@@ -464,6 +464,12 @@ fn spatial_track_summary(
             "signed_plane_offset":fit.signed_support_plane_offset,
             "max_plane_offset_error":fit.max_support_plane_offset_residual,
             "relative_plane_offset_error":fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+            "support_normal_axial_projection_spread":
+                fit.support_normal_axial_projection_spread,
+            "minimum_support_normal_axial_projection":
+                fit.min_support_normal_axial_projection,
+            "maximum_support_normal_axial_projection":
+                fit.max_support_normal_axial_projection,
             "axial_span":fit.axial_coordinate_span,
             "axial_station_count":fit.axial_stations.len(),
             "axial_station_resolution":fit.axial_station_resolution,
@@ -543,6 +549,8 @@ fn growth_track_summary(
                 "support_plane_relative_error":
                     h.spatial.max_support_plane_offset_residual / h.spatial.mean_sample_radius,
                 "meridian_stations":h.spatial.axial_stations.len(),
+                "support_normal_axial_projection_spread":
+                    h.spatial.support_normal_axial_projection_spread,
                 "meridian_max_slope_change":h.spatial.max_meridian_slope_change,
                 "maximum_seed_axis_deviation_radians":h.max_seed_axis_deviation_radians,
                 "maximum_relative_axis_line_separation":h.max_relative_input_axis_separation,
@@ -552,6 +560,8 @@ fn growth_track_summary(
                     "cumulative_supports":s.cumulative_supports,
                     "cumulative_radial_relative_error":s.cumulative_relative_radial_residual,
                     "cumulative_support_plane_relative_error":s.cumulative_relative_plane_residual,
+                    "cumulative_support_normal_axial_projection_spread":
+                        s.cumulative_support_normal_axial_projection_spread,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -823,6 +833,12 @@ fn native_curvature_growth_reference(
                 "whole_source_radial_error":hypothesis.spatial.relative_max_sample_radial_residual,
                 "whole_source_plane_error":hypothesis.spatial.max_support_plane_offset_residual
                     / hypothesis.spatial.mean_sample_radius,
+                "whole_source_normal_axis_projection_spread":
+                    hypothesis.spatial.support_normal_axial_projection_spread,
+                "whole_source_normal_axis_projection_min":
+                    hypothesis.spatial.min_support_normal_axial_projection,
+                "whole_source_normal_axis_projection_max":
+                    hypothesis.spatial.max_support_normal_axial_projection,
             })
         })
         .collect::<Vec<_>>();

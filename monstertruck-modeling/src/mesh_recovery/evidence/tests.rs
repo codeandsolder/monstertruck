@@ -1015,6 +1015,60 @@ fn globally_grown_curvature_reuses_one_placed_axis_across_compatible_bands() {
 }
 
 #[test]
+fn short_axial_blend_retains_normal_latitude_change_despite_good_vertex_fit() {
+    // The radius barely changes over this short height, making the two
+    // joined bands almost indistinguishable from a single cylinder by vertex
+    // position. Their original support normals nevertheless rotate out of
+    // the equatorial normal plane by atan(0.02 / 0.1) ≈ 0.197 radians.
+    let mesh = faceted_radial_profile(
+        &[(0.0, 1.0), (0.1, 1.0), (0.2, 1.02)],
+        32,
+        [1.0, 1.0],
+        [0.0; 3],
+    );
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let tracks = trace_curvature_tracks(&evidence, CurvatureTrackOptions::default()).unwrap();
+    let index = CurvatureGrowthIndex::new(
+        &evidence,
+        &tracks,
+        CurvatureGrowthOptions {
+            max_relative_vertex_radial_residual: 0.02,
+            max_relative_support_plane_residual: 0.02,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let grown = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, _)| index.grow(i))
+        .max_by_key(|region| region.support_indices.len())
+        .unwrap();
+    assert!(grown.track_indices.len() == 1);
+    assert!(grown.spatial.support_normal_axial_projection_spread < 0.06);
+    let permissive = CurvatureGrowthIndex::new(
+        &evidence,
+        &tracks,
+        CurvatureGrowthOptions {
+            max_relative_vertex_radial_residual: 0.02,
+            max_relative_support_plane_residual: 0.02,
+            max_support_normal_axial_projection_spread: 0.25,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let joined = tracks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, _)| permissive.grow(i))
+        .max_by_key(|region| region.support_indices.len())
+        .unwrap();
+    assert!(joined.track_indices.len() > 1);
+    assert!(joined.spatial.relative_max_sample_radial_residual < 0.01);
+    assert!(joined.spatial.support_normal_axial_projection_spread > 0.1);
+}
+
+#[test]
 fn cumulative_spatial_growth_does_not_accept_nontransitive_axial_kink_chain() {
     // Every individual band is a perfect faceted cylinder/cone. Each pair
     // of neighboring bands fits a common profile within 0.4%, while all
@@ -1091,6 +1145,10 @@ fn growth_rejects_disconnected_source_tracks_and_invalid_limits() {
         },
         CurvatureGrowthOptions {
             max_relative_vertex_radial_residual: f64::INFINITY,
+            ..options
+        },
+        CurvatureGrowthOptions {
+            max_support_normal_axial_projection_spread: f64::NAN,
             ..options
         },
     ] {

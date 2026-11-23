@@ -51,6 +51,15 @@ pub struct SpatialTrackEvidence {
     pub max_support_plane_offset_residual: f64,
     /// RMS original source support-plane offset error at seed origins.
     pub rms_support_plane_offset_residual: f64,
+    /// Minimum normal projection onto the candidate axis over *all* source
+    /// planar supports, independent of the fitted source vertex radius.
+    pub min_support_normal_axial_projection: f64,
+    /// Maximum normal projection onto the same candidate axis.
+    pub max_support_normal_axial_projection: f64,
+    /// Difference of the extrema of support-normal axial projections. A
+    /// perfect cylinder has zero; a true cone also has zero on one common
+    /// conical flank, but neighboring toroidal strips may change latitude.
+    pub support_normal_axial_projection_spread: f64,
     /// Number of *unique canonical source vertices* sampled across all source
     /// polygons of the track, including non-boundary/interior vertices.
     pub unique_source_vertex_count: usize,
@@ -356,11 +365,14 @@ pub(super) fn fit_spatial_support_set(
         axis,
         angular_uncertainty,
     )?;
-    let axial_projection = supports
+    let (projection_sum, projection_min, projection_max) = supports
         .iter()
         .map(|&id| evidence.planar_supports[id].normal.dot(axis))
-        .sum::<f64>()
-        / crate::usize_to_f64(supports.len());
+        .fold(
+            (0.0_f64, f64::INFINITY, f64::NEG_INFINITY),
+            |(sum, min, max), value| (sum + value, min.min(value), max.max(value)),
+        );
+    let axial_projection = projection_sum / crate::usize_to_f64(supports.len());
     let transverse = axial_projection
         .mul_add(-axial_projection, 1.0)
         .max(0.0)
@@ -386,6 +398,9 @@ pub(super) fn fit_spatial_support_set(
         signed_support_plane_offset: plane.signed_offset,
         max_support_plane_offset_residual: plane.max_residual,
         rms_support_plane_offset_residual: plane.rms_residual,
+        min_support_normal_axial_projection: projection_min,
+        max_support_normal_axial_projection: projection_max,
+        support_normal_axial_projection_spread: projection_max - projection_min,
         unique_source_vertex_count: samples.unique_count,
         axial_coordinate_span: samples.axial_span,
         axial_stations: samples.axial_stations,

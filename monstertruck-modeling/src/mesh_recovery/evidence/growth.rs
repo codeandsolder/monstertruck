@@ -24,6 +24,12 @@ pub struct CurvatureGrowthOptions {
     pub max_relative_vertex_radial_residual: f64,
     /// Maximum supporting-plane fit error / mean source radius.
     pub max_relative_support_plane_residual: f64,
+    /// Maximum spread of original source-support normal projections onto the
+    /// *joint* placed axis. The normal latitude is constant for one cylinder
+    /// or cone, even though a short toroidal blend can fit their vertex
+    /// positions extremely closely. This is an independent necessary check
+    /// for one globally constant normal-cone surface, not a torus rejection.
+    pub max_support_normal_axial_projection_spread: f64,
 }
 
 impl Default for CurvatureGrowthOptions {
@@ -35,6 +41,7 @@ impl Default for CurvatureGrowthOptions {
             max_relative_axis_line_separation: 0.05,
             max_relative_vertex_radial_residual: 0.01,
             max_relative_support_plane_residual: 0.01,
+            max_support_normal_axial_projection_spread: 0.06,
         }
     }
 }
@@ -49,6 +56,7 @@ impl CurvatureGrowthOptions {
                 self.max_relative_axis_line_separation,
                 self.max_relative_vertex_radial_residual,
                 self.max_relative_support_plane_residual,
+                self.max_support_normal_axial_projection_spread,
             ]
             .into_iter()
             .all(|x| x.is_finite() && x >= 0.0)
@@ -58,6 +66,8 @@ impl CurvatureGrowthOptions {
         fit.relative_max_sample_radial_residual <= self.max_relative_vertex_radial_residual
             && fit.max_support_plane_offset_residual / fit.mean_sample_radius
                 <= self.max_relative_support_plane_residual
+            && fit.support_normal_axial_projection_spread
+                <= self.max_support_normal_axial_projection_spread
     }
 }
 
@@ -74,6 +84,8 @@ pub struct CurvatureGrowthStep {
     pub cumulative_relative_radial_residual: f64,
     /// Largest supporting-plane placement error relative to radius.
     pub cumulative_relative_plane_residual: f64,
+    /// Original support-normal latitude spread after cumulative refitting.
+    pub cumulative_support_normal_axial_projection_spread: f64,
     /// Undirected angle from the unchanging initial seed axis.
     pub seed_axis_angle_radians: f64,
 }
@@ -217,6 +229,9 @@ impl<'a> CurvatureGrowthIndex<'a> {
                     .spatial
                     .max_support_plane_offset_residual
                     / proposal.spatial.mean_sample_radius,
+                cumulative_support_normal_axial_projection_spread: proposal
+                    .spatial
+                    .support_normal_axial_projection_spread,
                 seed_axis_angle_radians: proposal.seed_angle,
             });
             state.hypothesis.track_indices.push(proposal.track_index);
@@ -320,11 +335,18 @@ impl<'a> CurvatureGrowthIndex<'a> {
         if !self.options.accepts(&spatial) {
             return None;
         }
-        let score = (spatial.relative_max_sample_radial_residual
+        let score = (spatial.support_normal_axial_projection_spread
             / self
                 .options
-                .max_relative_vertex_radial_residual
+                .max_support_normal_axial_projection_spread
                 .max(f64::MIN_POSITIVE))
+        .max(
+            spatial.relative_max_sample_radial_residual
+                / self
+                    .options
+                    .max_relative_vertex_radial_residual
+                    .max(f64::MIN_POSITIVE),
+        )
         .max(
             (spatial.max_support_plane_offset_residual / spatial.mean_sample_radius)
                 / self
