@@ -319,7 +319,7 @@ pub fn recover_cylindrical_solid(
         return Err(MeshRecoveryError::InvalidCylinderOptions);
     }
     let planar = recover_planar_mesh(mesh, options.planar)?;
-    if planar.shell.shell_condition() != ShellCondition::Closed {
+    if planar.shell.shell_condition() != ShellCondition::Closed || !planar.shell.is_connected() {
         return Ok(None);
     }
     let caps = planar

@@ -72,6 +72,7 @@ fn revolved_line_with_shared_circular_caps_makes_closed_native_cylinder() {
     )
     .unwrap();
     assert_eq!(solid.boundaries().len(), 1);
+    assert!(solid.is_geometric_consistent());
     let shell = &solid.boundaries()[0];
     assert_eq!(shell.shell_condition(), ShellCondition::Closed);
     assert_eq!(shell.len(), 4);
@@ -133,6 +134,7 @@ fn recovers_true_analytic_cylinder_from_128_triangles_with_cap_center_vertices()
     assert_eq!(result.cap_source_face_indices[0].len(), 32);
     assert_eq!(result.cap_source_face_indices[1].len(), 32);
     assert_eq!(result.lateral_source_face_indices.len(), 64);
+    assert!(result.solid.is_geometric_consistent());
     let shell = &result.solid.boundaries()[0];
     assert_eq!(shell.shell_condition(), ShellCondition::Closed);
     assert_eq!(shell.len(), 4);
