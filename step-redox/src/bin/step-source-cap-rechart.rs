@@ -5,7 +5,11 @@
 mod enabled {
     use anyhow::{Context, Result, ensure};
     use clap::Parser;
-    use std::{fs::OpenOptions, io::Write, path::PathBuf};
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write,
+        path::{Path, PathBuf},
+    };
 
     #[derive(Parser)]
     #[command(
@@ -38,38 +42,77 @@ mod enabled {
             "detached source boundary proof is incomplete: {:?}",
             proposal.manifest.proof_view_boundary_reason
         );
-        // create_new=true makes source overwrite impossible; no environmental
-        // flags can replace the original or overwrite an existing audit.
+        let step = step_redox::write_exchange(&proposal.exchange)?;
+        let mut manifest = serde_json::to_vec_pretty(&proposal.manifest)?;
+        manifest.push(b'\n');
+        write_pair_new(
+            &cli.proof_step,
+            &cli.manifest_json,
+            step.as_bytes(),
+            &manifest,
+        )?;
+        Ok(())
+    }
+
+    /// Create both outputs without replacing any existing file. If either
+    /// creation or write fails, remove only files created in this invocation
+    /// rather than leaving an orphaned proof without its provenance manifest.
+    fn write_pair_new(proof: &Path, manifest: &Path, step: &[u8], metadata: &[u8]) -> Result<()> {
         let mut proof_file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&cli.proof_step)
-            .with_context(|| {
-                format!(
-                    "create private STEP proof view {}",
-                    cli.proof_step.display()
-                )
-            })?;
-        let mut manifest_file = OpenOptions::new()
+            .open(proof)
+            .with_context(|| format!("create detached STEP {}", proof.display()))?;
+        let mut manifest_file = match OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&cli.manifest_json)
-            .with_context(|| {
-                format!(
-                    "create private patch manifest {}",
-                    cli.manifest_json.display()
-                )
-            })?;
-        let step = step_redox::write_exchange(&proposal.exchange)?;
-        proof_file.write_all(step.as_bytes())?;
-        serde_json::to_writer_pretty(&mut manifest_file, &proposal.manifest)?;
-        manifest_file.write_all(b"\n")?;
-        Ok(())
+            .open(manifest)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                drop(proof_file);
+                let _ = fs::remove_file(proof);
+                return Err(error)
+                    .with_context(|| format!("create provenance manifest {}", manifest.display()));
+            }
+        };
+        let result = (|| -> Result<()> {
+            proof_file.write_all(step)?;
+            manifest_file.write_all(metadata)?;
+            proof_file.flush()?;
+            manifest_file.flush()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            drop(proof_file);
+            drop(manifest_file);
+            let _ = fs::remove_file(proof);
+            let _ = fs::remove_file(manifest);
+        }
+        result
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn output_pair_is_create_only_and_does_not_leave_orphans() -> Result<()> {
+            let temporary = tempfile::tempdir()?;
+            let proof = temporary.path().join("view.step");
+            let manifest = temporary.path().join("manifest.json");
+            fs::write(&manifest, b"existing manifest")?;
+            assert!(write_pair_new(&proof, &manifest, b"step", b"manifest").is_err());
+            assert!(!proof.exists());
+            assert_eq!(fs::read(&manifest)?, b"existing manifest");
+            fs::remove_file(&manifest)?;
+            write_pair_new(&proof, &manifest, b"step", b"manifest")?;
+            assert_eq!(fs::read(&proof)?, b"step");
+            assert_eq!(fs::read(&manifest)?, b"manifest");
+            assert!(write_pair_new(&proof, &manifest, b"changed", b"changed").is_err());
+            assert_eq!(fs::read(&proof)?, b"step");
+            Ok(())
+        }
 
         #[test]
         fn requires_both_detached_outputs_and_optional_full_boundary_proof() -> Result<()> {

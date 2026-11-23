@@ -36,6 +36,8 @@ pub struct SourceCapRechartManifest {
     pub solid_id: u64,
     pub data_section: usize,
     pub author_uncertainty_mm: f64,
+    /// Exact strict analytic proof quantum, not the STEP author's wider budget.
+    pub certified_cap_locus_target_mm: f64,
     pub source_boundary_supported: bool,
     pub cap_recharted_boundary_supported: bool,
     pub proof_view_boundary_supported: bool,
@@ -192,7 +194,7 @@ fn identify_rechart_cap_candidates(
     // shared) geometric curve ID. Different surface-row owners are ambiguous.
     let mut candidates = BTreeMap::<u64, (u64, u64, usize, f64)>::new();
     for cap in &audit.cap_witnesses {
-        let params = named_entity_parameters(cap.source_edge_id, "EDGE_CURVE", source, &index)
+        let params = named_entity_parameters(cap.source_edge_id, "EDGE_CURVE", source, index)
             .context("source EDGE_CURVE missing")?;
         let curve_id = entity_ref_value(params.get(3).context("missing edge geometry")?)
             .context("edge geometry is not an entity reference")?;
@@ -210,13 +212,13 @@ fn identify_rechart_cap_candidates(
             "edge #{} has an unsupported shared wrapper or geometry",
             cap.source_edge_id
         );
-        let CurveSupport::BSpline(current) = brep::curve_support(curve_id, source, &index) else {
+        let CurveSupport::BSpline(current) = brep::curve_support(curve_id, source, index) else {
             bail!(
                 "edge #{} has an unsupported original B-spline",
                 cap.source_edge_id
             );
         };
-        let row = super::boundary_strip_profiles(cap.surface_id, source, &index)
+        let row = super::boundary_strip_profiles(cap.surface_id, source, index)
             .and_then(|(rows, _)| rows.get(cap.surface_row).cloned())
             .context("source surface no longer has the witnessed cap row")?;
         if current == row {
@@ -232,7 +234,7 @@ fn identify_rechart_cap_candidates(
             &current,
             cap.bound_mm / scale,
             source,
-            &index,
+            index,
             curve_id,
         )
         .is_some_and(|(literal, _)| literal == *original_curve)
@@ -275,12 +277,12 @@ fn construct_private_cap_curves(
     let mut generated = Vec::new();
     let mut patches = Vec::new();
     for (&edge_id, &(face_id, surface_id, row, bound_mm)) in candidates {
-        let params = named_entity_parameters(edge_id, "EDGE_CURVE", source, &index)
+        let params = named_entity_parameters(edge_id, "EDGE_CURVE", source, index)
             .context("candidate edge absent")?;
         let original_curve_id =
             entity_ref_value(params.get(3).context("candidate geometry absent")?)
                 .context("candidate geometry reference invalid")?;
-        let CurveSupport::BSpline(current) = brep::curve_support(original_curve_id, source, &index)
+        let CurveSupport::BSpline(current) = brep::curve_support(original_curve_id, source, index)
         else {
             bail!("candidate edge #{edge_id} B-spline unavailable");
         };
@@ -290,7 +292,7 @@ fn construct_private_cap_curves(
             &current,
             bound_mm / scale,
             source,
-            &index,
+            index,
             next_id,
         )
         .context("cannot author an unambiguous private surface-row curve")?;
@@ -397,7 +399,9 @@ pub fn propose_source_cap_rechart(
     data_section: usize,
     solid_id: u64,
 ) -> Result<SourceCapRechartProposal> {
-    let audit = audit_source_spline_cap_precision(source_step, data_section, solid_id)?;
+    let strict_bound = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
+    let audit =
+        audit_source_spline_cap_precision(source_step, data_section, solid_id, Some(strict_bound))?;
     ensure!(
         audit.fully_certified_strip_faces == audit.strip_faces,
         "{} / {} source strip face trims are precision-proven",
@@ -444,6 +448,7 @@ pub fn propose_source_cap_rechart(
             solid_id,
             data_section,
             author_uncertainty_mm: audit.authored_uncertainty_mm,
+            certified_cap_locus_target_mm: strict_bound,
             source_boundary_supported: original_boundary.supported,
             cap_recharted_boundary_supported: cap_boundary.supported,
             proof_view_boundary_supported: proof_boundary.supported,
@@ -477,7 +482,18 @@ mod tests {
             manifest.proof_view_boundary_supported,
             manifest.proof_view_boundary_reason
         );
+        assert_eq!(
+            manifest.certified_cap_locus_target_mm.to_bits(),
+            crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM.to_bits()
+        );
         assert!(manifest.patches.len() >= 10);
+        assert!(
+            manifest
+                .patches
+                .iter()
+                .all(|p| p.source_to_private_locus_upper_mm
+                    <= manifest.certified_cap_locus_target_mm)
+        );
         assert!(manifest.proof_view_boundary_supported);
         assert!(!manifest.source_boundary_supported);
         assert!(!manifest.cap_recharted_boundary_supported);
@@ -547,6 +563,52 @@ mod tests {
             again.manifest.patches.is_empty(),
             "proof-only patch must be idempotent"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_original_cap_deformation_larger_than_strict_quantum() -> Result<()> {
+        let proposal = propose_source_cap_rechart(ORIGINAL, 0, 3877)?;
+        let mut exchange = ParsedStepSource::parse(ORIGINAL)?.exchange;
+        let entities = &mut exchange.data[0].entities;
+        let index = build_index(entities);
+        let curve_id = proposal
+            .manifest
+            .patches
+            .iter()
+            .find_map(|patch| {
+                let record = crate::step_graph::simple_record(
+                    entities.get(*index.get(&patch.original_curve_id)?)?,
+                )?;
+                (record.name == "B_SPLINE_CURVE_WITH_KNOTS").then_some(patch.original_curve_id)
+            })
+            .context("expected one original nonrational cap curve")?;
+        let original_pole_id = {
+            let params =
+                named_entity_parameters(curve_id, "B_SPLINE_CURVE_WITH_KNOTS", entities, &index)
+                    .context("missing original B-spline poles")?;
+            let Parameter::List(poles) = &params[2] else {
+                bail!("missing pole references")
+            };
+            entity_ref_value(poles.get(1).context("curve lacks an interior pole")?)
+                .context("interior pole is not an entity")?
+        };
+        let mut shifted = cartesian_point(original_pole_id, entities, &index)
+            .context("source pole has no Cartesian coordinates")?;
+        shifted[1] += 5.0e-6;
+        let mut next_id = entities.iter().map(entity_id).max().unwrap_or(0) + 1;
+        let new_pole = crate::step_entities::push_point(entities, &mut next_id, shifted);
+        let record = simple_record_mut(&mut entities[index[&curve_id]])
+            .context("source curve stopped being a record")?;
+        let Parameter::List(params) = &mut record.parameter else {
+            bail!("bad source curve")
+        };
+        let Parameter::List(poles) = &mut params[2] else {
+            bail!("bad source poles")
+        };
+        poles[1] = crate::step_entities::entity_ref(new_pole);
+        let changed = crate::step_io::write_exchange(&exchange)?;
+        assert!(propose_source_cap_rechart(changed.as_bytes(), 0, 3877).is_err());
         Ok(())
     }
 
