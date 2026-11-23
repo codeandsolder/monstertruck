@@ -27,7 +27,7 @@ impl StructuredMesh {
 
     /// Creates a structured polygon without `uv_division` and `normal`.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn from_positions_unchecked(positions: Vec<Vec<Point3>>) -> Self {
         Self {
             positions,
@@ -52,7 +52,7 @@ impl StructuredMesh {
     }
     /// Creates a structured polygon without normals.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn from_positions_and_uvs_unchecked(
         positions: Vec<Vec<Point3>>,
         uv_divisions: (Vec<f64>, Vec<f64>),
@@ -79,7 +79,7 @@ impl StructuredMesh {
     }
     /// Creates a structured polygon without uv divisions.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn from_positions_and_normals_unchecked(
         positions: Vec<Vec<Point3>>,
         normals: Vec<Vec<Vector3>>,
@@ -110,7 +110,7 @@ impl StructuredMesh {
     /// Creates new structured mesh.
     /// Does not check whether the size of vectors are compatible before creation.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new_unchecked(
         positions: Vec<Vec<Point3>>,
         uv_division: (Vec<f64>, Vec<f64>),
@@ -125,7 +125,7 @@ impl StructuredMesh {
 
     /// Returns the matrix of all positions.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the matrix of all positions."]
     pub const fn positions(&self) -> &Vec<Vec<Point3>> { &self.positions }
 
     /// Returns the vector of the mutable references to the rows of the positions matrix.
@@ -139,7 +139,7 @@ impl StructuredMesh {
 
     /// Returns the divisions of uv coordinates.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the divisions of uv coordinates."]
     pub fn uv_division(&self) -> Option<(&Vec<f64>, &Vec<f64>)> {
         self.uv_division.as_ref().map(|tuple| (&tuple.0, &tuple.1))
     }
@@ -154,7 +154,7 @@ impl StructuredMesh {
 
     /// Returns the matrix of all normals.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the matrix of all normals."]
     pub const fn normals(&self) -> Option<&Vec<Vec<Vector3>>> { self.normals.as_ref() }
 
     /// Returns the vector of the mutable references to the rows of the normals matrix.

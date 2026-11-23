@@ -52,7 +52,7 @@ pub trait TransformedAttributes: Clone {
     /// transform by `trans`.
     fn transform_by(&mut self, trans: Matrix4);
     /// transformed attributions by `trans`.
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     fn transformed(&self, trans: Matrix4) -> Self;
 }
 
