@@ -5,15 +5,18 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use monstertruck_io::step::load::ParsedStepSource;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hasher;
 use std::path::Path;
 use step_p21::ast::{DataSection, EntityInstance, Exchange, Parameter};
 
-#[derive(Debug, Serialize)]
-struct ScanReport {
+pub mod batch;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanReport {
     manifold_solids: usize,
     analyzed_solids: usize,
     skipped_solids: usize,
@@ -22,12 +25,12 @@ struct ScanReport {
     solids: Vec<SolidScan>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct SolidScan {
     data_section: usize,
     solid_id: u64,
     geometry_fingerprint: Option<String>,
-    identity_kind: &'static str,
+    identity_kind: IdentityKind,
     unit_scale_mm: Option<f64>,
     center_source_units: Option<[f64; 3]>,
     canonical_quarter_turn: Option<u8>,
@@ -37,6 +40,28 @@ struct SolidScan {
     oriented_edges: usize,
     faces: usize,
     has_shape_representation: bool,
+}
+
+impl SolidScan {
+    const fn topology(&self) -> [usize; 4] {
+        [self.vertices, self.edges, self.oriented_edges, self.faces]
+    }
+}
+
+fn digest(bytes: &[u8]) -> String { hex::encode(Sha256::digest(bytes)) }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExtractedBody {
+    fingerprint: String,
+    sha256: String,
+    bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IdentityKind {
+    Canonical,
+    FileLocalFallback,
 }
 
 #[derive(Clone, Copy)]
@@ -109,10 +134,7 @@ fn fingerprint(value: &shape_identity::ShapeKey) -> String {
     format!("{:016x}{:016x}", hashers[0].finish(), hashers[1].finish())
 }
 
-fn parse_exchange(path: &Path) -> Result<step_p21::ast::Exchange> {
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    Ok(ParsedStepSource::parse(&bytes)?.exchange)
-}
+fn parse_exchange(bytes: &[u8]) -> Result<Exchange> { Ok(ParsedStepSource::parse(bytes)?.exchange) }
 
 fn representation_ownership(entities: &[EntityInstance]) -> HashMap<u64, (u64, u64)> {
     let mut owners = HashMap::new();
@@ -220,11 +242,20 @@ fn solid_basic_stats(
     stats
 }
 
-fn scan(path: &Path) -> Result<ScanReport> {
-    let exchange = parse_exchange(path)?;
+/// Scan the STEP file using the production body-identity implementation.
+///
+/// # Errors
+/// Returns an error if the file cannot be read, decoded, or parsed.
+pub fn scan(path: &Path) -> Result<ScanReport> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    scan_bytes(&bytes)
+}
+
+fn scan_bytes(bytes: &[u8]) -> Result<ScanReport> {
+    let exchange = parse_exchange(bytes)?;
     let mut solids = Vec::new();
     let mut manifold_solids = 0usize;
-    let skipped_solids = 0usize;
+    let mut skipped_solids = 0usize;
     let mut fallback_identity_solids = 0usize;
     let mut solids_without_shape_representation = 0usize;
 
@@ -243,6 +274,7 @@ fn scan(path: &Path) -> Result<ScanReport> {
             manifold_solids += 1;
             let solid_id = step_graph::entity_id(entity);
             let Some(source) = document_section.entity(solid_id).map(StepEntity::source) else {
+                skipped_solids += 1;
                 continue;
             };
             debug_assert_eq!(source.data_section, data_section);
@@ -266,7 +298,7 @@ fn scan(path: &Path) -> Result<ScanReport> {
             ) = if let Some((key, center, quarter, closure_entities)) = canonical {
                 (
                     Some(fingerprint(&key)),
-                    "canonical",
+                    IdentityKind::Canonical,
                     Some(center),
                     Some(quarter),
                     BasicSolidStats {
@@ -281,7 +313,7 @@ fn scan(path: &Path) -> Result<ScanReport> {
                 fallback_identity_solids += 1;
                 (
                     None,
-                    "file_local_fallback",
+                    IdentityKind::FileLocalFallback,
                     None,
                     None,
                     solid_basic_stats(solid_id, &section.entities, &index),
@@ -316,7 +348,14 @@ fn scan(path: &Path) -> Result<ScanReport> {
     })
 }
 
-fn parse_selection(raw: &str) -> Result<(usize, u64, String)> {
+#[derive(Debug)]
+struct Selection {
+    section: usize,
+    solid_id: u64,
+    fingerprint: String,
+}
+
+fn parse_selection(raw: &str) -> Result<Selection> {
     let mut parts = raw.splitn(3, ':');
     let section = parts
         .next()
@@ -332,7 +371,11 @@ fn parse_selection(raw: &str) -> Result<(usize, u64, String)> {
     if fingerprint.is_empty() || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("invalid fingerprint in {raw:?}");
     }
-    Ok((section, solid, fingerprint))
+    Ok(Selection {
+        section,
+        solid_id: solid,
+        fingerprint,
+    })
 }
 
 fn set_shell_faces(entity: &mut EntityInstance, face_ids: &[u64]) -> Result<()> {
@@ -376,7 +419,7 @@ fn extract_one(
     context_id: u64,
     index: &HashMap<u64, usize>,
     out_path: &Path,
-) -> Result<usize> {
+) -> Result<(String, usize)> {
     let section = exchange
         .data
         .get(data_section)
@@ -451,22 +494,20 @@ fn extract_one(
     // presentation consolidation and dense entity IDs substantially reduce
     // corpus size without invoking any constructive recovery heuristics.
     let cleaned = crate::clean_bytes(serialized.as_bytes(), &crate::Options::default())?;
+    let result = (digest(&cleaned.bytes), cleaned.bytes.len());
     fs::write(out_path, cleaned.bytes).with_context(|| format!("write {}", out_path.display()))?;
-    Ok(keep.len())
+    Ok(result)
 }
 
-fn extract(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
-    let exchange = parse_exchange(path)?;
+fn extract(bytes: &[u8], out_dir: &Path, selections: &[Selection]) -> Result<Vec<ExtractedBody>> {
+    let exchange = parse_exchange(bytes)?;
     fs::create_dir_all(out_dir).with_context(|| format!("create {}", out_dir.display()))?;
 
-    let mut parsed = Vec::with_capacity(selections.len());
     let mut seen = HashSet::new();
-    for raw in selections {
-        let (section, solid_id, fingerprint) = parse_selection(raw)?;
-        if !seen.insert(fingerprint.clone()) {
-            bail!("duplicate output fingerprint {fingerprint}");
+    for selection in selections {
+        if !seen.insert(&selection.fingerprint) {
+            bail!("duplicate output fingerprint {}", selection.fingerprint);
         }
-        parsed.push((section, solid_id, fingerprint));
     }
 
     let mut indexes = Vec::with_capacity(exchange.data.len());
@@ -476,7 +517,14 @@ fn extract(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
         ownership.push(representation_ownership(&section.entities));
     }
 
-    for (section_id, solid_id, fingerprint) in parsed {
+    let mut objects = Vec::with_capacity(selections.len());
+    for Selection {
+        section: section_id,
+        solid_id,
+        fingerprint,
+    } in selections
+    {
+        let (section_id, solid_id) = (*section_id, *solid_id);
         let index = indexes
             .get(section_id)
             .with_context(|| format!("missing DATA section {section_id}"))?;
@@ -492,7 +540,7 @@ fn extract(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
         let dir = out_dir.join(shard);
         fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let out_path = dir.join(format!("{fingerprint}.step"));
-        extract_one(
+        let (sha256, bytes) = extract_one(
             &exchange,
             section_id,
             solid_id,
@@ -501,21 +549,27 @@ fn extract(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
             index,
             &out_path,
         )?;
+        objects.push(ExtractedBody {
+            fingerprint: fingerprint.clone(),
+            sha256,
+            bytes,
+        });
     }
-    Ok(())
+    Ok(objects)
 }
 
-/// Scan one STEP file using the production body-identity implementation and
-/// return the body-corpus report in the stable JSON shape consumed by corpus tools.
-///
-/// # Errors
-/// Returns an error if the file cannot be read/decoded/parsed or serialization fails.
-pub fn scan_json(path: &Path) -> Result<String> { Ok(serde_json::to_string(&scan(path)?)?) }
-
 /// Extract selected body fingerprints into standalone STEP files.
-///
 /// # Errors
 /// Returns an error if selection metadata is invalid or a body cannot be isolated/written.
-pub fn extract_selected(path: &Path, out_dir: &Path, selections: &[String]) -> Result<()> {
-    extract(path, out_dir, selections)
+pub fn extract_selected(
+    path: &Path,
+    out_dir: &Path,
+    selections: &[String],
+) -> Result<Vec<ExtractedBody>> {
+    let parsed = selections
+        .iter()
+        .map(|raw| parse_selection(raw))
+        .collect::<Result<Vec<_>>>()?;
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    extract(&bytes, out_dir, &parsed)
 }
