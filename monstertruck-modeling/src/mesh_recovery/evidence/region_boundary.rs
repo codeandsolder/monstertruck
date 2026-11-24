@@ -14,6 +14,7 @@ mod curve_evidence;
 mod partition;
 mod trim;
 mod trim_graph;
+mod trim_intersections;
 pub use coincidence::CarrierCoincidenceEvidence;
 pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};

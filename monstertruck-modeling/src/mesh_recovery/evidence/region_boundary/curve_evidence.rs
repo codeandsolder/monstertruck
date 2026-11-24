@@ -32,7 +32,8 @@ pub struct ContactCircleEvidence {
     /// Mean projected vertex radius about the fitted center.
     pub radius: f64,
     /// Normalized area strength of the plane-defining source point triple.
-    /// Near zero indicates a poorly resolved plane and circle.
+    /// Near zero indicates a poorly resolved source plane, or an
+    /// independently supplied analytic circle not fitted to a source triple.
     pub plane_span_strength: f64,
     /// Largest distance of any original vertex from the candidate plane.
     pub max_plane_residual: f64,
@@ -156,24 +157,50 @@ fn measure_circle(points: &[Point3], ids: &[usize], count: usize) -> Option<Cont
     }
     let samples = ids.get(..count)?;
     let carrier = fit_circle_carrier(points, samples)?;
-    let center = carrier.center;
-    let normal = carrier.normal;
-    let radius = carrier.radius;
+    measure_placed_circle(
+        points,
+        ids,
+        carrier.center,
+        carrier.normal,
+        carrier.radius,
+        carrier.plane_span_strength,
+    )
+}
+
+/// Measure the original ordered path against supplied circular geometry.
+/// An independent carrier can supply a circle even with only two samples.
+pub(super) fn measure_placed_circle(
+    points: &[Point3],
+    ids: &[usize],
+    center: Point3,
+    normal: Vector3,
+    radius: f64,
+    plane_span_strength: f64,
+) -> Option<ContactCircleEvidence> {
+    if !super::containment::unit(normal) || !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
+    let mut max_plane_residual = 0.0_f64;
+    let mut max_radial_residual = 0.0_f64;
     let projected = ids
         .iter()
         .map(|&id| {
-            let relative = points[id] - center;
-            relative - normal * relative.dot(normal)
+            let relative = *points.get(id)? - center;
+            let axial = relative.dot(normal);
+            let planar = relative - normal * axial;
+            max_plane_residual = max_plane_residual.max(axial.abs());
+            max_radial_residual = max_radial_residual.max((planar.magnitude() - radius).abs());
+            Some(planar)
         })
-        .collect::<Vec<_>>();
+        .collect::<Option<Vec<_>>>()?;
     let mut result = ContactCircleEvidence {
         center,
         normal,
         radius,
-        plane_span_strength: carrier.plane_span_strength,
-        max_plane_residual: carrier.max_plane_residual,
-        max_vertex_radial_residual: carrier.max_radial_residual,
-        max_chord_radial_residual: carrier.max_radial_residual,
+        plane_span_strength,
+        max_plane_residual,
+        max_vertex_radial_residual: max_radial_residual,
+        max_chord_radial_residual: max_radial_residual,
         signed_sweep_radians: 0.0,
         unsigned_sweep_radians: 0.0,
         max_step_radians: 0.0,

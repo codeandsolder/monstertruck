@@ -53,7 +53,7 @@ pub struct SharedTrimSegmentation {
 
 impl RegionContactPath {
     /// Fit and segment the shared source path against every adjacent carrier.
-    /// A sparse three-point circle requires distinct incident carrier
+    /// A sparse circle derived from the surfaces or a three-point fit requires distinct incident carrier
     /// constraints. Otherwise at least four samples and a 60-degree
     /// sampling envelope are required. All circular candidates are tested
     /// over their whole carrier, not just their sampled vertices. Missing adjacent carriers are not
@@ -127,38 +127,86 @@ fn accepted(
     {
         return Some(SharedTrimGeometry::Line(line));
     }
-    let circle = fit.circle?;
-    let tolerance = tolerance.min(options.relative_tolerance * circle.radius);
-    let angular = tolerance / circle.radius;
     let first = points[ids[0]];
     let span = ids
         .iter()
         .map(|&id| (points[id] - first).magnitude())
         .fold(0.0_f64, f64::max);
+    if let Some(circle) = fit.circle
+        && accepts_circle(
+            circle,
+            fit,
+            carriers,
+            tolerance.min(options.relative_tolerance * circle.radius),
+            span,
+            false,
+        )
+    {
+        return Some(SharedTrimGeometry::Circle(circle));
+    }
+
+    // A two-point path cannot fit a circle, but the independently recovered
+    // surface intersection may supply it. Reject competing distinct circles
+    // rather than arbitrarily choose one of the surviving analytic families.
+    let mut selected = None;
+    for circle in super::trim_intersections::supplied_circles(points, ids, carriers, tolerance) {
+        if !accepts_circle(
+            circle,
+            fit,
+            carriers,
+            tolerance.min(options.relative_tolerance * circle.radius),
+            span,
+            true,
+        ) {
+            continue;
+        }
+        if let Some(previous) = selected {
+            if !super::trim_intersections::same_circle(&previous, &circle, tolerance) {
+                return None;
+            }
+        } else {
+            selected = Some(circle);
+        }
+    }
+    selected.map(SharedTrimGeometry::Circle)
+}
+
+fn accepts_circle(
+    circle: ContactCircleEvidence,
+    mut fit: super::ContactCurveEvidence,
+    carriers: &[SurfaceCarrier],
+    tolerance: f64,
+    span: f64,
+    supplied: bool,
+) -> bool {
+    let angular = tolerance / circle.radius;
     let corroborated = independently_constrained_circle(&circle, carriers, tolerance);
     let max_step = if corroborated {
         std::f64::consts::FRAC_PI_2
     } else {
         std::f64::consts::FRAC_PI_3
     };
+    fit.circle = Some(circle);
+    if supplied && !corroborated {
+        return false;
+    }
     if (!corroborated && fit.source_vertex_count < 4)
+        || (!supplied && circle.plane_span_strength * span <= tolerance)
         || circle.max_step_radians > max_step + angular
-        || circle.plane_span_strength * span <= tolerance
         || circle.max_plane_residual > tolerance
         || circle.max_vertex_radial_residual > tolerance
         || circle.unsigned_sweep_radians - circle.signed_sweep_radians.abs() > angular
         || circle.unsigned_sweep_radians > TAU + angular
         || circle.zero_angular_steps > 0
-        || !carriers.iter().all(|carrier| {
-            carrier
-                .measure(&fit)
-                .circle
-                .is_some_and(|r| r.upper_bound <= tolerance)
-        })
     {
-        return None;
+        return false;
     }
-    Some(SharedTrimGeometry::Circle(circle))
+    carriers.iter().all(|carrier| {
+        carrier
+            .measure(&fit)
+            .circle
+            .is_some_and(|r| r.upper_bound <= tolerance)
+    })
 }
 
 // A distinct surface constraint must be witnessed away from the proposed
@@ -382,6 +430,83 @@ mod tests {
             path.segment_analytic_trims(&points, &[plane], options())
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn two_samples_use_independent_axial_circle() -> Result<(), Box<dyn std::error::Error>> {
+        let points = [Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
+        let plane = SurfaceCarrier::Plane {
+            origin: points[0],
+            normal: Vector3::unit_z(),
+        };
+        let cylinder = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let result = path(1, false)
+            .segment_analytic_trims(&points, &[plane, cylinder], options())
+            .ok_or("segmentation")?;
+        assert_eq!(result.pieces.len(), 1);
+        let SharedTrimGeometry::Circle(circle) = result.pieces[0].geometry else {
+            return Err("missing axial intersection".into());
+        };
+        assert!((circle.radius - 1.0).abs() < 1.0e-10);
+        assert!((circle.signed_sweep_radians.abs() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-10);
+        let coincident = path(1, false)
+            .segment_analytic_trims(&points, &[cylinder, cylinder], options())
+            .ok_or("segmentation")?;
+        assert!(matches!(
+            coincident.pieces[0].geometry,
+            SharedTrimGeometry::Unresolved
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn two_samples_resolve_meridian_and_arbitrary_sphere_plane_sections()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let torus = SurfaceCarrier::CircularRevolution {
+            axial_center: center,
+            axis: Vector3::unit_z(),
+            radial_center: 4.0,
+            profile_radius: 1.0,
+        };
+        let points = [Point3::new(5.0, 0.0, 0.0), Point3::new(4.0, 0.0, 1.0)];
+        let plane = SurfaceCarrier::Plane {
+            origin: center,
+            normal: Vector3::unit_y(),
+        };
+        let result = path(1, false)
+            .segment_analytic_trims(&points, &[torus, plane], options())
+            .ok_or("segmentation")?;
+        let SharedTrimGeometry::Circle(circle) = result.pieces[0].geometry else {
+            return Err("missing meridian intersection".into());
+        };
+        assert!((circle.center - Point3::new(4.0, 0.0, 0.0)).magnitude() < 1.0e-10);
+        let sphere = SurfaceCarrier::CircularRevolution {
+            axial_center: center,
+            axis: Vector3::unit_z(),
+            radial_center: 0.0,
+            profile_radius: 1.0,
+        };
+        let radius = 0.75_f64.sqrt();
+        let points = [Point3::new(0.5, radius, 0.0), Point3::new(0.5, 0.0, radius)];
+        let plane = SurfaceCarrier::Plane {
+            origin: points[0],
+            normal: Vector3::unit_x(),
+        };
+        let result = path(1, false)
+            .segment_analytic_trims(&points, &[sphere, plane], options())
+            .ok_or("segmentation")?;
+        let SharedTrimGeometry::Circle(circle) = result.pieces[0].geometry else {
+            return Err("missing sphere-plane intersection".into());
+        };
+        assert!((circle.center - Point3::new(0.5, 0.0, 0.0)).magnitude() < 1.0e-10);
+        assert!((circle.radius - radius).abs() < 1.0e-10);
         Ok(())
     }
 
