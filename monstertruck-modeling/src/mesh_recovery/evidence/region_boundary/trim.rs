@@ -1,7 +1,7 @@
 //! Shared analytic trim hypotheses over contiguous original source paths.
 //! Segmentation never invents a second copy of the same edge on either side.
 
-use super::curve_evidence::measure_path_curves;
+use super::curve_evidence::{measure_path_curves, measure_placed_circle};
 use super::{ContactCircleEvidence, ContactLineEvidence, RegionContactPath, SurfaceCarrier};
 use crate::{InnerSpace, Point3};
 use std::f64::consts::TAU;
@@ -132,7 +132,19 @@ fn accepted(
         .iter()
         .map(|&id| (points[id] - first).magnitude())
         .fold(0.0_f64, f64::max);
-    if let Some(circle) = fit.circle
+    // A free planar curve has no independent intersection fixing its
+    // carrier. Its endpoints must therefore be constraints of the fit,
+    // not independently adjustable predictions at a shared junction.
+    let circle = if carriers
+        .iter()
+        .all(|c| matches!(c, SurfaceCarrier::Plane { .. }))
+    {
+        fit.circle
+            .and_then(|observed| endpoint_circle(points, ids, carriers[0], observed))
+    } else {
+        fit.circle
+    };
+    if let Some(circle) = circle
         && accepts_circle(
             circle,
             fit,
@@ -169,6 +181,57 @@ fn accepted(
         }
     }
     selected.map(SharedTrimGeometry::Circle)
+}
+
+// Algebraic least squares in the one-dimensional family of circles
+// through both source endpoints. Unlike an unconstrained three-parameter
+// circle fit this cannot create a geometric gap between adjacent pieces.
+fn endpoint_circle(
+    points: &[Point3],
+    ids: &[usize],
+    carrier: SurfaceCarrier,
+    observed: ContactCircleEvidence,
+) -> Option<ContactCircleEvidence> {
+    let SurfaceCarrier::Plane { origin, normal } = carrier else {
+        return None;
+    };
+    let project = |p: Point3| p - normal * (p - origin).dot(normal);
+    let first = project(points[*ids.first()?]);
+    let last = project(points[*ids.last()?]);
+    let (center, radius) = if ids.first() == ids.last() {
+        let center = project(observed.center);
+        (center, (first - center).magnitude())
+    } else {
+        let delta = last - first;
+        let length = delta.magnitude();
+        if length <= 0.0 {
+            return None;
+        }
+        let mid = first + delta * 0.5;
+        let direction = normal.cross(delta / length);
+        let half_squared = 0.25 * length * length;
+        let (numerator, denominator) = ids.iter().fold((0.0_f64, 0.0_f64), |(num, den), &id| {
+            let local = project(points[id]) - mid;
+            let side = 2.0 * local.dot(direction);
+            (
+                side.mul_add(local.magnitude2() - half_squared, num),
+                side.mul_add(side, den),
+            )
+        });
+        if denominator <= f64::EPSILON * length * length {
+            return None;
+        }
+        let offset = numerator / denominator;
+        (mid + direction * offset, (length * 0.5).hypot(offset))
+    };
+    measure_placed_circle(
+        points,
+        ids,
+        center,
+        normal,
+        radius,
+        observed.plane_span_strength,
+    )
 }
 
 fn accepts_circle(
@@ -382,6 +445,45 @@ mod tests {
             relative_tolerance: 1.0e-4,
             max_interval_edges: 128,
         }
+    }
+
+    #[test]
+    fn approximate_planar_arcs_share_exact_source_junctions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let points = (0..9)
+            .map(|i| {
+                let (sin, cos) = (f64::from(i) * 0.1).sin_cos();
+                let radius = if i == 0 || i == 4 || i == 8 {
+                    1.0
+                } else {
+                    1.0 + 1.0e-6 * f64::from(i % 3)
+                };
+                Point3::new(radius * cos, radius * sin, 0.0)
+            })
+            .collect::<Vec<_>>();
+        let plane = SurfaceCarrier::Plane {
+            origin: points[0],
+            normal: crate::Vector3::unit_z(),
+        };
+        let options = SharedTrimOptions {
+            absolute_tolerance: 1.0e-5,
+            relative_tolerance: 1.0e-4,
+            max_interval_edges: 128,
+        };
+        let mut circles = Vec::new();
+        for ids in [vec![0, 1, 2, 3, 4], vec![4, 5, 6, 7, 8]] {
+            let Some(SharedTrimGeometry::Circle(circle)) =
+                accepted(&points, &ids, &[plane], options)
+            else {
+                return Err("circle".into());
+            };
+            for id in [ids[0], *ids.last().ok_or("end")?] {
+                assert!(((points[id] - circle.center).magnitude() - circle.radius).abs() < 1.0e-12);
+            }
+            circles.push(circle);
+        }
+        assert!((circles[0].center - circles[1].center).magnitude() > 1.0e-8);
+        Ok(())
     }
 
     #[test]
