@@ -191,8 +191,8 @@ fn private_surface_row_curve(
     Some((curve, reversed))
 }
 
-/// Every authoring use of a proposed EDGE_CURVE must lead through standard
-/// oriented face topology to an ADVANCED_FACE in the selected original solid.
+/// Every authoring use of a proposed `EDGE_CURVE` must lead through standard
+/// oriented face topology to an `ADVANCED_FACE` in the selected original solid.
 /// A foreign solid or an untracked reference could otherwise inherit the
 /// detached curve change without having independently proven its incidence.
 fn ensure_cap_edge_solely_owned(
