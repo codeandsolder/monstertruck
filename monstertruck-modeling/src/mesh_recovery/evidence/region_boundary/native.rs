@@ -153,8 +153,15 @@ impl RegionBoundaryIndex<'_> {
                 let carrier = partition.carriers.get(region.region).copied().flatten()?;
                 let supports = groups.get(region.region)?;
                 let boundary = region.boundary.as_ref().ok()?;
-                let carrier =
-                    chart_carrier(carrier, boundary, graph, options.intersection_tolerance);
+                let carrier = chart_carrier(
+                    carrier,
+                    boundary,
+                    graph,
+                    self.evidence,
+                    supports,
+                    positions,
+                    options,
+                );
                 let (surface, outward) =
                     native_surface(carrier, self.evidence, supports, positions).ok()?;
                 if !boundary.pinched_vertices.is_empty() {
@@ -236,7 +243,10 @@ impl FaceAssembly<'_> {
                 carrier,
                 boundary,
                 self.graph,
-                self.options.intersection_tolerance,
+                self.evidence,
+                supports,
+                self.positions,
+                self.options,
             );
             let (surface, outward) =
                 native_surface(carrier, self.evidence, supports, self.positions)?;
@@ -526,13 +536,17 @@ fn native_circle_edge(
     Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)
 }
 
-// A sphere has no intrinsic axis. Its circular boundary can define a
-// more useful chart without altering the fitted carrier geometry.
+// A sphere has no intrinsic axis. Align with a complete circular rim
+// only for the cap planner; a general circular arc does not define a
+// suitable chart axis for the rest of a patch.
 fn chart_carrier(
     carrier: SurfaceCarrier,
     boundary: &super::RegionTrimLoops,
     graph: &SharedTrimGraph,
-    tolerance: f64,
+    evidence: &MeshEvidence,
+    supports: &[usize],
+    points: &[Point3],
+    options: NativeTrimOptions,
 ) -> SurfaceCarrier {
     let SurfaceCarrier::CircularRevolution {
         axial_center,
@@ -546,28 +560,122 @@ fn chart_carrier(
     if radial_center.abs() > crate::KERNEL_EPSILON {
         return carrier;
     }
-    let [cycle] = boundary.loops.as_slice() else {
+    let Some(axis) = circular_rim_axis(axial_center, boundary, graph, options).or_else(|| {
+        compact_sphere_axis(
+            axial_center,
+            boundary,
+            graph,
+            evidence,
+            supports,
+            points,
+            options,
+        )
+    }) else {
         return carrier;
     };
-    let Some(first) = cycle.first().and_then(|r| graph.trims.get(r.trim)) else {
-        return carrier;
-    };
-    let SharedTrimGeometry::Circle(circle) = first.geometry else {
-        return carrier;
-    };
-    if (circle.center - axial_center)
-        .cross(circle.normal)
-        .magnitude()
-        > tolerance
-    {
-        return carrier;
-    }
     SurfaceCarrier::CircularRevolution {
         axial_center,
-        axis: circle.normal,
+        axis,
         radial_center: 0.0,
         profile_radius,
     }
+}
+
+fn circular_rim_axis(
+    center: Point3,
+    boundary: &super::RegionTrimLoops,
+    graph: &SharedTrimGraph,
+    options: NativeTrimOptions,
+) -> Option<Vector3> {
+    let [cycle] = boundary.loops.as_slice() else {
+        return None;
+    };
+    let SharedTrimGeometry::Circle(first) = graph.trims.get(cycle.first()?.trim)?.geometry else {
+        return None;
+    };
+    let tolerance = options.intersection_tolerance;
+    if (first.center - center).cross(first.normal).magnitude() > tolerance {
+        return None;
+    }
+    let mut sweep = 0.0;
+    for reference in cycle {
+        let SharedTrimGeometry::Circle(circle) = graph.trims.get(reference.trim)?.geometry else {
+            return None;
+        };
+        if !super::trim_intersections::same_circle(&first, &circle, tolerance) {
+            return None;
+        }
+        let orientation = if reference.reversed { -1.0 } else { 1.0 };
+        sweep = (circle.signed_sweep_radians * orientation)
+            .mul_add(first.normal.dot(circle.normal).signum(), sweep);
+    }
+    ((sweep.abs() - TAU).abs() <= options.angular_resolution).then_some(first.normal)
+}
+
+// A source patch contained in an open hemisphere admits a regular
+// longitude/latitude chart with both poles in the separating great circle.
+// Use the same halfspace for source facets AND the continuous trim arcs;
+// a collection of vertices alone is not sufficient to certify the chart.
+fn compact_sphere_axis(
+    center: Point3,
+    boundary: &super::RegionTrimLoops,
+    graph: &SharedTrimGraph,
+    evidence: &MeshEvidence,
+    supports: &[usize],
+    points: &[Point3],
+    options: NativeTrimOptions,
+) -> Option<Vector3> {
+    let mut vertices = std::collections::BTreeSet::new();
+    for &support in supports {
+        for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
+            vertices.extend(evidence.source_polygon_vertices(polygon)?.iter().copied());
+        }
+    }
+    let mut direction = Vector3::new(0.0, 0.0, 0.0);
+    for &id in &vertices {
+        direction += *points.get(id)? - center;
+    }
+    if !direction.magnitude2().is_finite() || direction.magnitude2() == 0.0 {
+        return None;
+    }
+    direction = direction.normalize();
+    let margin = options.max_vertex_displacement + options.intersection_tolerance;
+    if vertices
+        .iter()
+        .any(|&id| (points[id] - center).dot(direction) <= margin)
+    {
+        return None;
+    }
+    // Every source facet lies in this convex halfspace. For a minor circle
+    // arc the distance from its projected chord is at most its sagitta.
+    // Add the original endpoint projection errors and junction movement.
+    for reference in boundary.loops.iter().flatten() {
+        let trim = graph.trims.get(reference.trim)?;
+        let deviation = match trim.geometry {
+            SharedTrimGeometry::Line(line) => line.max_vertex_offset,
+            SharedTrimGeometry::Circle(circle) => {
+                let sagitta = circle.radius * (1.0 - (circle.max_step_radians * 0.5).cos());
+                sagitta
+                    + circle
+                        .max_plane_residual
+                        .hypot(circle.max_vertex_radial_residual)
+            }
+            SharedTrimGeometry::Unresolved => return None,
+        };
+        if trim
+            .source_edges
+            .iter()
+            .flat_map(|edge| edge.vertices)
+            .any(|id| {
+                points
+                    .get(id)
+                    .is_none_or(|&point| (point - center).dot(direction) <= deviation + margin)
+            })
+        {
+            return None;
+        }
+    }
+    Some(normal_basis(direction).0)
 }
 
 fn native_surface(
@@ -1009,6 +1117,108 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn spherical_patch_with_multiple_distinct_rims_avoids_chart_poles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Three circular boundaries meeting at the original chart's poles:
+        // the source patch is an octant, not an annulus or a complete cap.
+        let steps = 6_usize;
+        let width = steps + 1;
+        let mut positions = Vec::new();
+        for i in 0..steps {
+            let elevation = PI * 0.5 * crate::usize_to_f64(i) / crate::usize_to_f64(steps);
+            let (z, rho) = elevation.sin_cos();
+            for j in 0..=steps {
+                let angle = PI * 0.5 * crate::usize_to_f64(j) / crate::usize_to_f64(steps);
+                let (sin, cos) = angle.sin_cos();
+                positions.push(Point3::new(rho * cos, rho * sin, z));
+            }
+        }
+        let pole = positions.len();
+        positions.push(Point3::new(0.0, 0.0, 1.0));
+        let center = positions.len();
+        positions.push(Point3::new(0.0, 0.0, 0.0));
+        let mut faces = Vec::new();
+        for i in 0..steps {
+            for j in 0..steps {
+                let a = i * width + j;
+                if i + 1 == steps {
+                    faces.push(vec![a, a + 1, pole]);
+                } else {
+                    faces.push(vec![a, a + 1, a + 1 + width, a + width]);
+                }
+            }
+        }
+        let sphere_polygons = faces.len();
+        faces.push(std::iter::once(center).chain((0..=steps).rev()).collect());
+        faces.push(
+            std::iter::once(center)
+                .chain((0..steps).map(|i| i * width))
+                .chain(std::iter::once(pole))
+                .collect(),
+        );
+        faces.push(
+            [center, pole]
+                .into_iter()
+                .chain((0..steps).rev().map(|i| i * width + steps))
+                .collect(),
+        );
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let mut supports = evidence.source_planar_support[..sphere_polygons].to_vec();
+        supports.sort_unstable();
+        supports.dedup();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: 0.0,
+            profile_radius: 1.0,
+        };
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1.0e-8,
+                    chord: 0.1,
+                },
+            )
+            .ok_or("sphere patch")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?;
+        assert_eq!(native.regions.len(), 4);
+        assert!(
+            native
+                .regions
+                .iter()
+                .all(|r| !r.requires_chart_cut && r.chart_seams == 0)
+        );
+        let mut shell = crate::Shell::new();
+        for region in native.regions {
+            shell.extend(region.faces?);
+        }
+        assert_eq!(shell.len(), 4);
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Closed
+        );
+        assert!(shell.is_geometric_consistent());
+        Ok(())
+    }
+
     #[test]
     fn spherical_cap_reorients_the_arbitrary_axis_and_shares_its_pole()
     -> Result<(), Box<dyn std::error::Error>> {
