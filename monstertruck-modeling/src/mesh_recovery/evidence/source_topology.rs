@@ -2,9 +2,13 @@
 //! Exact geometric welding is evidence for coincident positions, not for
 //! identifying the topological vertices of distinct closed surface chains.
 
-use super::super::{InputPolygon, source_edge_incidence};
+use super::super::{EdgeIncidence, InputPolygon, source_edge_incidence};
+use super::{
+    SourceProvenance,
+    source_sectors::{SourceSectorPair, paired_sectors},
+};
 use crate::Point3;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
 /// A distinct topological copy of an exactly coincident source position.
@@ -82,8 +86,11 @@ impl Interval {
         }
     }
 
-    fn resolves_nonzero(self) -> bool {
-        self.low.is_finite() && self.high.is_finite() && (self.low > 0.0 || self.high < 0.0)
+    fn resolves_sign(self, positive: Option<bool>) -> bool {
+        self.low.is_finite()
+            && self.high.is_finite()
+            && ((positive != Some(false) && self.low > 0.0)
+                || (positive != Some(true) && self.high < 0.0))
     }
 }
 
@@ -126,8 +133,13 @@ impl ComponentVolume {
 // including those shared geometrically with other components, has exactly
 // two opposite uses within that component. No pairing is inferred between
 // components merely because their geometry coincides.
-fn closed_components(positions: &[Point3], polygons: &[InputPolygon]) -> Vec<Option<usize>> {
-    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+fn closed_components(
+    positions: &[Point3],
+    polygons: &[InputPolygon],
+    incidence: &EdgeIncidence,
+    sectors: &[SourceSectorPair],
+    positive: Option<bool>,
+) -> Vec<Option<usize>> {
     let mut neighbors = vec![Vec::new(); polygons.len()];
     for uses in incidence.values() {
         if let [a, b] = uses.as_slice()
@@ -136,6 +148,11 @@ fn closed_components(positions: &[Point3], polygons: &[InputPolygon]) -> Vec<Opt
             neighbors[a.0].push(b.0);
             neighbors[b.0].push(a.0);
         }
+    }
+    for sector in sectors {
+        let [a, b] = sector.polygons;
+        neighbors[a].push(b);
+        neighbors[b].push(a);
     }
     let mut membership = vec![usize::MAX; polygons.len()];
     let mut closed = Vec::new();
@@ -185,7 +202,7 @@ fn closed_components(positions: &[Point3], polygons: &[InputPolygon]) -> Vec<Opt
         }
     }
     for (closed, volume) in closed.iter_mut().zip(volumes) {
-        *closed &= volume.is_some_and(|v| v.six_volume.resolves_nonzero());
+        *closed &= volume.is_some_and(|v| v.six_volume.resolves_sign(positive));
     }
     membership
         .into_iter()
@@ -200,12 +217,129 @@ fn closed_components(positions: &[Point3], polygons: &[InputPolygon]) -> Vec<Opt
 pub(super) fn separate_closed_components(
     positions: &mut Vec<Point3>,
     polygons: &mut [InputPolygon],
-    separated_vertices: &mut Vec<SeparatedSourceVertex>,
+    provenance: &mut SourceProvenance,
 ) -> Vec<bool> {
-    let components = closed_components(positions, polygons);
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+    let components = closed_components(positions, polygons, &incidence, &[], None);
+    separate_components(
+        positions,
+        polygons,
+        &components,
+        &mut provenance.separated_vertices,
+    );
+    let mut closed = components.iter().map(Option::is_some).collect::<Vec<_>>();
+    if closed.contains(&false) {
+        let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+        let selected =
+            select_sector_components(positions, polygons, &incidence, &closed, provenance);
+        separate_components(
+            positions,
+            polygons,
+            &selected,
+            &mut provenance.separated_vertices,
+        );
+        for (flag, component) in closed.iter_mut().zip(selected) {
+            *flag |= component.is_some();
+        }
+    }
+    closed
+}
+
+fn sector_candidates(
+    positions: &[Point3],
+    polygons: &[InputPolygon],
+    incidence: &EdgeIncidence,
+) -> [Vec<SourceSectorPair>; 2] {
+    let mut candidates = [Vec::new(), Vec::new()];
+    for (&edge, uses) in incidence {
+        if let Some(pairings) = paired_sectors(positions, polygons, edge, uses) {
+            for (index, pairs) in pairings.into_iter().enumerate() {
+                if let Some(pairs) = pairs {
+                    candidates[index].extend(pairs.into_iter().map(|polygons| SourceSectorPair {
+                        edge,
+                        polygons,
+                        positive_volume: index == 0,
+                    }));
+                }
+            }
+        }
+    }
+    for pairs in &mut candidates {
+        pairs.sort_unstable_by_key(|p| (p.edge, p.polygons));
+    }
+    candidates
+}
+
+fn select_sector_components(
+    positions: &[Point3],
+    polygons: &[InputPolygon],
+    incidence: &EdgeIncidence,
+    closed: &[bool],
+    provenance: &mut SourceProvenance,
+) -> Vec<Option<usize>> {
+    let pairs = sector_candidates(positions, polygons, incidence);
+    if pairs.iter().all(Vec::is_empty) {
+        return vec![None; polygons.len()];
+    }
+    let memberships = std::array::from_fn::<_, 2, _>(|index| {
+        closed_components(
+            positions,
+            polygons,
+            incidence,
+            &pairs[index],
+            Some(index == 0),
+        )
+    });
+    // A source polygon cannot belong to two incompatible sign-certified
+    // component explanations. Reject every overlapping component as a
+    // whole, not individual polygons that would break its closed chain.
+    let mut conflicts = [HashSet::default(), HashSet::default()];
+    for (id, &already_closed) in closed.iter().enumerate() {
+        if !already_closed && let (Some(a), Some(b)) = (memberships[0][id], memberships[1][id]) {
+            conflicts[0].insert(a);
+            conflicts[1].insert(b);
+        }
+    }
+    let mut group_ids = HashMap::default();
+    let mut selected = vec![None; polygons.len()];
+    for (id, &already_closed) in closed.iter().enumerate() {
+        if already_closed {
+            continue;
+        }
+        for (index, membership) in memberships.iter().enumerate() {
+            if let Some(component) = membership[id]
+                && !conflicts[index].contains(&component)
+            {
+                let next = group_ids.len();
+                selected[id] = Some(*group_ids.entry((index, component)).or_insert(next));
+            }
+        }
+    }
+    for (index, pairs) in pairs.into_iter().enumerate() {
+        for mut pair in pairs {
+            let [a, b] = pair.polygons;
+            if let Some(component) = memberships[index][a]
+                && group_ids
+                    .get(&(index, component))
+                    .is_some_and(|&group| selected[a] == Some(group) && selected[b] == Some(group))
+            {
+                pair.polygons = pair.polygons.map(|id| provenance.original_polygon_ids[id]);
+                provenance.sector_pairs.push(pair);
+            }
+        }
+    }
+    selected
+}
+
+fn separate_components(
+    positions: &mut Vec<Point3>,
+    polygons: &mut [InputPolygon],
+    components: &[Option<usize>],
+    separated_vertices: &mut Vec<SeparatedSourceVertex>,
+) {
     let mut owner = vec![None; positions.len()];
     // Reserve original IDs for the unresolved pool. Never change its edges.
-    for (polygon, component) in polygons.iter().zip(&components) {
+    for (polygon, component) in polygons.iter().zip(components) {
         if component.is_none() {
             for &vertex in &polygon.vertices {
                 owner[vertex] = Some(usize::MAX);
@@ -213,7 +347,7 @@ pub(super) fn separate_closed_components(
         }
     }
     let mut copies = HashMap::default();
-    for (polygon, component) in polygons.iter_mut().zip(&components) {
+    for (polygon, component) in polygons.iter_mut().zip(components) {
         let Some(component) = *component else {
             continue;
         };
@@ -236,7 +370,6 @@ pub(super) fn separate_closed_components(
             }
         }
     }
-    components.into_iter().map(|c| c.is_some()).collect()
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ mod join;
 mod meridian;
 mod region_boundary;
 mod source_collapse;
+mod source_sectors;
 mod source_sheet;
 mod source_topology;
 mod spatial;
@@ -45,6 +46,7 @@ pub use region_boundary::{
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use source_collapse::CollapsedSourceFacet;
+pub use source_sectors::SourceSectorPair;
 pub use source_sheet::CanceledSourceSheet;
 pub use source_topology::SeparatedSourceVertex;
 pub use spatial::{
@@ -269,6 +271,8 @@ pub struct SourceProvenance {
     pub collapsed_facets: Vec<CollapsedSourceFacet>,
     /// Coordinate-identical copies created to preserve closed components.
     pub separated_vertices: Vec<SeparatedSourceVertex>,
+    /// Exact angular sector pairings accepted by closed component proofs.
+    pub sector_pairs: Vec<SourceSectorPair>,
     /// Opt-in canceled opposite source sheets, using original polygon IDs.
     pub canceled_sheets: Vec<CanceledSourceSheet>,
 }
@@ -967,6 +971,7 @@ pub fn analyze_mesh_evidence(
         original_polygon_ids: Vec::with_capacity(source.len()),
         collapsed_facets: Vec::new(),
         separated_vertices: Vec::new(),
+        sector_pairs: Vec::new(),
         canceled_sheets: Vec::new(),
     };
     let mut polygons = Vec::with_capacity(source.len());
@@ -998,11 +1003,8 @@ pub fn analyze_mesh_evidence(
         source_collapse::required_repairs(&source, &provenance.original_polygon_ids)
     };
     drop(source);
-    let closed = source_topology::separate_closed_components(
-        &mut positions,
-        &mut polygons,
-        &mut provenance.separated_vertices,
-    );
+    let closed =
+        source_topology::separate_closed_components(&mut positions, &mut polygons, &mut provenance);
     // A component whose original edge uses already form a closed chain
     // has no T-junctions to repair. Do not split it at another body's
     // coincident geometry, or use its vertices to attach unresolved faces.
@@ -1015,11 +1017,7 @@ pub fn analyze_mesh_evidence(
                 .filter_map(|(p, &closed)| (!closed).then_some(p)),
         );
         // Exact subdivision can reveal additional independently closed chains.
-        source_topology::separate_closed_components(
-            &mut positions,
-            &mut polygons,
-            &mut provenance.separated_vertices,
-        );
+        source_topology::separate_closed_components(&mut positions, &mut polygons, &mut provenance);
     }
     source_collapse::verify_repairs(&positions, &polygons, &repairs)?;
     Ok(analyze_welded_evidence(
