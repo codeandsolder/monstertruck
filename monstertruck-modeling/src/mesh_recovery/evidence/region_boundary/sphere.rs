@@ -338,6 +338,37 @@ mod tests {
         };
         assert!((axial_center - center).magnitude() < 1.0e-10);
         assert!(radial_center.abs() < 1.0e-10 && (profile_radius - radius).abs() < 1.0e-10);
+        // A numerically tiny fitted radial offset must not survive as
+        // a toroidal implicit constraint at a spherical pole.
+        let measured = index
+            .measure_surface_region(
+                proposal.supports(),
+                SurfaceCarrier::CircularRevolution {
+                    axial_center: center,
+                    axis: Vector3::unit_z(),
+                    radial_center: crate::KERNEL_EPSILON * 0.25,
+                    profile_radius: radius,
+                },
+                SurfaceRegionBudget {
+                    vertex: 1.0e-10,
+                    chord: 0.5,
+                },
+            )
+            .ok_or("canonical spherical proposal")?;
+        assert!(matches!(
+            measured.carrier(),
+            SurfaceCarrier::CircularRevolution {
+                radial_center: 0.0,
+                ..
+            }
+        ));
+        let pole = center + Vector3::unit_z() * radius;
+        let (normal, residual) = measured
+            .carrier()
+            .signed_constraint(pole)
+            .ok_or("sphere pole")?;
+        assert_eq!(normal, Vector3::unit_z());
+        assert_eq!(residual, 0.0);
         let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
         assert_eq!(recovered.native.regions.len(), 1);
         assert!(recovered.complete_shell().is_some());

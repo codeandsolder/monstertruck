@@ -101,6 +101,27 @@ impl<'a> RegionBoundaryIndex<'a> {
         if !boundary.pinched_vertices.is_empty() {
             return None;
         }
+        // Canonicalize a sub-resolution circular meridian to a sphere
+        // before measuring it. Native construction already uses this
+        // kernel-scale distinction; retain exactly the geometry that
+        // passes the vertex and continuous chord budgets, so implicit
+        // constraints and chart construction cannot disagree at poles.
+        let carrier = match carrier {
+            SurfaceCarrier::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } if radial_center.abs() <= crate::KERNEL_EPSILON => {
+                SurfaceCarrier::CircularRevolution {
+                    axial_center,
+                    axis,
+                    radial_center: 0.0,
+                    profile_radius,
+                }
+            }
+            other => other,
+        };
         let mut vertex_error = 0.0_f64;
         for &support in supports {
             for &polygon in &self.evidence.planar_supports[support].source_face_indices {
