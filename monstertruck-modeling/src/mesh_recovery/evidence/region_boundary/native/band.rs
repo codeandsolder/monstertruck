@@ -39,17 +39,20 @@ pub(super) struct BandPlan {
 impl BandPlan {
     pub(super) fn faces(
         &self,
-        wires: Vec<Wire>,
+        wires: &[Wire],
         surface: &Surface,
     ) -> Result<Vec<Face>, NativeTrimError> {
-        let [first, second]: [Wire; 2] = wires
-            .try_into()
-            .map_err(|_| NativeTrimError::InvalidBoundary)?;
+        let [first, rest @ ..] = wires else {
+            return Err(NativeTrimError::InvalidBoundary);
+        };
         let [a0, a1] = &self.vertices[0];
         let [b0, b1] = &self.vertices[1];
-        let [first_a, first_b] = split_wire(&first, a0, a1).ok_or(NativeTrimError::FaceTopology)?;
-        let [second_a, second_b] =
-            split_wire(&second, b1, b0).ok_or(NativeTrimError::FaceTopology)?;
+        let [first_a, first_b] = split_wire(first, a0, a1).ok_or(NativeTrimError::FaceTopology)?;
+        let [second_a, second_b] = match rest {
+            [second] => split_wire(second, b1, b0).ok_or(NativeTrimError::FaceTopology)?,
+            [] if b0 == b1 => [Vec::new(), Vec::new()],
+            _ => return Err(NativeTrimError::InvalidBoundary),
+        };
         let wire_a = first_a
             .into_iter()
             .chain(self.seams[1].iter().cloned())
@@ -94,7 +97,7 @@ impl BandContext<'_> {
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
     ) -> Option<BandPlan> {
         let [first, second] = boundary.loops.as_slice() else {
-            return None;
+            return self.cap(boundary, trims);
         };
         let rings = [self.ring(first)?, self.ring(second)?];
         if rings[0].axis != rings[1].axis || rings[0].positive == rings[1].positive {
@@ -122,31 +125,10 @@ impl BandContext<'_> {
         if !self.covers_band(other, lower, span) {
             return None;
         }
-        let mut changed = BTreeMap::new();
-        for reference in first.iter().chain(second) {
-            changed.entry(reference.trim).or_insert_with(|| {
-                trims
-                    .get(reference.trim)
-                    .and_then(|v| v.as_ref().ok())
-                    .cloned()
-            });
-        }
+        let mut changed = copy_rings(first.iter().chain(second), trims)?;
         let mut endpoints = Vec::new();
         for (cycle, ring) in [first, second].into_iter().zip(rings) {
-            let vertices = [0.0, PI].map(|angle| {
-                let mut uv = [0.0; 2];
-                uv[axis] = angle;
-                uv[other] = ring.fixed;
-                let point = world_point(self.carrier, uv)?;
-                cut_ring(
-                    cycle,
-                    point,
-                    &mut changed,
-                    self.options.intersection_tolerance,
-                )
-            });
-            let [a, b] = vertices;
-            endpoints.push([a?, b?]);
+            endpoints.push(self.ring_vertices(cycle, ring, &mut changed)?);
         }
         let vertices: [[Vertex; 2]; 2] = endpoints.try_into().ok()?;
         let signed_span = if first_lower { span } else { -span };
@@ -166,14 +148,84 @@ impl BandContext<'_> {
             .collect::<Option<Vec<_>>>()?
             .try_into()
             .ok()?;
-        let updates = changed
-            .into_iter()
-            .map(|(id, edges)| Some((id, edges?)))
-            .collect::<Option<Vec<_>>>()?;
-        for (id, edges) in updates {
-            trims[id] = Ok(edges);
-        }
+        commit_rings(changed, trims);
         Some(BandPlan { vertices, seams })
+    }
+
+    // A spherical cap is the limiting annular chart whose second ring
+    // collapses to a pole. Its two meridian seams share a single pole vertex.
+    fn cap(
+        &self,
+        boundary: &RegionTrimLoops,
+        trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    ) -> Option<BandPlan> {
+        let SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        } = self.carrier
+        else {
+            return None;
+        };
+        if radial_center.abs() > crate::KERNEL_EPSILON {
+            return None;
+        }
+        let [cycle] = boundary.loops.as_slice() else {
+            return None;
+        };
+        let ring = self.ring(cycle)?;
+        if ring.axis != 0 {
+            return None;
+        }
+        let positive = ring.positive == self.outward;
+        let pole_angle = if positive { PI * 0.5 } else { -PI * 0.5 };
+        let sweep = pole_angle - ring.fixed;
+        if sweep.abs() <= self.options.angular_resolution
+            || !self.covers_band(1, pole_angle.min(ring.fixed), sweep.abs())
+        {
+            return None;
+        }
+        let mut changed = copy_rings(cycle.iter(), trims)?;
+        let endpoints = self.ring_vertices(cycle, ring, &mut changed)?;
+        let pole = builder::vertex(
+            axial_center
+                + axis
+                    * if positive {
+                        profile_radius
+                    } else {
+                        -profile_radius
+                    },
+        );
+        let seams = [0.0, PI]
+            .into_iter()
+            .enumerate()
+            .map(|(id, angle)| self.seam(0, angle, ring.fixed, sweep, &endpoints[id], &pole))
+            .collect::<Option<Vec<_>>>()?
+            .try_into()
+            .ok()?;
+        commit_rings(changed, trims);
+        Some(BandPlan {
+            vertices: [endpoints, [pole.clone(), pole]],
+            seams,
+        })
+    }
+
+    fn ring_vertices(
+        &self,
+        cycle: &[OrientedTrim],
+        ring: Ring,
+        changed: &mut BTreeMap<usize, Vec<Edge>>,
+    ) -> Option<[Vertex; 2]> {
+        let vertices = [0.0, PI].map(|angle| {
+            let mut uv = [0.0; 2];
+            uv[ring.axis] = angle;
+            uv[1 - ring.axis] = ring.fixed;
+            let point = world_point(self.carrier, uv)?;
+            cut_ring(cycle, point, changed, self.options.intersection_tolerance)
+        });
+        let [a, b] = vertices;
+        Some([a?, b?])
     }
 
     fn ring(&self, cycle: &[OrientedTrim]) -> Option<Ring> {
@@ -264,14 +316,29 @@ impl BandContext<'_> {
                         return false;
                     };
                     ids.iter().all(|&id| {
-                        let Some(uv) = chart_point(
-                            self.carrier,
-                            self.positions[id],
-                            self.options.angular_resolution,
-                        ) else {
+                        let point = self.positions[id];
+                        let value =
+                            chart_point(self.carrier, point, self.options.angular_resolution)
+                                .map(|uv| uv[other])
+                                .or_else(|| {
+                                    let SurfaceCarrier::CircularRevolution {
+                                        axial_center,
+                                        axis,
+                                        radial_center,
+                                        ..
+                                    } = self.carrier
+                                    else {
+                                        return None;
+                                    };
+                                    if other != 1 || radial_center.abs() > crate::KERNEL_EPSILON {
+                                        return None;
+                                    }
+                                    Some((point - axial_center).dot(axis).signum() * PI * 0.5)
+                                });
+                        let Some(value) = value else {
                             return false;
                         };
-                        let mut coordinate = uv[other] - lower;
+                        let mut coordinate = value - lower;
                         if periodic_coordinate(self.carrier, other) {
                             coordinate = coordinate.rem_euclid(TAU);
                             if TAU - coordinate <= self.options.angular_resolution {
@@ -419,14 +486,36 @@ fn parameter_circle(carrier: SurfaceCarrier, varying: usize, fixed: f64) -> Opti
     .filter(|circle| circle.radius > 0.0)
 }
 
+fn copy_rings<'a>(
+    references: impl Iterator<Item = &'a OrientedTrim>,
+    trims: &[Result<Vec<Edge>, NativeTrimError>],
+) -> Option<BTreeMap<usize, Vec<Edge>>> {
+    let mut changed = BTreeMap::new();
+    for reference in references {
+        if let std::collections::btree_map::Entry::Vacant(entry) = changed.entry(reference.trim) {
+            entry.insert(trims.get(reference.trim)?.as_ref().ok()?.clone());
+        }
+    }
+    Some(changed)
+}
+
+fn commit_rings(
+    changed: BTreeMap<usize, Vec<Edge>>,
+    trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+) {
+    for (id, edges) in changed {
+        trims[id] = Ok(edges);
+    }
+}
+
 fn cut_ring(
     cycle: &[OrientedTrim],
     point: Point3,
-    trims: &mut BTreeMap<usize, Option<Vec<Edge>>>,
+    trims: &mut BTreeMap<usize, Vec<Edge>>,
     tolerance: f64,
 ) -> Option<Vertex> {
     for reference in cycle {
-        let edges = trims.get(&reference.trim)?.as_ref()?;
+        let edges = trims.get(&reference.trim)?;
         for edge in edges {
             for vertex in [edge.front(), edge.back()] {
                 if (vertex.point() - point).magnitude() <= tolerance {
@@ -438,7 +527,7 @@ fn cut_ring(
     let vertex = builder::vertex(point);
     let mut cuts = Vec::new();
     for reference in cycle {
-        let edges = trims.get(&reference.trim)?.as_ref()?;
+        let edges = trims.get(&reference.trim)?;
         for (index, edge) in edges.iter().enumerate() {
             if let Some((left, right)) = edge.cut(&vertex)
                 && left.is_geometric_consistent()
@@ -453,7 +542,6 @@ fn cut_ring(
     };
     trims
         .get_mut(id)?
-        .as_mut()?
         .splice(*index..=*index, [left.clone(), right.clone()]);
     Some(vertex)
 }

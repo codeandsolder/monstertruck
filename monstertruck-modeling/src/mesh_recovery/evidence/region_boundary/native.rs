@@ -152,9 +152,11 @@ impl RegionBoundaryIndex<'_> {
             .map(|region| {
                 let carrier = partition.carriers.get(region.region).copied().flatten()?;
                 let supports = groups.get(region.region)?;
+                let boundary = region.boundary.as_ref().ok()?;
+                let carrier =
+                    chart_carrier(carrier, boundary, graph, options.intersection_tolerance);
                 let (surface, outward) =
                     native_surface(carrier, self.evidence, supports, positions).ok()?;
-                let boundary = region.boundary.as_ref().ok()?;
                 if !boundary.pinched_vertices.is_empty() {
                     return None;
                 }
@@ -230,6 +232,12 @@ impl FaceAssembly<'_> {
                 .groups
                 .get(region.region)
                 .ok_or(NativeTrimError::InvalidSource)?;
+            let carrier = chart_carrier(
+                carrier,
+                boundary,
+                self.graph,
+                self.options.intersection_tolerance,
+            );
             let (surface, outward) =
                 native_surface(carrier, self.evidence, supports, self.positions)?;
             let mut wires = Vec::new();
@@ -268,7 +276,7 @@ impl FaceAssembly<'_> {
                 wires.push(Wire::from(edges));
             }
             if let Some(plan) = plan {
-                let faces = plan.faces(wires, &surface)?;
+                let faces = plan.faces(&wires, &surface)?;
                 requires_chart_cut = false;
                 return Ok(faces);
             }
@@ -516,6 +524,50 @@ fn native_circle_edge(
     )
     .to_same_geometry();
     Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)
+}
+
+// A sphere has no intrinsic axis. Its circular boundary can define a
+// more useful chart without altering the fitted carrier geometry.
+fn chart_carrier(
+    carrier: SurfaceCarrier,
+    boundary: &super::RegionTrimLoops,
+    graph: &SharedTrimGraph,
+    tolerance: f64,
+) -> SurfaceCarrier {
+    let SurfaceCarrier::CircularRevolution {
+        axial_center,
+        radial_center,
+        profile_radius,
+        ..
+    } = carrier
+    else {
+        return carrier;
+    };
+    if radial_center.abs() > crate::KERNEL_EPSILON {
+        return carrier;
+    }
+    let [cycle] = boundary.loops.as_slice() else {
+        return carrier;
+    };
+    let Some(first) = cycle.first().and_then(|r| graph.trims.get(r.trim)) else {
+        return carrier;
+    };
+    let SharedTrimGeometry::Circle(circle) = first.geometry else {
+        return carrier;
+    };
+    if (circle.center - axial_center)
+        .cross(circle.normal)
+        .magnitude()
+        > tolerance
+    {
+        return carrier;
+    }
+    SurfaceCarrier::CircularRevolution {
+        axial_center,
+        axis: circle.normal,
+        radial_center: 0.0,
+        profile_radius,
+    }
 }
 
 fn native_surface(
@@ -954,6 +1006,81 @@ mod tests {
         assert_eq!(
             shell.shell_condition(),
             monstertruck_topology::shell::ShellCondition::Oriented
+        );
+        Ok(())
+    }
+    #[test]
+    fn spherical_cap_reorients_the_arbitrary_axis_and_shares_its_pole()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ring = 8_usize;
+        let mut positions = Vec::new();
+        for elevation in [0.0, PI * 0.25] {
+            let (z, rho) = elevation.sin_cos();
+            for j in 0..ring {
+                let (sin, cos) =
+                    (TAU * crate::usize_to_f64(j) / crate::usize_to_f64(ring)).sin_cos();
+                positions.push(Point3::new(rho * cos, rho * sin, z));
+            }
+        }
+        let pole = positions.len();
+        positions.push(Point3::new(0.0, 0.0, 1.0));
+        let mut faces = Vec::new();
+        for j in 0..ring {
+            let next = (j + 1) % ring;
+            faces.push(vec![j, next, next + ring, j + ring]);
+            faces.push(vec![j + ring, next + ring, pole]);
+        }
+        faces.push((0..ring).rev().collect());
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let mut supports = evidence.source_planar_support[..2 * ring].to_vec();
+        supports.sort_unstable();
+        supports.dedup();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_y(),
+            radial_center: 0.0,
+            profile_radius: 1.0,
+        };
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1.0e-8,
+                    chord: 0.5,
+                },
+            )
+            .ok_or("sphere")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?;
+        assert_eq!(native.regions.len(), 2);
+        assert!(native.regions.iter().all(|r| !r.requires_chart_cut));
+        assert_eq!(
+            native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+            2
+        );
+        let mut shell = crate::Shell::new();
+        for region in native.regions {
+            shell.extend(region.faces?);
+        }
+        assert_eq!(shell.len(), 3);
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Closed
         );
         Ok(())
     }
