@@ -142,8 +142,34 @@ impl<'a> RegionBoundaryIndex<'a> {
                 }
             }
         }
-        let chord = carrier.measure_source_chords(self.evidence, supports, budget.chord)?;
-        if chord.upper_bound > budget.chord {
+        let chord_bound = match carrier {
+            SurfaceCarrier::CircularRevolution {
+                axial_center,
+                radial_center: 0.0,
+                profile_radius,
+                ..
+            } => {
+                // Spherical extrema admit a direct filled-facet bound.
+                // Include interior points even when the source is an n-gon
+                // with no long chords in its perimeter.
+                let mut maximum = 0.0_f64;
+                for &support in supports {
+                    maximum = maximum.max(super::sphere::facet_residual_bound(
+                        self.evidence,
+                        support,
+                        axial_center,
+                        profile_radius,
+                    )?);
+                }
+                maximum
+            }
+            _ => {
+                carrier
+                    .measure_source_chords(self.evidence, supports, budget.chord)?
+                    .upper_bound
+            }
+        };
+        if chord_bound > budget.chord {
             return None;
         }
         Some(SurfaceRegionProposal {
@@ -152,7 +178,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             carrier,
             source_polygons: boundary.source_polygon_count,
             relative_vertex_error: vertex_error / budget.vertex,
-            relative_chord_bound: chord.upper_bound / budget.chord,
+            relative_chord_bound: chord_bound / budget.chord,
             independently_tested_profile: profile_is_tested(
                 self.evidence,
                 supports,

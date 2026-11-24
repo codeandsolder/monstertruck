@@ -2,7 +2,7 @@
 //! A single sphere through four points is interpolation; independent
 //! quadratic sample rank distinguishes it from competing quadric carriers.
 
-use super::super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier};
+use super::super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier, normal_basis};
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
@@ -41,6 +41,86 @@ impl SphereSeed {
     fn same(self, other: Self, tolerance: f64) -> bool {
         (self.center - other.center).magnitude() <= tolerance
             && (self.radius - other.radius).abs() <= tolerance
+    }
+}
+
+// Bound the residual of every point of an original polygon, not merely
+// its vertices or perimeter. A planar disk with a co-spherical rim is not
+// necessarily a good spherical approximation. Orthogonal projection onto
+// the support plane preserves the polygon's filled domain; the support's
+// measured point-to-plane envelope bounds displacement from that projection.
+pub(super) fn facet_residual_bound(
+    evidence: &MeshEvidence,
+    support: usize,
+    center: Point3,
+    radius: f64,
+) -> Option<f64> {
+    let plane = evidence.planar_supports.get(support)?;
+    let offset = (plane.origin - center).dot(plane.normal);
+    let (u, v) = normal_basis(plane.normal);
+    let mut bound = 0.0_f64;
+    for &polygon in &plane.source_face_indices {
+        let vertices = evidence.source_polygon_vertices(polygon)?;
+        let mut maximum = 0.0_f64;
+        for &id in vertices {
+            maximum = maximum.max((evidence.positions.get(id)? - center).magnitude());
+        }
+        // Distance to the sphere is bounded by its maximum at the farthest
+        // vertex and its minimum radial distance over the filled polygon.
+        let axial_lower = (offset.abs() - plane.max_vertex_plane_residual).max(0.0);
+        let transverse_lower = projected_polygon_distance(evidence, vertices, center, u, v)?;
+        let minimum = axial_lower.hypot(transverse_lower);
+        bound = bound
+            .max((maximum - radius).abs())
+            .max((radius - minimum).max(0.0));
+    }
+    bound.is_finite().then_some(bound)
+}
+
+// Distance from the projected center to a filled (possibly concave)
+// polygon. Its closest point is either the center itself or on an edge.
+// Use a half-open winding rule and adaptive orientation for crossings.
+fn projected_polygon_distance(
+    evidence: &MeshEvidence,
+    ids: &[usize],
+    center: Point3,
+    u: Vector3,
+    v: Vector3,
+) -> Option<f64> {
+    use robust::{Coord, orient2d};
+    let project = |id: usize| {
+        let delta = *evidence.positions.get(id)? - center;
+        Some(Coord {
+            x: delta.dot(u),
+            y: delta.dot(v),
+        })
+    };
+    let mut distance = f64::INFINITY;
+    let mut winding = 0_i64;
+    let zero = Coord { x: 0.0, y: 0.0 };
+    for (&a, &b) in ids.iter().zip(ids.iter().cycle().skip(1)) {
+        let start = project(a)?;
+        let end = project(b)?;
+        let dx = end.x - start.x;
+        let dy = end.y - start.y;
+        let length2 = dx.mul_add(dx, dy * dy);
+        let t = if length2 > 0.0 {
+            (-start.x.mul_add(dx, start.y * dy) / length2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        distance = distance.min(dx.mul_add(t, start.x).hypot(dy.mul_add(t, start.y)));
+        let turn = orient2d(start, end, zero);
+        if start.y <= 0.0 && end.y > 0.0 && turn > 0.0 {
+            winding += 1;
+        } else if start.y > 0.0 && end.y <= 0.0 && turn < 0.0 {
+            winding -= 1;
+        }
+    }
+    if winding != 0 {
+        Some(0.0)
+    } else {
+        distance.is_finite().then_some(distance)
     }
 }
 
@@ -162,7 +242,8 @@ impl SphereDiscovery<'_> {
         sample.vertices.iter().all(|&id| {
             ((self.evidence.positions[id] - sphere.center).magnitude() - sphere.radius).abs()
                 <= tolerance
-        })
+        }) && facet_residual_bound(self.evidence, support, sphere.center, sphere.radius)
+            .is_some_and(|error| error <= self.chord_fraction * sphere.radius)
     }
 
     fn grow(&self, seed: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> Vec<usize> {
@@ -453,6 +534,118 @@ mod tests {
         // region when the configured surface budget excludes the seam.
         let strict = index.discover_spherical_regions(1.0e-6, 1.0e-8, 0.3);
         assert!(strict.iter().all(|p| p.source_polygons() < steps * steps));
+        Ok(())
+    }
+
+    #[test]
+    fn cospherical_planar_closure_does_not_poison_spherical_growth()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rings = 8_usize;
+        let sides = 24_usize;
+        let mut positions = vec![Point3::new(0.0, 0.0, 1.0)];
+        let mut polygons = Vec::new();
+        for ring in 1..=rings {
+            // More than a hemisphere: the planar closure and the sphere
+            // have the same oriented support-plane offset sign.
+            let theta = TAU / 3.0 * crate::usize_to_f64(ring) / crate::usize_to_f64(rings);
+            let (rho, z) = theta.sin_cos();
+            for j in 0..sides {
+                let (sin, cos) =
+                    (TAU * crate::usize_to_f64(j) / crate::usize_to_f64(sides)).sin_cos();
+                positions.push(Point3::new(rho * cos, rho * sin, z));
+            }
+        }
+        for j in 0..sides {
+            polygons.push(vec![0, 1 + j, 1 + (j + 1) % sides]);
+        }
+        for ring in 1..rings {
+            for j in 0..sides {
+                let a = 1 + (ring - 1) * sides;
+                let b = a + sides;
+                let k = (j + 1) % sides;
+                polygons.push(vec![a + j, b + j, b + k, a + k]);
+            }
+        }
+        let spherical_polygons = polygons.len();
+        let cap_start = 1 + (rings - 1) * sides;
+        let rim = (cap_start..cap_start + sides).rev().collect::<Vec<_>>();
+        for triangulated in [false, true] {
+            let mut faces = polygons.clone();
+            if triangulated {
+                faces.extend(
+                    rim[1..]
+                        .windows(2)
+                        .map(|pair| vec![rim[0], pair[0], pair[1]]),
+                );
+            } else {
+                faces.push(rim.clone());
+            }
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions: positions.clone(),
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let cap = evidence
+                .planar_supports
+                .iter()
+                .position(|support| {
+                    support.source_face_indices.iter().all(|&polygon| {
+                        evidence
+                            .source_polygon_vertices(polygon)
+                            .is_some_and(|vertices| {
+                                vertices
+                                    .iter()
+                                    .all(|&id| (evidence.positions[id].z + 0.5).abs() < 1.0e-10)
+                            })
+                    })
+                })
+                .ok_or("planar closure support")?;
+            let center = Point3::new(0.0, 0.0, 0.0);
+            let carrier = SurfaceCarrier::CircularRevolution {
+                axial_center: center,
+                axis: Vector3::unit_z(),
+                radial_center: 0.0,
+                profile_radius: 1.0,
+            };
+            let residual =
+                facet_residual_bound(&evidence, cap, center, 1.0).ok_or("closure facet bound")?;
+            assert!(
+                (residual - 0.5).abs() < 1.0e-9,
+                "closure residual {residual}"
+            );
+            if !triangulated {
+                let perimeter = carrier
+                    .measure_source_chords(&evidence, &[cap], 0.3)
+                    .ok_or("closure perimeter")?;
+                assert!(perimeter.upper_bound < 0.3);
+            }
+            let proposals = index.discover_spherical_regions(1.0e-4, 1.0e-8, 0.3);
+            let found = proposals
+                .iter()
+                .find(|p| p.source_polygons() == spherical_polygons)
+                .ok_or("sphere without its planar closure")?;
+            assert!(!found.supports().contains(&cap));
+            assert!(found.independently_tested_profile());
+            let mut union = found.supports().to_vec();
+            union.push(cap);
+            union.sort_unstable();
+            assert!(
+                index
+                    .measure_surface_region(
+                        &union,
+                        carrier,
+                        SurfaceRegionBudget {
+                            vertex: 1.0e-8,
+                            chord: 0.3,
+                        }
+                    )
+                    .is_none()
+            );
+        }
         Ok(())
     }
 
