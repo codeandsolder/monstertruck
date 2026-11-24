@@ -36,6 +36,13 @@ impl Default for PlanarRecoveryOptions {
     }
 }
 
+mod analytic;
+pub use analytic::{
+    AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
+    AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, RecoveredAnalyticMesh,
+    SelectedSurfaceProposal, SupportRefinementPass, construct_analytic_recovery,
+    discover_analytic_regions, recover_analytic_evidence, recover_analytic_mesh,
+};
 mod cylinder;
 mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
@@ -44,19 +51,19 @@ mod evidence;
 mod sample_fit;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, CarrierCoincidenceEvidence, CarrierResidual, ChainPairEvidence,
-    CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions, CircleAxisStation,
-    CircularMeridianEvidence, CollinearChain, ContactCircleEvidence, ContactCurveEvidence,
-    ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
-    CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdge,
-    FeatureEdgeKind, MeridianGraphOptions, MeridianStation, MeridianStationGraph,
-    MeridianTransition, MeshEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph,
-    NativeTrimOptions, OrientedTrim, ParallelBundle, ParallelPlacement, PlanarSupport,
-    ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim,
-    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
-    SharedTrimSegmentation, SourceCircleObservation, SpatialTrackEvidence,
+    AxialRadialStation, CanceledSourceSheet, CarrierCoincidenceEvidence, CarrierResidual,
+    ChainPairEvidence, CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions,
+    CircleAxisStation, CircularMeridianEvidence, CollinearChain, ContactCircleEvidence,
+    ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
+    CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
+    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeridianGraphOptions, MeridianStation,
+    MeridianStationGraph, MeridianTransition, MeshEvidence, NativeRegionFace, NativeTrimError,
+    NativeTrimGraph, NativeTrimOptions, NormalizedSourceEvidence, OrientedTrim, ParallelBundle,
+    ParallelPlacement, PlanarSupport, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
+    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, RegionTrimBoundary,
+    RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions,
+    SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation, SpatialTrackEvidence,
     SpatialTrackJoinEvidence, StationLinearCandidate, StationMeridianCandidate,
     StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
     SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
@@ -173,15 +180,29 @@ fn signed_plane_distance(point: Point3, origin: Point3, normal: Vector3) -> f64 
 ///
 /// Compensated summation protects thin solids with cancelling oriented faces.
 fn signed_source_volume(positions: &[Point3], polygons: &[InputPolygon]) -> Option<f64> {
-    let first = polygons.first()?.vertices.first()?;
-    let origin = positions[*first];
+    signed_polygon_volume(
+        positions,
+        polygons.iter().map(|polygon| polygon.vertices.as_slice()),
+    )
+}
+
+fn signed_polygon_volume<'a>(
+    positions: &[Point3],
+    polygons: impl IntoIterator<Item = &'a [usize]>,
+) -> Option<f64> {
+    let mut polygons = polygons.into_iter();
+    let first = polygons.next()?;
+    let origin = *positions.get(*first.first()?)?;
     let mut six_volume = 0.0_f64;
     let mut compensation = 0.0_f64;
-    for polygon in polygons {
-        let a = positions[polygon.vertices[0]] - origin;
-        for i in 1..polygon.vertices.len() - 1 {
-            let b = positions[polygon.vertices[i]] - origin;
-            let c = positions[polygon.vertices[i + 1]] - origin;
+    for polygon in std::iter::once(first).chain(polygons) {
+        if polygon.len() < 3 {
+            return None;
+        }
+        let a = *positions.get(polygon[0])? - origin;
+        for pair in polygon[1..].windows(2) {
+            let b = *positions.get(pair[0])? - origin;
+            let c = *positions.get(pair[1])? - origin;
             let term = a.dot(b.cross(c));
             let corrected = term - compensation;
             let next = six_volume + corrected;

@@ -18,6 +18,7 @@ mod growth;
 mod join;
 mod meridian;
 mod region_boundary;
+mod source_sheet;
 mod spatial;
 mod station_graph;
 mod support;
@@ -41,6 +42,7 @@ pub use region_boundary::{
     SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
+pub use source_sheet::{CanceledSourceSheet, NormalizedSourceEvidence};
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
     measure_spatial_support_set,
@@ -288,6 +290,26 @@ pub struct MeshEvidence {
 }
 
 impl MeshEvidence {
+    /// Signed polyhedral volume of a closed, consistently oriented source chain.
+    /// Returns none for open, ambiguous, or empty source incidence. This is
+    /// a numerical integral, not a non-self-intersection certificate.
+    #[must_use]
+    pub fn closed_source_volume(&self) -> Option<f64> {
+        if self
+            .edges
+            .iter()
+            .any(|edge| edge.kind != FeatureEdgeKind::Dihedral)
+            || self.non_manifold_edge_count != 0
+            || self.inconsistent_winding_edge_count != 0
+        {
+            return None;
+        }
+        let polygons = (0..self.source_planar_support.len())
+            .map(|id| self.source_polygon_vertices(id))
+            .collect::<Option<Vec<_>>>()?;
+        super::signed_polygon_volume(&self.positions, polygons)
+    }
+
     /// Exact canonical source vertex IDs of an input polygon, including any
     /// collinear points inserted to resolve original T-junctions.
     #[must_use]
@@ -913,6 +935,13 @@ pub fn analyze_mesh_evidence(
     mesh: &PolygonMesh,
     options: EvidenceOptions,
 ) -> Result<MeshEvidence, MeshRecoveryError> {
+    validate_evidence_options(options)?;
+    let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
+    seams::split_source_t_junctions(&positions, &mut polygons);
+    Ok(analyze_welded_evidence(positions, polygons, options))
+}
+
+fn validate_evidence_options(options: EvidenceOptions) -> Result<(), MeshRecoveryError> {
     if !options.min_dihedral_angle_radians.is_finite()
         || !(0.0..std::f64::consts::PI).contains(&options.min_dihedral_angle_radians)
         || !options.max_parallel_angle_radians.is_finite()
@@ -925,8 +954,14 @@ pub fn analyze_mesh_evidence(
     {
         return Err(MeshRecoveryError::InvalidEvidenceOptions);
     }
-    let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
-    seams::split_source_t_junctions(&positions, &mut polygons);
+    Ok(())
+}
+
+fn analyze_welded_evidence(
+    positions: Vec<Point3>,
+    polygons: Vec<InputPolygon>,
+    options: EvidenceOptions,
+) -> MeshEvidence {
     let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let EdgeSelection {
         edges,
@@ -952,7 +987,7 @@ pub fn analyze_mesh_evidence(
         source_polygon_vertex_indices.extend_from_slice(&polygon.vertices);
     }
     source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
-    Ok(MeshEvidence {
+    MeshEvidence {
         positions,
         edges,
         chains,
@@ -966,7 +1001,7 @@ pub fn analyze_mesh_evidence(
         suppressed_interior_edge_count: suppressed_coplanar,
         non_manifold_edge_count: non_manifold,
         inconsistent_winding_edge_count: winding_conflicts,
-    })
+    }
 }
 
 #[cfg(test)]

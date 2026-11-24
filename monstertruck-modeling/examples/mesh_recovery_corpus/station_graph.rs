@@ -3,140 +3,20 @@
 use super::{PartitionCarriers, partition_contact_metrics};
 
 use monstertruck_modeling::mesh_recovery::{
-    CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureTrack, MeridianGraphOptions,
-    MeridianStationGraph, MeshEvidence, NativeTrimGraph, NativeTrimOptions, ReconciliationOptions,
-    RegionBoundaryIndex, RegionContactGraph, SharedTrimGeometry, SharedTrimGraph,
-    SharedTrimOptions, SpatialTrackEvidence, StationLinearCandidate, StationMeridianCandidate,
-    SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal, discover_circle_axes,
-    measure_curvature_spatial,
+    AnalyticRecoveryOptions, CurvatureGrowthHypothesis, CurvatureTrack, MeshEvidence,
+    NativeTrimGraph, RecoveredAnalyticMesh, RegionBoundaryIndex, RegionContactGraph,
+    SelectedSurfaceProposal, SharedTrimGeometry, SharedTrimGraph, SpatialTrackEvidence,
+    StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
+    construct_analytic_recovery, discover_analytic_regions, recover_analytic_evidence,
 };
-use monstertruck_modeling::{InnerSpace, Point3, Vector3};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-const RELATIVE_BUDGET: f64 = 1.0e-4;
-const AXIS_RESOLUTION: f64 = 1.0e-8;
-// Local chord approximation envelope. For a cylindrical chord the
-// conservative squared-radius bound is r*sin²(azimuth_step/2); a quarter
-// radius corresponds to a 60 degree source step. This is a declared
-// sampling-quality constraint, not a claim that every inscribed polygon
-// at finer resolution was originally analytic.
-const LINEAR_CHORD_FRACTION: f64 = 0.25;
-// A quarter-turn circular chord has sagitta r*(1-cos(pi/4)).
-// Limit the absolute surface deviation to this fraction of the observed
-// meridian scale; exact vertex interpolation alone cannot justify a surface
-// with coarser deviation. Continuous bounds are refined at this budget.
-const CIRCULAR_CHORD_FRACTION: f64 = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
-
-struct PlacedAxis {
-    origin: Point3,
-    axis: Vector3,
-    source_track: Option<usize>,
-    source_circle_group: Option<usize>,
-    circular_seed: bool,
-}
-
-fn independent_axes(
-    evidence: &MeshEvidence,
-    spatial: &[Option<SpatialTrackEvidence>],
-    local_tracks: &[CurvatureTrack],
-) -> Vec<PlacedAxis> {
-    let Some(&reference) = evidence.positions.first() else {
-        return Vec::new();
-    };
-    let extent = evidence
-        .positions
-        .iter()
-        .map(|&p| (p - reference).magnitude())
-        .fold(0.0_f64, f64::max);
-    if extent <= 0.0 {
-        return Vec::new();
+fn recovery_options() -> AnalyticRecoveryOptions {
+    AnalyticRecoveryOptions {
+        max_planar_displacement: 0.0055,
+        ..Default::default()
     }
-    let mut tracks = local_tracks
-        .iter()
-        .enumerate()
-        .filter_map(|(id, track)| {
-            let fit = spatial
-                .get(id)?
-                .clone()
-                .or_else(|| measure_curvature_spatial(evidence, track))?;
-            Some((id, fit))
-        })
-        .filter(|(_, fit)| {
-            fit.max_sample_radial_residual <= AXIS_RESOLUTION * fit.mean_sample_radius
-                && fit.max_support_plane_offset_residual <= AXIS_RESOLUTION * fit.mean_sample_radius
-        })
-        .collect::<Vec<_>>();
-    tracks.sort_unstable_by(|(a_id, a), (b_id, b)| {
-        a.relative_max_sample_radial_residual
-            .total_cmp(&b.relative_max_sample_radial_residual)
-            .then_with(|| {
-                b.transverse_normal_rank_ratio
-                    .total_cmp(&a.transverse_normal_rank_ratio)
-            })
-            .then(a_id.cmp(b_id))
-    });
-    let mut result: Vec<PlacedAxis> = Vec::new();
-    for (id, fit) in tracks {
-        let axis = fit.axis;
-        let origin = fit.axis_origin + axis * (reference - fit.axis_origin).dot(axis);
-        if result.iter().any(|placed| {
-            axis.cross(placed.axis).magnitude() <= AXIS_RESOLUTION
-                && (origin - placed.origin).magnitude() <= AXIS_RESOLUTION * extent
-        }) {
-            continue;
-        }
-        result.push(PlacedAxis {
-            origin,
-            axis,
-            source_track: Some(id),
-            source_circle_group: None,
-            circular_seed: true,
-        });
-    }
-    result
-}
-
-fn extend_with_circle_axes(evidence: &MeshEvidence, axes: &mut Vec<PlacedAxis>) -> Value {
-    let mut circle_summary = Value::Null;
-    if let Some(&reference) = evidence.positions.first() {
-        let extent = evidence
-            .positions
-            .iter()
-            .map(|&point| (point - reference).magnitude())
-            .fold(0.0_f64, f64::max);
-        let resolution = extent * AXIS_RESOLUTION;
-        if let Some(discovery) = discover_circle_axes(
-            evidence,
-            CircleAxisOptions {
-                vertex_tolerance: resolution,
-                relative_tolerance: RELATIVE_BUDGET,
-                axis_position_tolerance: 8.0 * resolution,
-                axis_angle_tolerance_radians: 1.0e-7,
-            },
-        ) {
-            let mut added = 0;
-            for (id, group) in discovery.axes.iter().enumerate() {
-                if let Some(placed) = axes.iter_mut().find(|placed| {
-                    group.axis.cross(placed.axis).magnitude() <= AXIS_RESOLUTION
-                        && (group.origin - placed.origin).magnitude() <= resolution
-                }) {
-                    placed.circular_seed |= group.stations.len() >= 4;
-                    continue;
-                }
-                axes.push(PlacedAxis {
-                    origin: group.origin,
-                    axis: group.axis,
-                    source_track: None,
-                    source_circle_group: Some(id),
-                    circular_seed: group.stations.len() >= 4,
-                });
-                added += 1;
-            }
-            circle_summary = json!({"source_triples":discovery.source_triples,"circles":discovery.circles.len(),"repeated_axes":discovery.axes.len(),"axes_added":added});
-        }
-    }
-    circle_summary
 }
 
 fn selected_partition(
@@ -150,7 +30,11 @@ fn selected_partition(
         .filter_map(|c| curved_proposal(boundary, c))
         .collect::<Vec<_>>();
     let partition = boundary
-        .select_surface_partition(&proposals, planar_baseline, 100_000)
+        .select_surface_partition(
+            &proposals,
+            planar_baseline,
+            recovery_options().max_partition_search_nodes,
+        )
         .map_err(|error| error.to_string())?;
     let carriers =
         PartitionCarriers::new(evidence, partition.carriers, &partition.region_by_polygon);
@@ -170,7 +54,7 @@ fn curved_proposal<'a>(
         &candidate.supports,
         SurfaceCarrier::from_circular_meridian(&candidate.fit),
         SurfaceRegionBudget {
-            vertex: RELATIVE_BUDGET * scale,
+            vertex: recovery_options().relative_surface_tolerance * scale,
             chord: candidate.chord_tolerance,
         },
     )
@@ -209,347 +93,93 @@ fn candidate_summary(evidence: &MeshEvidence, candidate: &StationMeridianCandida
     })
 }
 
-fn graph_options(evidence: &MeshEvidence, placed: &PlacedAxis) -> MeridianGraphOptions {
-    let extent = evidence
-        .positions
-        .iter()
-        .map(|&p| (p - placed.origin).magnitude())
-        .fold(0.0_f64, f64::max);
-    let resolution = extent * AXIS_RESOLUTION;
-    MeridianGraphOptions {
-        station_resolution: resolution,
-        vertex_tolerance: 4.0 * resolution,
-        relative_tolerance: RELATIVE_BUDGET,
-        max_linear_relative_chord_error: LINEAR_CHORD_FRACTION,
-        max_circular_relative_chord_error: CIRCULAR_CHORD_FRACTION,
-        normal_tolerance_radians: 1.0e-5,
-    }
-}
-
 pub fn summarize(
     evidence: &MeshEvidence,
-    boundary: &RegionBoundaryIndex<'_>,
+    _boundary: &RegionBoundaryIndex<'_>,
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
     local_tracks: &[CurvatureTrack],
 ) -> Result<Value, String> {
-    let mut axes = independent_axes(evidence, spatial, local_tracks);
-    let circle_summary = extend_with_circle_axes(evidence, &mut axes);
-    let mut refined = None;
-    let mut history = Vec::new();
-    loop {
-        let active = refined.as_ref().unwrap_or(evidence);
-        let split = axes
-            .iter()
-            .filter_map(|placed| {
-                MeridianStationGraph::new(
-                    active,
-                    placed.origin,
-                    placed.axis,
-                    graph_options(active, placed),
-                )
-            })
-            .flat_map(|graph| graph.mixed_support_refinements())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        history.push(
-            json!({"support_count":active.planar_supports.len(),"split_supports":split.len()}),
-        );
-        if split.is_empty() {
-            break;
-        }
-        // Monotone refinement, finite because each split makes singletons.
-        refined = Some(
-            active
-                .refine_planar_supports(&split)
-                .map_err(|error| error.to_string())?,
-        );
-    }
-    let mut result = if let Some(active) = &refined {
-        let active_boundary =
-            RegionBoundaryIndex::new(active).map_err(|error| error.to_string())?;
-        evaluate_axes(active, evidence, &active_boundary, &axes, grown)?
-    } else {
-        evaluate_axes(evidence, evidence, boundary, &axes, grown)?
-    };
-    result["circle_axis_discovery"] = circle_summary;
-    result["support_refinement"] = json!({"passes":history,"original_supports":evidence.planar_supports.len(),
-        "final_supports":refined.as_ref().map_or(evidence.planar_supports.len(),|active|active.planar_supports.len()),"placed_axes":axes.len()});
-    Ok(result)
-}
-
-fn evaluate_axes(
-    evidence: &MeshEvidence,
-    planar_baseline: &MeshEvidence,
-    boundary: &RegionBoundaryIndex<'_>,
-    axes: &[PlacedAxis],
-    grown: &[CurvatureGrowthHypothesis],
-) -> Result<Value, String> {
-    let mut results = Vec::new();
-    let mut candidates = BTreeMap::<Vec<usize>, StationMeridianCandidate>::new();
-    let mut linear = BTreeMap::<Vec<usize>, StationLinearCandidate>::new();
-    for placed in axes {
-        let options = graph_options(evidence, placed);
-        let Some(graph) = MeridianStationGraph::new(evidence, placed.origin, placed.axis, options)
-        else {
-            continue;
-        };
-        let linear_candidates = graph.discover_linear(boundary);
-        let linear_count = linear_candidates.len();
-        for candidate in linear_candidates {
-            let entry = linear
-                .entry(candidate.supports.clone())
-                .or_insert_with(|| candidate.clone());
-            if candidate.max_vertex_residual < entry.max_vertex_residual {
-                *entry = candidate;
-            }
-        }
-        if !placed.circular_seed {
-            if linear_count > 0 {
-                results.push(json!({"source_track":placed.source_track,"source_circle_group":placed.source_circle_group,
-                    "axis":[placed.axis.x,placed.axis.y,placed.axis.z],"origin":[placed.origin.x,placed.origin.y,placed.origin.z],
-                    "stations":graph.stations().len(),"linear_candidates":linear_count,"candidates":0}));
-            }
-            continue;
-        }
-        let found = graph.discover_circular(boundary);
-        results.push(json!({
-            "source_track":placed.source_track,
-            "source_circle_group":placed.source_circle_group,
-            "axis":[placed.axis.x,placed.axis.y,placed.axis.z],
-            "origin":[placed.origin.x,placed.origin.y,placed.origin.z],
-            "stations":graph.stations().len(),
-            "repeated_transitions":graph.transitions().iter().filter(|transition|transition.repeated).count(),
-            "seeds":found.seed_count,
-            "profiles":found.profile_count,
-            "candidates":found.candidates.len(),
-            "linear_candidates":linear_count,
-        }));
-        for candidate in found.candidates {
-            let entry = candidates
-                .entry(candidate.supports.clone())
-                .or_insert_with(|| candidate.clone());
-            if candidate.fit.max_vertex_residual < entry.fit.max_vertex_residual {
-                *entry = candidate;
-            }
-        }
-    }
-    let mut candidates = candidates.into_values().collect::<Vec<_>>();
-    candidates.sort_unstable_by(|a, b| {
-        b.source_polygons
-            .cmp(&a.source_polygons)
-            .then_with(|| {
-                a.fit
-                    .max_vertex_residual
-                    .total_cmp(&b.fit.max_vertex_residual)
-            })
-            .then_with(|| a.supports.cmp(&b.supports))
-    });
+    let options = recovery_options();
+    let discovered = discover_analytic_regions(evidence, spatial, grown, local_tracks, options)
+        .map_err(|e| e.to_string())?;
+    let recovery = construct_analytic_recovery(discovered, options).map_err(|e| e.to_string())?;
+    let active = &recovery.evidence;
+    let stats = &recovery.discovery;
+    let boundary = RegionBoundaryIndex::new(active).map_err(|e| e.to_string())?;
     let mut used = BTreeSet::new();
     let mut selected = Vec::new();
-    for candidate in &candidates {
-        // Provisional admissibility: even a perfectly interpolating surface
-        // must remain within the observed feature scale along source chords.
-        // Retain failures as alternatives, not as selected analytic regions.
-        if candidate.source_chords.upper_bound > candidate.chord_tolerance {
-            continue;
-        }
-        if candidate.supports.iter().any(|id| used.contains(id)) {
+    for candidate in &stats.circular_candidates {
+        if candidate.source_chords.upper_bound > candidate.chord_tolerance
+            || candidate.supports.iter().any(|id| used.contains(id))
+        {
             continue;
         }
         used.extend(candidate.supports.iter().copied());
         selected.push(candidate);
     }
-    let partition = selected_partition(evidence, planar_baseline, boundary, &selected)?;
-    let linear = linear.into_values().collect::<Vec<_>>();
-    let joint = joint_partition(
-        evidence,
-        planar_baseline,
-        boundary,
-        &candidates,
-        &linear,
-        grown,
-    )?;
-    Ok(
-        json!({"axes":results,"candidates":candidates.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"selected":selected.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"applied_partition":partition,"joint_partition":joint}),
-    )
-}
-
-fn trim_options(evidence: &MeshEvidence) -> SharedTrimOptions {
-    let extent = evidence.positions.first().map_or(0.0, |&reference| {
-        evidence
-            .positions
-            .iter()
-            .map(|&point| (point - reference).magnitude())
-            .fold(0.0_f64, f64::max)
-    });
-    SharedTrimOptions {
-        absolute_tolerance: extent * AXIS_RESOLUTION * 8.0,
-        relative_tolerance: RELATIVE_BUDGET,
-        max_interval_edges: 128,
-    }
-}
-
-fn joint_partition(
-    evidence: &MeshEvidence,
-    planar_baseline: &MeshEvidence,
-    boundary: &RegionBoundaryIndex<'_>,
-    curved: &[StationMeridianCandidate],
-    linear: &[StationLinearCandidate],
-    grown: &[CurvatureGrowthHypothesis],
-) -> Result<Value, String> {
-    let mut proposals = Vec::new();
-    let mut seen = BTreeSet::new();
-    proposals.extend(curved.iter().filter_map(|c| curved_proposal(boundary, c)));
-    let curved_count = proposals.len();
-    for candidate in linear {
-        if let Some(proposal) = boundary.measure_surface_region(
-            &candidate.supports,
-            candidate.carrier,
-            SurfaceRegionBudget {
-                vertex: candidate.vertex_tolerance,
-                chord: candidate.chord_tolerance,
-            },
-        ) {
-            seen.insert(candidate.supports.clone());
-            proposals.push(proposal);
-        }
-    }
-    let direct_linear_count = proposals.len() - curved_count;
-    for candidate in grown {
-        let fit = &candidate.spatial;
-        let scale = fit.mean_sample_radius.min(fit.axial_coordinate_span);
-        if scale <= 0.0
-            || fit.max_sample_radial_residual > RELATIVE_BUDGET * scale
-            || fit.max_support_plane_offset_residual > RELATIVE_BUDGET * fit.mean_sample_radius
-            || fit.support_normal_axial_projection_spread > RELATIVE_BUDGET
-        {
-            continue;
-        }
-        let supports = candidate
-            .support_indices
-            .iter()
-            .flat_map(|&id| &planar_baseline.planar_supports[id].source_face_indices)
-            .map(|&polygon| evidence.source_planar_support[polygon])
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if !seen.insert(supports.clone()) {
-            continue;
-        }
-        let Some(carrier) = SurfaceCarrier::from_spatial_fit(fit) else {
-            continue;
-        };
-        if let Some(proposal) = boundary.measure_surface_region(
-            &supports,
-            carrier,
-            SurfaceRegionBudget {
-                vertex: RELATIVE_BUDGET * scale,
-                chord: LINEAR_CHORD_FRACTION
-                    * fit
-                        .axial_stations
-                        .iter()
-                        .map(|s| s.radius_mean)
-                        .fold(f64::INFINITY, f64::min),
-            },
-        ) {
-            proposals.push(proposal);
-        }
-    }
-    let partition = boundary
-        .select_surface_partition(&proposals, planar_baseline, 100_000)
-        .map_err(|error| error.to_string())?;
-    let chosen = partition
-        .selected_proposals
+    let baseline = selected_partition(active, evidence, &boundary, &selected)?;
+    let axes=stats.axes.iter().map(|a|json!({
+        "source_track":a.source_track,"source_circle_group":a.source_circle_group,
+        "axis":[a.axis.x,a.axis.y,a.axis.z],"origin":[a.origin.x,a.origin.y,a.origin.z],
+        "stations":a.stations,"repeated_transitions":a.repeated_transitions,
+        "seeds":a.seed_count,"profiles":a.profile_count,"candidates":a.circular_candidates,"linear_candidates":a.linear_candidates,
+    })).collect::<Vec<_>>();
+    let circle_summary=stats.circle_axes.map(|c|json!({"source_triples":c.source_triples,"circles":c.circles,"repeated_axes":c.repeated_axes,"axes_added":c.axes_added}));
+    let history = stats
+        .refinement_passes
         .iter()
-        .map(|&id| proposal_summary(evidence, &proposals[id]))
+        .map(|p| json!({"support_count":p.support_count,"split_supports":p.split_supports}))
         .collect::<Vec<_>>();
-    let selected_curved = partition
-        .selected_proposals
-        .iter()
-        .filter(|&&id| id < curved_count)
-        .count();
-    let FinishedPartition {
-        partition,
-        repair_summary,
-        trim_graph,
-        native,
-    } = finish_partition(evidence, boundary, partition)?;
-    let region_count = partition.carriers.iter().flatten().count();
-    let carriers =
-        PartitionCarriers::new(evidence, partition.carriers, &partition.region_by_polygon);
-    Ok(json!({
-        "curved_proposals":curved_count,
-        "linear_proposals":proposals.len()-curved_count,
-        "direct_linear_proposals":direct_linear_count,
-        "direct_linear_hypotheses":linear.len(),
-        "selected_curved":selected_curved,
-        "selected_linear":chosen.len()-selected_curved,
-        "selected":chosen,
-        "consolidated_supports":partition.consolidated_supports,
-        "region_count":region_count,
-        "original_planar_supports":planar_baseline.planar_supports.len(),
-        "exact_overlap_components":partition.exact_components,
-        "limited_overlap_components":partition.limited_components,
-        "contact_graph":partition_contact_metrics(&partition.contacts,evidence,Some(&carriers)),
-        "reconciliation":repair_summary,
-        "native":native,
-        "analytic_trims":trim_summary(&trim_graph, &partition.contacts,&carriers),
-    }))
-}
-
-struct FinishedPartition {
-    partition: monstertruck_modeling::mesh_recovery::SurfaceRegionPartition,
-    repair_summary: Value,
-    trim_graph: SharedTrimGraph,
-    native: Value,
-}
-
-fn finish_partition(
-    evidence: &MeshEvidence,
-    boundary: &RegionBoundaryIndex<'_>,
-    partition: monstertruck_modeling::mesh_recovery::SurfaceRegionPartition,
-) -> Result<FinishedPartition, String> {
-    let trim = trim_options(evidence);
-    let reconciled = boundary
-        .reconcile_planes(
-            partition,
-            trim,
-            ReconciliationOptions {
-                max_displacement: 0.0055,
-                max_normal_angle: 0.01,
-                parallel_angle_tolerance: 1.0e-8,
-                intersection_tolerance: (trim.absolute_tolerance * 0.1)
-                    .min(monstertruck_modeling::KERNEL_EPSILON * 0.01),
+    let mut result = json!({
+        "axes":axes,"candidates":stats.circular_candidates.iter().map(|c|candidate_summary(active,c)).collect::<Vec<_>>(),
+        "selected":selected.iter().map(|c|candidate_summary(active,c)).collect::<Vec<_>>(),
+        "applied_partition":baseline,"joint_partition":joint_summary(&recovery),
+        "circle_axis_discovery":circle_summary,
+        "support_refinement":{"passes":history,"original_supports":stats.original_supports,"final_supports":active.planar_supports.len(),"placed_axes":stats.placed_axes},
+    });
+    if evidence.non_manifold_edge_count > 0 {
+        let normalized = recover_analytic_evidence(
+            evidence,
+            AnalyticRecoveryOptions {
+                normalize_coincident_sheets: true,
+                ..options
             },
         )
-        .map_err(|error| error.to_string())?;
-    let repair_summary = json!({"accepted":reconciled.planes.len(),"rejected":reconciled.rejected,"max_displacement":reconciled.max_displacement,
-        "planes":reconciled.planes.iter().map(|p|json!({"region":p.region,"supports":p.supports,"max_plane_residual":p.max_plane_residual,"normal_shift":p.normal_shift,
+        .map_err(|e| e.to_string())?;
+        result["normalized_recovery"] = json!({
+            "canceled_sheets":normalized.canceled_sheets.iter().map(|s|json!({"sides":s.sides,"resolved_edges":s.resolved_edges,"max_plane_residual":s.max_plane_residual})).collect::<Vec<_>>(),
+            "original_polygon_ids":normalized.original_polygon_ids,
+            "joint_partition":joint_summary(&normalized),
+            "complete_shell":normalized.complete_shell().is_some(),
+        });
+    }
+    Ok(result)
+}
+
+fn joint_summary(recovery: &RecoveredAnalyticMesh) -> Value {
+    let evidence = &recovery.evidence;
+    let stats = &recovery.discovery;
+    let repaired = &recovery.reconciled;
+    let partition = &repaired.partition;
+    let carriers = PartitionCarriers::new(
+        evidence,
+        partition.carriers.clone(),
+        &partition.region_by_polygon,
+    );
+    let repair_summary = json!({"accepted":repaired.planes.len(),"rejected":repaired.rejected,"max_displacement":repaired.max_displacement,
+        "planes":repaired.planes.iter().map(|p|json!({"region":p.region,"supports":p.supports,"max_plane_residual":p.max_plane_residual,"normal_shift":p.normal_shift,
         "source_polygons":p.supports.iter().flat_map(|&id|&evidence.planar_supports[id].source_face_indices).collect::<Vec<_>>() })).collect::<Vec<_>>()});
-    let partition = reconciled.partition;
-    let trim_graph = boundary
-        .assemble_shared_trims(&partition, &reconciled.positions, trim)
-        .map_err(|error| error.to_string())?;
-    let native = boundary
-        .construct_native_trims(
-            &partition,
-            &trim_graph,
-            &reconciled.positions,
-            NativeTrimOptions {
-                max_vertex_displacement: trim.absolute_tolerance,
-                intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
-                angular_resolution: 1.0e-8,
-            },
-        )
-        .map_err(|error| error.to_string())?;
-    let summary = native_summary(&native, &partition);
-    Ok(FinishedPartition {
-        partition,
-        repair_summary,
-        trim_graph,
-        native: summary,
+    json!({
+        "curved_proposals":stats.curved_proposals,"linear_proposals":stats.linear_proposals,
+        "direct_linear_proposals":stats.direct_linear_proposals,"direct_linear_hypotheses":stats.linear_candidates.len(),
+        "selected_curved":stats.selected_curved,"selected_linear":stats.selected.len()-stats.selected_curved,
+        "selected":stats.selected.iter().map(|p|proposal_summary(evidence,p)).collect::<Vec<_>>(),
+        "consolidated_supports":partition.consolidated_supports,"region_count":partition.carriers.iter().flatten().count(),
+        "original_planar_supports":stats.original_supports,"exact_overlap_components":partition.exact_components,"limited_overlap_components":partition.limited_components,
+        "contact_graph":partition_contact_metrics(&partition.contacts,evidence,Some(&carriers)),
+        "reconciliation":repair_summary,"native":native_summary(&recovery.native,partition),
+        "analytic_trims":trim_summary(&recovery.trims,&partition.contacts,&carriers),
     })
 }
 
@@ -599,9 +229,9 @@ fn native_summary(
         "max_vertex_displacement":native.max_vertex_displacement,"chart_seams":native.regions.iter().map(|r|r.chart_seams).sum::<usize>(),"native_face_count":shell.len(),"shell_condition":format!("{:?}",shell.shell_condition())})
 }
 
-fn proposal_summary(evidence: &MeshEvidence, proposal: &SurfaceRegionProposal<'_>) -> Value {
+fn proposal_summary(evidence: &MeshEvidence, proposal: &SelectedSurfaceProposal) -> Value {
     let polygons = proposal
-        .supports()
+        .supports
         .iter()
         .flat_map(|&id| {
             evidence.planar_supports[id]
@@ -610,7 +240,7 @@ fn proposal_summary(evidence: &MeshEvidence, proposal: &SurfaceRegionProposal<'_
                 .copied()
         })
         .collect::<Vec<_>>();
-    let carrier = match proposal.carrier() {
+    let carrier = match proposal.carrier {
         SurfaceCarrier::Plane { origin, normal } => {
             json!({"kind":"plane","origin":[origin.x,origin.y,origin.z],"normal":[normal.x,normal.y,normal.z]})
         }
@@ -631,7 +261,7 @@ fn proposal_summary(evidence: &MeshEvidence, proposal: &SurfaceRegionProposal<'_
             json!({"kind":"circular","origin":[axial_center.x,axial_center.y,axial_center.z],"axis":[axis.x,axis.y,axis.z],"radial_center":radial_center,"profile_radius":profile_radius})
         }
     };
-    json!({"carrier":carrier,"source_polygons":polygons,"supports":proposal.supports().len(),"relative_vertex_error":proposal.relative_vertex_error(),"relative_chord_bound":proposal.relative_chord_bound(),"independently_tested_profile":proposal.independently_tested_profile()})
+    json!({"carrier":carrier,"source_polygons":polygons,"supports":proposal.supports.len(),"relative_vertex_error":proposal.relative_vertex_error,"relative_chord_bound":proposal.relative_chord_bound,"independently_tested_profile":proposal.independently_tested_profile})
 }
 
 fn trim_summary(
