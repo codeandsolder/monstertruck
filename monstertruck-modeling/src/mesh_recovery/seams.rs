@@ -6,21 +6,94 @@
 //! adjacent patches; this guarantees both sides of a seam receive the same cut.
 
 use super::{EdgeIncidence, EdgeKey, InputPolygon, MeshRecoveryError, PlanarPatch, edge_key};
-use crate::{InnerSpace, Point3};
+use crate::{InnerSpace, Point3, Vector3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
+
+// Error-free difference (high component, subtraction tail).
+fn two_diff(a: f64, b: f64) -> [f64; 2] {
+    let hi = a - b;
+    let virtual_b = a - hi;
+    let virtual_a = hi + virtual_b;
+    [hi, (a - virtual_a) + (virtual_b - b)]
+}
+
+// Grow a nonoverlapping floating-point expansion by one scalar, using
+// error-free addition. At most sixteen components can arise from the
+// eight two-component products in a determinant of two differences.
+fn add_expansion_term(expansion: &mut [f64; 16], len: &mut usize, mut carry: f64) {
+    if carry == 0.0 {
+        return;
+    }
+    let mut write = 0;
+    for read in 0..*len {
+        let component = expansion[read];
+        let sum = carry + component;
+        let virtual_b = sum - carry;
+        let virtual_a = sum - virtual_b;
+        let error = (carry - virtual_a) + (component - virtual_b);
+        if error != 0.0 {
+            expansion[write] = error;
+            write += 1;
+        }
+        carry = sum;
+    }
+    if carry != 0.0 {
+        expansion[write] = carry;
+        write += 1;
+    }
+    *len = write;
+}
+
+fn difference_of_products(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> f64 {
+    if [a[1], b[1], c[1], d[1]].into_iter().all(|tail| tail == 0.0) {
+        // Compensated difference of products. FMA retains the low bits
+        // lost by rounding the second product before subtraction.
+        let product = c[0] * d[0];
+        return a[0].mul_add(b[0], -product) + (-c[0]).mul_add(d[0], product);
+    }
+    let mut expansion = [0.0; 16];
+    let mut len = 0;
+    for (left, right, sign) in [(a, b, 1.0), (c, d, -1.0)] {
+        for x in left {
+            for y in right {
+                let product = x * y;
+                let error = x.mul_add(y, -product);
+                add_expansion_term(&mut expansion, &mut len, sign * error);
+                add_expansion_term(&mut expansion, &mut len, sign * product);
+            }
+        }
+    }
+    expansion[..len].iter().sum()
+}
+
+// Adaptive orientation guarantees a determinant's sign, not its relative
+// magnitude. Normals of skinny triangles require the latter too. Compute
+// a compensated cross product of the original coordinate differences.
+pub(super) fn oriented_triangle_area(a: Point3, b: Point3, c: Point3) -> Vector3 {
+    let first: [[f64; 2]; 3] = std::array::from_fn(|i| two_diff(b[i], a[i]));
+    let second: [[f64; 2]; 3] = std::array::from_fn(|i| two_diff(c[i], a[i]));
+    Vector3::new(
+        difference_of_products(first[1], second[2], first[2], second[1]),
+        difference_of_products(first[2], second[0], first[0], second[2]),
+        difference_of_products(first[0], second[1], first[1], second[0]),
+    )
+}
+
+fn projected_orientation(a: Point3, b: Point3, c: Point3, axis: usize) -> f64 {
+    use robust::{Coord, orient2d};
+    let project = |p: Point3| Coord {
+        x: p[(axis + 1) % 3],
+        y: p[(axis + 2) % 3],
+    };
+    orient2d(project(a), project(b), project(c))
+}
 
 /// The three projected 2D orientation tests certify collinearity in 3D
 /// using adaptive exact predicates for the *stored f64 input coordinates*.
 /// A fitted near-line is intentionally not a shared topological edge.
 pub(super) fn on_line(a: Point3, b: Point3, p: Point3) -> bool {
-    use robust::{Coord, orient2d};
-    let xy = |v: Point3| Coord { x: v.x, y: v.y };
-    let xz = |v: Point3| Coord { x: v.x, y: v.z };
-    let yz = |v: Point3| Coord { x: v.y, y: v.z };
-    orient2d(xy(a), xy(b), xy(p)) == 0.0
-        && orient2d(xz(a), xz(b), xz(p)) == 0.0
-        && orient2d(yz(a), yz(b), yz(p)) == 0.0
+    (0..3).all(|axis| projected_orientation(a, b, p, axis) == 0.0)
 }
 
 /// Returns the coordinate along the directed segment only for a strictly

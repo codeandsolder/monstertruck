@@ -496,3 +496,44 @@ fn large_coordinate_offsets_do_not_turn_a_nearby_parallel_edge_into_a_seam() {
         [base + 0.75, base - 0.001, 0.0],
     ]);
 }
+
+#[test]
+fn thin_nonzero_triangle_retains_an_accurate_normal() -> Result<(), MeshRecoveryError> {
+    use super::{input_polygon_from_ids, seams, signed_plane_distance};
+    use crate::KERNEL_EPSILON;
+    // Exact f64 coordinates from a real CAD tessellation. The midpoint
+    // is not exactly collinear, despite an area near 8e-17.
+    let points = [
+        Point3::new(12.255500000000033, -2.2866252039089234, 2.1843830485733986),
+        Point3::new(12.390948778270976, -2.3694207929078286, 2.20970281338093),
+        Point3::new(12.323224389135504, -2.3280229984083767, 2.1970429309771644),
+    ];
+    let polygon = input_polygon_from_ids(&points, vec![0, 1, 2], 0, KERNEL_EPSILON)?;
+    assert!(
+        points.iter().all(
+            |&p| signed_plane_distance(p, polygon.origin, polygon.normal).abs() < KERNEL_EPSILON
+        )
+    );
+    assert!(!seams::on_line(points[0], points[1], points[2]));
+    let collinear = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 1.0, 1.0),
+        Point3::new(0.5, 0.5, 0.5),
+    ];
+    assert!(matches!(
+        input_polygon_from_ids(&collinear, vec![0, 1, 2], 0, KERNEL_EPSILON),
+        Err(MeshRecoveryError::DegeneratePolygon(0))
+    ));
+    Ok(())
+}
+
+#[test]
+fn oriented_area_retains_subtraction_and_product_tails() {
+    // Both rounded edge differences lose unit-sized tails and both
+    // products are near 1e32. The exact determinant is -1.
+    let a = Point3::new(1.0e16, 1.0e16, 0.0);
+    let b = Point3::new(0.0, 1.0, 0.0);
+    let c = Point3::new(1.0, 2.0, 0.0);
+    let area = super::seams::oriented_triangle_area(a, b, c);
+    assert_eq!(area, crate::Vector3::new(0.0, 0.0, -1.0));
+}

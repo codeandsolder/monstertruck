@@ -284,19 +284,36 @@ fn input_polygon_from_ids(
     }
     let origin = positions[vertices[0]];
     let mut area_vector = Vector3::new(0.0, 0.0, 0.0);
-    for i in 0..vertices.len() {
-        let p = positions[vertices[i]] - origin;
-        let q = positions[vertices[(i + 1) % vertices.len()]] - origin;
-        area_vector += p.cross(q);
-        if positions[vertices[i]] == positions[vertices[(i + 1) % vertices.len()]] {
-            return Err(MeshRecoveryError::DegeneratePolygon(source));
-        }
+    let mut compensation = Vector3::new(0.0, 0.0, 0.0);
+    for pair in vertices[1..].windows(2) {
+        let term = seams::oriented_triangle_area(origin, positions[pair[0]], positions[pair[1]]);
+        let corrected = term - compensation;
+        let next = area_vector + corrected;
+        compensation = (next - area_vector) - corrected;
+        area_vector = next;
     }
-    let length_sq = area_vector.magnitude2();
-    if !length_sq.is_finite() || length_sq <= 0.0 {
+    if vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .any(|(&a, &b)| positions[a] == positions[b])
+    {
         return Err(MeshRecoveryError::DegeneratePolygon(source));
     }
-    let normal = area_vector / length_sq.sqrt();
+    // Scale before normalization so a finite nonzero area is not lost by
+    // squaring subnormal components or overflowing a large area vector.
+    let scale = area_vector
+        .x
+        .abs()
+        .max(area_vector.y.abs())
+        .max(area_vector.z.abs());
+    if ![area_vector.x, area_vector.y, area_vector.z]
+        .into_iter()
+        .all(f64::is_finite)
+        || scale <= 0.0
+    {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    let normal = (area_vector / scale).normalize();
     if vertices
         .iter()
         .any(|&id| signed_plane_distance(positions[id], origin, normal).abs() > tolerance)
