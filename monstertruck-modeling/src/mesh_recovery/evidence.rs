@@ -34,8 +34,9 @@ pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactCurveEvidence,
     ContactLineEvidence, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
-    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SurfaceCarrier,
-    SurfaceCurveAgreement,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
+    SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier,
+    SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
@@ -43,7 +44,7 @@ pub use spatial::{
 };
 pub use station_graph::{
     MeridianGraphOptions, MeridianStation, MeridianStationGraph, MeridianTransition,
-    StationMeridianCandidate, StationMeridianDiscovery,
+    StationLinearCandidate, StationMeridianCandidate, StationMeridianDiscovery,
 };
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};

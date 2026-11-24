@@ -321,6 +321,7 @@ mod tests {
             station_resolution: 1.0e-9,
             vertex_tolerance: 4.0e-9,
             relative_tolerance: 1.0e-4,
+            max_linear_relative_chord_error: 0.25,
             normal_tolerance_radians: 1.0e-6,
         }
     }
@@ -355,6 +356,142 @@ mod tests {
         assert_eq!(candidate.boundary_loops, 2);
         assert!((candidate.fit.radial_center - 2.0).abs() < 1.0e-10);
         assert!((candidate.fit.profile_radius - 0.5).abs() < 1.0e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn two_station_linear_region_is_recovered_from_independent_circle_axes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{
+            CircleAxisOptions, SurfaceCarrier, SurfaceRegionBudget, discover_circle_axes,
+        };
+        // Eight azimuth sectors with two different axial radii: a truncated
+        // cone, not a cylinder or a planar cap.
+        let mut positions = Vec::new();
+        let mut faces = Vec::new();
+        for station in 0..2 {
+            let axial = 2.0 * f64::from(station);
+            let radius = 0.25f64.mul_add(axial, 1.0);
+            for j in 0..8_usize {
+                let (sin, cos) = (TAU * crate::usize_to_f64(j) / 8.0).sin_cos();
+                positions.push(Point3::new(radius * cos, radius * sin, axial));
+                if station == 0 {
+                    let next = (j + 1) % 8;
+                    faces.push([j, next, next + 8, j + 8]);
+                }
+            }
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let found = discover_circle_axes(
+            &evidence,
+            CircleAxisOptions {
+                vertex_tolerance: 1.0e-9,
+                relative_tolerance: 1.0e-4,
+                axis_position_tolerance: 8.0e-9,
+                axis_angle_tolerance_radians: 1.0e-7,
+            },
+        )
+        .ok_or("source circle axes")?;
+        let placed = found
+            .axes
+            .iter()
+            .find(|axis| {
+                axis.stations.len() >= 2
+                    && axis.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
+                    && axis.origin.x.hypot(axis.origin.y) < 1.0e-8
+            })
+            .ok_or("axis")?;
+        let graph =
+            MeridianStationGraph::new(&evidence, placed.origin, placed.axis, graph_options())
+                .ok_or("graph")?;
+        let candidates = graph.discover_linear(&boundary);
+        assert_eq!(candidates.len(), 1);
+        let c = &candidates[0];
+        assert_eq!(c.source_polygons, 8);
+        assert_eq!(c.repeated_stations, 2);
+        let SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin,
+            slope,
+        } = c.carrier
+        else {
+            return Err("linear carrier".into());
+        };
+        assert!((slope.abs() - 0.25).abs() < 1.0e-10);
+        assert!(
+            (radius_at_origin + slope * (Point3::new(0.0, 0.0, 0.0) - origin).dot(axis) - 1.0)
+                .abs()
+                < 1.0e-10
+        );
+        let proposal = boundary
+            .measure_surface_region(
+                &c.supports,
+                c.carrier,
+                SurfaceRegionBudget {
+                    vertex: c.vertex_tolerance,
+                    chord: c.chord_tolerance,
+                },
+            )
+            .ok_or("proposal")?;
+        assert!(!proposal.independently_tested_profile());
+        Ok(())
+    }
+
+    #[test]
+    fn whole_curved_profile_wins_over_individually_exact_linear_strips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{SurfaceCarrier, SurfaceRegionBudget};
+        let mesh = mesh(5)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let graph = MeridianStationGraph::new(
+            &evidence,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("graph")?;
+        let curved = graph.discover_circular(&boundary);
+        let c = &curved.candidates[0];
+        let scale = c.fit.geometric_scale();
+        let mut proposals = vec![
+            boundary
+                .measure_surface_region(
+                    &c.supports,
+                    SurfaceCarrier::from_circular_meridian(&c.fit),
+                    SurfaceRegionBudget {
+                        vertex: 1.0e-8,
+                        chord: scale,
+                    },
+                )
+                .ok_or("curved proposal")?,
+        ];
+        for c in graph.discover_linear(&boundary) {
+            if let Some(proposal) = boundary.measure_surface_region(
+                &c.supports,
+                c.carrier,
+                SurfaceRegionBudget {
+                    vertex: c.vertex_tolerance,
+                    chord: c.chord_tolerance,
+                },
+            ) {
+                proposals.push(proposal);
+            }
+        }
+        assert!(proposals.len() > 1);
+        assert!(proposals[0].independently_tested_profile());
+        let partition = boundary.select_surface_partition(&proposals, 10_000)?;
+        assert_eq!(partition.selected_proposals, vec![0]);
+        assert_eq!(partition.consolidated_supports, c.supports.len() - 1);
         Ok(())
     }
 

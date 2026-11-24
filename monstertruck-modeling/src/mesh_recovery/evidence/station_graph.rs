@@ -20,6 +20,11 @@ pub struct MeridianGraphOptions {
     pub vertex_tolerance: f64,
     /// Relative source error bound, also limited by observed meridian extent.
     pub relative_tolerance: f64,
+    /// Maximum continuous chord residual relative to the local radial
+    /// scale of an affine meridian. Sparse faceted polygons may interpolate
+    /// the same circle; a local approximation envelope keeps those
+    /// alternatives distinguishable from well-sampled surfaces.
+    pub max_linear_relative_chord_error: f64,
     /// Source-normal comparison uncertainty in radians.
     pub normal_tolerance_radians: f64,
 }
@@ -32,6 +37,8 @@ impl MeridianGraphOptions {
             && self.vertex_tolerance > 0.0
             && self.relative_tolerance.is_finite()
             && self.relative_tolerance > 0.0
+            && self.max_linear_relative_chord_error.is_finite()
+            && self.max_linear_relative_chord_error > 0.0
             && (0.0..std::f64::consts::FRAC_PI_2).contains(&self.normal_tolerance_radians)
     }
 }
@@ -56,6 +63,9 @@ pub struct MeridianTransition {
     pub stations: [usize; 2],
     /// Entire original planar supports restricted to these two stations.
     pub supports: Vec<usize>,
+    /// Both endpoints have resolved azimuth sampling; even a single planar
+    /// tangent strip can link independently repeated adjacent intervals.
+    pub sampled: bool,
     /// Distinct support normals span resolved directions around the axis.
     pub repeated: bool,
 }
@@ -75,6 +85,27 @@ pub struct StationMeridianCandidate {
     pub source_polygons: usize,
     /// Exact source boundary loop count.
     pub boundary_loops: usize,
+}
+
+/// Affine meridian candidate at an independently placed axis.
+#[derive(Clone, Debug)]
+pub struct StationLinearCandidate {
+    /// Original whole support membership.
+    pub supports: Vec<usize>,
+    /// Fitted affine radial profile.
+    pub carrier: SurfaceCarrier,
+    /// Independently repeated stations inside the actual source core.
+    pub repeated_stations: usize,
+    /// Original source polygon count.
+    pub source_polygons: usize,
+    /// Maximum admitted source vertex error.
+    pub vertex_tolerance: f64,
+    /// Measured maximum source vertex error.
+    pub max_vertex_residual: f64,
+    /// Radial scale of the observed source domain, for chord approximation.
+    pub chord_tolerance: f64,
+    /// Continuous source chord measurement.
+    pub source_chords: CarrierResidual,
 }
 
 /// Graph and result counts preserve the distinction between proposals and
@@ -147,7 +178,7 @@ impl<'a> MeridianStationGraph<'a> {
             index_supports(evidence, &station_by_vertex, stations.len())?;
         let transitions = build_transitions(evidence, &stations, &supports, options);
         let mut adjacency = vec![Vec::new(); stations.len()];
-        for transition in transitions.iter().filter(|edge| edge.repeated) {
+        for transition in transitions.iter().filter(|edge| edge.sampled) {
             let [a, b] = transition.stations;
             adjacency[a].push(b);
             adjacency[b].push(a);
@@ -192,7 +223,7 @@ impl<'a> MeridianStationGraph<'a> {
             let Some(profile) = self.fit_station_profile(seed) else {
                 continue;
             };
-            let stations = self.connected_profile(*seed, profile);
+            let stations = self.connected_profile(seed, profile);
             if stations.len() < 4 || !profiles.insert(stations.clone()) {
                 continue;
             }
@@ -253,16 +284,16 @@ impl<'a> MeridianStationGraph<'a> {
             })
             .collect::<Vec<_>>();
         let ([z, r], radius) = fit_circle_2d(&local)?;
-        Some(Profile {
+        Some(Profile::Circular {
             z: z + first.axial,
             r: r + first.radius,
             radius,
         })
     }
 
-    fn connected_profile(&self, seed: [usize; 3], profile: Profile) -> Vec<usize> {
-        let mut visited = BTreeSet::from(seed);
-        let mut queue = VecDeque::from(seed);
+    fn connected_profile(&self, seed: &[usize], profile: Profile) -> Vec<usize> {
+        let mut visited = seed.iter().copied().collect::<BTreeSet<_>>();
+        let mut queue = seed.iter().copied().collect::<VecDeque<_>>();
         while let Some(id) = queue.pop_front() {
             for &neighbor in &self.adjacency[id] {
                 let station = &self.stations[neighbor];
@@ -282,6 +313,21 @@ impl<'a> MeridianStationGraph<'a> {
         profile: Profile,
         boundary: &RegionBoundaryIndex<'_>,
     ) -> Vec<StationMeridianCandidate> {
+        self.source_regions(stations, profile, 4)
+            .into_iter()
+            .filter_map(|(core, supports)| {
+                self.validate(supports, boundary)
+                    .or_else(|| self.validate(core, boundary))
+            })
+            .collect()
+    }
+
+    fn source_regions(
+        &self,
+        stations: &[usize],
+        profile: Profile,
+        min_stations: usize,
+    ) -> Vec<(Vec<usize>, Vec<usize>)> {
         let source = stations
             .iter()
             .flat_map(|&id| self.supports_by_station[id].iter().copied())
@@ -310,18 +356,12 @@ impl<'a> MeridianStationGraph<'a> {
         while let Some((&seed, &sign)) = cores.first_key_value() {
             let core = self.component(seed, sign, &mut cores);
             let repeated = self.local_repeated_station_count(&core);
-            if repeated < 4 || completed.contains(&seed) {
+            if repeated < min_stations || completed.contains(&seed) {
                 continue;
             }
             let supports = self.grow_component(seed, sign, profile, &mut eligible);
             completed.extend(supports.iter().copied());
-            // A broad candidate may acquire a pinched boundary, so keep the
-            // independently supported core available as an alternative.
-            if let Some(candidate) = self.validate(supports, boundary) {
-                candidates.push(candidate);
-            } else if let Some(candidate) = self.validate(core, boundary) {
-                candidates.push(candidate);
-            }
+            candidates.push((core, supports));
         }
         candidates
     }
@@ -336,14 +376,19 @@ impl<'a> MeridianStationGraph<'a> {
             }
         }
         let mut adjacency = BTreeMap::<usize, Vec<usize>>::new();
+        let mut independently_sampled = BTreeSet::new();
         for ([a, b], supports) in pairs {
+            if !self.adjacency[a].contains(&b) {
+                continue;
+            }
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
             if distinct_normals(
                 self.evidence,
                 &supports,
                 self.options.normal_tolerance_radians,
             ) {
-                adjacency.entry(a).or_default().push(b);
-                adjacency.entry(b).or_default().push(a);
+                independently_sampled.extend([a, b]);
             }
         }
         let mut seen = BTreeSet::new();
@@ -355,7 +400,7 @@ impl<'a> MeridianStationGraph<'a> {
             let mut queue = VecDeque::from([seed]);
             let mut count = 0;
             while let Some(id) = queue.pop_front() {
-                count += 1;
+                count += usize::from(independently_sampled.contains(&id));
                 for &other in &adjacency[&id] {
                     if seen.insert(other) {
                         queue.push_back(other);
@@ -437,7 +482,6 @@ impl<'a> MeridianStationGraph<'a> {
         {
             return None;
         }
-        let center = self.origin + self.axis * profile.z;
         let mut orientation: Option<OrientationEvidence> = None;
         for &polygon in &support.source_face_indices {
             let vertices = self.evidence.source_polygon_vertices(polygon)?;
@@ -445,9 +489,9 @@ impl<'a> MeridianStationGraph<'a> {
                 self.evidence,
                 vertices,
                 support.normal,
-                center,
+                self.origin,
                 self.axis,
-                profile.r,
+                profile,
                 self.options.normal_tolerance_radians,
             )?;
             if let Some(previous) = &mut orientation {
@@ -481,32 +525,12 @@ impl<'a> MeridianStationGraph<'a> {
         if !fit.resolves_curvature_within(tolerance) {
             return None;
         }
-        let profile = Profile {
+        let profile = Profile::Circular {
             z: (fit.axial_center - self.origin).dot(self.axis),
             r: fit.radial_center,
             radius: fit.profile_radius,
         };
-        let mut orientation = None;
-        let mut cores = BTreeMap::new();
-        for &id in &supports {
-            let measured = self.support_orientation(id, profile)?;
-            if orientation.is_some_and(|other| other != measured.positive) {
-                return None;
-            }
-            orientation = Some(measured.positive);
-            let ids = &self.supports[id].stations;
-            if measured.within_sample_span
-                && ids.len() == 2
-                && self.adjacency[ids[0]].contains(&ids[1])
-            {
-                cores.insert(id, measured.positive);
-            }
-        }
-        let mut repeated_stations = 0;
-        while let Some((&seed, &sign)) = cores.first_key_value() {
-            let core = self.component(seed, sign, &mut cores);
-            repeated_stations = repeated_stations.max(self.local_repeated_station_count(&core));
-        }
+        let repeated_stations = self.repeated_core(&supports, profile)?;
         if repeated_stations < 4 {
             return None;
         }
@@ -526,18 +550,189 @@ impl<'a> MeridianStationGraph<'a> {
             boundary_loops: region.loops.len(),
         })
     }
+
+    fn repeated_core(&self, supports: &[usize], profile: Profile) -> Option<usize> {
+        let mut orientation = None;
+        let mut cores = BTreeMap::new();
+        for &id in supports {
+            let measured = self.support_orientation(id, profile)?;
+            if orientation.is_some_and(|other| other != measured.positive) {
+                return None;
+            }
+            orientation = Some(measured.positive);
+            let ids = &self.supports[id].stations;
+            if measured.within_sample_span
+                && ids.len() == 2
+                && self.adjacency[ids[0]].contains(&ids[1])
+            {
+                cores.insert(id, measured.positive);
+            }
+        }
+        let mut repeated_stations = 0;
+        while let Some((&seed, &sign)) = cores.first_key_value() {
+            let core = self.component(seed, sign, &mut cores);
+            repeated_stations = repeated_stations.max(self.local_repeated_station_count(&core));
+        }
+        Some(repeated_stations)
+    }
+
+    /// Discover affine meridian profiles using the same independent placed
+    /// axis, repeated station transitions and original support connectivity.
+    /// Two stations interpolate an affine profile; a third independently
+    /// tests it. Both remain explicit alternatives for joint selection.
+    #[must_use = "linear candidates are competing source region hypotheses"]
+    pub fn discover_linear(
+        &self,
+        boundary: &RegionBoundaryIndex<'_>,
+    ) -> Vec<StationLinearCandidate> {
+        let mut profiles = BTreeSet::new();
+        let mut candidates = BTreeMap::new();
+        for transition in self
+            .transitions
+            .iter()
+            .filter(|transition| transition.repeated)
+        {
+            let [a, b] = transition.stations;
+            let first = &self.stations[a];
+            let second = &self.stations[b];
+            let span = second.axial - first.axial;
+            if span.abs() <= self.options.station_resolution {
+                continue;
+            }
+            let slope = (second.radius - first.radius) / span;
+            let profile = Profile::Linear {
+                radius: slope.mul_add(-first.axial, first.radius),
+                slope,
+            };
+            let stations = self.connected_profile(&[a, b], profile);
+            if !profiles.insert(stations.clone()) {
+                continue;
+            }
+            for (core, supports) in self.source_regions(&stations, profile, 2) {
+                if let Some(candidate) = self
+                    .validate_linear(supports, profile, boundary)
+                    .or_else(|| self.validate_linear(core, profile, boundary))
+                {
+                    candidates
+                        .entry(candidate.supports.clone())
+                        .or_insert(candidate);
+                }
+            }
+        }
+        candidates.into_values().collect()
+    }
+
+    fn validate_linear(
+        &self,
+        supports: Vec<usize>,
+        seed: Profile,
+        boundary: &RegionBoundaryIndex<'_>,
+    ) -> Option<StationLinearCandidate> {
+        // Refit all distinct source meridian observations at the fixed axis,
+        // giving each resolved station equal weight.
+        let ids = supports
+            .iter()
+            .flat_map(|&id| self.supports[id].stations.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let first = &self.stations[*ids.first()?];
+        let count = crate::usize_to_f64(ids.len());
+        let (sum_z, sum_r) = ids.iter().fold((0.0, 0.0), |(z, r), &id| {
+            (
+                z + self.stations[id].axial - first.axial,
+                r + self.stations[id].radius - first.radius,
+            )
+        });
+        let mean_z = sum_z / count;
+        let mean_r = sum_r / count;
+        let (zz, zr) = ids.iter().fold((0.0, 0.0), |(zz, zr), &id| {
+            let z = self.stations[id].axial - first.axial - mean_z;
+            let r = self.stations[id].radius - first.radius - mean_r;
+            (z.mul_add(z, zz), z.mul_add(r, zr))
+        });
+        if zz <= self.options.station_resolution.powi(2) {
+            return None;
+        }
+        let slope = zr / zz;
+        let radius = slope.mul_add(-(mean_z + first.axial), mean_r + first.radius);
+        let profile = Profile::Linear { radius, slope };
+        let mut min_z = f64::INFINITY;
+        let mut max_z = f64::NEG_INFINITY;
+        let mut min_r = f64::INFINITY;
+        let mut max_error = 0.0_f64;
+        for &id in &supports {
+            for &vertex in &self.supports[id].vertices {
+                let (z, r) = self.samples[vertex];
+                min_z = min_z.min(z);
+                max_z = max_z.max(z);
+                min_r = min_r.min(r);
+                max_error = max_error.max(profile.error((z, r)));
+                if seed.error((z, r)) > self.options.vertex_tolerance {
+                    return None;
+                }
+            }
+        }
+        let scale = min_r.min(max_z - min_z);
+        let tolerance = self
+            .options
+            .vertex_tolerance
+            .min(self.options.relative_tolerance * scale);
+        if scale <= 0.0 || max_error > tolerance {
+            return None;
+        }
+        let repeated_stations = self.repeated_core(&supports, profile)?;
+        if repeated_stations < 2 {
+            return None;
+        }
+        let carrier = SurfaceCarrier::LinearRevolution {
+            origin: self.origin,
+            axis: self.axis,
+            radius_at_origin: radius,
+            slope,
+        };
+        let region = boundary.boundary(&supports).ok()?;
+        if !region.pinched_vertices.is_empty() {
+            return None;
+        }
+        let source_chords = carrier.measure_source_chords(self.evidence, &supports)?;
+        Some(StationLinearCandidate {
+            supports,
+            carrier,
+            repeated_stations,
+            source_polygons: region.source_polygon_count,
+            vertex_tolerance: tolerance,
+            max_vertex_residual: max_error,
+            chord_tolerance: min_r * self.options.max_linear_relative_chord_error,
+            source_chords,
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
-struct Profile {
-    z: f64,
-    r: f64,
-    radius: f64,
+enum Profile {
+    Circular { z: f64, r: f64, radius: f64 },
+    Linear { radius: f64, slope: f64 },
 }
 
 impl Profile {
     fn error(self, (z, r): (f64, f64)) -> f64 {
-        ((z - self.z).hypot(r - self.r) - self.radius).abs()
+        match self {
+            Self::Circular {
+                z: center,
+                r: radial,
+                radius,
+            } => ((z - center).hypot(r - radial) - radius).abs(),
+            Self::Linear { radius, slope } => (r - slope.mul_add(z, radius)).abs(),
+        }
+    }
+
+    fn normal(self, delta: Vector3, axis: Vector3) -> Option<Vector3> {
+        match self {
+            Self::Circular { z, r, .. } => circular_profile_normal(delta - axis * z, axis, r),
+            Self::Linear { slope, .. } => {
+                let radial = delta - axis * delta.dot(axis);
+                (radial.magnitude2() > 0.0).then(|| (radial.normalize() - axis * slope).normalize())
+            }
+        }
     }
 }
 
@@ -627,6 +822,7 @@ fn build_transitions(
             MeridianTransition {
                 stations: ids,
                 supports,
+                sampled: rings,
                 repeated,
             }
         })
@@ -655,7 +851,7 @@ fn polygon_orientation(
     normal: Vector3,
     center: Point3,
     axis: Vector3,
-    radial_center: f64,
+    profile: Profile,
     angle_tolerance: f64,
 ) -> Option<OrientationEvidence> {
     let mut centroid = Vector3::new(0.0, 0.0, 0.0);
@@ -663,7 +859,7 @@ fn polygon_orientation(
         centroid += evidence.positions[id] - center;
     }
     centroid /= crate::usize_to_f64(vertices.len());
-    let expected = circular_profile_normal(centroid, axis, radial_center)?;
+    let expected = profile.normal(centroid, axis)?;
     let dot = expected.dot(normal);
     if dot.abs() <= angle_tolerance.sin() {
         return None;
@@ -671,9 +867,7 @@ fn polygon_orientation(
     let deviation = expected.cross(normal).magnitude().atan2(dot.abs());
     let mut span = 0.0_f64;
     for &id in vertices {
-        if let Some(vertex_normal) =
-            circular_profile_normal(evidence.positions[id] - center, axis, radial_center)
-        {
+        if let Some(vertex_normal) = profile.normal(evidence.positions[id] - center, axis) {
             span = span.max(
                 expected
                     .cross(vertex_normal)

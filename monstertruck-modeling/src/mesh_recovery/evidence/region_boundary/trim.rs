@@ -1,0 +1,379 @@
+//! Shared analytic trim hypotheses over contiguous original source paths.
+//! Segmentation never invents a second copy of the same edge on either side.
+
+use super::curve_evidence::measure_path_curves;
+use super::{ContactCircleEvidence, ContactLineEvidence, RegionContactPath, SurfaceCarrier};
+use crate::{InnerSpace, Point3};
+use std::f64::consts::TAU;
+
+/// Local fit budget and bounded search configuration.
+#[derive(Clone, Copy, Debug)]
+pub struct SharedTrimOptions {
+    /// Absolute source sample/continuous carrier error budget.
+    pub absolute_tolerance: f64,
+    /// Budget relative to observed source path length and carrier radius.
+    pub relative_tolerance: f64,
+    /// Longest interval examined during mixed-path segmentation. Whole
+    /// original paths are always tested first, regardless of this limit.
+    pub max_interval_edges: usize,
+}
+
+/// Analytic curve hypotheses certified against the supplied surface carriers.
+#[derive(Clone, Copy, Debug)]
+pub enum SharedTrimGeometry {
+    /// Finite endpoint line with independent source residual measurements.
+    Line(ContactLineEvidence),
+    /// Monotone circular arc or full ring with independent sample evidence.
+    Circle(ContactCircleEvidence),
+    /// No accepted analytic hypothesis for these original edges.
+    Unresolved,
+}
+
+/// One contiguous piece of a globally shared directed source path.
+#[derive(Clone, Copy, Debug)]
+pub struct SharedTrimPiece {
+    /// First original edge index in the input path (cyclic for closed paths).
+    pub first_edge: usize,
+    /// Number of successive original edges, preserving original winding.
+    pub edge_count: usize,
+    /// One common geometry for both surface sides.
+    pub geometry: SharedTrimGeometry,
+}
+
+/// Shared path decomposition. Unresolved edges remain represented.
+#[derive(Debug)]
+pub struct SharedTrimSegmentation {
+    /// Ordered disjoint contiguous original edge ranges.
+    pub pieces: Vec<SharedTrimPiece>,
+    /// Whether the original input path closes on its first source vertex.
+    pub closed: bool,
+    /// True when mixed-path search was restricted by the interval budget.
+    pub limited: bool,
+}
+
+impl RegionContactPath {
+    /// Fit and segment the shared source path against every adjacent carrier.
+    /// At least four distinct source circle vertices are required. The
+    /// analytic circle is tested over its whole carrier; no trim is accepted
+    /// on vertex interpolation alone. Missing adjacent carriers are not
+    /// silently ignored. Mixed paths are optimized for original edge
+    /// coverage first, then for the fewest pieces.
+    #[must_use = "unresolved source edges must remain represented"]
+    pub fn segment_analytic_trims(
+        &self,
+        points: &[Point3],
+        carriers: &[SurfaceCarrier],
+        options: SharedTrimOptions,
+    ) -> Option<SharedTrimSegmentation> {
+        if carriers.len() != 1 + usize::from(self.regions.1.is_some())
+            || !options.absolute_tolerance.is_finite()
+            || options.absolute_tolerance <= 0.0
+            || !options.relative_tolerance.is_finite()
+            || options.relative_tolerance <= 0.0
+            || options.max_interval_edges == 0
+        {
+            return None;
+        }
+        let ids = self.ordered_vertices()?;
+        if ids.iter().any(|&id| id >= points.len()) {
+            return None;
+        }
+        let count = self.edges.len();
+        let closed = ids.first() == ids.last();
+        if let Some(geometry) = accepted(points, &ids, carriers, options) {
+            return Some(SharedTrimSegmentation {
+                pieces: vec![SharedTrimPiece {
+                    first_edge: 0,
+                    edge_count: count,
+                    geometry,
+                }],
+                closed,
+                limited: false,
+            });
+        }
+        let mut pieces = segment_ranges(points, &ids, carriers, options);
+        // A canonical cyclic path may start in the middle of one analytic
+        // arc or line. Test the wraparound union of both end pieces.
+        if self.unanchored_cycle && closed && pieces.len() > 1 {
+            merge_cyclic_ends(points, &ids, carriers, options, &mut pieces);
+        }
+        Some(SharedTrimSegmentation {
+            pieces,
+            closed,
+            limited: count > options.max_interval_edges,
+        })
+    }
+}
+
+fn accepted(
+    points: &[Point3],
+    ids: &[usize],
+    carriers: &[SurfaceCarrier],
+    options: SharedTrimOptions,
+) -> Option<SharedTrimGeometry> {
+    let fit = measure_path_curves(points, ids)?;
+    let tolerance = options
+        .absolute_tolerance
+        .min(options.relative_tolerance * fit.source_length);
+    if let Some(line) = fit.line
+        && line.max_vertex_offset <= tolerance
+        && line.max_reverse_step <= tolerance
+        && carriers.iter().all(|carrier| {
+            carrier
+                .measure_segment(line.endpoints[0], line.endpoints[1])
+                .is_some_and(|r| r.upper_bound <= tolerance)
+        })
+    {
+        return Some(SharedTrimGeometry::Line(line));
+    }
+    let circle = fit.circle?;
+    let tolerance = tolerance.min(options.relative_tolerance * circle.radius);
+    let angular = tolerance / circle.radius;
+    let first = points[ids[0]];
+    let span = ids
+        .iter()
+        .map(|&id| (points[id] - first).magnitude())
+        .fold(0.0_f64, f64::max);
+    if fit.source_vertex_count < 4
+        || circle.plane_span_strength * span <= tolerance
+        || circle.max_plane_residual > tolerance
+        || circle.max_vertex_radial_residual > tolerance
+        || circle.unsigned_sweep_radians - circle.signed_sweep_radians.abs() > angular
+        || circle.unsigned_sweep_radians > TAU + angular
+        || circle.zero_angular_steps > 0
+        || !carriers.iter().all(|carrier| {
+            carrier
+                .measure(&fit)
+                .circle
+                .is_some_and(|r| r.upper_bound <= tolerance)
+        })
+    {
+        return None;
+    }
+    Some(SharedTrimGeometry::Circle(circle))
+}
+
+#[derive(Clone, Copy)]
+struct Step {
+    unresolved: usize,
+    pieces: usize,
+    end: usize,
+    geometry: SharedTrimGeometry,
+}
+
+fn segment_ranges(
+    points: &[Point3],
+    ids: &[usize],
+    carriers: &[SurfaceCarrier],
+    options: SharedTrimOptions,
+) -> Vec<SharedTrimPiece> {
+    let count = ids.len() - 1;
+    let mut best = vec![
+        Step {
+            unresolved: 0,
+            pieces: 0,
+            end: count,
+            geometry: SharedTrimGeometry::Unresolved
+        };
+        count + 1
+    ];
+    for start in (0..count).rev() {
+        let tail = best[start + 1];
+        let mut selected = Step {
+            unresolved: tail.unresolved + 1,
+            pieces: tail.pieces + 1,
+            end: start + 1,
+            geometry: SharedTrimGeometry::Unresolved,
+        };
+        for end in start + 1..=count.min(start.saturating_add(options.max_interval_edges)) {
+            let tail = best[end];
+            if (tail.unresolved, tail.pieces + 1) > (selected.unresolved, selected.pieces) {
+                continue;
+            }
+            let Some(geometry) = accepted(points, &ids[start..=end], carriers, options) else {
+                continue;
+            };
+            if (tail.unresolved, tail.pieces + 1) <= (selected.unresolved, selected.pieces) {
+                selected = Step {
+                    unresolved: tail.unresolved,
+                    pieces: tail.pieces + 1,
+                    end,
+                    geometry,
+                };
+            }
+        }
+        best[start] = selected;
+    }
+    let mut pieces: Vec<SharedTrimPiece> = Vec::new();
+    let mut start = 0;
+    while start < count {
+        let step = best[start];
+        if let Some(previous) = pieces.last_mut()
+            && matches!(previous.geometry, SharedTrimGeometry::Unresolved)
+            && matches!(step.geometry, SharedTrimGeometry::Unresolved)
+        {
+            previous.edge_count += step.end - start;
+        } else {
+            pieces.push(SharedTrimPiece {
+                first_edge: start,
+                edge_count: step.end - start,
+                geometry: step.geometry,
+            });
+        }
+        start = step.end;
+    }
+    pieces
+}
+
+fn merge_cyclic_ends(
+    points: &[Point3],
+    ids: &[usize],
+    carriers: &[SurfaceCarrier],
+    options: SharedTrimOptions,
+    pieces: &mut Vec<SharedTrimPiece>,
+) {
+    let (Some(first), Some(last)) = (pieces.first(), pieces.last()) else {
+        return;
+    };
+    let count = ids.len() - 1;
+    let length = first.edge_count + last.edge_count;
+    let first_edge = last.first_edge;
+    let wrapped = (0..=length)
+        .map(|i| ids[(first_edge + i) % count])
+        .collect::<Vec<_>>();
+    let geometry = if matches!(first.geometry, SharedTrimGeometry::Unresolved)
+        && matches!(last.geometry, SharedTrimGeometry::Unresolved)
+    {
+        SharedTrimGeometry::Unresolved
+    } else if let Some(geometry) = accepted(points, &wrapped, carriers, options) {
+        geometry
+    } else {
+        return;
+    };
+    pieces.remove(0);
+    pieces.pop();
+    pieces.push(SharedTrimPiece {
+        first_edge,
+        edge_count: length,
+        geometry,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::RegionBoundaryEdge;
+    use super::*;
+    use crate::Vector3;
+
+    fn path(count: usize, closed: bool) -> RegionContactPath {
+        RegionContactPath {
+            regions: (0, Some(1)),
+            edges: (0..count)
+                .map(|id| RegionBoundaryEdge {
+                    vertices: [id, if closed { (id + 1) % count } else { id + 1 }],
+                    interior_polygon: id,
+                    exterior_polygon: Some(id + count),
+                })
+                .collect(),
+            unanchored_cycle: closed,
+        }
+    }
+
+    fn options() -> SharedTrimOptions {
+        SharedTrimOptions {
+            absolute_tolerance: 1.0e-8,
+            relative_tolerance: 1.0e-4,
+            max_interval_edges: 128,
+        }
+    }
+
+    #[test]
+    fn shared_contact_segments_mixed_curves_and_checks_both_surfaces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut points = vec![Point3::new(2.0, 0.0, 0.0)];
+        points.extend((0..=8).map(|i| {
+            let (sin, cos) = (std::f64::consts::FRAC_PI_2 * f64::from(i) / 8.0).sin_cos();
+            Point3::new(cos, sin, 0.0)
+        }));
+        points.push(Point3::new(0.0, 2.0, 0.0));
+        let path = path(points.len() - 1, false);
+        let plane = SurfaceCarrier::Plane {
+            origin: points[0],
+            normal: Vector3::unit_z(),
+        };
+        let result = path
+            .segment_analytic_trims(&points, &[plane, plane], options())
+            .ok_or("segmentation")?;
+        assert_eq!(result.pieces.len(), 3);
+        assert!(matches!(
+            result.pieces[0].geometry,
+            SharedTrimGeometry::Line(_)
+        ));
+        assert!(matches!(
+            result.pieces[1].geometry,
+            SharedTrimGeometry::Circle(_)
+        ));
+        assert_eq!(result.pieces[1].edge_count, 8);
+        assert!(matches!(
+            result.pieces[2].geometry,
+            SharedTrimGeometry::Line(_)
+        ));
+        let cylinder = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let result = path
+            .segment_analytic_trims(&points, &[plane, cylinder], options())
+            .ok_or("segmentation")?;
+        assert_eq!(result.pieces.len(), 3);
+        assert!(matches!(
+            result.pieces[0].geometry,
+            SharedTrimGeometry::Unresolved
+        ));
+        assert!(matches!(
+            result.pieces[1].geometry,
+            SharedTrimGeometry::Circle(_)
+        ));
+        assert!(matches!(
+            result.pieces[2].geometry,
+            SharedTrimGeometry::Unresolved
+        ));
+        assert!(
+            path.segment_analytic_trims(&points, &[plane], options())
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_three_point_interpolation_is_not_a_circle() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let points = [
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(-1.0, 0.0, 0.0),
+        ];
+        let plane = SurfaceCarrier::Plane {
+            origin: points[0],
+            normal: Vector3::unit_z(),
+        };
+        let cylinder = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let result = path(2, false)
+            .segment_analytic_trims(&points, &[plane, cylinder], options())
+            .ok_or("segmentation")?;
+        assert_eq!(result.pieces.len(), 1);
+        assert_eq!(result.pieces[0].edge_count, 2);
+        assert!(matches!(
+            result.pieces[0].geometry,
+            SharedTrimGeometry::Unresolved
+        ));
+        Ok(())
+    }
+}

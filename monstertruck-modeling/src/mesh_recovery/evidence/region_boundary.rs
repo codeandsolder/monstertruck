@@ -11,10 +11,14 @@ mod coincidence;
 mod contacts;
 mod containment;
 mod curve_evidence;
+mod partition;
+mod trim;
 pub use coincidence::CarrierCoincidenceEvidence;
 pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
+pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
+pub use trim::{SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation};
 
 /// One directed source edge on a candidate region's boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

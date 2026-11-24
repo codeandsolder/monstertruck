@@ -74,6 +74,11 @@ impl RegionContactPath {
     /// proves the original CAD curve identity or containment by both surfaces.
     #[must_use = "curve fit residuals and source coverage must be inspected"]
     pub fn measure_curves(&self, evidence: &MeshEvidence) -> Option<ContactCurveEvidence> {
+        let ids = self.ordered_vertices()?;
+        measure_path_curves(&evidence.positions, &ids)
+    }
+
+    pub(super) fn ordered_vertices(&self) -> Option<Vec<usize>> {
         let mut ids = Vec::with_capacity(self.edges.len() + 1);
         let mut previous = self.edges.first()?.vertices[0];
         ids.push(previous);
@@ -84,27 +89,33 @@ impl RegionContactPath {
             previous = edge.vertices[1];
             ids.push(previous);
         }
-        let points = &evidence.positions;
-        if ids.iter().any(|&id| id >= points.len()) {
-            return None;
-        }
-        let source_length = ids
-            .windows(2)
-            .map(|pair| (points[pair[1]] - points[pair[0]]).magnitude())
-            .sum::<f64>();
-        if !source_length.is_finite() || source_length <= 0.0 {
-            return None;
-        }
-        let closed = ids.first() == ids.last();
-        let count = ids.len() - usize::from(closed);
-        Some(ContactCurveEvidence {
-            source_vertex_count: count,
-            closed,
-            source_length,
-            line: (!closed).then(|| measure_line(points, &ids)).flatten(),
-            circle: measure_circle(points, &ids, count),
-        })
+        Some(ids)
     }
+}
+
+pub(super) fn measure_path_curves(
+    points: &[Point3],
+    ids: &[usize],
+) -> Option<ContactCurveEvidence> {
+    if ids.iter().any(|&id| id >= points.len()) {
+        return None;
+    }
+    let source_length = ids
+        .windows(2)
+        .map(|pair| (points[pair[1]] - points[pair[0]]).magnitude())
+        .sum::<f64>();
+    if !source_length.is_finite() || source_length <= 0.0 {
+        return None;
+    }
+    let closed = ids.first() == ids.last();
+    let count = ids.len() - usize::from(closed);
+    Some(ContactCurveEvidence {
+        source_vertex_count: count,
+        closed,
+        source_length,
+        line: (!closed).then(|| measure_line(points, ids)).flatten(),
+        circle: measure_circle(points, ids, count),
+    })
 }
 
 fn measure_line(points: &[Point3], ids: &[usize]) -> Option<ContactLineEvidence> {
