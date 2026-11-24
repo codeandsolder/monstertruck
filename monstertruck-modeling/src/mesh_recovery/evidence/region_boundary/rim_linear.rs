@@ -1,0 +1,520 @@
+//! Locally grow affine radial profiles from independently observed source
+//! circles, including irregular end trims and zero-radius cone tips.
+
+use super::super::super::sample_fit::normal_basis;
+use super::super::SourceCircleObservation;
+use super::{MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionProposal};
+use crate::{InnerSpace, Point3, Vector3};
+use std::collections::{BTreeSet, VecDeque};
+
+#[derive(Clone, Copy)]
+struct Profile {
+    origin: Point3,
+    axis: Vector3,
+    radius: f64,
+    slope: f64,
+}
+
+impl Profile {
+    const fn from_carrier(carrier: SurfaceCarrier) -> Option<Self> {
+        let SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin,
+            slope,
+        } = carrier
+        else {
+            return None;
+        };
+        Some(Self {
+            origin,
+            axis,
+            radius: radius_at_origin,
+            slope,
+        })
+    }
+
+    fn sample(self, point: Point3) -> (f64, Vector3) {
+        let delta = point - self.origin;
+        let z = delta.dot(self.axis);
+        (z, delta - self.axis * z)
+    }
+
+    const fn expected(self, z: f64) -> f64 { self.slope.mul_add(z, self.radius) }
+
+    const fn carrier(self) -> SurfaceCarrier {
+        SurfaceCarrier::LinearRevolution {
+            origin: self.origin,
+            axis: self.axis,
+            radius_at_origin: self.radius,
+            slope: self.slope,
+        }
+    }
+}
+
+// A linear radial profile admits a bound on the entire filled facet.
+// For p = sum(w_i p_i) in its convex hull, r(p) = sum(w_i r_i).
+// Triangle inequality bounds rho(p) above. For one unit transverse
+// direction u, rho(p) >= u.dot(sum(w_i v_i)). Thus vertex-wise bounds
+// against the affine budget e + f*r_i certify every convex combination,
+// including apex edges and nonconvex polygons. The unit direction is
+// chosen from the observed azimuth span; its inequalities are then tested
+// directly, rather than trusting the angle calculation as a certificate.
+pub(super) fn facet_bound(
+    evidence: &MeshEvidence,
+    support: usize,
+    carrier: SurfaceCarrier,
+    tolerance: f64,
+    fraction: f64,
+) -> Option<f64> {
+    let profile = Profile::from_carrier(carrier)?;
+    let (u, v) = normal_basis(profile.axis);
+    let mut maximum = 0.0_f64;
+    for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
+        let ids = evidence.source_polygon_vertices(polygon)?;
+        let mut angles = Vec::with_capacity(ids.len());
+        let mut samples = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let (z, radial) = profile.sample(*evidence.positions.get(id)?);
+            let expected = profile.expected(z);
+            let rho = radial.magnitude();
+            if !expected.is_finite() || expected < -tolerance || (rho - expected).abs() > tolerance
+            {
+                return None;
+            }
+            if rho > tolerance {
+                angles.push(radial.dot(v).atan2(radial.dot(u)));
+            }
+            samples.push((radial, expected, rho));
+        }
+        angles.sort_unstable_by(f64::total_cmp);
+        let first = *angles.first()?;
+        let last = *angles.last()?;
+        let mut gap = first + std::f64::consts::TAU - last;
+        let mut start = first;
+        for pair in angles.windows(2) {
+            if pair[1] - pair[0] > gap {
+                gap = pair[1] - pair[0];
+                start = pair[1];
+            }
+        }
+        let midpoint = (std::f64::consts::TAU - gap).mul_add(0.5, start);
+        let (sin, cos) = midpoint.sin_cos();
+        let direction = (u * cos + v * sin).normalize();
+        for (radial, expected, rho) in samples {
+            let budget = fraction.mul_add(expected, tolerance);
+            let bound = (expected - radial.dot(direction))
+                .max(rho - expected)
+                .max(0.0);
+            if !budget.is_finite() || budget <= 0.0 || bound > budget {
+                return None;
+            }
+            maximum = maximum.max(bound / budget);
+        }
+    }
+    Some(maximum)
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::mesh_recovery) struct RimLinearOptions {
+    pub absolute_tolerance: f64,
+    pub relative_tolerance: f64,
+    pub angular_tolerance: f64,
+    pub chord_fraction: f64,
+}
+
+struct LocalGrowth<'a> {
+    evidence: &'a MeshEvidence,
+    support_vertices: Vec<Vec<usize>>,
+    // Source edges incident to a vertex, with their original support uses.
+    ring_edges: Vec<Vec<(usize, usize)>>,
+    options: RimLinearOptions,
+}
+
+impl<'a> LocalGrowth<'a> {
+    fn new(index: &RegionBoundaryIndex<'a>, options: RimLinearOptions) -> Option<Self> {
+        let evidence = index.evidence;
+        let mut support_vertices = Vec::with_capacity(evidence.planar_supports.len());
+        for support in &evidence.planar_supports {
+            let mut vertices = Vec::new();
+            for &polygon in &support.source_face_indices {
+                vertices.extend_from_slice(evidence.source_polygon_vertices(polygon)?);
+            }
+            vertices.sort_unstable();
+            vertices.dedup();
+            support_vertices.push(vertices);
+        }
+        let mut ring_edges = vec![Vec::new(); evidence.positions.len()];
+        for (&[a, b], uses) in &index.incidence {
+            if uses.len() > 2 || (uses.len() == 2 && uses[0].1 == uses[1].1) {
+                continue;
+            }
+            for &(polygon, _) in uses {
+                let support = evidence.source_planar_support[polygon];
+                ring_edges[a].push((b, support));
+                ring_edges[b].push((a, support));
+            }
+        }
+        Some(Self {
+            evidence,
+            support_vertices,
+            ring_edges,
+            options,
+        })
+    }
+
+    fn seeds(&self, circle: &SourceCircleObservation) -> BTreeSet<usize> {
+        let mut seeds = BTreeSet::new();
+        for &vertex in &circle.vertices {
+            for &(other, support) in &self.ring_edges[vertex] {
+                if circle.vertices.binary_search(&other).is_ok() {
+                    seeds.insert(support);
+                }
+            }
+        }
+        seeds
+    }
+
+    fn orientation(&self, profile: Profile, id: usize, tolerance: f64) -> Option<bool> {
+        let support = &self.evidence.planar_supports[id];
+        let ids = &self.support_vertices[id];
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for &vertex in ids {
+            let (z, radial) = profile.sample(self.evidence.positions[vertex]);
+            low = low.min(z);
+            high = high.max(z);
+            if (radial.magnitude() - profile.expected(z)).abs() > tolerance {
+                return None;
+            }
+        }
+        if high - low <= tolerance {
+            return None; // a rim disk is not a lateral surface
+        }
+        let carrier = profile.carrier();
+        let mut orientation = None;
+        for &polygon in &support.source_face_indices {
+            let vertices = self.evidence.source_polygon_vertices(polygon)?;
+            let centroid = vertices
+                .iter()
+                .fold(Vector3::new(0.0, 0.0, 0.0), |sum, &id| {
+                    sum + (self.evidence.positions[id] - profile.origin)
+                })
+                / crate::usize_to_f64(vertices.len());
+            let expected = carrier.signed_constraint(profile.origin + centroid)?.0;
+            let dot = expected.dot(support.normal);
+            let deviation = expected.cross(support.normal).magnitude().atan2(dot.abs());
+            let span = vertices
+                .iter()
+                .filter_map(|&id| {
+                    carrier
+                        .signed_constraint(self.evidence.positions[id])
+                        .map(|(normal, _)| {
+                            expected
+                                .cross(normal)
+                                .magnitude()
+                                .atan2(expected.dot(normal))
+                        })
+                })
+                .fold(0.0_f64, f64::max);
+            if dot.abs() <= self.options.angular_tolerance.sin()
+                || deviation
+                    > span + self.options.angular_tolerance + support.max_normal_angle_radians
+                || orientation.is_some_and(|sign| sign != (dot > 0.0))
+            {
+                return None;
+            }
+            orientation = Some(dot > 0.0);
+        }
+        facet_bound(
+            self.evidence,
+            id,
+            carrier,
+            tolerance,
+            self.options.chord_fraction,
+        )?;
+        orientation
+    }
+
+    fn grow(&self, profile: Profile, seed: usize, tolerance: f64) -> Vec<usize> {
+        let Some(sign) = self.orientation(profile, seed, tolerance) else {
+            return Vec::new();
+        };
+        let mut tested = BTreeSet::from([seed]);
+        let mut pending = VecDeque::from([seed]);
+        let mut result = vec![seed];
+        while let Some(id) = pending.pop_front() {
+            for &interface in &self.evidence.support_interface_indices[id] {
+                let [a, b] = self.evidence.support_interfaces[interface].supports;
+                let other = if a == id { b } else { a };
+                if tested.insert(other) && self.orientation(profile, other, tolerance) == Some(sign)
+                {
+                    result.push(other);
+                    pending.push_back(other);
+                }
+            }
+        }
+        result.sort_unstable();
+        result
+    }
+
+    fn proposal(
+        &self,
+        index: &RegionBoundaryIndex<'a>,
+        circle: &SourceCircleObservation,
+        seed: usize,
+    ) -> Option<SurfaceRegionProposal<'a>> {
+        let mut profile = Profile {
+            origin: circle.center,
+            axis: circle.normal,
+            radius: circle.radius,
+            slope: 0.0,
+        };
+        let tolerance = self
+            .options
+            .absolute_tolerance
+            .min(self.options.relative_tolerance * circle.radius);
+        let (z, radial) = self.support_vertices[seed]
+            .iter()
+            .map(|&id| profile.sample(self.evidence.positions[id]))
+            .max_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))?;
+        if z.abs() <= tolerance {
+            return None;
+        }
+        profile.slope = (radial.magnitude() - circle.radius) / z;
+        let supports = self.grow(profile, seed, tolerance);
+        if supports.len() < 2 {
+            return None;
+        }
+        let first_normal = self.evidence.planar_supports[supports[0]].normal;
+        if !supports.iter().any(|&id| {
+            first_normal
+                .cross(self.evidence.planar_supports[id].normal)
+                .magnitude()
+                > self.options.angular_tolerance.sin()
+        }) {
+            return None;
+        }
+        let ids = supports
+            .iter()
+            .flat_map(|&id| self.support_vertices[id].iter().copied())
+            .collect::<BTreeSet<_>>();
+        // A circle must be represented by the grown lateral surface itself,
+        // not merely found on a neighboring unrelated planar patch.
+        if ids
+            .iter()
+            .filter(|id| circle.vertices.binary_search(id).is_ok())
+            .count()
+            < 4
+        {
+            return None;
+        }
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        let mut axial = Vec::with_capacity(ids.len());
+        for &id in &ids {
+            let (z, _) = profile.sample(self.evidence.positions[id]);
+            low = low.min(z);
+            high = high.max(z);
+            axial.push(z);
+        }
+        let tolerance = tolerance.min(self.options.relative_tolerance * (high - low));
+        let proposal = index.measure_rim_linear_region(
+            &supports,
+            profile.carrier(),
+            tolerance,
+            self.options.chord_fraction,
+        )?;
+        // Two axial samples interpolate a slope. A third resolved sample
+        // tests it independently, even if the off-rim samples are irregular.
+        let independently_tested = axial
+            .iter()
+            .any(|&z| z - low > tolerance && high - z > tolerance);
+        Some(if independently_tested {
+            proposal.with_independent_profile()
+        } else {
+            proposal
+        })
+    }
+}
+
+impl<'a> RegionBoundaryIndex<'a> {
+    pub(in crate::mesh_recovery) fn discover_rim_linear_regions(
+        &self,
+        circles: &[SourceCircleObservation],
+        options: RimLinearOptions,
+    ) -> Vec<SurfaceRegionProposal<'a>> {
+        let Some(growth) = LocalGrowth::new(self, options) else {
+            return Vec::new();
+        };
+        let mut proposals = Vec::new();
+        let mut seen = BTreeSet::new();
+        for circle in circles {
+            let mut completed = BTreeSet::new();
+            for seed in growth.seeds(circle) {
+                if completed.contains(&seed) {
+                    continue;
+                }
+                if let Some(proposal) = growth.proposal(self, circle, seed) {
+                    completed.extend(proposal.supports().iter().copied());
+                    if seen.insert(proposal.supports().to_vec()) {
+                        proposals.push(proposal);
+                    }
+                }
+            }
+        }
+        proposals
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mesh_recovery::{
+        CircleAxisOptions, EvidenceOptions, analyze_mesh_evidence, discover_circle_axes,
+    };
+    use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+
+    fn options() -> RimLinearOptions {
+        RimLinearOptions {
+            absolute_tolerance: 1.0e-8,
+            relative_tolerance: 1.0e-4,
+            angular_tolerance: 1.0e-5,
+            chord_fraction: 0.25,
+        }
+    }
+
+    fn discover<'a>(index: &RegionBoundaryIndex<'a>) -> Vec<SurfaceRegionProposal<'a>> {
+        let circles = discover_circle_axes(
+            index.evidence,
+            CircleAxisOptions {
+                vertex_tolerance: 1.0e-8,
+                relative_tolerance: 1.0e-4,
+                axis_position_tolerance: 8.0e-8,
+                axis_angle_tolerance_radians: 1.0e-7,
+            },
+        );
+        circles.map_or_else(Vec::new, |c| {
+            index.discover_rim_linear_regions(&c.circles, options())
+        })
+    }
+
+    fn cylinder_mesh(n: usize) -> Result<PolygonMesh, Box<dyn std::error::Error>> {
+        let mut positions = Vec::new();
+        for row in 0..2 {
+            for i in 0..n {
+                let a = std::f64::consts::TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                let (sin, cos) = a.sin_cos();
+                // No second regular axial ring. The trim plane is oblique.
+                let z = if row == 0 {
+                    0.0
+                } else {
+                    2.0 + 0.3 * cos + 0.17 * sin
+                };
+                positions.push(Point3::new(cos, sin, z));
+            }
+        }
+        let quads = (0..n).flat_map(|i| {
+            let next = (i + 1) % n;
+            [[i, next, n + next], [i, n + next, n + i]]
+        });
+        Ok(PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(quads),
+        )?)
+    }
+
+    #[test]
+    fn irregular_trim_cylinder_is_recovered_without_repeated_stations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = cylinder_mesh(12)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let proposals = discover(&index);
+        let p = proposals
+            .iter()
+            .find(|p| p.source_polygons() == 24)
+            .ok_or("missing full cylinder")?;
+        assert!(p.independently_tested_profile());
+        let SurfaceCarrier::LinearRevolution {
+            radius_at_origin,
+            axis,
+            slope,
+            ..
+        } = p.carrier()
+        else {
+            return Err("expected linear carrier".into());
+        };
+        assert!((radius_at_origin - 1.0).abs() < 1.0e-9);
+        assert!(axis.cross(Vector3::unit_z()).magnitude() < 1.0e-9);
+        assert!(slope.abs() < 1.0e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn coarse_square_prism_is_not_a_cylinder() -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = cylinder_mesh(4)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        assert!(discover(&index).iter().all(|p| p.source_polygons() < 8));
+        Ok(())
+    }
+
+    #[test]
+    fn cone_with_apex_passes_local_radius_approximation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let n = 12;
+        let mut positions = Vec::new();
+        for row in 0..2 {
+            let radius = if row == 0 { 1.0 } else { 0.5 };
+            for i in 0..n {
+                let a = std::f64::consts::TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                let (sin, cos) = a.sin_cos();
+                positions.push(Point3::new(radius * cos, radius * sin, 1.0 - radius));
+            }
+        }
+        positions.push(Point3::new(0.0, 0.0, 1.0));
+        let triangles = (0..n).flat_map(|i| {
+            let next = (i + 1) % n;
+            [
+                [i, next, n + next],
+                [i, n + next, n + i],
+                [n + i, n + next, 2 * n],
+            ]
+        });
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(triangles),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let proposals = discover(&index);
+        let p = proposals
+            .iter()
+            .find(|p| p.source_polygons() == 3 * n)
+            .ok_or("missing apex-inclusive cone")?;
+        assert!(p.independently_tested_profile());
+        assert!(p.relative_chord_bound() < 1.0);
+        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
+        let shell = recovered
+            .complete_shell()
+            .ok_or("missing complete cone cap")?;
+        assert_eq!(shell.len(), 2);
+        assert_eq!(recovered.native.regions.len(), 1);
+        assert!(
+            recovered
+                .native
+                .regions
+                .iter()
+                .all(|r| !r.requires_chart_cut)
+        );
+
+        Ok(())
+    }
+}

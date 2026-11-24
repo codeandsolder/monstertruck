@@ -8,12 +8,15 @@ use super::MeshEvidence;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 mod coincidence;
+mod conic;
 mod contacts;
 mod containment;
+pub use conic::ContactConicEvidence;
 mod curve_evidence;
 mod native;
 mod partition;
 mod reconcile;
+mod rim_linear;
 mod sphere;
 mod trim;
 mod trim_graph;
@@ -25,6 +28,7 @@ pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLin
 pub use native::{NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions};
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
 pub use reconcile::{ReconciledPartition, ReconciledPlane, ReconciliationOptions};
+pub(in crate::mesh_recovery) use rim_linear::RimLinearOptions;
 pub use trim::{SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation};
 pub use trim_graph::{
     OrientedTrim, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGraph,

@@ -152,25 +152,13 @@ impl BandContext<'_> {
         Some(BandPlan { vertices, seams })
     }
 
-    // A spherical cap is the limiting annular chart whose second ring
-    // collapses to a pole. Its two meridian seams share a single pole vertex.
+    // A cap is the limiting annular chart whose second ring collapses
+    // to a singular point. Both chart seams share one topological tip.
     fn cap(
         &self,
         boundary: &RegionTrimLoops,
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
     ) -> Option<BandPlan> {
-        let SurfaceCarrier::CircularRevolution {
-            axial_center,
-            axis,
-            radial_center,
-            profile_radius,
-        } = self.carrier
-        else {
-            return None;
-        };
-        if radial_center.abs() > crate::KERNEL_EPSILON {
-            return None;
-        }
         let [cycle] = boundary.loops.as_slice() else {
             return None;
         };
@@ -179,24 +167,61 @@ impl BandContext<'_> {
             return None;
         }
         let positive = ring.positive == self.outward;
-        let pole_angle = if positive { PI * 0.5 } else { -PI * 0.5 };
-        let sweep = pole_angle - ring.fixed;
-        if sweep.abs() <= self.options.angular_resolution
-            || !self.covers_band(1, pole_angle.min(ring.fixed), sweep.abs())
+        let (tip_coordinate, tip) = match self.carrier {
+            SurfaceCarrier::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } if radial_center.abs() <= crate::KERNEL_EPSILON => {
+                let direction = if positive { 1.0 } else { -1.0 };
+                (
+                    direction * PI * 0.5,
+                    axial_center + axis * (direction * profile_radius),
+                )
+            }
+            SurfaceCarrier::LinearRevolution {
+                origin,
+                axis,
+                radius_at_origin,
+                slope,
+            } if slope != 0.0 => {
+                let z = -radius_at_origin / slope;
+                let tip = origin + axis * z;
+                // A finite cone with one rim must actually reach its
+                // singular end in the observed source, not extrapolate
+                // across an unobserved portion of the infinite carrier.
+                let witnessed = self.supports.iter().any(|&support| {
+                    self.evidence.planar_supports[support]
+                        .source_face_indices
+                        .iter()
+                        .any(|&polygon| {
+                            self.evidence
+                                .source_polygon_vertices(polygon)
+                                .is_some_and(|ids| {
+                                    ids.iter().any(|&id| {
+                                        (self.positions[id] - tip).magnitude()
+                                            <= self.options.max_vertex_displacement
+                                    })
+                                })
+                        })
+                });
+                if !witnessed || (z > ring.fixed) != positive {
+                    return None;
+                }
+                (z, tip)
+            }
+            _ => return None,
+        };
+        let sweep = tip_coordinate - ring.fixed;
+        if sweep.abs() <= self.coordinate_tolerance(1)
+            || !self.covers_band(1, tip_coordinate.min(ring.fixed), sweep.abs())
         {
             return None;
         }
         let mut changed = copy_rings(cycle.iter(), trims)?;
         let endpoints = self.ring_vertices(cycle, ring, &mut changed)?;
-        let pole = builder::vertex(
-            axial_center
-                + axis
-                    * if positive {
-                        profile_radius
-                    } else {
-                        -profile_radius
-                    },
-        );
+        let pole = builder::vertex(tip);
         let seams = [0.0, PI]
             .into_iter()
             .enumerate()
@@ -321,19 +346,32 @@ impl BandContext<'_> {
                             chart_point(self.carrier, point, self.options.angular_resolution)
                                 .map(|uv| uv[other])
                                 .or_else(|| {
-                                    let SurfaceCarrier::CircularRevolution {
-                                        axial_center,
-                                        axis,
-                                        radial_center,
-                                        ..
-                                    } = self.carrier
-                                    else {
-                                        return None;
-                                    };
-                                    if other != 1 || radial_center.abs() > crate::KERNEL_EPSILON {
+                                    if other != 1 {
                                         return None;
                                     }
-                                    Some((point - axial_center).dot(axis).signum() * PI * 0.5)
+                                    match self.carrier {
+                                        SurfaceCarrier::CircularRevolution {
+                                            axial_center,
+                                            axis,
+                                            radial_center,
+                                            ..
+                                        } if radial_center.abs() <= crate::KERNEL_EPSILON => Some(
+                                            (point - axial_center).dot(axis).signum() * PI * 0.5,
+                                        ),
+                                        SurfaceCarrier::LinearRevolution {
+                                            origin,
+                                            axis,
+                                            radius_at_origin,
+                                            slope,
+                                        } if slope != 0.0 => {
+                                            let apex = -radius_at_origin / slope;
+                                            let tip = origin + axis * apex;
+                                            ((point - tip).magnitude()
+                                                <= self.options.max_vertex_displacement)
+                                                .then_some(apex)
+                                        }
+                                        _ => None,
+                                    }
                                 });
                         let Some(value) = value else {
                             return false;

@@ -163,7 +163,7 @@ impl RegionBoundaryIndex<'_> {
                     options,
                 );
                 let (surface, outward) =
-                    native_surface(carrier, self.evidence, supports, positions).ok()?;
+                    native_surface(carrier, self.evidence, supports, positions, options).ok()?;
                 if !boundary.pinched_vertices.is_empty() {
                     return None;
                 }
@@ -248,8 +248,13 @@ impl FaceAssembly<'_> {
                 self.positions,
                 self.options,
             );
-            let (surface, outward) =
-                native_surface(carrier, self.evidence, supports, self.positions)?;
+            let (surface, outward) = native_surface(
+                carrier,
+                self.evidence,
+                supports,
+                self.positions,
+                self.options,
+            )?;
             let mut wires = Vec::new();
             let mut areas = Vec::new();
             for cycle in &boundary.loops {
@@ -341,6 +346,31 @@ fn trim_intervals(
                 sweep: 0.0,
             }])
         }
+        SharedTrimGeometry::Conic(conic) => {
+            let mut result = Vec::with_capacity(trim.source_edges.len());
+            let mut previous = start;
+            for edge in &trim.source_edges {
+                let [a, b] = edge.vertices;
+                if a != previous {
+                    return Err(NativeTrimError::InvalidSource);
+                }
+                let sweep = conic
+                    .angular_step(
+                        *points.get(a).ok_or(NativeTrimError::InvalidSource)?,
+                        *points.get(b).ok_or(NativeTrimError::InvalidSource)?,
+                    )
+                    .ok_or(NativeTrimError::EdgeGeometry)?;
+                if sweep * conic.signed_sweep_radians <= 0.0 {
+                    return Err(NativeTrimError::EdgeGeometry);
+                }
+                result.push(TrimInterval {
+                    endpoints: [a, b],
+                    sweep,
+                });
+                previous = b;
+            }
+            Ok(result)
+        }
         SharedTrimGeometry::Circle(circle) => {
             let mut result = Vec::new();
             let mut first = start;
@@ -403,7 +433,9 @@ fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
                 profile_radius: circle.radius,
             },
         ],
-        SharedTrimGeometry::Unresolved => Vec::new(),
+        // The conic is exactly the intersection of the two already
+        // supplied incident carriers. No redundant fitted constraint.
+        SharedTrimGeometry::Conic(_) | SharedTrimGeometry::Unresolved => Vec::new(),
     }
 }
 
@@ -492,6 +524,17 @@ fn native_edge(
             interval.sweep,
             options.intersection_tolerance,
         )?,
+        SharedTrimGeometry::Conic(conic) => {
+            let curve = conic
+                .native_curve(
+                    front.point(),
+                    back.point(),
+                    interval.sweep,
+                    options.intersection_tolerance,
+                )
+                .ok_or(NativeTrimError::EdgeGeometry)?;
+            Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)?
+        }
         SharedTrimGeometry::Unresolved => return Err(NativeTrimError::UnresolvedTrim),
     };
     if !edge.is_geometric_consistent() {
@@ -660,7 +703,7 @@ fn compact_sphere_axis(
                         .max_plane_residual
                         .hypot(circle.max_vertex_radial_residual)
             }
-            SharedTrimGeometry::Unresolved => return None,
+            SharedTrimGeometry::Conic(_) | SharedTrimGeometry::Unresolved => return None,
         };
         if trim
             .source_edges
@@ -683,30 +726,9 @@ fn native_surface(
     evidence: &MeshEvidence,
     supports: &[usize],
     points: &[Point3],
+    options: NativeTrimOptions,
 ) -> Result<(Surface, bool), NativeTrimError> {
-    let support = supports
-        .iter()
-        .map(|&id| &evidence.planar_supports[id])
-        .max_by(|a, b| a.area.total_cmp(&b.area))
-        .ok_or(NativeTrimError::InvalidSource)?;
-    let ids = evidence
-        .source_polygon_vertices(
-            *support
-                .source_face_indices
-                .first()
-                .ok_or(NativeTrimError::InvalidSource)?,
-        )
-        .ok_or(NativeTrimError::InvalidSource)?;
-    let origin = points[ids[0]];
-    let centroid = origin
-        + ids.iter().fold(Vector3::new(0.0, 0.0, 0.0), |sum, &id| {
-            sum + (points[id] - origin)
-        }) / crate::usize_to_f64(ids.len());
-    let normal = carrier
-        .signed_constraint(centroid)
-        .ok_or(NativeTrimError::UnsupportedCarrier)?
-        .0;
-    let outward = normal.dot(support.normal) > 0.0;
+    let outward = region_outward(carrier, evidence, supports, points)?;
     let (mut surface, probe) = match carrier {
         SurfaceCarrier::Plane { origin, normal } => {
             let (u, v) = normal_basis(normal);
@@ -723,15 +745,31 @@ fn native_surface(
         } => {
             let (lo, hi) = axial_span(evidence, supports, points, origin, axis)?;
             let (u, _) = normal_basis(axis);
-            let profile = |z| origin + axis * z + u * slope.mul_add(z, radius_at_origin);
-            if slope.mul_add(lo, radius_at_origin) < 0.0
-                || slope.mul_add(hi, radius_at_origin) < 0.0
-                || lo >= hi
-            {
+            if lo >= hi {
                 return Err(NativeTrimError::UnsupportedCarrier);
             }
+            let front = linear_profile_point(
+                origin,
+                axis,
+                u,
+                radius_at_origin,
+                slope,
+                lo,
+                options.intersection_tolerance,
+            )
+            .ok_or(NativeTrimError::UnsupportedCarrier)?;
+            let back = linear_profile_point(
+                origin,
+                axis,
+                u,
+                radius_at_origin,
+                slope,
+                hi,
+                options.intersection_tolerance,
+            )
+            .ok_or(NativeTrimError::UnsupportedCarrier)?;
             let surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
-                Curve::Line(Line(profile(lo), profile(hi))),
+                Curve::Line(Line(front, back)),
                 origin,
                 axis,
             )));
@@ -777,6 +815,58 @@ fn native_surface(
         surface.invert();
     }
     Ok((surface, outward))
+}
+
+fn region_outward(
+    carrier: SurfaceCarrier,
+    evidence: &MeshEvidence,
+    supports: &[usize],
+    points: &[Point3],
+) -> Result<bool, NativeTrimError> {
+    let support = supports
+        .iter()
+        .map(|&id| &evidence.planar_supports[id])
+        .max_by(|a, b| a.area.total_cmp(&b.area))
+        .ok_or(NativeTrimError::InvalidSource)?;
+    let ids = evidence
+        .source_polygon_vertices(
+            *support
+                .source_face_indices
+                .first()
+                .ok_or(NativeTrimError::InvalidSource)?,
+        )
+        .ok_or(NativeTrimError::InvalidSource)?;
+    let origin = points[ids[0]];
+    let centroid = origin
+        + ids.iter().fold(Vector3::new(0.0, 0.0, 0.0), |sum, &id| {
+            sum + (points[id] - origin)
+        }) / crate::usize_to_f64(ids.len());
+    let normal = carrier
+        .signed_constraint(centroid)
+        .ok_or(NativeTrimError::UnsupportedCarrier)?
+        .0;
+    Ok(normal.dot(support.normal) > 0.0)
+}
+
+// Near a cone tip, roundoff can make the fitted radius slightly
+// negative. Snap to the exact apex only within the intersection budget.
+fn linear_profile_point(
+    origin: Point3,
+    axis: Vector3,
+    u: Vector3,
+    radius_at_origin: f64,
+    slope: f64,
+    z: f64,
+    tolerance: f64,
+) -> Option<Point3> {
+    let radius = slope.mul_add(z, radius_at_origin);
+    if slope != 0.0 {
+        let apex_z = -radius_at_origin / slope;
+        if (z - apex_z).hypot(radius) <= tolerance {
+            return Some(origin + axis * apex_z);
+        }
+    }
+    (radius >= 0.0).then_some(origin + axis * z + u * radius)
 }
 
 fn axial_span(

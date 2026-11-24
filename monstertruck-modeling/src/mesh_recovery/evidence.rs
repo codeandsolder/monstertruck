@@ -35,15 +35,16 @@ pub use growth::{
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
+pub(in crate::mesh_recovery) use region_boundary::RimLinearOptions;
 pub use region_boundary::{
-    CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactCurveEvidence,
-    ContactLineEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
-    OrientedTrim, ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim,
-    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
-    SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
-    SurfaceRegionPartition, SurfaceRegionProposal,
+    CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactConicEvidence,
+    ContactCurveEvidence, ContactLineEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph,
+    NativeTrimOptions, OrientedTrim, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
+    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, RegionTrimBoundary,
+    RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions,
+    SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement,
+    SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use source_collapse::CollapsedSourceFacet;
 pub use source_sectors::SourceSectorPair;

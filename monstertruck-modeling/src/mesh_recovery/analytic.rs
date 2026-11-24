@@ -3,20 +3,23 @@
 //! retain every failed region; only complete oriented shells are returned
 //! by the explicit shell extraction method.
 
+use super::evidence::RimLinearOptions;
 use super::{
     CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
     CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, MeridianGraphOptions,
     MeridianStationGraph, MeshEvidence, MeshRecoveryError, NativeTrimError, NativeTrimGraph,
     NativeTrimOptions, ReconciledPartition, ReconciliationOptions, RegionBoundaryError,
-    RegionBoundaryIndex, SharedTrimGraph, SharedTrimOptions, SpatialTrackEvidence,
-    StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget,
-    SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
-    measure_curvature_spatial, trace_curvature_tracks,
+    RegionBoundaryIndex, SharedTrimGraph, SharedTrimOptions, SourceCircleObservation,
+    SpatialTrackEvidence, StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier,
+    SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence,
+    discover_circle_axes, measure_curvature_spatial, trace_curvature_tracks,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{BTreeMap, BTreeSet};
+mod native_selection;
+use native_selection::{PartitionAlternative, select_native};
 
 /// Shared policy for evidence, surface recognition and native assembly.
 #[derive(Clone, Copy, Debug)]
@@ -236,6 +239,15 @@ pub struct AnalyticDiscoveryStats {
     pub linear_proposals: usize,
     /// Direct station-graph linear proposals.
     pub direct_linear_proposals: usize,
+    /// Additional local circle-rim linear proposals.
+    pub rim_linear_proposals: usize,
+    /// Measured local circle-rim hypotheses, including alternatives whose
+    /// incident trims are not yet reconstructable.
+    pub rim_linear_candidates: Vec<SelectedSurfaceProposal>,
+    /// Neighborhoods compared using actual native assembly.
+    pub compared_native_neighborhoods: usize,
+    /// Neighborhoods using the expanded analytic candidate set.
+    pub expanded_native_neighborhoods: usize,
     /// Number of selected circular proposals.
     pub selected_curved: usize,
     /// Selected mutually nonoverlapping measured proposals.
@@ -251,6 +263,7 @@ pub struct AnalyticRegionDiscovery {
     pub partition: SurfaceRegionPartition,
     /// Recognition evidence and diagnostics.
     pub stats: AnalyticDiscoveryStats,
+    core_alternative: Option<PartitionAlternative>,
 }
 
 struct CandidateDiscovery {
@@ -264,6 +277,9 @@ struct ProposalSelection {
     selected: Vec<SelectedSurfaceProposal>,
     curved_proposals: usize,
     direct_linear_proposals: usize,
+    rim_linear_proposals: usize,
+    rim_linear_candidates: Vec<SelectedSurfaceProposal>,
+    core_alternative: Option<PartitionAlternative>,
     linear_proposals: usize,
     selected_curved: usize,
 }
@@ -333,10 +349,18 @@ pub fn discover_analytic_regions(
         return Err(AnalyticRecoveryError::InvalidOptions);
     }
     let mut axes = independent_axes(evidence, spatial, tracks, options);
-    let circle_axes = extend_with_circle_axes(evidence, &mut axes, options);
+    let (circle_axes, circles) = extend_with_circle_axes(evidence, &mut axes, options);
     let (active, refinement_passes, candidates) = refine_and_discover(evidence, &axes, options)?;
     let boundary = RegionBoundaryIndex::new(&active)?;
-    let selection = choose_partition(&active, evidence, &boundary, &candidates, grown, options)?;
+    let selection = choose_partition(
+        &active,
+        evidence,
+        &boundary,
+        &candidates,
+        grown,
+        &circles,
+        options,
+    )?;
     let stats = AnalyticDiscoveryStats {
         circle_axes,
         placed_axes: axes.len(),
@@ -348,6 +372,10 @@ pub fn discover_analytic_regions(
         curved_proposals: selection.curved_proposals,
         linear_proposals: selection.linear_proposals,
         direct_linear_proposals: selection.direct_linear_proposals,
+        rim_linear_proposals: selection.rim_linear_proposals,
+        rim_linear_candidates: selection.rim_linear_candidates,
+        compared_native_neighborhoods: 0,
+        expanded_native_neighborhoods: 0,
         selected_curved: selection.selected_curved,
         selected: selection.selected,
     };
@@ -355,6 +383,7 @@ pub fn discover_analytic_regions(
         evidence: active,
         partition: selection.partition,
         stats,
+        core_alternative: selection.core_alternative,
     })
 }
 
@@ -410,10 +439,51 @@ pub fn construct_analytic_recovery(
     let AnalyticRegionDiscovery {
         evidence,
         partition,
-        stats,
+        mut stats,
+        core_alternative,
     } = discovered;
-    let boundary = RegionBoundaryIndex::new(&evidence)?;
-    let trim = options.trim_options(&evidence);
+    let assembly = if let Some(core) = core_alternative {
+        let expanded = PartitionAlternative {
+            partition,
+            selected: std::mem::take(&mut stats.selected),
+        };
+        let selection = select_native(&evidence, core, expanded, options)?;
+        stats.compared_native_neighborhoods = selection.compared_neighborhoods;
+        stats.expanded_native_neighborhoods = selection.expanded_neighborhoods;
+        stats.selected = selection.alternative.selected;
+        stats.selected_curved = selection
+            .alternative
+            .partition
+            .selected_proposals
+            .iter()
+            .filter(|&&id| id < stats.curved_proposals)
+            .count();
+        selection.assembly
+    } else {
+        assemble_native(&evidence, partition, options)?
+    };
+    Ok(RecoveredAnalyticMesh {
+        evidence,
+        discovery: stats,
+        reconciled: assembly.reconciled,
+        trims: assembly.trims,
+        native: assembly.native,
+    })
+}
+
+struct NativeAssembly {
+    reconciled: ReconciledPartition,
+    trims: SharedTrimGraph,
+    native: NativeTrimGraph,
+}
+
+fn assemble_native(
+    evidence: &MeshEvidence,
+    partition: SurfaceRegionPartition,
+    options: AnalyticRecoveryOptions,
+) -> Result<NativeAssembly, AnalyticRecoveryError> {
+    let boundary = RegionBoundaryIndex::new(evidence)?;
+    let trim = options.trim_options(evidence);
     let reconciled = if options.max_planar_displacement > 0.0 {
         boundary.reconcile_planes(
             partition,
@@ -446,9 +516,7 @@ pub fn construct_analytic_recovery(
             angular_resolution: options.axis_relative_resolution,
         },
     )?;
-    Ok(RecoveredAnalyticMesh {
-        evidence,
-        discovery: stats,
+    Ok(NativeAssembly {
         reconciled,
         trims,
         native,
@@ -585,8 +653,9 @@ fn extend_with_circle_axes(
     evidence: &MeshEvidence,
     axes: &mut Vec<PlacedAxis>,
     options: AnalyticRecoveryOptions,
-) -> Option<CircleAxisSummary> {
+) -> (Option<CircleAxisSummary>, Vec<SourceCircleObservation>) {
     let mut circle_summary = None;
+    let mut circles = Vec::new();
     if let Some(&reference) = evidence.positions.first() {
         let extent = evidence
             .positions
@@ -627,9 +696,10 @@ fn extend_with_circle_axes(
                 repeated_axes: discovery.axes.len(),
                 axes_added: added,
             });
+            circles = discovery.circles;
         }
     }
-    circle_summary
+    (circle_summary, circles)
 }
 
 fn graph_options(
@@ -765,6 +835,7 @@ fn choose_partition(
     boundary: &RegionBoundaryIndex<'_>,
     candidates: &CandidateDiscovery,
     grown: &[CurvatureGrowthHypothesis],
+    circles: &[SourceCircleObservation],
     options: AnalyticRecoveryOptions,
 ) -> Result<ProposalSelection, AnalyticRecoveryError> {
     let curved = &candidates.circular;
@@ -800,6 +871,113 @@ fn choose_partition(
         }
     }
     let direct_linear_count = proposals.len() - curved_count;
+    append_growth_proposals(
+        evidence,
+        planar_baseline,
+        boundary,
+        grown,
+        options,
+        &mut seen,
+        &mut proposals,
+    );
+    let core_count = proposals.len();
+    let rim_linear_candidates = append_rim_proposals(
+        boundary,
+        circles,
+        options,
+        absolute_tolerance,
+        &mut proposals,
+    );
+    let rim_linear_count = proposals.len() - core_count;
+    let partition = boundary.select_surface_partition(
+        &proposals,
+        planar_baseline,
+        options.max_partition_search_nodes,
+    )?;
+    let selected_for = |partition: &SurfaceRegionPartition| {
+        partition
+            .selected_proposals
+            .iter()
+            .map(|&id| SelectedSurfaceProposal::from_measured(&proposals[id]))
+            .collect::<Vec<_>>()
+    };
+    let chosen = selected_for(&partition);
+    let core_alternative = if partition
+        .selected_proposals
+        .iter()
+        .any(|&id| id >= core_count)
+    {
+        let core = boundary.select_surface_partition(
+            &proposals[..core_count],
+            planar_baseline,
+            options.max_partition_search_nodes,
+        )?;
+        let selected = selected_for(&core);
+        Some(PartitionAlternative {
+            partition: core,
+            selected,
+        })
+    } else {
+        None
+    };
+    let selected_curved = partition
+        .selected_proposals
+        .iter()
+        .filter(|&&id| id < curved_count)
+        .count();
+    Ok(ProposalSelection {
+        partition,
+        selected: chosen,
+        curved_proposals: curved_count,
+        direct_linear_proposals: direct_linear_count,
+        rim_linear_proposals: rim_linear_count,
+        rim_linear_candidates,
+        core_alternative,
+        linear_proposals: proposals.len() - curved_count,
+        selected_curved,
+    })
+}
+
+fn append_rim_proposals<'a>(
+    boundary: &RegionBoundaryIndex<'a>,
+    circles: &[SourceCircleObservation],
+    options: AnalyticRecoveryOptions,
+    absolute_tolerance: f64,
+    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
+) -> Vec<SelectedSurfaceProposal> {
+    let rim_candidates = boundary.discover_rim_linear_regions(
+        circles,
+        RimLinearOptions {
+            absolute_tolerance,
+            relative_tolerance: options.relative_surface_tolerance,
+            angular_tolerance: options.profile_normal_tolerance_radians,
+            chord_fraction: options.max_linear_relative_chord_error,
+        },
+    );
+    // Failed growth hypotheses must not suppress admissible rim candidates.
+    let mut seen = proposals
+        .iter()
+        .map(|p| p.supports().to_vec())
+        .collect::<BTreeSet<_>>();
+    let mut rim_linear_candidates = Vec::new();
+    for proposal in rim_candidates {
+        if seen.insert(proposal.supports().to_vec()) {
+            rim_linear_candidates.push(SelectedSurfaceProposal::from_measured(&proposal));
+            proposals.push(proposal);
+        }
+    }
+    rim_linear_candidates
+}
+
+fn append_growth_proposals<'a>(
+    evidence: &MeshEvidence,
+    planar_baseline: &MeshEvidence,
+    boundary: &RegionBoundaryIndex<'a>,
+    grown: &[CurvatureGrowthHypothesis],
+    options: AnalyticRecoveryOptions,
+    seen: &mut BTreeSet<Vec<usize>>,
+    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
+) {
     for candidate in grown {
         let fit = &candidate.spatial;
         let scale = fit.mean_sample_radius.min(fit.axial_coordinate_span);
@@ -841,29 +1019,6 @@ fn choose_partition(
             proposals.push(proposal);
         }
     }
-    let partition = boundary.select_surface_partition(
-        &proposals,
-        planar_baseline,
-        options.max_partition_search_nodes,
-    )?;
-    let chosen = partition
-        .selected_proposals
-        .iter()
-        .map(|&id| SelectedSurfaceProposal::from_measured(&proposals[id]))
-        .collect::<Vec<_>>();
-    let selected_curved = partition
-        .selected_proposals
-        .iter()
-        .filter(|&&id| id < curved_count)
-        .count();
-    Ok(ProposalSelection {
-        partition,
-        selected: chosen,
-        curved_proposals: curved_count,
-        direct_linear_proposals: direct_linear_count,
-        linear_proposals: proposals.len() - curved_count,
-        selected_curved,
-    })
 }
 
 #[cfg(test)]

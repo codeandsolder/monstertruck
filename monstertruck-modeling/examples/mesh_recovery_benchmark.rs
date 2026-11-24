@@ -46,13 +46,14 @@ fn carrier_summary(carrier: SurfaceCarrier) -> Value {
 fn trim_summary(
     trims: &[monstertruck_modeling::mesh_recovery::SharedAnalyticTrim],
     carriers: &[Option<SurfaceCarrier>],
-) -> ([usize; 3], BTreeMap<String, usize>) {
-    let mut trim_edges = [0_usize; 3];
+) -> ([usize; 4], BTreeMap<String, usize>) {
+    let mut trim_edges = [0_usize; 4];
     let mut unresolved_contact_pairs = BTreeMap::new();
     for trim in trims {
         let kind = match trim.geometry {
             SharedTrimGeometry::Line(_) => 0,
             SharedTrimGeometry::Circle(_) => 1,
+            SharedTrimGeometry::Conic(_) => 3,
             SharedTrimGeometry::Unresolved => 2,
         };
         trim_edges[kind] += trim.source_edges.len();
@@ -183,13 +184,16 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "source_nonmanifold_edges":recovery.evidence.non_manifold_edge_count,
         "source_winding_conflicts":recovery.evidence.inconsistent_winding_edge_count,
         "source_signed_volume":recovery.evidence.closed_source_volume(),
-        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],
+        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],
         "unresolved_source_edges":trim_edges[2],
         "unresolved_contact_pairs":unresolved_contact_pairs,
         "unresolved_trims":unresolved_trims(&recovery),
         "trim_absolute_tolerance":options.trim_options(&recovery.evidence).absolute_tolerance,
         "trim_relative_tolerance":options.trim_options(&recovery.evidence).relative_tolerance,
         "limited_partition_components":partition.limited_components,
+        "rim_linear_proposals":recovery.discovery.rim_linear_proposals,
+        "compared_native_neighborhoods":recovery.discovery.compared_native_neighborhoods,
+        "expanded_native_neighborhoods":recovery.discovery.expanded_native_neighborhoods,
         "shell_condition":complete.as_ref().map(|shell|format!("{:?}",shell.shell_condition())),
         "shell_components":complete.as_ref().map(|shell|shell.connected_components().len()),
     }))

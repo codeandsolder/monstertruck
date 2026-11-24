@@ -14,6 +14,12 @@ pub struct SurfaceRegionBudget {
     pub chord: f64,
 }
 
+#[derive(Clone, Copy)]
+enum ApproximationBudget {
+    Absolute(f64),
+    LocalRadiusFraction(f64),
+}
+
 /// A measured connected region hypothesis. Construct through the source
 /// index so support ownership and admissibility cannot diverge.
 #[derive(Clone)]
@@ -94,12 +100,46 @@ impl<'a> RegionBoundaryIndex<'a> {
         carrier: SurfaceCarrier,
         budget: SurfaceRegionBudget,
     ) -> Option<SurfaceRegionProposal<'a>> {
+        self.measure_region(
+            supports,
+            carrier,
+            budget.vertex,
+            ApproximationBudget::Absolute(budget.chord),
+        )
+    }
+
+    pub(super) fn measure_rim_linear_region(
+        &self,
+        supports: &[usize],
+        carrier: SurfaceCarrier,
+        vertex_tolerance: f64,
+        chord_fraction: f64,
+    ) -> Option<SurfaceRegionProposal<'a>> {
+        self.measure_region(
+            supports,
+            carrier,
+            vertex_tolerance,
+            ApproximationBudget::LocalRadiusFraction(chord_fraction),
+        )
+    }
+
+    fn measure_region(
+        &self,
+        supports: &[usize],
+        carrier: SurfaceCarrier,
+        vertex_tolerance: f64,
+        approximation: ApproximationBudget,
+    ) -> Option<SurfaceRegionProposal<'a>> {
+        let chord = match approximation {
+            ApproximationBudget::Absolute(chord)
+            | ApproximationBudget::LocalRadiusFraction(chord) => chord,
+        };
         if supports.len() < 2
             || supports.windows(2).any(|pair| pair[0] >= pair[1])
-            || !budget.vertex.is_finite()
-            || budget.vertex <= 0.0
-            || !budget.chord.is_finite()
-            || budget.chord <= 0.0
+            || !vertex_tolerance.is_finite()
+            || vertex_tolerance <= 0.0
+            || !chord.is_finite()
+            || chord <= 0.0
             || !self.connected_supports(supports)
         {
             return None;
@@ -141,41 +181,16 @@ impl<'a> RegionBoundaryIndex<'a> {
                 for &vertex in self.evidence.source_polygon_vertices(polygon)? {
                     let point = *self.evidence.positions.get(vertex)?;
                     let residual = carrier.measure_segment(point, point)?.witnessed_max;
-                    if residual > budget.vertex {
+                    if residual > vertex_tolerance {
                         return None;
                     }
                     vertex_error = vertex_error.max(residual);
                 }
             }
         }
-        let chord_bound = match carrier {
-            SurfaceCarrier::CircularRevolution {
-                axial_center,
-                radial_center: 0.0,
-                profile_radius,
-                ..
-            } => {
-                // Spherical extrema admit a direct filled-facet bound.
-                // Include interior points even when the source is an n-gon
-                // with no long chords in its perimeter.
-                let mut maximum = 0.0_f64;
-                for &support in supports {
-                    maximum = maximum.max(super::sphere::facet_residual_bound(
-                        self.evidence,
-                        support,
-                        axial_center,
-                        profile_radius,
-                    )?);
-                }
-                maximum
-            }
-            _ => {
-                carrier
-                    .measure_source_chords(self.evidence, supports, budget.chord)?
-                    .upper_bound
-            }
-        };
-        if chord_bound > budget.chord {
+        let relative_chord_bound =
+            self.approximation_bound(supports, carrier, vertex_tolerance, approximation)?;
+        if relative_chord_bound > 1.0 {
             return None;
         }
         Some(SurfaceRegionProposal {
@@ -183,15 +198,68 @@ impl<'a> RegionBoundaryIndex<'a> {
             supports: supports.to_vec(),
             carrier,
             source_polygons: boundary.source_polygon_count,
-            relative_vertex_error: vertex_error / budget.vertex,
-            relative_chord_bound: chord_bound / budget.chord,
+            relative_vertex_error: vertex_error / vertex_tolerance,
+            relative_chord_bound,
             independently_tested_profile: profile_is_tested(
                 self.evidence,
                 supports,
                 carrier,
-                budget.vertex,
+                vertex_tolerance,
                 vertex_error,
             ),
+        })
+    }
+
+    fn approximation_bound(
+        &self,
+        supports: &[usize],
+        carrier: SurfaceCarrier,
+        vertex_tolerance: f64,
+        approximation: ApproximationBudget,
+    ) -> Option<f64> {
+        Some(match approximation {
+            ApproximationBudget::LocalRadiusFraction(fraction) => {
+                let mut bound = 0.0_f64;
+                for &support in supports {
+                    bound = bound.max(super::rim_linear::facet_bound(
+                        self.evidence,
+                        support,
+                        carrier,
+                        vertex_tolerance,
+                        fraction,
+                    )?);
+                }
+                bound
+            }
+            ApproximationBudget::Absolute(chord) => {
+                (match carrier {
+                    SurfaceCarrier::CircularRevolution {
+                        axial_center,
+                        radial_center: 0.0,
+                        profile_radius,
+                        ..
+                    } => {
+                        // Spherical extrema admit a direct filled-facet bound.
+                        // Include interior points even when the source is an n-gon
+                        // with no long chords in its perimeter.
+                        let mut maximum = 0.0_f64;
+                        for &support in supports {
+                            maximum = maximum.max(super::sphere::facet_residual_bound(
+                                self.evidence,
+                                support,
+                                axial_center,
+                                profile_radius,
+                            )?);
+                        }
+                        maximum
+                    }
+                    _ => {
+                        carrier
+                            .measure_source_chords(self.evidence, supports, chord)?
+                            .upper_bound
+                    }
+                }) / chord
+            }
         })
     }
 

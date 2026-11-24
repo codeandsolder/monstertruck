@@ -506,14 +506,20 @@ fn preserves_polygon_orientation(
     })
 }
 
-fn unresolved_contacts(
+#[derive(Default)]
+struct ContactQuality {
+    unresolved: BTreeSet<[usize; 2]>,
+    conics: BTreeSet<[usize; 2]>,
+}
+
+fn contact_quality(
     partition: &SurfaceRegionPartition,
     points: &[Point3],
     regions: &BTreeSet<usize>,
     vertices: &BTreeSet<usize>,
     trim: SharedTrimOptions,
-) -> BTreeSet<[usize; 2]> {
-    let mut unresolved = BTreeSet::new();
+) -> ContactQuality {
+    let mut quality = ContactQuality::default();
     for path in &partition.contacts.paths {
         if !regions.contains(&path.regions.0)
             && !path.regions.1.is_some_and(|r| regions.contains(&r))
@@ -530,22 +536,25 @@ fn unresolved_contacts(
             .collect::<Vec<_>>();
         if let Some(fit) = path.segment_analytic_trims(points, &carriers, trim) {
             for piece in fit.pieces {
-                if matches!(piece.geometry, SharedTrimGeometry::Unresolved) {
-                    for offset in 0..piece.edge_count {
-                        let edge = path.edges[(piece.first_edge + offset) % path.edges.len()];
-                        unresolved.insert(super::edge_key(edge.vertices[0], edge.vertices[1]).0);
-                    }
+                let target = match piece.geometry {
+                    SharedTrimGeometry::Unresolved => &mut quality.unresolved,
+                    SharedTrimGeometry::Conic(_) => &mut quality.conics,
+                    _ => continue,
+                };
+                for offset in 0..piece.edge_count {
+                    let edge = path.edges[(piece.first_edge + offset) % path.edges.len()];
+                    target.insert(super::edge_key(edge.vertices[0], edge.vertices[1]).0);
                 }
             }
         } else {
-            unresolved.extend(
+            quality.unresolved.extend(
                 path.edges
                     .iter()
                     .map(|e| super::edge_key(e.vertices[0], e.vertices[1]).0),
             );
         }
     }
-    unresolved
+    quality
 }
 
 fn preserves_contact_geometry(
@@ -556,23 +565,28 @@ fn preserves_contact_geometry(
     new_region: usize,
     trim: SharedTrimOptions,
 ) -> bool {
-    let old = unresolved_contacts(
+    let old = contact_quality(
         &before.partition,
         &before.positions,
         regions,
         vertices,
         trim,
     );
-    let new = unresolved_contacts(
+    let new = contact_quality(
         after.0,
         after.1,
         &BTreeSet::from([new_region]),
         vertices,
         trim,
     );
-    // A geometric repair must resolve a previously unproved boundary
-    // without introducing a new one. Removed internal seams are allowed.
-    new.is_subset(&old) && new.len() < old.len()
+    // Independently circle-anchored, displacement-bounded planar repair
+    // may replace an already valid noncircular conic by a simpler circular
+    // ring (needed by periodic charts). Never introduce unresolved edges.
+    // When unresolved coverage is unchanged, require a strict reduction
+    // of conic edges without introducing new conic seams.
+    new.unresolved.is_subset(&old.unresolved)
+        && (new.unresolved.len() < old.unresolved.len()
+            || (new.conics.is_subset(&old.conics) && new.conics.len() < old.conics.len()))
 }
 
 struct VertexConstraints {

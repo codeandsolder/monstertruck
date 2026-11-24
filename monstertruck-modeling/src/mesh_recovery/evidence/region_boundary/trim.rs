@@ -2,7 +2,10 @@
 //! Segmentation never invents a second copy of the same edge on either side.
 
 use super::curve_evidence::{measure_path_curves, measure_placed_circle};
-use super::{ContactCircleEvidence, ContactLineEvidence, RegionContactPath, SurfaceCarrier};
+use super::{
+    ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence, RegionContactPath,
+    SurfaceCarrier,
+};
 use crate::{InnerSpace, Point3};
 use std::f64::consts::TAU;
 
@@ -25,6 +28,8 @@ pub enum SharedTrimGeometry {
     Line(ContactLineEvidence),
     /// Monotone circular arc or full ring with independent sample evidence.
     Circle(ContactCircleEvidence),
+    /// Finite exact rational plane/linear-revolution conic branch.
+    Conic(ContactConicEvidence),
     /// No accepted analytic hypothesis for these original edges.
     Unresolved,
 }
@@ -180,7 +185,10 @@ fn accepted(
             selected = Some(circle);
         }
     }
-    selected.map(SharedTrimGeometry::Circle)
+    selected.map(SharedTrimGeometry::Circle).or_else(|| {
+        super::conic::supplied_conic(points, ids, carriers, tolerance)
+            .map(SharedTrimGeometry::Conic)
+    })
 }
 
 // Algebraic least squares in the one-dimensional family of circles
