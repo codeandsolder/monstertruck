@@ -21,6 +21,15 @@ pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Opt
             (delta.dot(xaxis), delta.dot(yaxis))
         })
         .collect::<Vec<_>>();
+    let ([cx, cy], radius) = fit_circle_2d(&samples)?;
+    Some((start + xaxis * cx + yaxis * cy, radius))
+}
+
+/// Algebraic least-squares circle in a source-local two-dimensional frame.
+pub(super) fn fit_circle_2d(samples: &[(f64, f64)]) -> Option<([f64; 2], f64)> {
+    if samples.len() < 3 {
+        return None;
+    }
     let n = crate::usize_to_f64(samples.len());
     let mx = samples.iter().map(|&(x, _)| x).sum::<f64>() / n;
     let my = samples.iter().map(|&(_, y)| y).sum::<f64>() / n;
@@ -30,7 +39,7 @@ pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Opt
         .sum::<f64>()
         / n;
     let (mut xx, mut xy, mut yy, mut qx, mut qy) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    for &(x, y) in &samples {
+    for &(x, y) in samples {
         let dx = x - mx;
         let dy = y - my;
         let dq = x.mul_add(x, y * y) - mqq;
@@ -46,13 +55,12 @@ pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Opt
     }
     let cx = (qx.mul_add(yy, -(qy * xy))) / det;
     let cy = (qy.mul_add(xx, -(qx * xy))) / det;
-    let center = start + xaxis * cx + yaxis * cy;
     let radius = samples
         .iter()
         .map(|&(x, y)| (x - cx).hypot(y - cy))
         .sum::<f64>()
         / n;
-    (radius > 0.0 && radius.is_finite()).then_some((center, radius))
+    (radius > 0.0 && radius.is_finite()).then_some(([cx, cy], radius))
 }
 
 pub(super) fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {

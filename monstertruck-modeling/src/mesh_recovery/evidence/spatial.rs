@@ -252,13 +252,12 @@ struct RadialFit {
     axial_mean: f64,
 }
 
-fn fit_source_vertex_radial_profile(
+pub(super) fn source_meridian_samples(
     evidence: &MeshEvidence,
     support_ids: &[usize],
     origin: Point3,
     axis: Vector3,
-    inferred_axis_angular_uncertainty: f64,
-) -> Option<RadialFit> {
+) -> Option<Vec<(f64, f64)>> {
     // Use every source polygon vertex, including those not participating in
     // the support-contact interfaces. Dedup canonical position IDs exactly.
     let mut source_vertices = HashSet::<usize>::default();
@@ -284,6 +283,17 @@ fn fit_source_vertex_radial_profile(
         }
         data.push((axial, radial));
     }
+    Some(data)
+}
+
+fn fit_source_vertex_radial_profile(
+    evidence: &MeshEvidence,
+    support_ids: &[usize],
+    origin: Point3,
+    axis: Vector3,
+    inferred_axis_angular_uncertainty: f64,
+) -> Option<RadialFit> {
+    let data = source_meridian_samples(evidence, support_ids, origin, axis)?;
     let count = crate::usize_to_f64(data.len());
     let (axial_sum, radius_sum, axial_min, axial_max) = data.iter().fold(
         (0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY),

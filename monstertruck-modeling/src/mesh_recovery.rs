@@ -44,16 +44,17 @@ mod evidence;
 mod sample_fit;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, CarrierResidual, ChainPairEvidence, CollinearChain, ContactCircleEvidence,
-    ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
-    CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
-    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement,
-    PlanarSupport, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    AxialRadialStation, CarrierCoincidenceEvidence, CarrierResidual, ChainPairEvidence,
+    CircularMeridianEvidence, CollinearChain, ContactCircleEvidence, ContactCurveEvidence,
+    ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
+    CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdge,
+    FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
+    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
     RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SpatialTrackEvidence,
     SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
     SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, analyze_mesh_evidence,
-    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
-    trace_curvature_tracks,
+    measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,
+    measure_spatial_support_set, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.

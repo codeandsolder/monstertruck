@@ -4,12 +4,16 @@
 //! Run using managed Cargo, for example:
 //! `cargo run -p monstertruck-modeling --example mesh_recovery_corpus -- mesh.obj`
 
+#[path = "mesh_recovery_corpus/meridian.rs"]
+mod meridian;
+
 use monstertruck_mesh::{PolygonMesh, obj};
+use monstertruck_modeling::Point3;
 use monstertruck_modeling::mesh_recovery::{
-    CarrierResidual, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
-    CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
-    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, SpatialTrackEvidence,
-    SurfaceCarrier, analyze_mesh_evidence, measure_curvature_spatial,
+    CarrierCoincidenceEvidence, CarrierResidual, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
+    CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions,
+    FeatureEdgeKind, MeshEvidence, RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph,
+    SpatialTrackEvidence, SurfaceCarrier, analyze_mesh_evidence, measure_curvature_spatial,
     measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
@@ -512,7 +516,6 @@ fn growth_track_summary(
     let mut grown = seed_ids
         .into_iter()
         .filter_map(|id| index.grow(id))
-        .take(12)
         .collect::<Vec<_>>();
     let sampled_seed_count = grown.len();
     let expanded_seeds = grown
@@ -534,7 +537,17 @@ fn growth_track_summary(
         .map(|hypothesis| hypothesis.source_polygon_count)
         .max()
         .unwrap_or(0);
-    grown.sort_unstable_by_key(|h| std::cmp::Reverse(h.support_indices.len()));
+    grown.sort_unstable_by(|a, b| {
+        b.support_indices
+            .len()
+            .cmp(&a.support_indices.len())
+            .then_with(|| {
+                a.spatial
+                    .relative_max_sample_radial_residual
+                    .total_cmp(&b.spatial.relative_max_sample_radial_residual)
+            })
+            .then_with(|| a.seed_track_index.cmp(&b.seed_track_index))
+    });
     let top = grown
         .iter()
         .take(6)
@@ -570,7 +583,7 @@ fn growth_track_summary(
     let summary = json!({
         "eligible_source_tracks":index.eligible_track_count(),
         "sampled_independent_seed_count":sampled_seed_count,
-        "seed_policy":"up to 12 locally identifiable seeds, descending original support count, no original STEP metadata",
+        "seed_policy":"all locally identifiable seeds, descending original support count, no original STEP metadata",
         "expanded_seed_count":expanded_seeds,
         "maximum_source_support_count":maximum_source_supports,
         "maximum_tracks_in_one_region":maximum_tracks_merged,
@@ -676,12 +689,88 @@ impl CircleConstraintMetrics {
     }
 }
 
+/// Enclose complete source regions with axis-aligned boxes, using each
+/// original source vertex. A shared-reference ball encloses both boxes.
+#[derive(Clone, Copy)]
+struct RegionExtent {
+    min: Point3,
+    max: Point3,
+}
+
+impl RegionExtent {
+    const fn include(&mut self, point: Point3) {
+        self.min.x = self.min.x.min(point.x);
+        self.min.y = self.min.y.min(point.y);
+        self.min.z = self.min.z.min(point.z);
+        self.max.x = self.max.x.max(point.x);
+        self.max.y = self.max.y.max(point.y);
+        self.max.z = self.max.z.max(point.z);
+    }
+
+    fn radius_from(self, reference: Point3) -> f64 {
+        let dx = (reference.x - self.min.x)
+            .abs()
+            .max((reference.x - self.max.x).abs());
+        let dy = (reference.y - self.min.y)
+            .abs()
+            .max((reference.y - self.max.y).abs());
+        let dz = (reference.z - self.min.z)
+            .abs()
+            .max((reference.z - self.max.z).abs());
+        dx.hypot(dy).hypot(dz)
+    }
+}
+
+struct PartitionCarriers {
+    carriers: Vec<Option<SurfaceCarrier>>,
+    extents: Vec<Option<RegionExtent>>,
+}
+
+impl PartitionCarriers {
+    fn new(
+        evidence: &MeshEvidence,
+        carriers: Vec<Option<SurfaceCarrier>>,
+        region_by_polygon: &[usize],
+    ) -> Self {
+        let mut extents = vec![None::<RegionExtent>; carriers.len()];
+        for (polygon, &region) in region_by_polygon.iter().enumerate() {
+            if let Some(vertices) = evidence.source_polygon_vertices(polygon) {
+                for &id in vertices {
+                    let point = evidence.positions[id];
+                    if let Some(bounds) = &mut extents[region] {
+                        bounds.include(point);
+                    } else {
+                        extents[region] = Some(RegionExtent {
+                            min: point,
+                            max: point,
+                        });
+                    }
+                }
+            }
+        }
+        Self { carriers, extents }
+    }
+
+    fn compare(
+        &self,
+        regions: (usize, Option<usize>),
+        reference: Point3,
+    ) -> Option<(f64, CarrierCoincidenceEvidence)> {
+        let (left, right) = (regions.0, regions.1?);
+        let extent = self.extents[left]?
+            .radius_from(reference)
+            .max(self.extents[right]?.radius_from(reference));
+        let fit = self.carriers[left]?.compare_in_ball(self.carriers[right]?, reference, extent)?;
+        Some((extent, fit))
+    }
+}
+
 /// Count globally shared contact paths, rather than fitting a separate
 /// potentially incompatible copy of a trim on each adjacent face.
 fn partition_contact_metrics(
     graph: &RegionContactGraph,
     evidence: &MeshEvidence,
-    carriers: Option<&[Option<SurfaceCarrier>]>,
+    carriers: Option<&PartitionCarriers>,
 ) -> Value {
     let mut measured = 0;
     let mut exact_lines = 0;
@@ -716,6 +805,7 @@ fn partition_contact_metrics(
                 .chain(path.regions.1)
                 .map(|id| {
                     carriers
+                        .carriers
                         .get(id)
                         .copied()
                         .flatten()
@@ -725,6 +815,8 @@ fn partition_contact_metrics(
             constraints.observe(&sides, circle.radius);
             sides
         });
+        let coincidence =
+            carriers.and_then(|carriers| carriers.compare(path.regions, circle.center));
         if circular_examples.len() < 64 {
             circular_examples.push(json!({
                 "regions":path.regions,
@@ -739,6 +831,14 @@ fn partition_contact_metrics(
                 "relative_plane_error":circle.max_plane_residual/circle.radius,
                 "relative_chord_error":circle.max_chord_radial_residual/circle.radius,
                 "signed_sweep":circle.signed_sweep_radians,
+                "carrier_coincidence":coincidence.map(|(extent,fit)| json!({
+                    "domain_extent":extent,
+                    "direction_angle_radians":fit.direction_angle_radians,
+                    "relative_reference_position_difference":fit.reference_position_difference/circle.radius,
+                    "relative_reference_profile_difference":fit.reference_profile_difference/circle.radius,
+                    "profile_gradient_difference":fit.profile_gradient_difference,
+                    "relative_residual_difference_upper_bound":fit.residual_difference_upper_bound/circle.radius,
+                })),
                 "adjacent_carrier_residuals":side_residuals.map(|sides| sides.iter().map(|side| side.map(|r| json!({
                     "relative_upper_bound":r.upper_bound/circle.radius,
                     "relative_witnessed_max":r.witnessed_max/circle.radius,
@@ -775,12 +875,14 @@ fn region_boundary_summary(
         .iter()
         .map(|support| Some(SurfaceCarrier::from_planar_support(support)))
         .collect::<Vec<_>>();
+    let baseline_carriers =
+        PartitionCarriers::new(evidence, carriers.clone(), &evidence.source_planar_support);
     let baseline = partition_contact_metrics(
         &index
             .partition_contacts(&evidence.source_planar_support)
             .map_err(|error| error.to_string())?,
         evidence,
-        Some(&carriers),
+        Some(&baseline_carriers),
     );
     let mut region_by_support = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
     let mut used_supports = HashSet::new();
@@ -850,6 +952,7 @@ fn region_boundary_summary(
         .iter()
         .map(|&support| region_by_support[support])
         .collect::<Vec<_>>();
+    let partition_carriers = PartitionCarriers::new(evidence, carriers, &region_by_polygon);
     let partition = index
         .partition_contacts(&region_by_polygon)
         .map_err(|error| error.to_string())?;
@@ -857,9 +960,10 @@ fn region_boundary_summary(
         json!(cases),
         json!({
             "singleton_support_partition":baseline,
-            "provisional_growth_partition":partition_contact_metrics(&partition, evidence, Some(&carriers)),
+            "provisional_growth_partition":partition_contact_metrics(&partition, evidence, Some(&partition_carriers)),
             "selected_nonoverlapping_growth_regions": selected_regions,
             "selected_source_supports":used_supports.len(),
+            "circular_meridian_proposals":meridian::summarize(evidence,index,&partition_carriers,&partition,&region_by_support)?,
         }),
     ))
 }

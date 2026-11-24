@@ -2,12 +2,15 @@
 //! carriers. A small vertex residual alone cannot establish containment.
 
 use super::super::super::sample_fit::normal_basis;
-use super::super::{PlanarSupport, SpatialTrackEvidence};
+use super::super::{CircularMeridianEvidence, PlanarSupport, SpatialTrackEvidence};
+mod circular;
 use super::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 use crate::{InnerSpace, Point3, Vector3};
+use circular::CircularProfile;
 
 /// Infinite surface carrier hypothesis, independently fitted to source faces.
-/// A linear meridional radius profile covers both cylinders and cones.
+///
+/// Linear and circular meridians represent different rotational carriers.
 #[derive(Clone, Copy, Debug)]
 pub enum SurfaceCarrier {
     /// Oriented plane.
@@ -28,6 +31,17 @@ pub enum SurfaceCarrier {
         /// Change in radius per unit axial distance.
         slope: f64,
     },
+    /// Surface of revolution whose meridian is circular (including spheres).
+    CircularRevolution {
+        /// Axis point at the meridian circle center's axial coordinate.
+        axial_center: Point3,
+        /// Unit axial direction.
+        axis: Vector3,
+        /// Signed radial coordinate of the meridian circle center.
+        radial_center: f64,
+        /// Radius of the meridian circle.
+        profile_radius: f64,
+    },
 }
 
 /// Numerical continuous-carrier residual, in mesh length units.
@@ -35,13 +49,13 @@ pub enum SurfaceCarrier {
 /// it is not a directed-rounding interval arithmetic certificate.
 #[derive(Clone, Copy, Debug)]
 pub struct CarrierResidual {
-    /// Upper bound on maximum absolute plane or same-station radial residual.
+    /// Upper bound on maximum absolute plane or meridian residual.
     pub upper_bound: f64,
     /// Maximum directly evaluated residual, a lower witness for the maximum.
     pub witnessed_max: f64,
     /// Minimum predicted radius anywhere along the tested carrier domain.
     /// Negative means the proposed trim extends beyond the selected profile
-    /// sheet; a plane has no meridional radius.
+    /// sheet. Only defined for linear meridians.
     pub minimum_profile_radius: Option<f64>,
 }
 
@@ -52,7 +66,7 @@ pub struct SurfaceCurveAgreement {
     pub line: Option<CarrierResidual>,
     /// Residual over the entire circular carrier, not just the observed arc.
     /// Exact containment of a nontrivial circular arc by an infinite plane
-    /// or quadratic surface implies containment of the whole circle on its
+    /// or polynomial surface implies containment of the whole circle on its
     /// algebraic carrier; the chosen radial sheet is checked separately.
     pub circle: Option<CarrierResidual>,
 }
@@ -78,6 +92,17 @@ impl SurfaceCarrier {
             radius_at_origin: fit.fitted_sample_radius_at_origin,
             slope: fit.fitted_sample_radius_slope?,
         })
+    }
+
+    /// Obtain the circular meridian hypothesis without discarding its carrier.
+    #[must_use = "the meridian requires independent region validation"]
+    pub const fn from_circular_meridian(fit: &CircularMeridianEvidence) -> Self {
+        Self::CircularRevolution {
+            axial_center: fit.axial_center,
+            axis: fit.axis,
+            radial_center: fit.radial_center,
+            profile_radius: fit.profile_radius,
+        }
     }
 
     /// Test the shared trim geometry against this independent surface.
@@ -134,6 +159,13 @@ impl SurfaceCarrier {
                 }
                 radial_residual(maximum, witness, minimum_radius)
             }
+            Self::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } => CircularProfile::new(axial_center, axis, radial_center, profile_radius)?
+                .line(start, end),
             _ => None,
         }
     }
@@ -176,12 +208,23 @@ impl SurfaceCarrier {
                     .fold(0.0_f64, f64::max);
                 radial_residual(maximum, witness, minimum_radius)
             }
+            Self::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } => CircularProfile::new(axial_center, axis, radial_center, profile_radius)?.circle(
+                circle.center,
+                basis_u,
+                basis_v,
+                circle.radius,
+            ),
             _ => None,
         }
     }
 }
 
-fn unit(axis: Vector3) -> bool {
+pub(super) fn unit(axis: Vector3) -> bool {
     (0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
 }
 

@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 mod curvature;
 mod growth;
 mod join;
+mod meridian;
 mod region_boundary;
 mod spatial;
 mod support;
@@ -23,10 +24,11 @@ pub use growth::{
     CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep,
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
+pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
 pub use region_boundary::{
-    CarrierResidual, ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence,
-    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
-    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SurfaceCarrier,
+    CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactCurveEvidence,
+    ContactLineEvidence, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SurfaceCarrier,
     SurfaceCurveAgreement,
 };
 pub use spatial::{
