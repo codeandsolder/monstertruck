@@ -81,11 +81,14 @@ fn trim_summary(
     (trim_edges, unresolved_contact_pairs)
 }
 
-fn benchmark(path: &Path, evidence_only: bool) -> Result<Value> {
+fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value> {
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
     let read_seconds = start.elapsed().as_secs_f64();
-    let options = AnalyticRecoveryOptions::default();
+    let options = AnalyticRecoveryOptions {
+        normalize_coincident_sheets: normalize,
+        ..Default::default()
+    };
     let evidence = analyze_mesh_evidence(&mesh, options.evidence)?;
     let evidence_seconds = start.elapsed().as_secs_f64() - read_seconds;
     if evidence_only {
@@ -129,6 +132,14 @@ fn benchmark(path: &Path, evidence_only: bool) -> Result<Value> {
             "native_faces":faces,"pending_chart_cut":region.requires_chart_cut,"error":error}),
         );
     }
+    let canceled_sheets = recovery
+        .canceled_sheets
+        .iter()
+        .map(|pair| {
+            json!({"sides":pair.sides,"resolved_edges":pair.resolved_edges,
+            "max_plane_residual":pair.max_plane_residual})
+        })
+        .collect::<Vec<_>>();
     let (trim_edges, unresolved_contact_pairs) =
         trim_summary(&recovery.trims.trims, &partition.carriers);
     let complete = recovery.complete_shell();
@@ -138,6 +149,8 @@ fn benchmark(path: &Path, evidence_only: bool) -> Result<Value> {
         "total_seconds":start.elapsed().as_secs_f64(),
         "regions":region_info,"region_by_polygon":partition.region_by_polygon,
         "original_polygon_ids":recovery.original_polygon_ids,
+        "canceled_sheets":canceled_sheets,
+        "normalize_coincident_sheets":normalize,
         "failed_regions":failed_regions,"native_faces":native_faces,"pending_chart_cuts":chart_cuts,
         "native_region_errors":errors,
         "native_trim_errors":recovery.native.trims.iter().filter(|trim|trim.is_err()).count(),
@@ -158,14 +171,17 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let first = args.next().context("expected one OBJ path")?;
     let evidence_only = first == "--evidence-only";
-    let path = PathBuf::from(if evidence_only {
-        args.next()
-            .context("expected OBJ path after --evidence-only")?
+    let normalize = first == "--normalize-coincident-sheets";
+    let path = PathBuf::from(if evidence_only || normalize {
+        args.next().context("expected OBJ path after option")?
     } else {
         first
     });
-    anyhow::ensure!(args.next().is_none(), "expected [--evidence-only] OBJ");
-    let result = benchmark(&path, evidence_only).unwrap_or_else(|error| {
+    anyhow::ensure!(
+        args.next().is_none(),
+        "expected [--evidence-only | --normalize-coincident-sheets] OBJ"
+    );
+    let result = benchmark(&path, evidence_only, normalize).unwrap_or_else(|error| {
         json!({
             "status":"recovery_error","source":path,"error":format!("{error:#}"),
         })
