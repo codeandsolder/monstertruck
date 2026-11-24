@@ -25,6 +25,10 @@ pub struct MeridianGraphOptions {
     /// the same circle; a local approximation envelope keeps those
     /// alternatives distinguishable from well-sampled surfaces.
     pub max_linear_relative_chord_error: f64,
+    /// Maximum continuous chord error relative to the observed circular
+    /// meridian scale. A separate explicit sampling envelope is needed
+    /// because exact vertex interpolation cannot identify a design surface.
+    pub max_circular_relative_chord_error: f64,
     /// Source-normal comparison uncertainty in radians.
     pub normal_tolerance_radians: f64,
 }
@@ -39,6 +43,8 @@ impl MeridianGraphOptions {
             && self.relative_tolerance > 0.0
             && self.max_linear_relative_chord_error.is_finite()
             && self.max_linear_relative_chord_error > 0.0
+            && self.max_circular_relative_chord_error.is_finite()
+            && self.max_circular_relative_chord_error > 0.0
             && (0.0..std::f64::consts::FRAC_PI_2).contains(&self.normal_tolerance_radians)
     }
 }
@@ -81,6 +87,8 @@ pub struct StationMeridianCandidate {
     pub fit: CircularMeridianEvidence,
     /// Continuous approximation bounds on every original source chord.
     pub source_chords: CarrierResidual,
+    /// Absolute continuous chord approximation budget.
+    pub chord_tolerance: f64,
     /// Number of original polygons in the candidate.
     pub source_polygons: usize,
     /// Exact source boundary loop count.
@@ -137,6 +145,7 @@ pub struct MeridianStationGraph<'a> {
     options: MeridianGraphOptions,
     samples: Vec<(f64, f64)>,
     stations: Vec<MeridianStation>,
+    station_by_vertex: Vec<usize>,
     transitions: Vec<MeridianTransition>,
     supports: Vec<SupportSamples>,
     supports_by_station: Vec<Vec<usize>>,
@@ -190,6 +199,7 @@ impl<'a> MeridianStationGraph<'a> {
             options,
             samples,
             stations,
+            station_by_vertex,
             transitions,
             supports,
             supports_by_station,
@@ -204,6 +214,132 @@ impl<'a> MeridianStationGraph<'a> {
     /// Observed two-station intervals, including intervals without redundancy.
     #[must_use = "transition evidence must be retained"]
     pub fn transitions(&self) -> &[MeridianTransition] { &self.transitions }
+
+    /// Detect original planar groups which hide independently sampled
+    /// rotational intervals. This is a refinement request, not a surface
+    /// assignment. Only split a mixed group when its original polygons
+    /// supply a repeated transition or link independently repeated stations.
+    #[must_use = "a refinement preserves source polygons and planar alternatives"]
+    pub fn mixed_support_refinements(&self) -> Vec<usize> {
+        let mut pairs = BTreeMap::<[usize; 2], Vec<(usize, usize)>>::new();
+        let repeated_stations = self
+            .transitions
+            .iter()
+            .filter(|edge| edge.repeated)
+            .flat_map(|edge| edge.stations)
+            .collect::<BTreeSet<_>>();
+        for (id, support) in self.supports.iter().enumerate() {
+            if support.stations.len() <= 2
+                || self.evidence.planar_supports[id].source_face_indices.len() < 2
+            {
+                continue;
+            }
+            for &polygon in &self.evidence.planar_supports[id].source_face_indices {
+                let Some(vertices) = self.evidence.source_polygon_vertices(polygon) else {
+                    continue;
+                };
+                let mut stations = vertices
+                    .iter()
+                    .map(|&vertex| self.station_by_vertex[vertex])
+                    .collect::<Vec<_>>();
+                stations.sort_unstable();
+                stations.dedup();
+                if let [a, b] = stations.as_slice()
+                    && station_is_sampled(&self.stations[*a], self.options.station_resolution)
+                    && station_is_sampled(&self.stations[*b], self.options.station_resolution)
+                {
+                    pairs.entry([*a, *b]).or_default().push((id, polygon));
+                }
+            }
+        }
+        let mut split = BTreeSet::new();
+        for (pair, members) in pairs {
+            let mut parents = members
+                .iter()
+                .map(|&(parent, _)| parent)
+                .collect::<Vec<_>>();
+            parents.sort_unstable();
+            parents.dedup();
+            if pair.iter().all(|id| repeated_stations.contains(id))
+                && self.bridge_has_independent_profile(pair)
+            {
+                split.extend(parents);
+                continue;
+            }
+            let mut observed = parents.clone();
+            if let Ok(id) = self
+                .transitions
+                .binary_search_by_key(&pair, |edge| edge.stations)
+            {
+                observed.extend(self.transitions[id].supports.iter().copied());
+            }
+            if !distinct_normals(
+                self.evidence,
+                &observed,
+                self.options.normal_tolerance_radians,
+            ) {
+                continue;
+            }
+            let [a, b] = pair;
+            let first = &self.stations[a];
+            let second = &self.stations[b];
+            let span = second.axial - first.axial;
+            if span.abs() <= self.options.station_resolution {
+                continue;
+            }
+            let slope = (second.radius - first.radius) / span;
+            let carrier = SurfaceCarrier::LinearRevolution {
+                origin: self.origin,
+                axis: self.axis,
+                radius_at_origin: slope.mul_add(-first.axial, first.radius),
+                slope,
+            };
+            let tolerance = first.radius.min(second.radius).mul_add(
+                self.options.max_linear_relative_chord_error,
+                self.options.vertex_tolerance,
+            );
+            for (parent, polygon) in members {
+                let Some(vertices) = self.evidence.source_polygon_vertices(polygon) else {
+                    continue;
+                };
+                if vertices
+                    .iter()
+                    .zip(vertices.iter().cycle().skip(1))
+                    .all(|(&a, &b)| {
+                        carrier
+                            .measure_segment(self.evidence.positions[a], self.evidence.positions[b])
+                            .is_some_and(|r| r.upper_bound <= tolerance)
+                    })
+                {
+                    split.insert(parent);
+                }
+            }
+        }
+        split.into_iter().collect()
+    }
+
+    fn bridge_has_independent_profile(&self, [a, b]: [usize; 2]) -> bool {
+        // A missing coplanar interval must connect two independently
+        // observed neighboring intervals on one non-linear profile.
+        for &left in &self.adjacency[a] {
+            if left == b {
+                continue;
+            }
+            let Some(profile) = self.fit_station_profile(&[left, a, b]) else {
+                continue;
+            };
+            if self.adjacency[b].iter().any(|&right| {
+                if right == a || right == left {
+                    return false;
+                }
+                let station = &self.stations[right];
+                profile.error((station.axial, station.radius)) <= self.options.vertex_tolerance
+            }) {
+                return true;
+            }
+        }
+        false
+    }
 
     /// Discover circular profile candidates without any native CAD labels.
     ///
@@ -539,11 +675,18 @@ impl<'a> MeridianStationGraph<'a> {
         {
             return None;
         }
-        let source_chords = SurfaceCarrier::from_circular_meridian(&fit)
-            .measure_source_chords(self.evidence, &supports)?;
+        let chord_tolerance = fit
+            .geometric_scale()
+            .mul_add(self.options.max_circular_relative_chord_error, tolerance);
+        let source_chords = SurfaceCarrier::from_circular_meridian(&fit).measure_source_chords(
+            self.evidence,
+            &supports,
+            chord_tolerance,
+        )?;
         Some(StationMeridianCandidate {
             supports,
             source_chords,
+            chord_tolerance,
             repeated_stations,
             fit,
             source_polygons: region.source_polygon_count,
@@ -693,7 +836,10 @@ impl<'a> MeridianStationGraph<'a> {
         if !region.pinched_vertices.is_empty() {
             return None;
         }
-        let source_chords = carrier.measure_source_chords(self.evidence, &supports)?;
+        let chord_tolerance =
+            min_r.mul_add(self.options.max_linear_relative_chord_error, tolerance);
+        let source_chords =
+            carrier.measure_source_chords(self.evidence, &supports, chord_tolerance)?;
         Some(StationLinearCandidate {
             supports,
             carrier,
@@ -701,7 +847,7 @@ impl<'a> MeridianStationGraph<'a> {
             source_polygons: region.source_polygon_count,
             vertex_tolerance: tolerance,
             max_vertex_residual: max_error,
-            chord_tolerance: min_r * self.options.max_linear_relative_chord_error,
+            chord_tolerance,
             source_chords,
         })
     }
@@ -813,10 +959,9 @@ fn build_transitions(
     pairs
         .into_iter()
         .map(|(ids, supports)| {
-            let rings = ids.iter().all(|&id| {
-                stations[id].vertices.len() >= 3
-                    && stations[id].transverse_span > options.station_resolution
-            });
+            let rings = ids
+                .iter()
+                .all(|&id| station_is_sampled(&stations[id], options.station_resolution));
             let repeated =
                 rings && distinct_normals(evidence, &supports, options.normal_tolerance_radians);
             MeridianTransition {
@@ -827,6 +972,10 @@ fn build_transitions(
             }
         })
         .collect()
+}
+
+fn station_is_sampled(station: &MeridianStation, resolution: f64) -> bool {
+    station.vertices.len() >= 3 && station.transverse_span > resolution
 }
 
 fn distinct_normals(evidence: &MeshEvidence, supports: &[usize], angle_tolerance: f64) -> bool {

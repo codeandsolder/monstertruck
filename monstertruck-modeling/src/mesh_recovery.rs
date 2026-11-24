@@ -50,12 +50,13 @@ pub use evidence::{
     ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
     CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdge,
     FeatureEdgeKind, MeridianGraphOptions, MeridianStation, MeridianStationGraph,
-    MeridianTransition, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
-    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
-    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SharedTrimGeometry,
-    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation,
-    SpatialTrackEvidence, SpatialTrackJoinEvidence, StationLinearCandidate,
-    StationMeridianCandidate, StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
+    MeridianTransition, MeshEvidence, OrientedTrim, ParallelBundle, ParallelPlacement,
+    PlanarSupport, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, RegionTrimBoundary,
+    RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions,
+    SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation, SpatialTrackEvidence,
+    SpatialTrackJoinEvidence, StationLinearCandidate, StationMeridianCandidate,
+    StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
     SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
     SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
     measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,
@@ -239,38 +240,51 @@ fn positions_and_polygons(
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut seen = HashSet::new();
-        if vertices.len() < 3 || !vertices.iter().all(|&id| seen.insert(id)) {
-            return Err(MeshRecoveryError::DegeneratePolygon(source));
-        }
-        let origin = positions[vertices[0]];
-        let mut area_vector = Vector3::new(0.0, 0.0, 0.0);
-        for i in 0..vertices.len() {
-            let p = positions[vertices[i]] - origin;
-            let q = positions[vertices[(i + 1) % vertices.len()]] - origin;
-            area_vector += p.cross(q);
-            if positions[vertices[i]] == positions[vertices[(i + 1) % vertices.len()]] {
-                return Err(MeshRecoveryError::DegeneratePolygon(source));
-            }
-        }
-        let length_sq = area_vector.magnitude2();
-        if !length_sq.is_finite() || length_sq <= 0.0 {
-            return Err(MeshRecoveryError::DegeneratePolygon(source));
-        }
-        let normal = area_vector / length_sq.sqrt();
-        if vertices
-            .iter()
-            .any(|&id| signed_plane_distance(positions[id], origin, normal).abs() > tolerance)
-        {
-            return Err(MeshRecoveryError::NonPlanarPolygon(source));
-        }
-        polygons.push(InputPolygon {
-            vertices,
-            normal,
-            origin,
-        });
+        polygons.push(input_polygon_from_ids(
+            &positions, vertices, source, tolerance,
+        )?);
     }
     Ok((positions, polygons))
+}
+
+/// Measure an already welded original polygon; shared by initial ingestion
+/// and subsequent support refinement without changing source coordinates.
+fn input_polygon_from_ids(
+    positions: &[Point3],
+    vertices: Vec<usize>,
+    source: usize,
+    tolerance: f64,
+) -> Result<InputPolygon, MeshRecoveryError> {
+    let mut seen = HashSet::new();
+    if vertices.len() < 3 || !vertices.iter().all(|&id| seen.insert(id)) {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    let origin = positions[vertices[0]];
+    let mut area_vector = Vector3::new(0.0, 0.0, 0.0);
+    for i in 0..vertices.len() {
+        let p = positions[vertices[i]] - origin;
+        let q = positions[vertices[(i + 1) % vertices.len()]] - origin;
+        area_vector += p.cross(q);
+        if positions[vertices[i]] == positions[vertices[(i + 1) % vertices.len()]] {
+            return Err(MeshRecoveryError::DegeneratePolygon(source));
+        }
+    }
+    let length_sq = area_vector.magnitude2();
+    if !length_sq.is_finite() || length_sq <= 0.0 {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    let normal = area_vector / length_sq.sqrt();
+    if vertices
+        .iter()
+        .any(|&id| signed_plane_distance(positions[id], origin, normal).abs() > tolerance)
+    {
+        return Err(MeshRecoveryError::NonPlanarPolygon(source));
+    }
+    Ok(InputPolygon {
+        vertices,
+        normal,
+        origin,
+    })
 }
 
 /// Collect every original oriented polygon use without enforcing manifoldness.

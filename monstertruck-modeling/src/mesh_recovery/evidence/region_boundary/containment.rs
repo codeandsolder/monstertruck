@@ -181,20 +181,28 @@ impl SurfaceCarrier {
     /// supports, including internal tessellation edges. The maximum witness
     /// is a lower bound, and the maximum upper bound covers every chord.
     /// This is not a bound over polygon interiors or the reverse direction.
+    /// When a continuous bound straddles the specified chord budget,
+    /// subdivide the chord rather than confuse a loose bound with an error.
     #[must_use = "chord approximation is distinct from vertex interpolation"]
     pub fn measure_source_chords(
         self,
         evidence: &MeshEvidence,
         supports: &[usize],
+        chord_budget: f64,
     ) -> Option<CarrierResidual> {
+        if chord_budget.is_nan() || chord_budget < 0.0 {
+            return None;
+        }
         let mut result = None::<CarrierResidual>;
         for &id in supports {
             for &polygon in &evidence.planar_supports.get(id)?.source_face_indices {
                 let vertices = evidence.source_polygon_vertices(polygon)?;
                 for (&a, &b) in vertices.iter().zip(vertices.iter().cycle().skip(1)) {
-                    let measured = self.measure_segment(
+                    let measured = self.measure_segment_to_budget(
                         *evidence.positions.get(a)?,
                         *evidence.positions.get(b)?,
+                        chord_budget,
+                        8,
                     )?;
                     if let Some(previous) = &mut result {
                         previous.upper_bound = previous.upper_bound.max(measured.upper_bound);
@@ -213,6 +221,30 @@ impl SurfaceCarrier {
             }
         }
         result
+    }
+
+    fn measure_segment_to_budget(
+        self,
+        start: Point3,
+        end: Point3,
+        budget: f64,
+        depth: usize,
+    ) -> Option<CarrierResidual> {
+        let measured = self.measure_segment(start, end)?;
+        if depth == 0 || measured.upper_bound <= budget || measured.witnessed_max > budget {
+            return Some(measured);
+        }
+        let middle = start + (end - start) * 0.5;
+        let left = self.measure_segment_to_budget(start, middle, budget, depth - 1)?;
+        let right = self.measure_segment_to_budget(middle, end, budget, depth - 1)?;
+        Some(CarrierResidual {
+            upper_bound: left.upper_bound.max(right.upper_bound),
+            witnessed_max: left.witnessed_max.max(right.witnessed_max),
+            minimum_profile_radius: left
+                .minimum_profile_radius
+                .zip(right.minimum_profile_radius)
+                .map(|(a, b)| a.min(b)),
+        })
     }
 
     fn circle_residual(self, circle: &ContactCircleEvidence) -> Option<CarrierResidual> {
@@ -470,14 +502,14 @@ mod tests {
             );
         }
         let residual = carrier
-            .measure_source_chords(&evidence, &[0])
+            .measure_source_chords(&evidence, &[0], f64::INFINITY)
             .ok_or("chord residual")?;
         assert!(residual.witnessed_max > 8.0);
         assert!(residual.upper_bound >= residual.witnessed_max);
         let plane = SurfaceCarrier::from_planar_support(&evidence.planar_supports[0]);
         assert!(
             plane
-                .measure_source_chords(&evidence, &[0])
+                .measure_source_chords(&evidence, &[0], f64::INFINITY)
                 .ok_or("plane residual")?
                 .upper_bound
                 < 1.0e-12

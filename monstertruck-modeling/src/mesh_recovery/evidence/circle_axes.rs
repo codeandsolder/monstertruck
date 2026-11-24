@@ -4,7 +4,7 @@
 //! surface-normal tracks do not expose the global rotational direction.
 
 use super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier};
-use super::{FeatureEdgeKind, MeshEvidence};
+use super::{MeshEvidence, source_edge_incidence};
 use crate::{InnerSpace, Point3, Vector3};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
@@ -106,14 +106,20 @@ struct CircleSearch<'a> {
 impl<'a> CircleSearch<'a> {
     fn new(evidence: &'a MeshEvidence, options: CircleAxisOptions) -> Option<Self> {
         let mut neighbors = vec![Vec::new(); evidence.positions.len()];
-        for edge in &evidence.edges {
-            if !matches!(
-                edge.kind,
-                FeatureEdgeKind::Boundary | FeatureEdgeKind::Dihedral
-            ) {
+        // A circular source path can cross a locally coplanar tangent
+        // join. Feature-edge suppression is useful for normal tracks, but
+        // it must not erase the source geometry used to observe circles.
+        let incidence = source_edge_incidence(
+            (0..evidence.source_planar_support.len())
+                .map(|id| evidence.source_polygon_vertices(id))
+                .collect::<Option<Vec<_>>>()?,
+        );
+        for ([a, b], uses) in incidence {
+            if !matches!(uses.as_slice(), [_])
+                && !matches!(uses.as_slice(),[left,right] if left.1!=right.1)
+            {
                 continue;
             }
-            let [a, b] = edge.vertices;
             neighbors.get_mut(a)?.push(b);
             neighbors.get_mut(b)?.push(a);
         }

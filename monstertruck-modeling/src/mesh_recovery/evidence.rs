@@ -5,8 +5,8 @@
 //! thresholds; they must not alter the source vertices or edge graph.
 
 use super::{
-    EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, positions_and_polygons,
-    seams, segment_patches, signed_plane_distance, source_edge_incidence,
+    EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, input_polygon_from_ids,
+    positions_and_polygons, seams, segment_patches, signed_plane_distance, source_edge_incidence,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
@@ -33,9 +33,10 @@ pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactCurveEvidence,
-    ContactLineEvidence, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
+    ContactLineEvidence, OrientedTrim, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
     RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
-    SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier,
+    RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
+    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier,
     SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use spatial::{
@@ -249,7 +250,7 @@ pub struct SupportNormalRotationEvidence {
 }
 
 /// Reusable primitive-free geometric evidence for a source mesh.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MeshEvidence {
     /// Exactly welded source positions.
     pub positions: Vec<Point3>,
@@ -292,6 +293,69 @@ impl MeshEvidence {
         let begin = *self.source_polygon_vertex_offsets.get(source_polygon)?;
         let end = *self.source_polygon_vertex_offsets.get(source_polygon + 1)?;
         self.source_polygon_vertex_indices.get(begin..end)
+    }
+
+    /// Refine selected coplanar support groups into individual original
+    /// polygons while preserving all canonical source vertices, polygon IDs,
+    /// edge incidence, and feature observations. Rebuild only support-level
+    /// membership and interfaces; the original grouping remains available as
+    /// an independent planar explanation in the caller's baseline evidence.
+    ///
+    /// # Errors
+    /// Returns an error when the refinement references invalid support or
+    /// source polygon IDs, or the original polygon geometry is inconsistent.
+    pub fn refine_planar_supports(&self, split: &[usize]) -> Result<Self, MeshRecoveryError> {
+        let split = split.iter().copied().collect::<HashSet<_>>();
+        if split.iter().any(|&id| id >= self.planar_supports.len()) {
+            return Err(MeshRecoveryError::InvalidEvidenceOptions);
+        }
+        let polygons = (0..self.source_planar_support.len())
+            .map(|id| {
+                let vertices = self
+                    .source_polygon_vertices(id)
+                    .ok_or(MeshRecoveryError::DegeneratePolygon(id))?;
+                input_polygon_from_ids(&self.positions, vertices.to_vec(), id, KERNEL_EPSILON)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut groups = Vec::new();
+        for (id, support) in self.planar_supports.iter().enumerate() {
+            if split.contains(&id) {
+                groups.extend(support.source_face_indices.iter().map(|&id| vec![id]));
+            } else {
+                groups.push(support.source_face_indices.clone());
+            }
+        }
+        let mut membership = vec![usize::MAX; polygons.len()];
+        let mut supports = Vec::with_capacity(groups.len());
+        for (id, group) in groups.into_iter().enumerate() {
+            for &polygon in &group {
+                let slot = membership
+                    .get_mut(polygon)
+                    .ok_or(MeshRecoveryError::DegeneratePolygon(polygon))?;
+                if *slot != usize::MAX {
+                    return Err(MeshRecoveryError::DegeneratePolygon(polygon));
+                }
+                *slot = id;
+            }
+            supports.push(measure_planar_support(&polygons, &self.positions, group));
+        }
+        if membership.contains(&usize::MAX) {
+            return Err(MeshRecoveryError::InvalidEvidenceOptions);
+        }
+        let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+        let (support_interfaces, support_interface_indices) = build_support_interfaces(
+            &self.positions,
+            &polygons,
+            &incidence,
+            &membership,
+            supports.len(),
+        );
+        let mut refined = self.clone();
+        refined.planar_supports = supports;
+        refined.source_planar_support = membership;
+        refined.support_interfaces = support_interfaces;
+        refined.support_interface_indices = support_interface_indices;
+        Ok(refined)
     }
 
     /// Planar-support region IDs on the two sides of a regular manifold edge.
@@ -781,46 +845,52 @@ fn planar_supports(
     let (membership, groups) = segment_patches(polygons, positions, &neighbors, options);
     let supports = groups
         .into_iter()
-        .map(|source_face_indices| {
-            let seed = &polygons[source_face_indices[0]];
-            let mut area = 0.0;
-            let mut max_vertex_plane_residual = 0.0_f64;
-            let mut max_normal_angle_radians = 0.0_f64;
-            for &face_id in &source_face_indices {
-                let face = &polygons[face_id];
-                let reference = positions[face.vertices[0]];
-                // Signed fan contributions cancel for concave polygons;
-                // summing triangle magnitudes would overestimate their area.
-                let mut signed_twice_area = 0.0;
-                for vertex in face.vertices.windows(2).skip(1) {
-                    let first = positions[vertex[0]] - reference;
-                    let second = positions[vertex[1]] - reference;
-                    signed_twice_area += first.cross(second).dot(face.normal);
-                }
-                area = signed_twice_area.abs().mul_add(0.5, area);
-                max_vertex_plane_residual = face
-                    .vertices
-                    .iter()
-                    .map(|&id| signed_plane_distance(positions[id], seed.origin, seed.normal).abs())
-                    .fold(max_vertex_plane_residual, f64::max);
-                let angular = face
-                    .normal
-                    .cross(seed.normal)
-                    .magnitude()
-                    .atan2(face.normal.dot(seed.normal));
-                max_normal_angle_radians = max_normal_angle_radians.max(angular);
-            }
-            PlanarSupport {
-                source_face_indices,
-                normal: seed.normal,
-                origin: seed.origin,
-                area,
-                max_vertex_plane_residual,
-                max_normal_angle_radians,
-            }
-        })
+        .map(|group| measure_planar_support(polygons, positions, group))
         .collect();
     (membership, supports)
+}
+
+fn measure_planar_support(
+    polygons: &[InputPolygon],
+    positions: &[Point3],
+    source_face_indices: Vec<usize>,
+) -> PlanarSupport {
+    let seed = &polygons[source_face_indices[0]];
+    let mut area = 0.0;
+    let mut max_vertex_plane_residual = 0.0_f64;
+    let mut max_normal_angle_radians = 0.0_f64;
+    for &face_id in &source_face_indices {
+        let face = &polygons[face_id];
+        let reference = positions[face.vertices[0]];
+        // Signed fan contributions cancel for concave polygons;
+        // summing triangle magnitudes would overestimate their area.
+        let mut signed_twice_area = 0.0;
+        for vertex in face.vertices.windows(2).skip(1) {
+            let first = positions[vertex[0]] - reference;
+            let second = positions[vertex[1]] - reference;
+            signed_twice_area += first.cross(second).dot(face.normal);
+        }
+        area = signed_twice_area.abs().mul_add(0.5, area);
+        max_vertex_plane_residual = face
+            .vertices
+            .iter()
+            .map(|&id| signed_plane_distance(positions[id], seed.origin, seed.normal).abs())
+            .fold(max_vertex_plane_residual, f64::max);
+        let angular = face
+            .normal
+            .cross(seed.normal)
+            .magnitude()
+            .atan2(face.normal.dot(seed.normal));
+        max_normal_angle_radians = max_normal_angle_radians.max(angular);
+    }
+    PlanarSupport {
+        source_face_indices,
+        normal: seed.normal,
+        origin: seed.origin,
+        area,
+        max_vertex_plane_residual,
+        max_normal_angle_radians,
+    }
 }
 
 /// Extract maximal exact straight feature chains and candidate parallel

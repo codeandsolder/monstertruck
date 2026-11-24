@@ -5,9 +5,9 @@ use super::{PartitionCarriers, partition_contact_metrics};
 use monstertruck_modeling::mesh_recovery::{
     CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureTrack, MeridianGraphOptions,
     MeridianStationGraph, MeshEvidence, RegionBoundaryIndex, RegionContactGraph,
-    SharedTrimGeometry, SharedTrimOptions, SpatialTrackEvidence, StationLinearCandidate,
-    StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
-    discover_circle_axes, measure_curvature_spatial,
+    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SpatialTrackEvidence,
+    StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget,
+    SurfaceRegionProposal, discover_circle_axes, measure_curvature_spatial,
 };
 use monstertruck_modeling::{InnerSpace, Point3, Vector3};
 use serde_json::{Value, json};
@@ -21,6 +21,11 @@ const AXIS_RESOLUTION: f64 = 1.0e-8;
 // sampling-quality constraint, not a claim that every inscribed polygon
 // at finer resolution was originally analytic.
 const LINEAR_CHORD_FRACTION: f64 = 0.25;
+// A quarter-turn circular chord has sagitta r*(1-cos(pi/4)).
+// Limit the absolute surface deviation to this fraction of the observed
+// meridian scale; exact vertex interpolation alone cannot justify a surface
+// with coarser deviation. Continuous bounds are refined at this budget.
+const CIRCULAR_CHORD_FRACTION: f64 = 1.0 - std::f64::consts::FRAC_1_SQRT_2;
 
 struct PlacedAxis {
     origin: Point3,
@@ -111,10 +116,11 @@ fn extend_with_circle_axes(evidence: &MeshEvidence, axes: &mut Vec<PlacedAxis>) 
         ) {
             let mut added = 0;
             for (id, group) in discovery.axes.iter().enumerate() {
-                if axes.iter().any(|placed| {
+                if let Some(placed) = axes.iter_mut().find(|placed| {
                     group.axis.cross(placed.axis).magnitude() <= AXIS_RESOLUTION
                         && (group.origin - placed.origin).magnitude() <= resolution
                 }) {
+                    placed.circular_seed |= group.stations.len() >= 4;
                     continue;
                 }
                 axes.push(PlacedAxis {
@@ -134,38 +140,39 @@ fn extend_with_circle_axes(evidence: &MeshEvidence, axes: &mut Vec<PlacedAxis>) 
 
 fn selected_partition(
     evidence: &MeshEvidence,
+    planar_baseline: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'_>,
     selected: &[&StationMeridianCandidate],
 ) -> Result<Value, String> {
-    let mut region_by_support = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
-    let mut carriers = evidence
-        .planar_supports
+    let proposals = selected
         .iter()
-        .map(|support| Some(SurfaceCarrier::from_planar_support(support)))
+        .filter_map(|c| curved_proposal(boundary, c))
         .collect::<Vec<_>>();
-    for candidate in selected {
-        let Some(&region) = candidate.supports.first() else {
-            continue;
-        };
-        for &support in &candidate.supports {
-            region_by_support[support] = region;
-        }
-        carriers[region] = Some(SurfaceCarrier::from_circular_meridian(&candidate.fit));
-    }
-    let region_by_polygon = evidence
-        .source_planar_support
-        .iter()
-        .map(|&support| region_by_support[support])
-        .collect::<Vec<_>>();
-    let graph = boundary
-        .partition_contacts(&region_by_polygon)
+    let partition = boundary
+        .select_surface_partition(&proposals, planar_baseline, 100_000)
         .map_err(|error| error.to_string())?;
-    let carriers = PartitionCarriers::new(evidence, carriers, &region_by_polygon);
+    let carriers =
+        PartitionCarriers::new(evidence, partition.carriers, &partition.region_by_polygon);
     Ok(json!({
-        "selected_regions": selected.len(),
-        "source_supports_consolidated": selected.iter().map(|candidate|candidate.supports.len()-1).sum::<usize>(),
-        "contact_graph": partition_contact_metrics(&graph,evidence,Some(&carriers)),
+        "selected_regions":partition.selected_proposals.len(),
+        "source_supports_consolidated":partition.consolidated_supports,
+        "contact_graph":partition_contact_metrics(&partition.contacts,evidence,Some(&carriers)),
     }))
+}
+
+fn curved_proposal<'a>(
+    boundary: &RegionBoundaryIndex<'a>,
+    candidate: &StationMeridianCandidate,
+) -> Option<SurfaceRegionProposal<'a>> {
+    let scale = candidate.fit.geometric_scale();
+    boundary.measure_surface_region(
+        &candidate.supports,
+        SurfaceCarrier::from_circular_meridian(&candidate.fit),
+        SurfaceRegionBudget {
+            vertex: RELATIVE_BUDGET * scale,
+            chord: candidate.chord_tolerance,
+        },
+    )
 }
 
 fn candidate_summary(evidence: &MeshEvidence, candidate: &StationMeridianCandidate) -> Value {
@@ -195,10 +202,27 @@ fn candidate_summary(evidence: &MeshEvidence, candidate: &StationMeridianCandida
         "max_normal_angle_radians":fit.max_normal_angle_radians,
         "boundary_loops":candidate.boundary_loops,
         "source_chord_witness":candidate.source_chords.witnessed_max,
-        "source_chord_upper_bound":candidate.source_chords.upper_bound,
+        "source_chord_upper_bound":candidate.source_chords.upper_bound,"chord_tolerance":candidate.chord_tolerance,
         "relative_source_chord_witness":candidate.source_chords.witnessed_max/fit.geometric_scale(),
         "relative_source_chord_upper_bound":candidate.source_chords.upper_bound/fit.geometric_scale(),
     })
+}
+
+fn graph_options(evidence: &MeshEvidence, placed: &PlacedAxis) -> MeridianGraphOptions {
+    let extent = evidence
+        .positions
+        .iter()
+        .map(|&p| (p - placed.origin).magnitude())
+        .fold(0.0_f64, f64::max);
+    let resolution = extent * AXIS_RESOLUTION;
+    MeridianGraphOptions {
+        station_resolution: resolution,
+        vertex_tolerance: 4.0 * resolution,
+        relative_tolerance: RELATIVE_BUDGET,
+        max_linear_relative_chord_error: LINEAR_CHORD_FRACTION,
+        max_circular_relative_chord_error: CIRCULAR_CHORD_FRACTION,
+        normal_tolerance_radians: 1.0e-5,
+    }
 }
 
 pub fn summarize(
@@ -210,23 +234,62 @@ pub fn summarize(
 ) -> Result<Value, String> {
     let mut axes = independent_axes(evidence, spatial, local_tracks);
     let circle_summary = extend_with_circle_axes(evidence, &mut axes);
+    let mut refined = None;
+    let mut history = Vec::new();
+    loop {
+        let active = refined.as_ref().unwrap_or(evidence);
+        let split = axes
+            .iter()
+            .filter_map(|placed| {
+                MeridianStationGraph::new(
+                    active,
+                    placed.origin,
+                    placed.axis,
+                    graph_options(active, placed),
+                )
+            })
+            .flat_map(|graph| graph.mixed_support_refinements())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        history.push(
+            json!({"support_count":active.planar_supports.len(),"split_supports":split.len()}),
+        );
+        if split.is_empty() {
+            break;
+        }
+        // Monotone refinement, finite because each split makes singletons.
+        refined = Some(
+            active
+                .refine_planar_supports(&split)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let mut result = if let Some(active) = &refined {
+        let active_boundary =
+            RegionBoundaryIndex::new(active).map_err(|error| error.to_string())?;
+        evaluate_axes(active, evidence, &active_boundary, &axes, grown)?
+    } else {
+        evaluate_axes(evidence, evidence, boundary, &axes, grown)?
+    };
+    result["circle_axis_discovery"] = circle_summary;
+    result["support_refinement"] = json!({"passes":history,"original_supports":evidence.planar_supports.len(),
+        "final_supports":refined.as_ref().map_or(evidence.planar_supports.len(),|active|active.planar_supports.len()),"placed_axes":axes.len()});
+    Ok(result)
+}
+
+fn evaluate_axes(
+    evidence: &MeshEvidence,
+    planar_baseline: &MeshEvidence,
+    boundary: &RegionBoundaryIndex<'_>,
+    axes: &[PlacedAxis],
+    grown: &[CurvatureGrowthHypothesis],
+) -> Result<Value, String> {
     let mut results = Vec::new();
     let mut candidates = BTreeMap::<Vec<usize>, StationMeridianCandidate>::new();
     let mut linear = BTreeMap::<Vec<usize>, StationLinearCandidate>::new();
-    for placed in &axes {
-        let extent = evidence
-            .positions
-            .iter()
-            .map(|&p| (p - placed.origin).magnitude())
-            .fold(0.0_f64, f64::max);
-        let resolution = extent * AXIS_RESOLUTION;
-        let options = MeridianGraphOptions {
-            station_resolution: resolution,
-            vertex_tolerance: 4.0 * resolution,
-            relative_tolerance: RELATIVE_BUDGET,
-            max_linear_relative_chord_error: LINEAR_CHORD_FRACTION,
-            normal_tolerance_radians: 1.0e-5,
-        };
+    for placed in axes {
+        let options = graph_options(evidence, placed);
         let Some(graph) = MeridianStationGraph::new(evidence, placed.origin, placed.axis, options)
         else {
             continue;
@@ -242,6 +305,11 @@ pub fn summarize(
             }
         }
         if !placed.circular_seed {
+            if linear_count > 0 {
+                results.push(json!({"source_track":placed.source_track,"source_circle_group":placed.source_circle_group,
+                    "axis":[placed.axis.x,placed.axis.y,placed.axis.z],"origin":[placed.origin.x,placed.origin.y,placed.origin.z],
+                    "stations":graph.stations().len(),"linear_candidates":linear_count,"candidates":0}));
+            }
             continue;
         }
         let found = graph.discover_circular(boundary);
@@ -283,7 +351,7 @@ pub fn summarize(
         // Provisional admissibility: even a perfectly interpolating surface
         // must remain within the observed feature scale along source chords.
         // Retain failures as alternatives, not as selected analytic regions.
-        if candidate.source_chords.upper_bound > candidate.fit.geometric_scale() {
+        if candidate.source_chords.upper_bound > candidate.chord_tolerance {
             continue;
         }
         if candidate.supports.iter().any(|id| used.contains(id)) {
@@ -292,16 +360,39 @@ pub fn summarize(
         used.extend(candidate.supports.iter().copied());
         selected.push(candidate);
     }
-    let partition = selected_partition(evidence, boundary, &selected)?;
+    let partition = selected_partition(evidence, planar_baseline, boundary, &selected)?;
     let linear = linear.into_values().collect::<Vec<_>>();
-    let joint = joint_partition(evidence, boundary, &candidates, &linear, grown)?;
+    let joint = joint_partition(
+        evidence,
+        planar_baseline,
+        boundary,
+        &candidates,
+        &linear,
+        grown,
+    )?;
     Ok(
-        json!({"circle_axis_discovery":circle_summary,"axes":results,"candidates":candidates.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"selected":selected.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"applied_partition":partition,"joint_partition":joint}),
+        json!({"axes":results,"candidates":candidates.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"selected":selected.iter().map(|c|candidate_summary(evidence,c)).collect::<Vec<_>>(),"applied_partition":partition,"joint_partition":joint}),
     )
+}
+
+fn trim_options(evidence: &MeshEvidence) -> SharedTrimOptions {
+    let extent = evidence.positions.first().map_or(0.0, |&reference| {
+        evidence
+            .positions
+            .iter()
+            .map(|&point| (point - reference).magnitude())
+            .fold(0.0_f64, f64::max)
+    });
+    SharedTrimOptions {
+        absolute_tolerance: extent * AXIS_RESOLUTION * 8.0,
+        relative_tolerance: RELATIVE_BUDGET,
+        max_interval_edges: 128,
+    }
 }
 
 fn joint_partition(
     evidence: &MeshEvidence,
+    planar_baseline: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'_>,
     curved: &[StationMeridianCandidate],
     linear: &[StationLinearCandidate],
@@ -309,19 +400,7 @@ fn joint_partition(
 ) -> Result<Value, String> {
     let mut proposals = Vec::new();
     let mut seen = BTreeSet::new();
-    for candidate in curved {
-        let scale = candidate.fit.geometric_scale();
-        if let Some(proposal) = boundary.measure_surface_region(
-            &candidate.supports,
-            SurfaceCarrier::from_circular_meridian(&candidate.fit),
-            SurfaceRegionBudget {
-                vertex: RELATIVE_BUDGET * scale,
-                chord: scale,
-            },
-        ) {
-            proposals.push(proposal);
-        }
-    }
+    proposals.extend(curved.iter().filter_map(|c| curved_proposal(boundary, c)));
     let curved_count = proposals.len();
     for candidate in linear {
         if let Some(proposal) = boundary.measure_surface_region(
@@ -332,7 +411,7 @@ fn joint_partition(
                 chord: candidate.chord_tolerance,
             },
         ) {
-            seen.insert(&candidate.supports);
+            seen.insert(candidate.supports.clone());
             proposals.push(proposal);
         }
     }
@@ -347,14 +426,22 @@ fn joint_partition(
         {
             continue;
         }
-        if !seen.insert(&candidate.support_indices) {
+        let supports = candidate
+            .support_indices
+            .iter()
+            .flat_map(|&id| &planar_baseline.planar_supports[id].source_face_indices)
+            .map(|&polygon| evidence.source_planar_support[polygon])
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !seen.insert(supports.clone()) {
             continue;
         }
         let Some(carrier) = SurfaceCarrier::from_spatial_fit(fit) else {
             continue;
         };
         if let Some(proposal) = boundary.measure_surface_region(
-            &candidate.support_indices,
+            &supports,
             carrier,
             SurfaceRegionBudget {
                 vertex: RELATIVE_BUDGET * scale,
@@ -370,7 +457,7 @@ fn joint_partition(
         }
     }
     let partition = boundary
-        .select_surface_partition(&proposals, 100_000)
+        .select_surface_partition(&proposals, planar_baseline, 100_000)
         .map_err(|error| error.to_string())?;
     let chosen = partition
         .selected_proposals
@@ -382,20 +469,27 @@ fn joint_partition(
         .iter()
         .filter(|&&id| id < curved_count)
         .count();
+    let region_count = partition.carriers.iter().flatten().count();
+    let trim_graph = boundary
+        .assemble_shared_trims(&partition, trim_options(evidence))
+        .map_err(|error| error.to_string())?;
     let carriers =
         PartitionCarriers::new(evidence, partition.carriers, &partition.region_by_polygon);
     Ok(json!({
         "curved_proposals":curved_count,
         "linear_proposals":proposals.len()-curved_count,
         "direct_linear_proposals":direct_linear_count,
+        "direct_linear_hypotheses":linear.len(),
         "selected_curved":selected_curved,
         "selected_linear":chosen.len()-selected_curved,
         "selected":chosen,
         "consolidated_supports":partition.consolidated_supports,
+        "region_count":region_count,
+        "original_planar_supports":planar_baseline.planar_supports.len(),
         "exact_overlap_components":partition.exact_components,
         "limited_overlap_components":partition.limited_components,
         "contact_graph":partition_contact_metrics(&partition.contacts,evidence,Some(&carriers)),
-        "analytic_trims":trim_summary(evidence,&partition.contacts,&carriers),
+        "analytic_trims":trim_summary(&trim_graph, &partition.contacts,&carriers),
     }))
 }
 
@@ -435,83 +529,91 @@ fn proposal_summary(evidence: &MeshEvidence, proposal: &SurfaceRegionProposal<'_
 }
 
 fn trim_summary(
-    evidence: &MeshEvidence,
+    trims: &SharedTrimGraph,
     graph: &RegionContactGraph,
     carriers: &PartitionCarriers,
 ) -> Value {
-    let Some(&reference) = evidence.positions.first() else {
-        return Value::Null;
-    };
-    let extent = evidence
-        .positions
-        .iter()
-        .map(|&p| (p - reference).magnitude())
-        .fold(0.0_f64, f64::max);
-    let options = SharedTrimOptions {
-        absolute_tolerance: extent * AXIS_RESOLUTION * 8.0,
-        relative_tolerance: RELATIVE_BUDGET,
-        max_interval_edges: 128,
-    };
     let mut counts = [0_usize; 3];
     let mut edges = [0_usize; 3];
-    let mut fully_supported_paths = 0;
-    let mut split_paths = 0;
-    let mut limited_paths = 0;
+    let mut path_counts = vec![[0_usize; 2]; graph.paths.len()];
     let mut circle_examples = Vec::new();
+    let mut unresolved_examples = Vec::new();
     let mut active_revolution_edges = 0;
     let mut unresolved_revolution_edges = 0;
-    for path in &graph.paths {
-        let sides = std::iter::once(path.regions.0)
-            .chain(path.regions.1)
+    for trim in &trims.trims {
+        let sides = std::iter::once(trim.regions.0)
+            .chain(trim.regions.1)
             .filter_map(|id| carriers.carriers[id])
             .collect::<Vec<_>>();
         let nonplanar = sides
             .iter()
             .any(|side| !matches!(side, SurfaceCarrier::Plane { .. }));
-        let Some(result) = path.segment_analytic_trims(&evidence.positions, &sides, options) else {
-            counts[2] += 1;
-            edges[2] += path.edges.len();
-            if nonplanar {
-                active_revolution_edges += path.edges.len();
-                unresolved_revolution_edges += path.edges.len();
-            }
-            continue;
-        };
-        fully_supported_paths += usize::from(
-            result
-                .pieces
+        let pairs = || {
+            trim.source_edges
                 .iter()
-                .all(|piece| !matches!(piece.geometry, SharedTrimGeometry::Unresolved)),
-        );
-        split_paths += usize::from(result.pieces.len() > 1);
-        limited_paths += usize::from(result.limited);
-        for piece in result.pieces {
-            let kind = match piece.geometry {
-                SharedTrimGeometry::Line(_) => 0,
-                SharedTrimGeometry::Circle(circle) => {
-                    if circle_examples.len() < 128 {
-                        let source_edges = (0..piece.edge_count).map(|offset| {
-                            &path.edges[(piece.first_edge + offset) % path.edges.len()]
-                        });
-                        circle_examples.push(json!({"regions":path.regions,"source_polygon_pairs":source_edges.map(|edge|[Some(edge.interior_polygon),edge.exterior_polygon]).collect::<Vec<_>>(),
-                            "radius":circle.radius,"center":[circle.center.x,circle.center.y,circle.center.z],"normal":[circle.normal.x,circle.normal.y,circle.normal.z],"signed_sweep":circle.signed_sweep_radians}));
-                    }
-                    1
+                .map(|edge| [Some(edge.interior_polygon), edge.exterior_polygon])
+                .collect::<Vec<_>>()
+        };
+        let kind = match trim.geometry {
+            SharedTrimGeometry::Line(_) => 0,
+            SharedTrimGeometry::Circle(circle) => {
+                if circle_examples.len() < 128 {
+                    circle_examples.push(json!({"regions":trim.regions,"source_polygon_pairs":pairs(),
+                        "radius":circle.radius,"center":[circle.center.x,circle.center.y,circle.center.z],"normal":[circle.normal.x,circle.normal.y,circle.normal.z],"signed_sweep":circle.signed_sweep_radians}));
                 }
-                SharedTrimGeometry::Unresolved => 2,
-            };
-            counts[kind] += 1;
-            edges[kind] += piece.edge_count;
-            if nonplanar {
-                active_revolution_edges += piece.edge_count;
-                if kind == 2 {
-                    unresolved_revolution_edges += piece.edge_count;
+                1
+            }
+            SharedTrimGeometry::Unresolved => {
+                if unresolved_examples.len() < 128 {
+                    unresolved_examples.push(json!({"regions":trim.regions,"source_polygon_pairs":pairs(),
+                        "source_edges":trim.source_edges.iter().map(|edge|edge.vertices).collect::<Vec<_>>(),"revolution":nonplanar}));
                 }
+                2
+            }
+        };
+        let length = trim.source_edges.len();
+        counts[kind] += 1;
+        edges[kind] += length;
+        path_counts[trim.contact_path][0] += 1;
+        path_counts[trim.contact_path][1] += usize::from(kind == 2);
+        if nonplanar {
+            active_revolution_edges += length;
+            if kind == 2 {
+                unresolved_revolution_edges += length;
             }
         }
     }
+    let loop_count = trims
+        .regions
+        .iter()
+        .filter_map(|region| region.boundary.as_ref().ok())
+        .map(|boundary| boundary.loops.len())
+        .sum::<usize>();
+    let pinched_regions = trims
+        .regions
+        .iter()
+        .filter(|region| {
+            region
+                .boundary
+                .as_ref()
+                .is_ok_and(|boundary| !boundary.pinched_vertices.is_empty())
+        })
+        .count();
+    let boundary_errors = trims
+        .regions
+        .iter()
+        .filter_map(|region| {
+            region
+                .boundary
+                .as_ref()
+                .err()
+                .map(|error| json!({"region":region.region,"error":error.to_string()}))
+        })
+        .collect::<Vec<_>>();
     json!({"line_pieces":counts[0],"circle_pieces":counts[1],"unresolved_pieces":counts[2],"line_edges":edges[0],"circle_edges":edges[1],"unresolved_edges":edges[2],
-        "fully_supported_paths":fully_supported_paths,"split_paths":split_paths,"limited_paths":limited_paths,
+        "fully_supported_paths":path_counts.iter().filter(|counts|counts[1]==0).count(),"split_paths":path_counts.iter().filter(|counts|counts[0]>1).count(),"limited_paths":trims.limited_paths,
         "revolution_contact_edges":active_revolution_edges,"unresolved_revolution_edges":unresolved_revolution_edges,
-        "circle_examples_first_128":circle_examples})
+        "circle_examples_first_128":circle_examples,"unresolved_examples_first_128":unresolved_examples,
+        "region_loop_count":loop_count,"pinched_regions":pinched_regions,"boundary_errors":boundary_errors,
+        "ambiguous_edges":trims.ambiguous_edges.len()})
 }

@@ -114,7 +114,7 @@ impl<'a> RegionBoundaryIndex<'a> {
                 }
             }
         }
-        let chord = carrier.measure_source_chords(self.evidence, supports)?;
+        let chord = carrier.measure_source_chords(self.evidence, supports, budget.chord)?;
         if chord.upper_bound > budget.chord {
             return None;
         }
@@ -170,8 +170,11 @@ impl<'a> RegionBoundaryIndex<'a> {
     pub fn select_surface_partition(
         &self,
         proposals: &[SurfaceRegionProposal<'_>],
+        planar_baseline: &MeshEvidence,
         search_nodes_per_component: usize,
     ) -> Result<SurfaceRegionPartition, RegionBoundaryError> {
+        let parent_by_support = planar_parents(self.evidence, planar_baseline)
+            .ok_or(RegionBoundaryError::InvalidEvidence)?;
         let count = self.evidence.planar_supports.len();
         let mut by_support = vec![Vec::new(); count];
         for (id, proposal) in proposals.iter().enumerate() {
@@ -221,24 +224,24 @@ impl<'a> RegionBoundaryIndex<'a> {
             }
         }
         selected.sort_unstable();
-        let mut region_by_support = (0..count).collect::<Vec<_>>();
-        let mut carriers = self
-            .evidence
-            .planar_supports
-            .iter()
-            .map(|support| Some(SurfaceCarrier::from_planar_support(support)))
-            .collect::<Vec<_>>();
-        let mut consolidated_supports = 0;
+        let mut region_by_support = vec![usize::MAX; count];
+        let mut carriers = vec![None; count];
         for &id in &selected {
             let proposal = &proposals[id];
             let region = proposal.supports[0];
             for &support in &proposal.supports {
                 region_by_support[support] = region;
-                carriers[support] = None;
             }
             carriers[region] = Some(proposal.carrier);
-            consolidated_supports += proposal.supports.len() - 1;
         }
+        restore_planar_components(
+            self.evidence,
+            planar_baseline,
+            &parent_by_support,
+            &mut region_by_support,
+            &mut carriers,
+        );
+        let consolidated_supports = count - carriers.iter().flatten().count();
         let region_by_polygon = self
             .evidence
             .source_planar_support
@@ -256,6 +259,63 @@ impl<'a> RegionBoundaryIndex<'a> {
             exact_components,
             limited_components,
         })
+    }
+}
+
+// Baseline plane hypotheses remain valid only on their own source polygons.
+// Refinement must never alter source geometry or mix independently observed
+// planar parents.
+fn planar_parents(evidence: &MeshEvidence, baseline: &MeshEvidence) -> Option<Vec<usize>> {
+    if evidence.positions != baseline.positions
+        || evidence.source_polygon_vertex_offsets != baseline.source_polygon_vertex_offsets
+        || evidence.source_polygon_vertex_indices != baseline.source_polygon_vertex_indices
+    {
+        return None;
+    }
+    evidence
+        .planar_supports
+        .iter()
+        .map(|support| {
+            let parent = *baseline
+                .source_planar_support
+                .get(*support.source_face_indices.first()?)?;
+            baseline.planar_supports.get(parent)?;
+            support
+                .source_face_indices
+                .iter()
+                .all(|&polygon| baseline.source_planar_support.get(polygon) == Some(&parent))
+                .then_some(parent)
+        })
+        .collect()
+}
+
+fn restore_planar_components(
+    evidence: &MeshEvidence,
+    baseline: &MeshEvidence,
+    parents: &[usize],
+    regions: &mut [usize],
+    carriers: &mut [Option<SurfaceCarrier>],
+) {
+    for seed in 0..regions.len() {
+        if regions[seed] != usize::MAX {
+            continue;
+        }
+        let parent = parents[seed];
+        regions[seed] = seed;
+        carriers[seed] = Some(SurfaceCarrier::from_planar_support(
+            &baseline.planar_supports[parent],
+        ));
+        let mut queue = VecDeque::from([seed]);
+        while let Some(id) = queue.pop_front() {
+            for &interface in &evidence.support_interface_indices[id] {
+                let [a, b] = evidence.support_interfaces[interface].supports;
+                let other = if a == id { b } else { a };
+                if regions[other] == usize::MAX && parents[other] == parent {
+                    regions[other] = seed;
+                    queue.push_back(other);
+                }
+            }
+        }
     }
 }
 
@@ -579,7 +639,7 @@ mod tests {
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let index = RegionBoundaryIndex::new(&evidence)?;
-        let partition = index.select_surface_partition(&[], 100)?;
+        let partition = index.select_surface_partition(&[], &evidence, 100)?;
         assert_eq!(partition.region_by_polygon, evidence.source_planar_support);
         assert_eq!(partition.consolidated_supports, 0);
         assert_eq!(

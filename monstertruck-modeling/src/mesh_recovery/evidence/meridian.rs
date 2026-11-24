@@ -322,6 +322,7 @@ mod tests {
             vertex_tolerance: 4.0e-9,
             relative_tolerance: 1.0e-4,
             max_linear_relative_chord_error: 0.25,
+            max_circular_relative_chord_error: 1.0 - std::f64::consts::FRAC_1_SQRT_2,
             normal_tolerance_radians: 1.0e-6,
         }
     }
@@ -447,6 +448,99 @@ mod tests {
     }
 
     #[test]
+    fn mixed_coplanar_supports_can_be_refined_without_fragmenting_planar_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut positions = Vec::new();
+        let mut faces = Vec::new();
+        // Six stations around a circular meridian include two exactly
+        // horizontal chord intervals. Their toroidal facets are coplanar
+        // with the straight tangent-tube extensions at both ends.
+        let ring = 6;
+        let sections = 6_usize;
+        for section in 0..sections {
+            let theta = std::f64::consts::FRAC_PI_2
+                * crate::usize_to_f64(section.saturating_sub(1).min(3))
+                / 3.0;
+            let (st, ct) = theta.sin_cos();
+            for sample in 0..ring {
+                let (sp, cp) =
+                    (TAU * crate::usize_to_f64(sample) / crate::usize_to_f64(ring)).sin_cos();
+                let radius = 0.25f64.mul_add(cp, 1.0);
+                let mut point = Point3::new(radius * ct, radius * st, 0.25 * sp);
+                if section == 0 {
+                    point.y -= 2.0;
+                }
+                if section + 1 == sections {
+                    point.x -= 2.0;
+                }
+                positions.push(point);
+                if section + 1 < sections {
+                    let next = section * ring + (sample + 1) % ring;
+                    let id = section * ring + sample;
+                    faces.push([id, id + ring, next + ring, next]);
+                }
+            }
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let baseline = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let graph = MeridianStationGraph::new(
+            &baseline,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("graph")?;
+        let split = graph.mixed_support_refinements();
+        assert!(!split.is_empty());
+        let refined = baseline.refine_planar_supports(&split)?;
+        assert_eq!(refined.positions, baseline.positions);
+        assert_eq!(
+            refined.source_polygon_vertex_indices,
+            baseline.source_polygon_vertex_indices
+        );
+        assert!(refined.planar_supports.len() > baseline.planar_supports.len());
+        let boundary = RegionBoundaryIndex::new(&refined)?;
+        let restored = boundary.select_surface_partition(&[], &baseline, 100)?;
+        let original = RegionBoundaryIndex::new(&baseline)?
+            .partition_contacts(&baseline.source_planar_support)?;
+        assert_eq!(
+            restored
+                .contacts
+                .paths
+                .iter()
+                .map(|p| p.edges.len())
+                .sum::<usize>(),
+            original.paths.iter().map(|p| p.edges.len()).sum::<usize>()
+        );
+        assert_eq!(
+            restored.carriers.iter().flatten().count(),
+            baseline.planar_supports.len()
+        );
+        let graph = MeridianStationGraph::new(
+            &refined,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("refined graph")?;
+        let candidates = graph.discover_circular(&boundary);
+        let candidate = candidates
+            .candidates
+            .iter()
+            .find(|c| c.source_polygons == 18)
+            .ok_or("missing complete elbow")?;
+        assert!((candidate.fit.radial_center - 1.0).abs() < 1.0e-10);
+        assert!((candidate.fit.profile_radius - 0.25).abs() < 1.0e-10);
+        Ok(())
+    }
+
+    #[test]
     fn whole_curved_profile_wins_over_individually_exact_linear_strips()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::mesh_recovery::{SurfaceCarrier, SurfaceRegionBudget};
@@ -489,7 +583,7 @@ mod tests {
         }
         assert!(proposals.len() > 1);
         assert!(proposals[0].independently_tested_profile());
-        let partition = boundary.select_surface_partition(&proposals, 10_000)?;
+        let partition = boundary.select_surface_partition(&proposals, &evidence, 10_000)?;
         assert_eq!(partition.selected_proposals, vec![0]);
         assert_eq!(partition.consolidated_supports, c.supports.len() - 1);
         Ok(())

@@ -110,11 +110,19 @@ impl CircularProfile {
         let witness = (0..=4)
             .map(|i| self.error(origin + direction * (f64::from(i) * 0.25)))
             .fold(0.0_f64, f64::max);
-        self.bound(
+        let mut measured = self.bound(
             quadratic_range(a)?,
             bernstein_quartic_bound(squared)?,
             witness,
-        )
+        )?;
+        // Cylindrical-coordinate projection (axial, radial distance) is
+        // nonexpansive, and distance to the meridian circle is 1-Lipschitz.
+        // Each point on this finite segment lies within length/8 of one
+        // of the five evaluated witnesses. Intersect the two independent
+        // upper bounds, especially when the squared branch bound is loose.
+        let lipschitz = direction.magnitude().mul_add(0.125, witness);
+        measured.upper_bound = measured.upper_bound.min(lipschitz).max(witness);
+        Some(measured)
     }
 
     pub(super) fn circle(

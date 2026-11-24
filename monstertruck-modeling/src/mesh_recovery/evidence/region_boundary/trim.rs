@@ -53,9 +53,10 @@ pub struct SharedTrimSegmentation {
 
 impl RegionContactPath {
     /// Fit and segment the shared source path against every adjacent carrier.
-    /// At least four distinct source circle vertices are required. The
-    /// analytic circle is tested over its whole carrier; no trim is accepted
-    /// on vertex interpolation alone. Missing adjacent carriers are not
+    /// A sparse three-point circle requires distinct incident carrier
+    /// constraints. Otherwise at least four samples and a 60-degree
+    /// sampling envelope are required. All circular candidates are tested
+    /// over their whole carrier, not just their sampled vertices. Missing adjacent carriers are not
     /// silently ignored. Mixed paths are optimized for original edge
     /// coverage first, then for the fewest pieces.
     #[must_use = "unresolved source edges must remain represented"]
@@ -134,7 +135,14 @@ fn accepted(
         .iter()
         .map(|&id| (points[id] - first).magnitude())
         .fold(0.0_f64, f64::max);
-    if fit.source_vertex_count < 4
+    let corroborated = independently_constrained_circle(&circle, carriers, tolerance);
+    let max_step = if corroborated {
+        std::f64::consts::FRAC_PI_2
+    } else {
+        std::f64::consts::FRAC_PI_3
+    };
+    if (!corroborated && fit.source_vertex_count < 4)
+        || circle.max_step_radians > max_step + angular
         || circle.plane_span_strength * span <= tolerance
         || circle.max_plane_residual > tolerance
         || circle.max_vertex_radial_residual > tolerance
@@ -151,6 +159,36 @@ fn accepted(
         return None;
     }
     Some(SharedTrimGeometry::Circle(circle))
+}
+
+// A distinct surface constraint must be witnessed away from the proposed
+// common circle. Merely having two region IDs does not supply extra geometry.
+// Compare absolute residuals, independent of normal direction and axis sign.
+fn independently_constrained_circle(
+    circle: &ContactCircleEvidence,
+    carriers: &[SurfaceCarrier],
+    tolerance: f64,
+) -> bool {
+    let [left, right] = carriers else {
+        return false;
+    };
+    let (u, v) = super::super::super::sample_fit::normal_basis(circle.normal);
+    let radius = circle.radius;
+    let directions = [
+        crate::Vector3::new(0.0, 0.0, 0.0),
+        circle.normal,
+        -circle.normal,
+        u * 0.5,
+        -u * 0.5,
+        v * 0.5,
+        -v * 0.5,
+    ];
+    directions.into_iter().any(|direction| {
+        let point = circle.center + direction * radius;
+        left.measure_segment(point, point)
+            .zip(right.measure_segment(point, point))
+            .is_some_and(|(a, b)| (a.witnessed_max - b.witnessed_max).abs() > tolerance * 2.0)
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -348,8 +386,8 @@ mod tests {
     }
 
     #[test]
-    fn sparse_three_point_interpolation_is_not_a_circle() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn sparse_three_point_circle_requires_independent_carrier_constraints()
+    -> Result<(), Box<dyn std::error::Error>> {
         let points = [
             Point3::new(1.0, 0.0, 0.0),
             Point3::new(0.0, 1.0, 0.0),
@@ -372,8 +410,17 @@ mod tests {
         assert_eq!(result.pieces[0].edge_count, 2);
         assert!(matches!(
             result.pieces[0].geometry,
-            SharedTrimGeometry::Unresolved
+            SharedTrimGeometry::Circle(_)
         ));
+        let planar = path(2, false)
+            .segment_analytic_trims(&points, &[plane, plane], options())
+            .ok_or("planar segmentation")?;
+        assert!(
+            planar
+                .pieces
+                .iter()
+                .all(|piece| !matches!(piece.geometry, SharedTrimGeometry::Circle(_)))
+        );
         Ok(())
     }
 }
