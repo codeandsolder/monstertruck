@@ -6,6 +6,8 @@
 
 #[path = "mesh_recovery_corpus/meridian.rs"]
 mod meridian;
+#[path = "mesh_recovery_corpus/station_graph.rs"]
+mod station_graph;
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::Point3;
@@ -869,6 +871,7 @@ fn region_boundary_summary(
     index: &RegionBoundaryIndex<'_>,
     grown: &[CurvatureGrowthHypothesis],
     tracks: &[CurvatureTrack],
+    spatial: &[Option<SpatialTrackEvidence>],
 ) -> Result<(Value, Value), String> {
     let mut carriers = evidence
         .planar_supports
@@ -964,6 +967,7 @@ fn region_boundary_summary(
             "selected_nonoverlapping_growth_regions": selected_regions,
             "selected_source_supports":used_supports.len(),
             "circular_meridian_proposals":meridian::summarize(evidence,index,&partition_carriers,&partition,&region_by_support)?,
+            "station_graph_meridians":station_graph::summarize(evidence,index,spatial),
         }),
     ))
 }
@@ -1692,7 +1696,7 @@ fn discover_and_evaluate_curvature(
     let boundary_index = RegionBoundaryIndex::new(evidence)
         .map_err(|error| ("region_boundary", error.to_string()))?;
     let (boundaries, contact_graph) =
-        region_boundary_summary(evidence, &boundary_index, &grown, &tracks)
+        region_boundary_summary(evidence, &boundary_index, &grown, &tracks, &spatial)
             .map_err(|error| ("region_boundary", error))?;
     let ground_truth =
         evaluate_native_face_labels(path, evidence, &boundary_index, &tracks, &spatial, &grown)

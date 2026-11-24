@@ -48,13 +48,15 @@ pub use evidence::{
     CircularMeridianEvidence, CollinearChain, ContactCircleEvidence, ContactCurveEvidence,
     ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
     CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdge,
-    FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
+    FeatureEdgeKind, MeridianGraphOptions, MeridianStation, MeridianStationGraph,
+    MeridianTransition, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
     RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
     RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SpatialTrackEvidence,
-    SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, analyze_mesh_evidence,
-    measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,
-    measure_spatial_support_set, trace_curvature_tracks,
+    SpatialTrackJoinEvidence, StationMeridianCandidate, StationMeridianDiscovery,
+    SupportBoundaryTopology, SupportInterface, SupportNormalRotationEvidence, SurfaceCarrier,
+    SurfaceCurveAgreement, analyze_mesh_evidence, measure_circular_meridian,
+    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
+    trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.

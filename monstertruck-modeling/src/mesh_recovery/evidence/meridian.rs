@@ -43,6 +43,26 @@ pub struct CircularMeridianEvidence {
     pub normal_samples: usize,
 }
 
+impl CircularMeridianEvidence {
+    /// Observed scale limits the accuracy budget even for huge fitted radii.
+    #[must_use = "the profile budget is limited by its observed domain"]
+    pub const fn geometric_scale(&self) -> f64 {
+        self.profile_radius.min(self.observed_meridian_span)
+    }
+
+    /// An independent fourth meridian observation and resolved nonlinearity
+    /// must both survive the supplied absolute tolerance.
+    #[must_use = "unresolved curvature is not a surface certificate"]
+    pub fn resolves_curvature_within(&self, tolerance: f64) -> bool {
+        tolerance.is_finite()
+            && tolerance >= 0.0
+            && self.resolved_meridian_samples >= 4
+            && self.max_vertex_residual <= tolerance
+            && self.linear_profile_residual_lower_bound > tolerance
+            && !self.mixed_normal_orientation
+    }
+}
+
 /// Fit a circular meridian at a fixed independently recovered axis.
 ///
 /// Source samples are clustered within the supplied length resolution in
@@ -66,12 +86,17 @@ pub fn measure_circular_meridian(
     {
         return None;
     }
-    let mut samples = source_meridian_samples(evidence, support_ids, origin, axis)?;
-    let clusters = cluster_meridian(&mut samples, resolution);
-    let reference = *clusters.first()?;
+    let samples = source_meridian_samples(evidence, support_ids, origin, axis)?;
+    let clusters = cluster_meridian(&samples, resolution);
+    let reference = clusters.first()?.center;
     let local = clusters
         .iter()
-        .map(|&(z, r)| (z - reference.0, r - reference.1))
+        .map(|cluster| {
+            (
+                cluster.center.0 - reference.0,
+                cluster.center.1 - reference.1,
+            )
+        })
         .collect::<Vec<_>>();
     let ([axial, radial], profile_radius) = fit_circle_2d(&local)?;
     let (observed_meridian_span, linear_profile_residual_lower_bound) =
@@ -144,27 +169,47 @@ fn meridian_extent(samples: &[(f64, f64)], local: &[(f64, f64)]) -> (f64, f64) {
     )
 }
 
-fn cluster_meridian(samples: &mut [(f64, f64)], resolution: f64) -> Vec<(f64, f64)> {
-    samples.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+/// Seed-anchored projected clusters, retaining exact sample provenance.
+pub(super) struct MeridianCluster {
+    pub center: (f64, f64),
+    pub members: Vec<usize>,
+}
+
+pub(super) fn cluster_meridian(samples: &[(f64, f64)], resolution: f64) -> Vec<MeridianCluster> {
+    let mut order = (0..samples.len()).collect::<Vec<_>>();
+    order.sort_unstable_by(|&a, &b| {
+        samples[a]
+            .0
+            .total_cmp(&samples[b].0)
+            .then(samples[a].1.total_cmp(&samples[b].1))
+            .then(a.cmp(&b))
+    });
     let mut result = Vec::new();
     let mut axial_begin = 0;
-    while axial_begin < samples.len() {
-        let anchor = samples[axial_begin].0;
+    while axial_begin < order.len() {
+        let anchor = samples[order[axial_begin]].0;
         let axial_end = axial_begin
-            + samples[axial_begin..].partition_point(|sample| sample.0 - anchor <= resolution);
-        let group = &mut samples[axial_begin..axial_end];
-        group.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+            + order[axial_begin..].partition_point(|&id| samples[id].0 - anchor <= resolution);
+        let group = &mut order[axial_begin..axial_end];
+        group.sort_unstable_by(|&a, &b| samples[a].1.total_cmp(&samples[b].1).then(a.cmp(&b)));
         let mut radial_begin = 0;
         while radial_begin < group.len() {
-            let anchor = group[radial_begin].1;
+            let anchor = samples[group[radial_begin]].1;
             let radial_end = radial_begin
-                + group[radial_begin..].partition_point(|sample| sample.1 - anchor <= resolution);
+                + group[radial_begin..].partition_point(|&id| samples[id].1 - anchor <= resolution);
             let members = &group[radial_begin..radial_end];
-            let (axial, radial) = members
-                .iter()
-                .fold((0.0, 0.0), |(za, ra), &(z, r)| (za + z, ra + r));
+            let reference = samples[members[0]];
+            let (axial, radial) = members.iter().fold((0.0, 0.0), |(za, ra), &id| {
+                (
+                    za + samples[id].0 - reference.0,
+                    ra + samples[id].1 - reference.1,
+                )
+            });
             let count = crate::usize_to_f64(members.len());
-            result.push((axial / count, radial / count));
+            result.push(MeridianCluster {
+                center: (reference.0 + axial / count, reference.1 + radial / count),
+                members: members.to_vec(),
+            });
             radial_begin = radial_end;
         }
         axial_begin = axial_end;
@@ -197,17 +242,9 @@ fn measure_normals(
                 centroid += *evidence.positions.get(vertex)? - center;
             }
             centroid /= crate::usize_to_f64(vertices.len());
-            let axial = centroid.dot(axis);
-            let radial = centroid - axis * axial;
-            let radius = radial.magnitude();
-            if radius <= 0.0 {
+            let Some(normal) = circular_profile_normal(centroid, axis, radial_center) else {
                 continue;
-            }
-            let gradient = axis * axial + radial * ((radius - radial_center) / radius);
-            if gradient.magnitude2() <= 0.0 {
-                continue;
-            }
-            let normal = gradient.normalize();
+            };
             let dot = normal.dot(support.normal);
             result.positive |= dot > 0.0;
             result.negative |= dot < 0.0;
@@ -220,10 +257,33 @@ fn measure_normals(
     Some(result)
 }
 
+/// Unit gradient of the signed circular meridian residual, except at a
+/// singular axis or profile center.
+pub(super) fn circular_profile_normal(
+    delta: Vector3,
+    axis: Vector3,
+    radial_center: f64,
+) -> Option<Vector3> {
+    let axial = delta.dot(axis);
+    let radial = delta - axis * axial;
+    let radius = radial.magnitude();
+    if radial_center == 0.0 {
+        return (delta.magnitude2() > 0.0).then(|| delta.normalize());
+    }
+    if radius <= 0.0 {
+        return None;
+    }
+    let gradient = axis * axial + radial * ((radius - radial_center) / radius);
+    (gradient.magnitude2() > 0.0).then(|| gradient.normalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh_recovery::{EvidenceOptions, analyze_mesh_evidence};
+    use crate::mesh_recovery::{
+        EvidenceOptions, MeridianGraphOptions, MeridianStationGraph, RegionBoundaryIndex,
+        analyze_mesh_evidence,
+    };
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
     use std::f64::consts::TAU;
 
@@ -254,6 +314,98 @@ mod tests {
             },
             Faces::from_iter(faces),
         )?)
+    }
+
+    fn graph_options() -> MeridianGraphOptions {
+        MeridianGraphOptions {
+            station_resolution: 1.0e-9,
+            vertex_tolerance: 4.0e-9,
+            relative_tolerance: 1.0e-4,
+            normal_tolerance_radians: 1.0e-6,
+        }
+    }
+
+    #[test]
+    fn station_graph_recovers_complete_curve_without_conical_strips()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = mesh(5)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let graph = MeridianStationGraph::new(
+            &evidence,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("graph")?;
+        assert_eq!(graph.stations().len(), 5);
+        assert_eq!(
+            graph
+                .transitions()
+                .iter()
+                .filter(|transition| transition.repeated)
+                .count(),
+            4
+        );
+        let result = graph.discover_circular(&boundary);
+        assert_eq!(result.candidates.len(), 1);
+        let candidate = &result.candidates[0];
+        assert_eq!(candidate.repeated_stations, 5);
+        assert_eq!(candidate.source_polygons, 64);
+        assert_eq!(candidate.boundary_loops, 2);
+        assert!((candidate.fit.radial_center - 2.0).abs() < 1.0e-10);
+        assert!((candidate.fit.profile_radius - 0.5).abs() < 1.0e-10);
+        Ok(())
+    }
+
+    /// The projected station graph joins two non-touching azimuth sectors.
+    /// Neither physical source component independently resolves four stations.
+    #[test]
+    fn projected_station_connectivity_does_not_merge_disjoint_source_regions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut positions = Vec::new();
+        let mut faces = Vec::new();
+        let ring = 5;
+        for sector in 0..2 {
+            let base = positions.len();
+            for station in 0..3 {
+                let angle = 0.2 + 0.3 * crate::usize_to_f64(station + sector * 2);
+                let (sine, cosine) = angle.sin_cos();
+                let radius = 0.5f64.mul_add(cosine, 2.0);
+                let axial = 0.5f64.mul_add(sine, 3.0);
+                for sample in 0..ring {
+                    let azimuth =
+                        2.0 * crate::usize_to_f64(sector) + 0.2 * crate::usize_to_f64(sample);
+                    let (sine, cosine) = azimuth.sin_cos();
+                    positions.push(Point3::new(radius * cosine, radius * sine, axial));
+                    if station < 2 && sample + 1 < ring {
+                        let start = base + station * ring + sample;
+                        faces.push([start, start + 1, start + 1 + ring, start + ring]);
+                    }
+                }
+            }
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let graph = MeridianStationGraph::new(
+            &evidence,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("graph")?;
+        assert_eq!(graph.stations().len(), 5);
+        let result = graph.discover_circular(&boundary);
+        assert!(result.profile_count > 0);
+        assert!(result.candidates.is_empty());
+        Ok(())
     }
 
     #[test]

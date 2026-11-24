@@ -33,11 +33,8 @@ struct Candidate {
 
 impl Candidate {
     fn accepted(&self) -> bool {
-        let tolerance = BUDGET * self.fit.profile_radius.min(self.fit.observed_meridian_span);
-        self.fit.resolved_meridian_samples >= 4
-            && self.fit.max_vertex_residual <= tolerance
-            && self.fit.linear_profile_residual_lower_bound > tolerance
-            && !self.fit.mixed_normal_orientation
+        let tolerance = BUDGET * self.fit.geometric_scale();
+        self.fit.resolves_curvature_within(tolerance)
             && self.fit.normal_samples == self.source_polygons
             && self.pinches == 0
     }
