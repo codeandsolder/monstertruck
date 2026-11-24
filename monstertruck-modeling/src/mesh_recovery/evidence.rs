@@ -12,6 +12,7 @@ use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
+mod circle_axes;
 mod curvature;
 mod growth;
 mod join;
@@ -20,6 +21,10 @@ mod region_boundary;
 mod spatial;
 mod station_graph;
 mod support;
+pub use circle_axes::{
+    CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions, CircleAxisStation,
+    SourceCircleObservation, discover_circle_axes,
+};
 pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
 pub use growth::{
     CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep,
@@ -642,7 +647,7 @@ fn trace_chains(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<CollinearCha
     chains
 }
 
-fn canonical_unit(vector: Vector3) -> Vector3 {
+pub(super) fn canonical_unit(vector: Vector3) -> Vector3 {
     let axis = (0..3)
         .max_by(|&a, &b| vector[a].abs().total_cmp(&vector[b].abs()))
         .unwrap_or(0);

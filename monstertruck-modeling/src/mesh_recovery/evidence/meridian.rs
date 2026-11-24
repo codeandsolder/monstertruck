@@ -358,6 +358,42 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn repeated_source_circles_supply_an_independent_meridian_axis()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{CircleAxisOptions, discover_circle_axes};
+        let mesh = mesh(5)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let found = discover_circle_axes(
+            &evidence,
+            CircleAxisOptions {
+                vertex_tolerance: 1.0e-9,
+                relative_tolerance: 1.0e-4,
+                axis_position_tolerance: 8.0e-9,
+                axis_angle_tolerance_radians: 1.0e-7,
+            },
+        )
+        .ok_or("circle discovery")?;
+        let placed = found
+            .axes
+            .iter()
+            .find(|a| {
+                a.stations.len() >= 5
+                    && a.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
+                    && a.origin.x.hypot(a.origin.y) < 1.0e-8
+            })
+            .ok_or("missing independent axis")?;
+        let graph =
+            MeridianStationGraph::new(&evidence, placed.origin, placed.axis, graph_options())
+                .ok_or("graph")?;
+        let result = graph.discover_circular(&boundary);
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].source_polygons, 64);
+        assert_eq!(result.candidates[0].repeated_stations, 5);
+        Ok(())
+    }
+
     /// The projected station graph joins two non-touching azimuth sectors.
     /// Neither physical source component independently resolves four stations.
     #[test]

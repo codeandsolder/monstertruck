@@ -1,5 +1,6 @@
 //! Geometric sample fitting shared across mesh-recovery hypothesis generators.
 
+use super::evidence::canonical_unit;
 use crate::{InnerSpace, Point3, Vector3};
 
 /// Least-squares circle in a known plane. The relative frame avoids
@@ -73,4 +74,67 @@ pub(super) fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {
     let u = axis.cross(reference).normalize();
     let v = axis.cross(u);
     (u, v)
+}
+
+/// Placed circle fitted to original samples without requiring a path order.
+#[derive(Clone, Copy)]
+pub(super) struct CircleCarrierFit {
+    pub center: Point3,
+    pub normal: Vector3,
+    pub radius: f64,
+    pub plane_span_strength: f64,
+    pub source_span: f64,
+    pub max_plane_residual: f64,
+    pub max_radial_residual: f64,
+}
+
+fn source_plane(points: &[Point3], ids: &[usize]) -> Option<(Vector3, f64, usize, f64)> {
+    let origin = points[*ids.first()?];
+    let (second, delta) = ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| (i, points[id] - origin))
+        .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))?;
+    let span_squared = delta.magnitude2();
+    if !span_squared.is_finite() || span_squared <= 0.0 {
+        return None;
+    }
+    let cross = ids
+        .iter()
+        .map(|&id| delta.cross(points[id] - origin))
+        .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
+    let strength = cross.magnitude() / span_squared;
+    if !strength.is_finite() || strength <= 64.0 * f64::EPSILON {
+        return None;
+    }
+    Some((canonical_unit(cross), strength, second, span_squared.sqrt()))
+}
+
+pub(super) fn fit_circle_carrier(points: &[Point3], ids: &[usize]) -> Option<CircleCarrierFit> {
+    if ids.len() < 3 {
+        return None;
+    }
+    let (normal, plane_span_strength, second, source_span) = source_plane(points, ids)?;
+    let mut fit_ids = ids.to_vec();
+    fit_ids.swap(1, second);
+    let (center, radius) = fit_circle(points, &fit_ids, normal)?;
+    let (max_plane_residual, max_radial_residual) =
+        ids.iter().fold((0.0_f64, 0.0_f64), |(plane, radial), &id| {
+            let relative = points[id] - center;
+            let distance = relative.dot(normal);
+            let projected = relative - normal * distance;
+            (
+                plane.max(distance.abs()),
+                radial.max((projected.magnitude() - radius).abs()),
+            )
+        });
+    Some(CircleCarrierFit {
+        center,
+        normal,
+        radius,
+        plane_span_strength,
+        source_span,
+        max_plane_residual,
+        max_radial_residual,
+    })
 }

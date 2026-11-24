@@ -967,7 +967,7 @@ fn region_boundary_summary(
             "selected_nonoverlapping_growth_regions": selected_regions,
             "selected_source_supports":used_supports.len(),
             "circular_meridian_proposals":meridian::summarize(evidence,index,&partition_carriers,&partition,&region_by_support)?,
-            "station_graph_meridians":station_graph::summarize(evidence,index,spatial),
+            "station_graph_meridians":station_graph::summarize(evidence,index,spatial)?,
         }),
     ))
 }

@@ -2,7 +2,7 @@
 //! carriers. A small vertex residual alone cannot establish containment.
 
 use super::super::super::sample_fit::normal_basis;
-use super::super::{CircularMeridianEvidence, PlanarSupport, SpatialTrackEvidence};
+use super::super::{CircularMeridianEvidence, MeshEvidence, PlanarSupport, SpatialTrackEvidence};
 mod circular;
 use super::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 use crate::{InnerSpace, Point3, Vector3};
@@ -122,6 +122,13 @@ impl SurfaceCarrier {
 
     fn line_residual(self, line: &ContactLineEvidence) -> Option<CarrierResidual> {
         let [start, end] = line.endpoints;
+        self.measure_segment(start, end)
+    }
+
+    /// Bound the continuous residual on a finite source chord.
+    /// This does not require the chord to be an intended analytic trim.
+    #[must_use = "the witnessed and upper bounds have different meanings"]
+    pub fn measure_segment(self, start: Point3, end: Point3) -> Option<CarrierResidual> {
         match self {
             Self::Plane { origin, normal } if unit(normal) => {
                 let error = (start - origin)
@@ -168,6 +175,44 @@ impl SurfaceCarrier {
                 .line(start, end),
             _ => None,
         }
+    }
+
+    /// Measure all finite polygon-edge chords in the selected original
+    /// supports, including internal tessellation edges. The maximum witness
+    /// is a lower bound, and the maximum upper bound covers every chord.
+    /// This is not a bound over polygon interiors or the reverse direction.
+    #[must_use = "chord approximation is distinct from vertex interpolation"]
+    pub fn measure_source_chords(
+        self,
+        evidence: &MeshEvidence,
+        supports: &[usize],
+    ) -> Option<CarrierResidual> {
+        let mut result = None::<CarrierResidual>;
+        for &id in supports {
+            for &polygon in &evidence.planar_supports.get(id)?.source_face_indices {
+                let vertices = evidence.source_polygon_vertices(polygon)?;
+                for (&a, &b) in vertices.iter().zip(vertices.iter().cycle().skip(1)) {
+                    let measured = self.measure_segment(
+                        *evidence.positions.get(a)?,
+                        *evidence.positions.get(b)?,
+                    )?;
+                    if let Some(previous) = &mut result {
+                        previous.upper_bound = previous.upper_bound.max(measured.upper_bound);
+                        previous.witnessed_max = previous.witnessed_max.max(measured.witnessed_max);
+                        if let Some(radius) = measured.minimum_profile_radius {
+                            previous.minimum_profile_radius = Some(
+                                previous
+                                    .minimum_profile_radius
+                                    .map_or(radius, |old| old.min(radius)),
+                            );
+                        }
+                    } else {
+                        result = Some(measured);
+                    }
+                }
+            }
+        }
+        result
     }
 
     fn circle_residual(self, circle: &ContactCircleEvidence) -> Option<CarrierResidual> {
@@ -384,6 +429,56 @@ mod tests {
             carrier
                 .line_residual(&generator)
                 .ok_or("missing generator")?
+                .upper_bound
+                < 1.0e-12
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_chord_bounds_distinguish_planar_facets_from_exact_vertex_interpolants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{EvidenceOptions, analyze_mesh_evidence};
+        use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+        let positions = (0..3)
+            .map(|i| {
+                let (sin, cos) = (TAU * f64::from(i) / 3.0).sin_cos();
+                Point3::new(21.0 * cos, 21.0 * sin, 0.0)
+            })
+            .collect::<Vec<_>>();
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter([[0, 1, 2]]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: 20.0,
+            profile_radius: 1.0,
+        };
+        for &point in &evidence.positions {
+            assert!(
+                carrier
+                    .measure_segment(point, point)
+                    .ok_or("vertex residual")?
+                    .witnessed_max
+                    < 1.0e-12
+            );
+        }
+        let residual = carrier
+            .measure_source_chords(&evidence, &[0])
+            .ok_or("chord residual")?;
+        assert!(residual.witnessed_max > 8.0);
+        assert!(residual.upper_bound >= residual.witnessed_max);
+        let plane = SurfaceCarrier::from_planar_support(&evidence.planar_supports[0]);
+        assert!(
+            plane
+                .measure_source_chords(&evidence, &[0])
+                .ok_or("plane residual")?
                 .upper_bound
                 < 1.0e-12
         );

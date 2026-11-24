@@ -1,7 +1,7 @@
 //! Source-curve evidence for one globally shared contact path.
 
-use super::super::super::{sample_fit::fit_circle, seams::on_line};
-use super::super::{MeshEvidence, canonical_unit};
+use super::super::super::{sample_fit::fit_circle_carrier, seams::on_line};
+use super::super::MeshEvidence;
 use super::RegionContactPath;
 use crate::{InnerSpace, Point3, Vector3};
 
@@ -139,60 +139,30 @@ fn measure_line(points: &[Point3], ids: &[usize]) -> Option<ContactLineEvidence>
     })
 }
 
-fn source_plane(points: &[Point3], ids: &[usize]) -> Option<(Vector3, f64, usize)> {
-    let origin = points[*ids.first()?];
-    let (second, delta) = ids
-        .iter()
-        .enumerate()
-        .map(|(i, &id)| (i, points[id] - origin))
-        .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))?;
-    let span_squared = delta.magnitude2();
-    if !span_squared.is_finite() || span_squared <= 0.0 {
-        return None;
-    }
-    let cross = ids
-        .iter()
-        .map(|&id| delta.cross(points[id] - origin))
-        .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
-    let strength = cross.magnitude() / span_squared;
-    if !strength.is_finite() || strength <= 64.0 * f64::EPSILON {
-        return None;
-    }
-    Some((canonical_unit(cross), strength, second))
-}
-
 fn measure_circle(points: &[Point3], ids: &[usize], count: usize) -> Option<ContactCircleEvidence> {
     if count < 3 {
         return None;
     }
     let samples = ids.get(..count)?;
-    let (normal, plane_span_strength, second) = source_plane(points, samples)?;
-    // A long source chord conditions the algebraic fit's in-plane basis.
-    let mut fit_ids = samples.to_vec();
-    fit_ids.swap(1, second);
-    let (center, radius) = fit_circle(points, &fit_ids, normal)?;
-    let mut max_plane_residual = 0.0_f64;
-    let mut max_vertex_radial_residual = 0.0_f64;
+    let carrier = fit_circle_carrier(points, samples)?;
+    let center = carrier.center;
+    let normal = carrier.normal;
+    let radius = carrier.radius;
     let projected = ids
         .iter()
         .map(|&id| {
             let relative = points[id] - center;
-            let plane_distance = relative.dot(normal);
-            let radial = relative - normal * plane_distance;
-            max_plane_residual = max_plane_residual.max(plane_distance.abs());
-            max_vertex_radial_residual =
-                max_vertex_radial_residual.max((radial.magnitude() - radius).abs());
-            radial
+            relative - normal * relative.dot(normal)
         })
         .collect::<Vec<_>>();
     let mut result = ContactCircleEvidence {
         center,
         normal,
         radius,
-        plane_span_strength,
-        max_plane_residual,
-        max_vertex_radial_residual,
-        max_chord_radial_residual: max_vertex_radial_residual,
+        plane_span_strength: carrier.plane_span_strength,
+        max_plane_residual: carrier.max_plane_residual,
+        max_vertex_radial_residual: carrier.max_radial_residual,
+        max_chord_radial_residual: carrier.max_radial_residual,
         signed_sweep_radians: 0.0,
         unsigned_sweep_radians: 0.0,
         max_step_radians: 0.0,

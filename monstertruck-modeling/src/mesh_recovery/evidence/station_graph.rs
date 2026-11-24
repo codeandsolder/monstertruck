@@ -5,7 +5,8 @@
 use super::super::sample_fit::fit_circle_2d;
 use super::meridian::{MeridianCluster, circular_profile_normal, cluster_meridian};
 use super::{
-    CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, measure_circular_meridian,
+    CarrierResidual, CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, SurfaceCarrier,
+    measure_circular_meridian,
 };
 use crate::{InnerSpace, Point3, Vector3};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -68,6 +69,8 @@ pub struct StationMeridianCandidate {
     pub repeated_stations: usize,
     /// Complete original vertex and oriented normal measurements.
     pub fit: CircularMeridianEvidence,
+    /// Continuous approximation bounds on every original source chord.
+    pub source_chords: CarrierResidual,
     /// Number of original polygons in the candidate.
     pub source_polygons: usize,
     /// Exact source boundary loop count.
@@ -512,8 +515,11 @@ impl<'a> MeridianStationGraph<'a> {
         {
             return None;
         }
+        let source_chords = SurfaceCarrier::from_circular_meridian(&fit)
+            .measure_source_chords(self.evidence, &supports)?;
         Some(StationMeridianCandidate {
             supports,
+            source_chords,
             repeated_stations,
             fit,
             source_polygons: region.source_polygon_count,

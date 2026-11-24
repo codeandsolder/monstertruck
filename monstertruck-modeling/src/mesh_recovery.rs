@@ -45,18 +45,19 @@ mod sample_fit;
 mod seams;
 pub use evidence::{
     AxialRadialStation, CarrierCoincidenceEvidence, CarrierResidual, ChainPairEvidence,
+    CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions, CircleAxisStation,
     CircularMeridianEvidence, CollinearChain, ContactCircleEvidence, ContactCurveEvidence,
     ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
     CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdge,
     FeatureEdgeKind, MeridianGraphOptions, MeridianStation, MeridianStationGraph,
     MeridianTransition, MeshEvidence, ParallelBundle, ParallelPlacement, PlanarSupport,
     RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
-    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SpatialTrackEvidence,
-    SpatialTrackJoinEvidence, StationMeridianCandidate, StationMeridianDiscovery,
-    SupportBoundaryTopology, SupportInterface, SupportNormalRotationEvidence, SurfaceCarrier,
-    SurfaceCurveAgreement, analyze_mesh_evidence, measure_circular_meridian,
-    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
-    trace_curvature_tracks,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SourceCircleObservation,
+    SpatialTrackEvidence, SpatialTrackJoinEvidence, StationMeridianCandidate,
+    StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
+    SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, analyze_mesh_evidence,
+    discover_circle_axes, measure_circular_meridian, measure_curvature_spatial,
+    measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.
