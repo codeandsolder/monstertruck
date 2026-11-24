@@ -5,6 +5,7 @@
 //! support-plane offsets and every canonical source polygon vertex, without
 //! assuming the identity or primitive family of any original STEP surface.
 
+use super::super::sample_fit::normal_basis;
 use super::{CurvatureTrack, MeshEvidence};
 use crate::{InnerSpace, Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
@@ -96,18 +97,6 @@ pub struct SpatialTrackEvidence {
     /// nonzero even for perfectly tessellated conical walls because the
     /// apothem differs from the circumradius by a facet-angle-dependent term.
     pub radius_slope_disagreement: Option<f64>,
-}
-
-fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {
-    // Select a transverse reference away from the axis for conditioning.
-    let reference = if axis.z.abs() <= 0.75 {
-        Vector3::unit_z()
-    } else {
-        Vector3::unit_x()
-    };
-    let u = axis.cross(reference).normalize();
-    let v = axis.cross(u);
-    (u, v)
 }
 
 struct PlaneFit {

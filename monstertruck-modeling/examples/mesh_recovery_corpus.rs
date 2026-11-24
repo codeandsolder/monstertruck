@@ -6,11 +6,11 @@
 
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
-    CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack,
-    CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence, RegionBoundaryGap,
-    RegionBoundaryIndex, RegionContactGraph, SpatialTrackEvidence, analyze_mesh_evidence,
-    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
-    trace_curvature_tracks,
+    CarrierResidual, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
+    CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, SpatialTrackEvidence,
+    SurfaceCarrier, analyze_mesh_evidence, measure_curvature_spatial,
+    measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -627,13 +627,67 @@ fn boundary_gap_summary(
     })
 }
 
+/// Compare shared circular carriers against independently fitted neighboring
+/// surfaces. Bounds and witnessed violations are reported separately.
+#[derive(Default)]
+struct CircleConstraintMetrics {
+    complete: usize,
+    bilateral: usize,
+    one_sided: usize,
+    bounded: [usize; 3],
+    bilateral_bounded: [usize; 3],
+    contradicted: [usize; 3],
+}
+
+impl CircleConstraintMetrics {
+    const RELATIVE_BUDGETS: [f64; 3] = [1.0e-4, 1.0e-3, 1.0e-2];
+
+    fn observe(&mut self, sides: &[Option<CarrierResidual>], radius: f64) {
+        let complete = sides.iter().all(Option::is_some);
+        self.complete += usize::from(complete);
+        self.bilateral += usize::from(complete && sides.len() == 2);
+        self.one_sided += usize::from(complete && sides.len() == 1);
+        for (i, relative) in Self::RELATIVE_BUDGETS.iter().enumerate() {
+            let budget = relative * radius;
+            let bounded = complete
+                && sides.iter().flatten().all(|fit| {
+                    fit.upper_bound <= budget && fit.minimum_profile_radius.is_none_or(|r| r >= 0.0)
+                });
+            self.bounded[i] += usize::from(bounded);
+            self.bilateral_bounded[i] += usize::from(bounded && sides.len() == 2);
+            self.contradicted[i] += usize::from(sides.iter().flatten().any(|fit| {
+                fit.witnessed_max > budget || fit.minimum_profile_radius.is_some_and(|r| r < 0.0)
+            }));
+        }
+    }
+
+    fn summary(&self) -> Value {
+        json!({
+            "all_adjacent_carriers_available":self.complete,
+            "two_sided_carriers_available":self.bilateral,
+            "open_path_carrier_available":self.one_sided,
+            "budgets":Self::RELATIVE_BUDGETS.iter().enumerate().map(|(i, threshold)| json!({
+                "relative_to_trim_radius":threshold,
+                "all_sides_bound_within_budget":self.bounded[i],
+                "two_sides_bound_within_budget":self.bilateral_bounded[i],
+                "at_least_one_side_witness_exceeds_budget":self.contradicted[i],
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
 /// Count globally shared contact paths, rather than fitting a separate
 /// potentially incompatible copy of a trim on each adjacent face.
-fn partition_contact_metrics(graph: &RegionContactGraph, evidence: &MeshEvidence) -> Value {
+fn partition_contact_metrics(
+    graph: &RegionContactGraph,
+    evidence: &MeshEvidence,
+    carriers: Option<&[Option<SurfaceCarrier>]>,
+) -> Value {
     let mut measured = 0;
     let mut exact_lines = 0;
     let mut circles = 0;
     let mut circular_examples = Vec::new();
+    let mut constraints = CircleConstraintMetrics::default();
     for path in graph.paths.iter().filter(|path| path.edges.len() > 1) {
         let Some(fit) = path.measure_curves(evidence) else {
             continue;
@@ -657,6 +711,20 @@ fn partition_contact_metrics(graph: &RegionContactGraph, evidence: &MeshEvidence
             continue;
         }
         circles += 1;
+        let side_residuals = carriers.map(|carriers| {
+            let sides = std::iter::once(path.regions.0)
+                .chain(path.regions.1)
+                .map(|id| {
+                    carriers
+                        .get(id)
+                        .copied()
+                        .flatten()
+                        .and_then(|carrier| carrier.measure(&fit).circle)
+                })
+                .collect::<Vec<_>>();
+            constraints.observe(&sides, circle.radius);
+            sides
+        });
         if circular_examples.len() < 64 {
             circular_examples.push(json!({
                 "regions":path.regions,
@@ -671,6 +739,11 @@ fn partition_contact_metrics(graph: &RegionContactGraph, evidence: &MeshEvidence
                 "relative_plane_error":circle.max_plane_residual/circle.radius,
                 "relative_chord_error":circle.max_chord_radial_residual/circle.radius,
                 "signed_sweep":circle.signed_sweep_radians,
+                "adjacent_carrier_residuals":side_residuals.map(|sides| sides.iter().map(|side| side.map(|r| json!({
+                    "relative_upper_bound":r.upper_bound/circle.radius,
+                    "relative_witnessed_max":r.witnessed_max/circle.radius,
+                    "minimum_profile_radius":r.minimum_profile_radius,
+                }))).collect::<Vec<_>>()),
             }));
         }
     }
@@ -686,6 +759,7 @@ fn partition_contact_metrics(graph: &RegionContactGraph, evidence: &MeshEvidence
         "exact_monotone_line_paths":exact_lines,
         "near_circular_monotone_paths_with_at_least_four_vertices":circles,
         "circle_examples_first_64":circular_examples,
+        "circle_surface_constraints":carriers.map(|_| constraints.summary()),
     })
 }
 
@@ -696,11 +770,17 @@ fn region_boundary_summary(
     grown: &[CurvatureGrowthHypothesis],
     tracks: &[CurvatureTrack],
 ) -> Result<(Value, Value), String> {
+    let mut carriers = evidence
+        .planar_supports
+        .iter()
+        .map(|support| Some(SurfaceCarrier::from_planar_support(support)))
+        .collect::<Vec<_>>();
     let baseline = partition_contact_metrics(
         &index
             .partition_contacts(&evidence.source_planar_support)
             .map_err(|error| error.to_string())?,
         evidence,
+        Some(&carriers),
     );
     let mut region_by_support = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
     let mut used_supports = HashSet::new();
@@ -722,6 +802,7 @@ fn region_boundary_summary(
                         && let Some(&region_id) = region.support_indices.first()
                     {
                         selected_regions += 1;
+                        carriers[region_id] = SurfaceCarrier::from_spatial_fit(&hypothesis.spatial);
                         for &support in &region.support_indices {
                             used_supports.insert(support);
                             region_by_support[support] = region_id;
@@ -776,7 +857,7 @@ fn region_boundary_summary(
         json!(cases),
         json!({
             "singleton_support_partition":baseline,
-            "provisional_growth_partition":partition_contact_metrics(&partition, evidence),
+            "provisional_growth_partition":partition_contact_metrics(&partition, evidence, Some(&carriers)),
             "selected_nonoverlapping_growth_regions": selected_regions,
             "selected_source_supports":used_supports.len(),
         }),
@@ -1357,7 +1438,7 @@ fn evaluate_native_face_labels(
     let native_contact_graph = boundary_index
         .partition_contacts(&labels)
         .map_err(|error| error.to_string())?;
-    let native_contact_metrics = partition_contact_metrics(&native_contact_graph, evidence);
+    let native_contact_metrics = partition_contact_metrics(&native_contact_graph, evidence, None);
     let mut native_edges = 0;
     let mut changed_surface_types = 0;
     let mut supported_candidates = 0;

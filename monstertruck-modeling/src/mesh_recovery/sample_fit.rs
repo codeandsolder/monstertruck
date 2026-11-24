@@ -54,3 +54,15 @@ pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Opt
         / n;
     (radius > 0.0 && radius.is_finite()).then_some((center, radius))
 }
+
+pub(super) fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {
+    // Select a transverse reference away from the axis for conditioning.
+    let reference = if axis.z.abs() <= 0.75 {
+        Vector3::unit_z()
+    } else {
+        Vector3::unit_x()
+    };
+    let u = axis.cross(reference).normalize();
+    let v = axis.cross(u);
+    (u, v)
+}

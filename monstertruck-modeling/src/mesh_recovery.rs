@@ -44,15 +44,16 @@ mod evidence;
 mod sample_fit;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, ChainPairEvidence, CollinearChain, ContactCircleEvidence,
+    AxialRadialStation, CarrierResidual, ChainPairEvidence, CollinearChain, ContactCircleEvidence,
     ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
     CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
     EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence, ParallelBundle, ParallelPlacement,
     PlanarSupport, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
     RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SpatialTrackEvidence,
     SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, analyze_mesh_evidence, measure_curvature_spatial,
-    measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
+    SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, analyze_mesh_evidence,
+    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
+    trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.

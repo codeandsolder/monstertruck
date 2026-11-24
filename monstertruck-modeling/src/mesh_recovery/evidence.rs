@@ -24,9 +24,10 @@ pub use growth::{
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use region_boundary::{
-    ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath,
+    CarrierResidual, ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence,
+    RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
+    RegionBoundaryIndex, RegionContactGraph, RegionContactPath, SurfaceCarrier,
+    SurfaceCurveAgreement,
 };
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,

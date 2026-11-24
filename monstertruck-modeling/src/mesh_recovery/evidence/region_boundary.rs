@@ -8,8 +8,10 @@ use super::MeshEvidence;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 mod contacts;
+mod containment;
 mod curve_evidence;
 pub use contacts::{RegionContactGraph, RegionContactPath};
+pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 
 /// One directed source edge on a candidate region's boundary.

@@ -8,6 +8,8 @@ use crate::{InnerSpace, Point3, Vector3};
 /// Straight-line hypothesis through both original contact path endpoints.
 #[derive(Clone, Copy, Debug)]
 pub struct ContactLineEvidence {
+    /// Original source endpoints in directed order.
+    pub endpoints: [Point3; 2],
     /// Directed unit vector from the first original vertex to the last.
     pub direction: Vector3,
     /// Original endpoint separation.
@@ -128,6 +130,7 @@ fn measure_line(points: &[Point3], ids: &[usize]) -> Option<ContactLineEvidence>
         exactly_collinear &= on_line(start, end, point);
     }
     Some(ContactLineEvidence {
+        endpoints: [start, end],
         direction,
         chord_length,
         max_vertex_offset,
