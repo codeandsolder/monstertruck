@@ -150,7 +150,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         },
     )?;
     let mut summary = json!({"source":path,"source_polygons":mesh.face_iter().count(),
-        "active_polygons":result.original_polygon_ids.len(),"canceled_sheets":result.canceled_sheets.len(),
+        "active_polygons":result.evidence.provenance.original_polygon_ids.len(),"canceled_sheets":result.evidence.provenance.canceled_sheets.len(),
         "source_signed_volume":result.evidence.closed_source_volume(),
         "regions":result.native.regions.len(),
         "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).count(),

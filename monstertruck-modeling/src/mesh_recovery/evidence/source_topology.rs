@@ -284,10 +284,10 @@ mod tests {
             assert_eq!(evidence.non_manifold_edge_count, 0);
             assert_eq!(evidence.inconsistent_winding_edge_count, 0);
             assert_eq!(
-                evidence.separated_vertices.len(),
+                evidence.provenance.separated_vertices.len(),
                 if partial { 1 } else { 2 }
             );
-            for copy in &evidence.separated_vertices {
+            for copy in &evidence.provenance.separated_vertices {
                 assert_eq!(
                     evidence.positions[copy.source_vertex],
                     evidence.positions[copy.separated_vertex]
@@ -307,7 +307,7 @@ mod tests {
             assert_eq!(shell.shell_condition(), ShellCondition::Closed);
             assert_eq!(shell.connected_components().len(), 2);
             assert_eq!(shell.len(), 8);
-            assert!(recovered.canceled_sheets.is_empty());
+            assert!(recovered.evidence.provenance.canceled_sheets.is_empty());
         }
         Ok(())
     }

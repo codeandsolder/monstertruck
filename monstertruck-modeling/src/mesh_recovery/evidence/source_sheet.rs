@@ -23,17 +23,6 @@ pub struct CanceledSourceSheet {
     pub max_plane_residual: f64,
 }
 
-/// A separate evidence table preserving a map to the unmodified source.
-#[derive(Debug)]
-pub struct NormalizedSourceEvidence {
-    /// Evidence on retained source polygons. Canonical vertex IDs unchanged.
-    pub evidence: MeshEvidence,
-    /// Active polygon index to original input polygon index.
-    pub original_polygon_ids: Vec<usize>,
-    /// Every canceled source sheet pair and its certificate.
-    pub canceled_sheets: Vec<CanceledSourceSheet>,
-}
-
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct SheetKey {
     boundary: Vec<EdgeKey>,
@@ -57,7 +46,7 @@ impl MeshEvidence {
     pub fn normalize_coincident_sheets(
         &self,
         options: EvidenceOptions,
-    ) -> Result<Option<NormalizedSourceEvidence>, MeshRecoveryError> {
+    ) -> Result<Option<Self>, MeshRecoveryError> {
         validate_evidence_options(options)?;
         if self.non_manifold_edge_count == 0 {
             return Ok(None);
@@ -125,8 +114,16 @@ impl MeshEvidence {
             removed.extend(pair);
             canceled_sheets.push(CanceledSourceSheet {
                 sides: [
-                    first.source_face_indices.clone(),
-                    second.source_face_indices.clone(),
+                    first
+                        .source_face_indices
+                        .iter()
+                        .map(|&id| self.provenance.original_polygon_ids[id])
+                        .collect(),
+                    second
+                        .source_face_indices
+                        .iter()
+                        .map(|&id| self.provenance.original_polygon_ids[id])
+                        .collect(),
                 ],
                 resolved_edges,
                 max_plane_residual: residual,
@@ -139,18 +136,17 @@ impl MeshEvidence {
             .into_iter()
             .enumerate()
             .filter(|(id, _)| !removed.contains(id))
+            .map(|(id, polygon)| (self.provenance.original_polygon_ids[id], polygon))
             .unzip();
-        let evidence = analyze_welded_evidence(
+        let mut provenance = self.provenance.clone();
+        provenance.original_polygon_ids = original_polygon_ids;
+        provenance.canceled_sheets.extend(canceled_sheets);
+        Ok(Some(analyze_welded_evidence(
             self.positions.clone(),
             &retained,
             options,
-            self.separated_vertices.clone(),
-        );
-        Ok(Some(NormalizedSourceEvidence {
-            evidence,
-            original_polygon_ids,
-            canceled_sheets,
-        }))
+            provenance,
+        )))
     }
 }
 
@@ -288,11 +284,68 @@ mod tests {
         let result = source
             .normalize_coincident_sheets(options)?
             .ok_or("cancel pair")?;
-        assert_eq!(result.original_polygon_ids, vec![0, 1]);
-        assert_eq!(result.evidence.non_manifold_edge_count, 0);
-        assert_eq!(result.evidence.planar_supports.len(), 1);
-        assert_eq!(result.canceled_sheets.len(), 1);
+        assert_eq!(result.provenance.original_polygon_ids, vec![0, 1]);
+        assert_eq!(result.non_manifold_edge_count, 0);
+        assert_eq!(result.planar_supports.len(), 1);
+        assert_eq!(result.provenance.canceled_sheets.len(), 1);
         assert_eq!(source.source_planar_support.len(), 6);
+        Ok(())
+    }
+
+    #[test]
+    fn sheet_cancellation_composes_original_ids_with_collapsed_facets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                    Point3::new(0.0, -1.0, 0.0),
+                    Point3::new(0.0, 0.0, 1.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                    Point3::new(2.0, 2.0, 2.0),
+                    Point3::new(3.0, 3.0, 3.0),
+                    Point3::new(4.0, 4.0, 4.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter([
+                [6, 7, 8],
+                [0, 1, 2],
+                [1, 0, 3],
+                [0, 1, 4],
+                [1, 5, 4],
+                [1, 0, 5],
+                [0, 4, 5],
+            ]),
+        )?;
+        let options = EvidenceOptions::default();
+        let source = analyze_mesh_evidence(&mesh, options)?;
+        let result = source
+            .normalize_coincident_sheets(options)?
+            .ok_or("canceled sheets")?;
+        let provenance = &result.provenance;
+        assert_eq!(provenance.original_polygon_count, 7);
+        assert_eq!(provenance.original_polygon_ids, [1, 2]);
+        assert_eq!(provenance.collapsed_facets.len(), 1);
+        assert_eq!(provenance.collapsed_facets[0].polygon, 0);
+        let mut canceled = provenance
+            .canceled_sheets
+            .iter()
+            .flat_map(|s| s.sides.iter().flatten().copied())
+            .collect::<Vec<_>>();
+        canceled.sort_unstable();
+        assert_eq!(canceled, [3, 4, 5, 6]);
+        let refined = result.refine_planar_supports(&[0])?;
+        assert_eq!(
+            refined.provenance.original_polygon_ids,
+            provenance.original_polygon_ids
+        );
+        assert_eq!(
+            refined.provenance.collapsed_facets,
+            provenance.collapsed_facets
+        );
         Ok(())
     }
 

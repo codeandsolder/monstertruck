@@ -148,8 +148,8 @@ pub fn summarize(
         )
         .map_err(|e| e.to_string())?;
         result["normalized_recovery"] = json!({
-            "canceled_sheets":normalized.canceled_sheets.iter().map(|s|json!({"sides":s.sides,"resolved_edges":s.resolved_edges,"max_plane_residual":s.max_plane_residual})).collect::<Vec<_>>(),
-            "original_polygon_ids":normalized.original_polygon_ids,
+            "canceled_sheets":normalized.evidence.provenance.canceled_sheets.iter().map(|s|json!({"sides":s.sides,"resolved_edges":s.resolved_edges,"max_plane_residual":s.max_plane_residual})).collect::<Vec<_>>(),
+            "original_polygon_ids":normalized.evidence.provenance.original_polygon_ids,
             "joint_partition":joint_summary(&normalized),
             "complete_shell":normalized.complete_shell().is_some(),
         });

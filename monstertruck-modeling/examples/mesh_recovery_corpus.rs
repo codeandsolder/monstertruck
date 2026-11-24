@@ -15,8 +15,9 @@ use monstertruck_modeling::mesh_recovery::{
     CarrierCoincidenceEvidence, CarrierResidual, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
     CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions,
     FeatureEdgeKind, MeshEvidence, RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph,
-    SpatialTrackEvidence, SurfaceCarrier, analyze_mesh_evidence, measure_curvature_spatial,
-    measure_curvature_spatial_join, measure_spatial_support_set, trace_curvature_tracks,
+    SourceProvenance, SpatialTrackEvidence, SurfaceCarrier, analyze_mesh_evidence,
+    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
+    trace_curvature_tracks,
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -1434,8 +1435,9 @@ fn native_spatial_track_reference(
 /// the caller is analyzing an ordinary unlabeled mesh.
 fn read_native_labels(
     path: &Path,
-    polygon_count: usize,
+    provenance: &SourceProvenance,
 ) -> Result<Option<NativeFaceLabels>, String> {
+    let polygon_count = provenance.original_polygon_count;
     let labels_path = path.with_extension("labels");
     if !labels_path.exists() {
         return Ok(None);
@@ -1509,7 +1511,11 @@ fn read_native_labels(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(NativeFaceLabels {
-        polygon_face_ids: labels,
+        polygon_face_ids: provenance
+            .original_polygon_ids
+            .iter()
+            .map(|&id| labels[id])
+            .collect(),
         surface_types: kinds,
         analytic_axes,
         analytic_centers,
@@ -1528,7 +1534,7 @@ fn evaluate_native_face_labels(
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
 ) -> Result<Option<Value>, String> {
-    let Some(native) = read_native_labels(path, evidence.source_planar_support.len())? else {
+    let Some(native) = read_native_labels(path, &evidence.provenance)? else {
         return Ok(None);
     };
     let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
@@ -1768,6 +1774,8 @@ fn analyze_file(path: &Path) -> Value {
                 "stage": "ok",
                 "ground_truth": analysis.native_ground_truth,
                 "source_faces": faces,
+                "original_polygon_ids":evidence.provenance.original_polygon_ids,
+                "collapsed_source_facets":evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
                 "source_vertices": vertices,
                 "canonical_vertices": evidence.positions.len(),
                 "feature_edges": evidence.edges.len(),

@@ -6,7 +6,7 @@
 
 use super::{
     EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, input_polygon_from_ids,
-    positions_and_polygons, seams, segment_patches, signed_plane_distance, source_edge_incidence,
+    seams, segment_patches, signed_plane_distance, source_edge_incidence, welded_source_polygons,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
@@ -18,6 +18,7 @@ mod growth;
 mod join;
 mod meridian;
 mod region_boundary;
+mod source_collapse;
 mod source_sheet;
 mod source_topology;
 mod spatial;
@@ -43,7 +44,8 @@ pub use region_boundary::{
     SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
-pub use source_sheet::{CanceledSourceSheet, NormalizedSourceEvidence};
+pub use source_collapse::CollapsedSourceFacet;
+pub use source_sheet::CanceledSourceSheet;
 pub use source_topology::SeparatedSourceVertex;
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
@@ -255,14 +257,30 @@ pub struct SupportNormalRotationEvidence {
     pub normal_space_axis_to_boundaries_radians: Option<f64>,
 }
 
+/// Complete source normalization provenance, shared by evidence,
+/// support refinement, and recovered native geometry.
+#[derive(Clone, Debug)]
+pub struct SourceProvenance {
+    /// Total polygon count in the unmodified input.
+    pub original_polygon_count: usize,
+    /// Active polygon index to original input polygon index.
+    pub original_polygon_ids: Vec<usize>,
+    /// Exactly collinear zero-area source facets and chain certificates.
+    pub collapsed_facets: Vec<CollapsedSourceFacet>,
+    /// Coordinate-identical copies created to preserve closed components.
+    pub separated_vertices: Vec<SeparatedSourceVertex>,
+    /// Opt-in canceled opposite source sheets, using original polygon IDs.
+    pub canceled_sheets: Vec<CanceledSourceSheet>,
+}
+
 /// Reusable primitive-free geometric evidence for a source mesh.
 #[derive(Clone, Debug)]
 pub struct MeshEvidence {
     /// Exactly welded source positions, except separately certified closed
     /// component vertices that retain distinct topological IDs at contacts.
     pub positions: Vec<Point3>,
-    /// Coordinate-identical copies created to preserve closed components.
-    pub separated_vertices: Vec<SeparatedSourceVertex>,
+    /// Original source ownership and exact/optional normalization certificates.
+    pub provenance: SourceProvenance,
     /// Boundary and dihedral source edges in canonical index order.
     pub edges: Vec<FeatureEdge>,
     /// Maximal exact collinear straight-through chains.
@@ -943,12 +961,47 @@ pub fn analyze_mesh_evidence(
     options: EvidenceOptions,
 ) -> Result<MeshEvidence, MeshRecoveryError> {
     validate_evidence_options(options)?;
-    let (mut positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
-    let mut separated_vertices = Vec::new();
+    let (mut positions, source) = welded_source_polygons(mesh)?;
+    let mut provenance = SourceProvenance {
+        original_polygon_count: source.len(),
+        original_polygon_ids: Vec::with_capacity(source.len()),
+        collapsed_facets: Vec::new(),
+        separated_vertices: Vec::new(),
+        canceled_sheets: Vec::new(),
+    };
+    let mut polygons = Vec::with_capacity(source.len());
+    for (id, vertices) in source.iter().enumerate() {
+        match input_polygon_from_ids(&positions, vertices.clone(), id, KERNEL_EPSILON) {
+            Ok(polygon) => {
+                polygons.push(polygon);
+                provenance.original_polygon_ids.push(id);
+            }
+            Err(error) => {
+                let collapsed = source_collapse::CollapsedSourceFacet::certify(
+                    &positions,
+                    id,
+                    vertices.clone(),
+                )
+                .ok_or(error)?;
+                provenance.collapsed_facets.push(collapsed);
+            }
+        }
+    }
+    if polygons.is_empty()
+        && let Some(facet) = provenance.collapsed_facets.first()
+    {
+        return Err(MeshRecoveryError::DegeneratePolygon(facet.polygon));
+    }
+    let repairs = if provenance.collapsed_facets.is_empty() {
+        Vec::new()
+    } else {
+        source_collapse::required_repairs(&source, &provenance.original_polygon_ids)
+    };
+    drop(source);
     let closed = source_topology::separate_closed_components(
         &mut positions,
         &mut polygons,
-        &mut separated_vertices,
+        &mut provenance.separated_vertices,
     );
     // A component whose original edge uses already form a closed chain
     // has no T-junctions to repair. Do not split it at another body's
@@ -965,14 +1018,12 @@ pub fn analyze_mesh_evidence(
         source_topology::separate_closed_components(
             &mut positions,
             &mut polygons,
-            &mut separated_vertices,
+            &mut provenance.separated_vertices,
         );
     }
+    source_collapse::verify_repairs(&positions, &polygons, &repairs)?;
     Ok(analyze_welded_evidence(
-        positions,
-        &polygons,
-        options,
-        separated_vertices,
+        positions, &polygons, options, provenance,
     ))
 }
 
@@ -996,7 +1047,7 @@ fn analyze_welded_evidence(
     positions: Vec<Point3>,
     polygons: &[InputPolygon],
     options: EvidenceOptions,
-    separated_vertices: Vec<SeparatedSourceVertex>,
+    provenance: SourceProvenance,
 ) -> MeshEvidence {
     let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let EdgeSelection {
@@ -1025,7 +1076,7 @@ fn analyze_welded_evidence(
     source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
     MeshEvidence {
         positions,
-        separated_vertices,
+        provenance,
         edges,
         chains,
         parallel_bundles,

@@ -53,18 +53,18 @@ mod seams;
 pub use evidence::{
     AxialRadialStation, CanceledSourceSheet, CarrierCoincidenceEvidence, CarrierResidual,
     ChainPairEvidence, CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions,
-    CircleAxisStation, CircularMeridianEvidence, CollinearChain, ContactCircleEvidence,
-    ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
-    CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
-    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeridianGraphOptions, MeridianStation,
-    MeridianStationGraph, MeridianTransition, MeshEvidence, NativeRegionFace, NativeTrimError,
-    NativeTrimGraph, NativeTrimOptions, NormalizedSourceEvidence, OrientedTrim, ParallelBundle,
+    CircleAxisStation, CircularMeridianEvidence, CollapsedSourceFacet, CollinearChain,
+    ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence, CurvatureGrowthHypothesis,
+    CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack,
+    CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeridianGraphOptions,
+    MeridianStation, MeridianStationGraph, MeridianTransition, MeshEvidence, NativeRegionFace,
+    NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim, ParallelBundle,
     ParallelPlacement, PlanarSupport, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
     RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
     RegionBoundaryIndex, RegionContactGraph, RegionContactPath, RegionTrimBoundary,
     RegionTrimLoops, SeparatedSourceVertex, SharedAnalyticTrim, SharedTrimGeometry,
     SharedTrimGraph, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation,
-    SourceCircleObservation, SpatialTrackEvidence, SpatialTrackJoinEvidence,
+    SourceCircleObservation, SourceProvenance, SpatialTrackEvidence, SpatialTrackJoinEvidence,
     StationLinearCandidate, StationMeridianCandidate, StationMeridianDiscovery,
     SupportBoundaryTopology, SupportInterface, SupportNormalRotationEvidence, SurfaceCarrier,
     SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
@@ -225,6 +225,18 @@ fn positions_and_polygons(
     mesh: &PolygonMesh,
     tolerance: f64,
 ) -> Result<(Vec<Point3>, Vec<InputPolygon>), MeshRecoveryError> {
+    let (positions, source) = welded_source_polygons(mesh)?;
+    let polygons = source
+        .into_iter()
+        .enumerate()
+        .map(|(id, vertices)| input_polygon_from_ids(&positions, vertices, id, tolerance))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((positions, polygons))
+}
+
+fn welded_source_polygons(
+    mesh: &PolygonMesh,
+) -> Result<(Vec<Point3>, Vec<Vec<usize>>), MeshRecoveryError> {
     // Only exactly identical coordinates are welded. Distinct nearby points
     // can be separate intentional material boundaries; fuzzy welding is unsafe.
     let mut positions = Vec::new();
@@ -264,9 +276,7 @@ fn positions_and_polygons(
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        polygons.push(input_polygon_from_ids(
-            &positions, vertices, source, tolerance,
-        )?);
+        polygons.push(vertices);
     }
     Ok((positions, polygons))
 }

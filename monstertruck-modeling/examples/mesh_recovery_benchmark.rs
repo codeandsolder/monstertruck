@@ -96,7 +96,9 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
             "status":"ok","source":path,"source_polygons":mesh.face_iter().count(),
             "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
             "source_supports":evidence.planar_supports.len(),
-            "separated_source_vertices":evidence.separated_vertices.len(),
+            "collapsed_source_facets":evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
+            "original_polygon_ids":evidence.provenance.original_polygon_ids,
+            "separated_source_vertices":evidence.provenance.separated_vertices.len(),
             "source_nonmanifold_edges":evidence.non_manifold_edge_count,
             "source_winding_conflicts":evidence.inconsistent_winding_edge_count,
             "source_signed_volume":evidence.closed_source_volume(),
@@ -134,6 +136,8 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         );
     }
     let canceled_sheets = recovery
+        .evidence
+        .provenance
         .canceled_sheets
         .iter()
         .map(|pair| {
@@ -149,8 +153,9 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
         "total_seconds":start.elapsed().as_secs_f64(),
         "regions":region_info,"region_by_polygon":partition.region_by_polygon,
-        "original_polygon_ids":recovery.original_polygon_ids,
-        "separated_source_vertices":recovery.evidence.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),
+        "original_polygon_ids":recovery.evidence.provenance.original_polygon_ids,
+        "collapsed_source_facets":recovery.evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
+        "separated_source_vertices":recovery.evidence.provenance.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),
         "canceled_sheets":canceled_sheets,
         "normalize_coincident_sheets":normalize,
         "failed_regions":failed_regions,"native_faces":native_faces,"pending_chart_cuts":chart_cuts,

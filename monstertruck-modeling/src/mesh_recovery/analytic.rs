@@ -4,14 +4,14 @@
 //! by the explicit shell extraction method.
 
 use super::{
-    CanceledSourceSheet, CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
-    CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions,
-    MeridianGraphOptions, MeridianStationGraph, MeshEvidence, MeshRecoveryError, NativeTrimError,
-    NativeTrimGraph, NativeTrimOptions, ReconciledPartition, ReconciliationOptions,
-    RegionBoundaryError, RegionBoundaryIndex, SharedTrimGraph, SharedTrimOptions,
-    SpatialTrackEvidence, StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier,
-    SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence,
-    discover_circle_axes, measure_curvature_spatial, trace_curvature_tracks,
+    CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions,
+    CurvatureTrack, CurvatureTrackOptions, EvidenceOptions, MeridianGraphOptions,
+    MeridianStationGraph, MeshEvidence, MeshRecoveryError, NativeTrimError, NativeTrimGraph,
+    NativeTrimOptions, ReconciledPartition, ReconciliationOptions, RegionBoundaryError,
+    RegionBoundaryIndex, SharedTrimGraph, SharedTrimOptions, SpatialTrackEvidence,
+    StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget,
+    SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
+    measure_curvature_spatial, trace_curvature_tracks,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
@@ -281,10 +281,6 @@ pub struct RecoveredAnalyticMesh {
     pub trims: SharedTrimGraph,
     /// Kernel-native shared edges and chart faces, with local failures.
     pub native: NativeTrimGraph,
-    /// Active polygon index to original input polygon index.
-    pub original_polygon_ids: Vec<usize>,
-    /// Opt-in canceled source sheet pairs.
-    pub canceled_sheets: Vec<CanceledSourceSheet>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -450,15 +446,12 @@ pub fn construct_analytic_recovery(
             angular_resolution: options.axis_relative_resolution,
         },
     )?;
-    let original_polygon_ids = (0..evidence.source_planar_support.len()).collect();
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,
         reconciled,
         trims,
         native,
-        original_polygon_ids,
-        canceled_sheets: Vec::new(),
     })
 }
 
@@ -487,7 +480,7 @@ pub fn recover_analytic_evidence(
     } else {
         None
     };
-    let active = normalization.as_ref().map_or(evidence, |n| &n.evidence);
+    let active = normalization.as_ref().unwrap_or(evidence);
     let tracks = trace_curvature_tracks(active, options.tracks)?;
     let spatial = tracks
         .iter()
@@ -513,12 +506,7 @@ pub fn recover_analytic_evidence(
             .then(a.seed_track_index.cmp(&b.seed_track_index))
     });
     let discovered = discover_analytic_regions(active, &spatial, &grown, &tracks, options)?;
-    let mut recovered = construct_analytic_recovery(discovered, options)?;
-    if let Some(normalized) = normalization {
-        recovered.original_polygon_ids = normalized.original_polygon_ids;
-        recovered.canceled_sheets = normalized.canceled_sheets;
-    }
-    Ok(recovered)
+    construct_analytic_recovery(discovered, options)
 }
 
 struct PlacedAxis {
@@ -917,7 +905,10 @@ mod tests {
             .closed_source_volume()
             .ok_or("source volume")?;
         assert!((volume - 1.0).abs() < 1.0e-12);
-        assert_eq!(recovered.original_polygon_ids, (0..6).collect::<Vec<_>>());
+        assert_eq!(
+            recovered.evidence.provenance.original_polygon_ids,
+            (0..6).collect::<Vec<_>>()
+        );
         Ok(())
     }
 
