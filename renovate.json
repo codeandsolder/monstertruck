@@ -5,16 +5,6 @@
   ],
   "packageRules": [
     {
-      "description": "The step-redox CAD tooling requires cadquery-ocp==8.0.1.1.0, which publishes CPython wheels only through cp314; do not propose cp315 until a compatible CAD wheel is available",
-      "matchFileNames": [
-        ".github/ci/step-redox/pyproject.toml"
-      ],
-      "matchPackageNames": [
-        "python"
-      ],
-      "allowedVersions": "<3.15"
-    },
-    {
       "description": "getrandom 0.3 is still used transitively by ahash 0.8 on wasm32; the renamed wasm_js 0.3 feature bridge must not be upgraded to 0.4 (which is already directly present and duplicates Cargo dependencies)",
       "matchManagers": [
         "cargo"

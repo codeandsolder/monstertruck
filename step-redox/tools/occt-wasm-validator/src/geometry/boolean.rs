@@ -60,7 +60,7 @@ struct Report {
     pass: bool,
 }
 
-fn result_volume(kernel: &mut OcctKernel, shape: ShapeHandle) -> Result<f64> {
+pub(crate) fn result_volume(kernel: &mut OcctKernel, shape: ShapeHandle) -> Result<f64> {
     let volume = kernel.get_b_rep_properties(shape)?.volume;
     kernel.release(shape)?;
     ensure!(volume.is_finite(), "invalid Boolean result volume");

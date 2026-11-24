@@ -35,6 +35,8 @@ enum Command {
     Occupancy(occupancy::OccupancyArgs),
     /// Report common volume and both directed cuts for matched solid occurrences.
     BooleanResiduals(geometry::boolean::BooleanArgs),
+    /// Compare two individual solids, optionally addressed by exact STEP entity IDs.
+    SolidDiagnostics(geometry::solid_diagnostics::SolidArgs),
     /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze {
         input: PathBuf,
@@ -232,6 +234,7 @@ fn main() -> Result<ExitCode> {
     match cli.command {
         Command::Occupancy(args) => occupancy::run(&args),
         Command::BooleanResiduals(args) => geometry::boolean::run(&args),
+        Command::SolidDiagnostics(args) => geometry::solid_diagnostics::run(&args),
         Command::FetchFixtures(args) => {
             manifest::fetch(&args)?;
             Ok(ExitCode::SUCCESS)
