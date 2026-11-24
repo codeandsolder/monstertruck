@@ -7,7 +7,7 @@
 
 use super::{DIRECTION_Q, compare_analytic_boundaries, strict_closed_shell_faces};
 use crate::brep::{self, CircleSupport, CurveSupport, SphereSupport, SurfaceSupport};
-use crate::math3::{canonical_direction, cross, dot, mul, norm, normalize, sub};
+use crate::math3::{add, canonical_direction, cross, dot, mul, norm, normalize, sub};
 use crate::step_entities::{entity_ref, named_entity_parameters, push_simple};
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record_mut,
@@ -33,6 +33,8 @@ pub struct SphereChartChange {
     pub new_reference: [f64; 3],
     pub latitude_edge_ids: Vec<u64>,
     pub meridian_edge_ids: Vec<u64>,
+    /// Explicit great-circle triangle arcs, not meridians in the new chart.
+    pub geodesic_edge_ids: Vec<u64>,
 }
 
 /// A provenance manifest tied to the exact original and revised bytes.
@@ -78,11 +80,18 @@ fn circles_for_faces(
     Some(circles)
 }
 
+// A positive quarter-unit hemisphere margin excludes both sphere poles
+// (at least asin(0.25) from either pole) and the longitude seam. By convexity
+// this bound holds over the complete short-geodesic triangular face, not just
+// its endpoints; it is not a geometry or numeric equality tolerance.
+const SAFE_REFERENCE_DOT: f64 = 0.25;
+
 struct AlignedChart {
     axis: [f64; 3],
     reference: [f64; 3],
     parallels: Vec<u64>,
     meridians: Vec<u64>,
+    geodesics: Vec<u64>,
 }
 
 fn aligned_chart(
@@ -137,6 +146,145 @@ fn aligned_chart(
         reference,
         parallels,
         meridians,
+        geodesics: Vec::new(),
+    })
+}
+
+/// Choose a pole and longitude origin that keep the entire positive
+/// spherical convex hull in one hemisphere. With each vertex satisfying
+/// dot(reference, vertex) > 1/4, the condition also holds for every point
+/// of every short geodesic arc and their bounded triangular interior.
+fn safe_hemisphere_frame(
+    vertices: &[[f64; 3]],
+    normals: &[[f64; 3]],
+) -> Option<([f64; 3], [f64; 3])> {
+    let centroid = vertices.iter().fold([0.0; 3], |sum, &v| add(sum, v));
+    let mut best = None::<(f64, [f64; 3], [f64; 3])>;
+    for i in 0..3 {
+        for j in (i + 1)..3 {
+            for sign in [-1.0, 1.0] {
+                let Some(axis) = normalize(add(normals[i], mul(normals[j], sign)), DIRECTION_Q)
+                else {
+                    continue;
+                };
+                let projected = sub(centroid, mul(axis, dot(centroid, axis)));
+                let Some(reference) = normalize(projected, DIRECTION_Q) else {
+                    continue;
+                };
+                let score = vertices
+                    .iter()
+                    .map(|&v| dot(reference, v))
+                    .fold(f64::INFINITY, f64::min);
+                if score <= SAFE_REFERENCE_DOT || !score.is_finite() {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(old, _, _)| score > *old) {
+                    best = Some((score, axis, reference));
+                }
+            }
+        }
+    }
+    best.map(|(_, axis, reference)| (axis, reference))
+}
+
+/// A complete spherical triangle of three *short* great-circle arcs
+/// admits a chart with no pole or longitude seam anywhere in the bounded
+/// convex spherical patch. Positive dot(reference, vertex) on all vertices
+/// extends over the entire short-arc spherical convex hull, not just samples.
+///
+/// The original STEP circle centers, axes, 3-D loci, face wires and endpoint
+/// identities are immutable. This chart changes only the sphere's private
+/// polar axis and azimuth reference. No pcurves are eligible.
+fn great_circle_triangle_chart(
+    sphere: SphereSupport,
+    faces: &[u64],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    circles: &BTreeMap<u64, CircleSupport>,
+) -> Option<AlignedChart> {
+    use std::f64::consts::{PI, TAU};
+
+    let [face] = faces else {
+        return None;
+    };
+    let loops = brep::face_loops(*face, entities, index)?;
+    let [wire] = loops.as_slice() else {
+        return None;
+    };
+    if !wire.outer || !wire.orientation || wire.edges.len() != 3 || circles.len() != 3 {
+        return None;
+    }
+    let mut vertices = Vec::with_capacity(3);
+    let mut normals = Vec::with_capacity(3);
+    let mut edge_ids = Vec::with_capacity(3);
+    for (i, edge) in wire.edges.iter().enumerate() {
+        let next = &wire.edges[(i + 1) % 3];
+        if edge.end_vertex != next.start_vertex
+            || norm(sub(edge.end_mm, next.start_mm)) > super::ANALYTIC_BOUNDARY_PROOF_TOL_MM
+        {
+            return None;
+        }
+        let circle = circles.get(&edge.edge_id)?;
+        if norm(sub(circle.center_mm, sphere.center_mm)) > super::ANALYTIC_BOUNDARY_PROOF_TOL_MM
+            || (circle.radius_mm - sphere.radius_mm).abs() > super::ANALYTIC_BOUNDARY_PROOF_TOL_MM
+        {
+            return None;
+        }
+        let normal = normalize(circle.normal, DIRECTION_Q)?;
+        let reference = normalize(circle.x_direction, DIRECTION_Q)?;
+        let y = normalize(cross(normal, reference), DIRECTION_Q)?;
+        let angular = |point: [f64; 3]| -> Option<f64> {
+            let radial = sub(point, sphere.center_mm);
+            if (norm(radial) - sphere.radius_mm).abs() > super::ANALYTIC_BOUNDARY_PROOF_TOL_MM
+                || dot(radial, normal).abs() > super::ANALYTIC_BOUNDARY_PROOF_TOL_MM
+            {
+                return None;
+            }
+            Some(dot(radial, y).atan2(dot(radial, reference)))
+        };
+        let from = angular(edge.start_mm)?;
+        let to = angular(edge.end_mm)?;
+        let sweep = if edge.parameter_forward {
+            (to - from).rem_euclid(TAU)
+        } else {
+            (from - to).rem_euclid(TAU)
+        };
+        // A complementary arc is not enclosed by the endpoint cone.
+        if sweep <= DIRECTION_Q || sweep >= PI - DIRECTION_Q {
+            return None;
+        }
+        vertices.push(normalize(
+            sub(edge.start_mm, sphere.center_mm),
+            DIRECTION_Q,
+        )?);
+        normals.push(normal);
+        edge_ids.push(edge.edge_id);
+    }
+    // The spherical convex triangle needs a unique (noncollinear) bounded
+    // interior; the antipodal / complementary winding is deliberately excluded.
+    if dot(vertices[0], cross(vertices[1], vertices[2])).abs() <= 1.0e-3 {
+        return None;
+    }
+    // If the original chart already keeps the entire triangle in a safe
+    // hemisphere around its azimuth reference, nothing needs normalization.
+    if vertices
+        .iter()
+        .all(|&v| dot(sphere.x_direction, v) > SAFE_REFERENCE_DOT)
+    {
+        return None;
+    }
+    let (axis, reference) = safe_hemisphere_frame(&vertices, &normals)?;
+    if norm(cross(axis, sphere.axis)) <= DIRECTION_Q
+        && norm(cross(reference, sphere.x_direction)) <= DIRECTION_Q
+    {
+        return None;
+    }
+    Some(AlignedChart {
+        axis,
+        reference,
+        parallels: Vec::new(),
+        meridians: Vec::new(),
+        geodesics: edge_ids,
     })
 }
 
@@ -163,7 +311,8 @@ fn plan_chart(
         return None;
     };
     let circles = circles_for_faces(&faces, entities, index)?;
-    let chart = aligned_chart(sphere, &circles)?;
+    let chart = aligned_chart(sphere, &circles)
+        .or_else(|| great_circle_triangle_chart(sphere, &faces, entities, index, &circles))?;
     Some(ChartPlan {
         center_id,
         change: SphereChartChange {
@@ -177,6 +326,7 @@ fn plan_chart(
             new_reference: chart.reference,
             latitude_edge_ids: chart.parallels,
             meridian_edge_ids: chart.meridians,
+            geodesic_edge_ids: chart.geodesics,
         },
     })
 }
@@ -440,6 +590,131 @@ mod tests {
         };
         faces.pop().context("nonempty shell")?;
         assert!(audit_sphere_charts(write_exchange(&source)?.as_bytes(), 1673).is_err());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod geodesic_regressions {
+    use super::*;
+
+    const DRAFTED_ROUND: &[u8] =
+        include_bytes!("../../validation/fixtures/native_drafted_round_network_0b5a3544.step");
+
+    #[test]
+    fn authored_spherical_corner_triangles_have_safe_private_hemisphere_charts() -> Result<()> {
+        let source = ParsedStepSource::parse(DRAFTED_ROUND)?.exchange;
+        let entities = &source.data[0].entities;
+        let index = build_index(entities);
+        let graph = ReferenceGraph::new(entities);
+        let faces =
+            strict_closed_shell_faces(3877, entities, &index).map_err(anyhow::Error::msg)?;
+        let mut eligible = 0;
+        for face in faces {
+            let surface = brep::face_surface(face, entities, &index).context("face surface")?;
+            if named_entity_parameters(surface, "SPHERICAL_SURFACE", entities, &index).is_none() {
+                continue;
+            }
+            let plan = plan_chart(surface, vec![face], entities, &index, &graph)
+                .with_context(|| format!("spherical triangular face #{face}"))?;
+            assert!(plan.change.latitude_edge_ids.is_empty());
+            assert!(plan.change.meridian_edge_ids.is_empty());
+            assert_eq!(plan.change.geodesic_edge_ids.len(), 3);
+            let SurfaceSupport::Sphere(sphere) = brep::surface_support(surface, entities, &index)
+            else {
+                anyhow::bail!("sphere carrier not found");
+            };
+            let circles = circles_for_faces(&[face], entities, &index)
+                .context("missing source 3-D circles")?;
+            let chart = great_circle_triangle_chart(sphere, &[face], entities, &index, &circles)
+                .context("no safe hemisphere")?;
+            for wire in brep::face_loops(face, entities, &index).context("face loops")? {
+                for edge in wire.edges {
+                    let v = normalize(sub(edge.start_mm, sphere.center_mm), DIRECTION_Q)
+                        .context("sphere vertex")?;
+                    assert!(dot(chart.reference, v) > 0.25);
+                }
+            }
+            let mut revised = entities.to_vec();
+            let mut next = entities.iter().map(entity_id).max().context("entity IDs")? + 1;
+            let change = apply_chart(&mut revised, &index, &mut next, plan)?;
+            assert_eq!(change.geodesic_edge_ids.len(), 3);
+            assert_eq!(revised.len(), entities.len() + 3);
+            let revised_index = build_index(&revised);
+            let SurfaceSupport::Sphere(recharted) =
+                brep::surface_support(surface, &revised, &revised_index)
+            else {
+                anyhow::bail!("recharted surface missing");
+            };
+            assert_eq!(sphere.center_mm, recharted.center_mm);
+            assert_eq!(sphere.radius_mm, recharted.radius_mm);
+            // All 3-D authored trim edges and every original surface entity
+            // aside from the selected sphere's chart reference are immutable.
+            for (a, b) in entities.iter().zip(&revised) {
+                if entity_id(a) != surface {
+                    assert_eq!(a, b);
+                }
+            }
+            eligible += 1;
+        }
+        assert_eq!(eligible, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn great_circle_chart_rejects_long_arcs_and_broken_face_vertex_links() -> Result<()> {
+        let source = ParsedStepSource::parse(DRAFTED_ROUND)?.exchange;
+        let entities = &source.data[0].entities;
+        let index = build_index(entities);
+        let surface = 2999;
+        let SurfaceSupport::Sphere(sphere) = brep::surface_support(surface, entities, &index)
+        else {
+            anyhow::bail!("source sphere missing");
+        };
+        let circles =
+            circles_for_faces(&[2316], entities, &index).context("source geodesic circles")?;
+        assert!(great_circle_triangle_chart(sphere, &[2316], entities, &index, &circles).is_some());
+        // Swapping only EDGE_CURVE.same_sense selects the complementary
+        // >180-degree arc without changing endpoints or 3-D circle carrier.
+        // Such a long arc cannot be justified by the vertex convex hull.
+        let source_edges = brep::face_loops(2316, entities, &index).context("source face loops")?;
+        let before = source_edges[0].edges[0].parameter_forward;
+        let edge_id = source_edges[0].edges[0].edge_id;
+        let mut long_arc = entities.to_vec();
+        let curve =
+            simple_record_mut(&mut long_arc[index[&edge_id]]).context("source EDGE_CURVE")?;
+        let Parameter::List(params) = &mut curve.parameter else {
+            anyhow::bail!("source curve params")
+        };
+        let prior = params[4].clone();
+        params[4] = match prior {
+            Parameter::Enumeration(v) if v == "T" => Parameter::Enumeration("F".to_string()),
+            Parameter::Enumeration(v) if v == "F" => Parameter::Enumeration("T".to_string()),
+            _ => anyhow::bail!("unexpected EDGE_CURVE orientation"),
+        };
+        let altered = brep::face_loops(2316, &long_arc, &index).context("altered loops")?;
+        assert_ne!(altered[0].edges[0].parameter_forward, before);
+        assert!(
+            great_circle_triangle_chart(sphere, &[2316], &long_arc, &index, &circles).is_none()
+        );
+        let mut modified = entities.to_vec();
+        let selected = [2316];
+        // Only a full triangular loop is eligible; adding a second boundary
+        // changes the authored trimmed face and must be rejected.
+        let face_index = *index.get(&2316).context("source face")?;
+        let record = simple_record_mut(&mut modified[face_index]).context("simple face")?;
+        let Parameter::List(params) = &mut record.parameter else {
+            anyhow::bail!("face params")
+        };
+        let Parameter::List(bounds) = &mut params[1] else {
+            anyhow::bail!("face bounds")
+        };
+        bounds.push(bounds[0].clone());
+        let changed_index = build_index(&modified);
+        assert!(
+            great_circle_triangle_chart(sphere, &selected, &modified, &changed_index, &circles)
+                .is_none()
+        );
         Ok(())
     }
 }
