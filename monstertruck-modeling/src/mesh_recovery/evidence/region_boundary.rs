@@ -14,6 +14,7 @@ mod curve_evidence;
 mod native;
 mod partition;
 mod reconcile;
+mod sphere;
 mod trim;
 mod trim_graph;
 mod trim_intersections;

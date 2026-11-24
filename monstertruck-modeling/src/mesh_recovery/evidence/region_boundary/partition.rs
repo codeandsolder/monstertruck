@@ -130,6 +130,7 @@ impl<'a> RegionBoundaryIndex<'a> {
                 supports,
                 carrier,
                 budget.vertex,
+                vertex_error,
             ),
         })
     }
@@ -363,10 +364,16 @@ fn profile_is_tested(
     supports: &[usize],
     carrier: SurfaceCarrier,
     resolution: f64,
+    vertex_error: f64,
 ) -> bool {
     let (origin, axis, required) = match carrier {
         SurfaceCarrier::Plane { .. } => return true,
         SurfaceCarrier::LinearRevolution { origin, axis, .. } => (origin, axis, 3),
+        SurfaceCarrier::CircularRevolution { radial_center, .. }
+            if radial_center.abs() <= crate::KERNEL_EPSILON =>
+        {
+            return super::sphere::independently_tested(evidence, supports, vertex_error);
+        }
         SurfaceCarrier::CircularRevolution {
             axial_center, axis, ..
         } => (axial_center, axis, 4),

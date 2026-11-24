@@ -781,6 +781,15 @@ fn choose_partition(
             .iter()
             .filter_map(|c| curved_proposal(boundary, c, options)),
     );
+    // A sphere has no physically distinguished rotational axis. Generate
+    // independent connected candidates directly from cyclic source facets.
+    // They compete in the same globally selected, nonoverlapping partition.
+    let absolute_tolerance = options.trim_options(evidence).absolute_tolerance;
+    proposals.extend(boundary.discover_spherical_regions(
+        options.relative_surface_tolerance,
+        absolute_tolerance,
+        options.max_circular_relative_chord_error,
+    ));
     let curved_count = proposals.len();
     for candidate in linear {
         if let Some(proposal) = boundary.measure_surface_region(
