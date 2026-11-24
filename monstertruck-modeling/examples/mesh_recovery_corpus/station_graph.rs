@@ -4,10 +4,11 @@ use super::{PartitionCarriers, partition_contact_metrics};
 
 use monstertruck_modeling::mesh_recovery::{
     CircleAxisOptions, CurvatureGrowthHypothesis, CurvatureTrack, MeridianGraphOptions,
-    MeridianStationGraph, MeshEvidence, RegionBoundaryIndex, RegionContactGraph,
-    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SpatialTrackEvidence,
-    StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier, SurfaceRegionBudget,
-    SurfaceRegionProposal, discover_circle_axes, measure_curvature_spatial,
+    MeridianStationGraph, MeshEvidence, NativeTrimGraph, NativeTrimOptions, ReconciliationOptions,
+    RegionBoundaryIndex, RegionContactGraph, SharedTrimGeometry, SharedTrimGraph,
+    SharedTrimOptions, SpatialTrackEvidence, StationLinearCandidate, StationMeridianCandidate,
+    SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal, discover_circle_axes,
+    measure_curvature_spatial,
 };
 use monstertruck_modeling::{InnerSpace, Point3, Vector3};
 use serde_json::{Value, json};
@@ -469,10 +470,13 @@ fn joint_partition(
         .iter()
         .filter(|&&id| id < curved_count)
         .count();
+    let FinishedPartition {
+        partition,
+        repair_summary,
+        trim_graph,
+        native,
+    } = finish_partition(evidence, boundary, partition)?;
     let region_count = partition.carriers.iter().flatten().count();
-    let trim_graph = boundary
-        .assemble_shared_trims(&partition, trim_options(evidence))
-        .map_err(|error| error.to_string())?;
     let carriers =
         PartitionCarriers::new(evidence, partition.carriers, &partition.region_by_polygon);
     Ok(json!({
@@ -489,8 +493,110 @@ fn joint_partition(
         "exact_overlap_components":partition.exact_components,
         "limited_overlap_components":partition.limited_components,
         "contact_graph":partition_contact_metrics(&partition.contacts,evidence,Some(&carriers)),
+        "reconciliation":repair_summary,
+        "native":native,
         "analytic_trims":trim_summary(&trim_graph, &partition.contacts,&carriers),
     }))
+}
+
+struct FinishedPartition {
+    partition: monstertruck_modeling::mesh_recovery::SurfaceRegionPartition,
+    repair_summary: Value,
+    trim_graph: SharedTrimGraph,
+    native: Value,
+}
+
+fn finish_partition(
+    evidence: &MeshEvidence,
+    boundary: &RegionBoundaryIndex<'_>,
+    partition: monstertruck_modeling::mesh_recovery::SurfaceRegionPartition,
+) -> Result<FinishedPartition, String> {
+    let trim = trim_options(evidence);
+    let reconciled = boundary
+        .reconcile_planes(
+            partition,
+            trim,
+            ReconciliationOptions {
+                max_displacement: 0.0055,
+                max_normal_angle: 0.01,
+                parallel_angle_tolerance: 1.0e-8,
+                intersection_tolerance: (trim.absolute_tolerance * 0.1)
+                    .min(monstertruck_modeling::KERNEL_EPSILON * 0.01),
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let repair_summary = json!({"accepted":reconciled.planes.len(),"rejected":reconciled.rejected,"max_displacement":reconciled.max_displacement,
+        "planes":reconciled.planes.iter().map(|p|json!({"region":p.region,"supports":p.supports,"max_plane_residual":p.max_plane_residual,"normal_shift":p.normal_shift,
+        "source_polygons":p.supports.iter().flat_map(|&id|&evidence.planar_supports[id].source_face_indices).collect::<Vec<_>>() })).collect::<Vec<_>>()});
+    let partition = reconciled.partition;
+    let trim_graph = boundary
+        .assemble_shared_trims(&partition, &reconciled.positions, trim)
+        .map_err(|error| error.to_string())?;
+    let native = boundary
+        .construct_native_trims(
+            &partition,
+            &trim_graph,
+            &reconciled.positions,
+            NativeTrimOptions {
+                max_vertex_displacement: trim.absolute_tolerance,
+                intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
+                angular_resolution: 1.0e-8,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let summary = native_summary(&native, &partition);
+    Ok(FinishedPartition {
+        partition,
+        repair_summary,
+        trim_graph,
+        native: summary,
+    })
+}
+
+fn native_summary(
+    native: &NativeTrimGraph,
+    partition: &monstertruck_modeling::mesh_recovery::SurfaceRegionPartition,
+) -> Value {
+    let mut errors = BTreeMap::<String, usize>::new();
+    let mut faces = [0_usize; 3];
+    let mut built = [0_usize; 3];
+    let mut chart = [0_usize; 3];
+    let mut failed = Vec::new();
+    for region in &native.regions {
+        let kind = match partition.carriers[region.region] {
+            Some(SurfaceCarrier::Plane { .. }) => 0,
+            Some(SurfaceCarrier::LinearRevolution { .. }) => 1,
+            _ => 2,
+        };
+        faces[kind] += 1;
+        if let Err(error) = &region.faces {
+            *errors.entry(error.to_string()).or_default() += 1;
+            if failed.len() < 128 {
+                failed.push(json!({"region":region.region,"kind":kind,"error":error.to_string()}));
+            }
+        } else {
+            built[kind] += 1;
+            chart[kind] += usize::from(region.requires_chart_cut);
+        }
+    }
+    let mut trim_errors = BTreeMap::<String, usize>::new();
+    let mut edges = 0;
+    for trim in &native.trims {
+        match trim {
+            Ok(trim) => edges += trim.len(),
+            Err(error) => *trim_errors.entry(error.to_string()).or_default() += 1,
+        }
+    }
+    let shell = native
+        .regions
+        .iter()
+        .filter_map(|region| region.faces.as_ref().ok())
+        .flatten()
+        .cloned()
+        .collect::<monstertruck_modeling::Shell>();
+    json!({"faces_by_kind":faces,"native_faces_by_kind":built,"requires_chart_cut_by_kind":chart,
+        "face_errors":errors,"failed_faces_first_128":failed,"trim_errors":trim_errors,"native_edges":edges,
+        "max_vertex_displacement":native.max_vertex_displacement,"chart_seams":native.regions.iter().map(|r|r.chart_seams).sum::<usize>(),"native_face_count":shell.len(),"shell_condition":format!("{:?}",shell.shell_condition())})
 }
 
 fn proposal_summary(evidence: &MeshEvidence, proposal: &SurfaceRegionProposal<'_>) -> Value {

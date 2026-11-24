@@ -57,7 +57,7 @@ impl SurfaceRegionProposal<'_> {
 /// A complete provisional partition of the original support graph.
 /// Singleton planes retain unresolved source geometry exactly; they are
 /// not necessarily true original planar CAD faces.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SurfaceRegionPartition {
     /// Input proposal indices selected without any overlap.
     pub selected_proposals: Vec<usize>,

@@ -94,15 +94,22 @@ pub(super) fn supplied_circles(
     carriers: &[SurfaceCarrier],
     tolerance: f64,
 ) -> Vec<ContactCircleEvidence> {
-    let [first, second] = carriers else {
+    let Some(&first) = carriers.first() else {
         return Vec::new();
     };
     let Some(&sample) = ids.first().and_then(|&id| points.get(id)) else {
         return Vec::new();
     };
-    surface_circles(*first, *second, sample, tolerance)
+    let proposals = match carriers {
+        [_, second] => surface_circles(first, *second, sample, tolerance)
+            .into_iter()
+            .chain(surface_circles(*second, first, sample, tolerance))
+            .collect::<Vec<_>>(),
+        [_] => surface_circles(first, first, sample, tolerance),
+        _ => return Vec::new(),
+    };
+    proposals
         .into_iter()
-        .chain(surface_circles(*second, *first, sample, tolerance))
         .filter_map(|circle| {
             measure_placed_circle(
                 points,

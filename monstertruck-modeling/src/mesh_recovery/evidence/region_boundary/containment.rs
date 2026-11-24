@@ -72,6 +72,56 @@ pub struct SurfaceCurveAgreement {
 }
 
 impl SurfaceCarrier {
+    // Signed implicit residual and gradient, in source coordinates.
+    // Linear profile residual is normalized to unit gradient.
+    pub(super) fn signed_constraint(self, point: Point3) -> Option<(Vector3, f64)> {
+        match self {
+            Self::Plane { origin, normal } => Some((normal, (point - origin).dot(normal))),
+            Self::LinearRevolution {
+                origin,
+                axis,
+                radius_at_origin,
+                slope,
+            } => {
+                let delta = point - origin;
+                let z = delta.dot(axis);
+                let radial = delta - axis * z;
+                let rho = radial.magnitude();
+                if rho <= 0.0 {
+                    return None;
+                }
+                let factor = 1.0_f64.hypot(slope);
+                Some((
+                    (radial / rho - axis * slope) / factor,
+                    (rho - slope.mul_add(z, radius_at_origin)) / factor,
+                ))
+            }
+            Self::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } => {
+                let delta = point - axial_center;
+                if radial_center == 0.0 {
+                    let rho = delta.magnitude();
+                    return (rho > 0.0).then(|| (delta / rho, rho - profile_radius));
+                }
+                let z = delta.dot(axis);
+                let radial = delta - axis * z;
+                let rho = radial.magnitude();
+                let distance = z.hypot(rho - radial_center);
+                if rho <= 0.0 || distance <= 0.0 {
+                    return None;
+                }
+                Some((
+                    (axis * z + radial * ((rho - radial_center) / rho)) / distance,
+                    distance - profile_radius,
+                ))
+            }
+        }
+    }
+
     /// Obtain the independent plane hypothesis of an original local support.
     #[must_use = "the plane is a candidate, not a recovered face"]
     pub const fn from_planar_support(support: &PlanarSupport) -> Self {

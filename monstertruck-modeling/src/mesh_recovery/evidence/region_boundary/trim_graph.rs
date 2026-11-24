@@ -87,9 +87,11 @@ impl RegionBoundaryIndex<'_> {
     pub fn assemble_shared_trims(
         &self,
         partition: &SurfaceRegionPartition,
+        positions: &[crate::Point3],
         options: SharedTrimOptions,
     ) -> Result<SharedTrimGraph, RegionBoundaryError> {
-        if partition.region_by_support.len() != self.evidence.planar_supports.len()
+        if positions.len() != self.evidence.positions.len()
+            || partition.region_by_support.len() != self.evidence.planar_supports.len()
             || self.evidence.source_planar_support.len() != partition.region_by_polygon.len()
             || self
                 .evidence
@@ -126,7 +128,7 @@ impl RegionBoundaryIndex<'_> {
             trims,
             locations,
             limited_paths,
-        } = self.shared_trim_table(partition, options)?;
+        } = Self::shared_trim_table(partition, positions, options)?;
         let mut regions = Vec::new();
         for (region, supports) in groups
             .iter()
@@ -156,8 +158,8 @@ impl RegionBoundaryIndex<'_> {
     }
 
     fn shared_trim_table(
-        &self,
         partition: &SurfaceRegionPartition,
+        positions: &[crate::Point3],
         options: SharedTrimOptions,
     ) -> Result<TrimTable, RegionBoundaryError> {
         let mut trims = Vec::new();
@@ -175,8 +177,7 @@ impl RegionBoundaryIndex<'_> {
                         .ok_or(RegionBoundaryError::InvalidPartition)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let segmentation =
-                path.segment_analytic_trims(&self.evidence.positions, &sides, options);
+            let segmentation = path.segment_analytic_trims(positions, &sides, options);
             let pieces = if let Some(segmentation) = segmentation {
                 limited_paths += usize::from(segmentation.limited);
                 segmentation.pieces
@@ -367,7 +368,7 @@ mod tests {
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let partition = index.select_surface_partition(&[], &evidence, 100)?;
-        let graph = index.assemble_shared_trims(&partition, options())?;
+        let graph = index.assemble_shared_trims(&partition, &evidence.positions, options())?;
         assert_eq!(graph.trims.len(), 5);
         assert_eq!(graph.regions.len(), 2);
         let shared = graph
@@ -414,7 +415,7 @@ mod tests {
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let partition = index.select_surface_partition(&[], &evidence, 100)?;
-        let graph = index.assemble_shared_trims(&partition, options())?;
+        let graph = index.assemble_shared_trims(&partition, &evidence.positions, options())?;
         assert_eq!(graph.trims.len(), 4);
         assert_eq!(
             graph

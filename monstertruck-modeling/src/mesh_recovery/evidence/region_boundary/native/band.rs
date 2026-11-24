@@ -1,0 +1,477 @@
+//! Periodic isoparametric bands, independent of the surface primitive.
+//! Two noncontractible parallel boundary cycles define an annular domain.
+//! Cut at two parameter values, globally subdivide their shared ring edges,
+//! and use the same two seam sequences in opposite chart-face orientations.
+
+use super::super::{
+    MeshEvidence, OrientedTrim, RegionTrimLoops, SharedTrimGeometry, SharedTrimGraph,
+    SurfaceCarrier,
+};
+use super::normal_basis;
+use super::{
+    NativeTrimError, NativeTrimOptions, chart_point, native_circle_edge, periodic_coordinate,
+};
+use crate::{
+    Edge, Face, IncludeCurve, InnerSpace, Point3, Surface, Vector3, Vertex, Wire, builder,
+};
+use std::collections::BTreeMap;
+use std::f64::consts::{PI, TAU};
+
+#[derive(Clone, Copy)]
+struct Ring {
+    axis: usize,
+    fixed: f64,
+    positive: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Circle {
+    center: Point3,
+    normal: Vector3,
+    radius: f64,
+}
+
+pub(super) struct BandPlan {
+    vertices: [[Vertex; 2]; 2],
+    seams: [Vec<Edge>; 2],
+}
+
+impl BandPlan {
+    pub(super) fn faces(
+        &self,
+        wires: Vec<Wire>,
+        surface: &Surface,
+    ) -> Result<Vec<Face>, NativeTrimError> {
+        let [first, second]: [Wire; 2] = wires
+            .try_into()
+            .map_err(|_| NativeTrimError::InvalidBoundary)?;
+        let [a0, a1] = &self.vertices[0];
+        let [b0, b1] = &self.vertices[1];
+        let [first_a, first_b] = split_wire(&first, a0, a1).ok_or(NativeTrimError::FaceTopology)?;
+        let [second_a, second_b] =
+            split_wire(&second, b1, b0).ok_or(NativeTrimError::FaceTopology)?;
+        let wire_a = first_a
+            .into_iter()
+            .chain(self.seams[1].iter().cloned())
+            .chain(second_a)
+            .chain(self.seams[0].iter().rev().map(Edge::inverse))
+            .collect::<Wire>();
+        let wire_b = first_b
+            .into_iter()
+            .chain(self.seams[0].iter().cloned())
+            .chain(second_b)
+            .chain(self.seams[1].iter().rev().map(Edge::inverse))
+            .collect::<Wire>();
+        [wire_a, wire_b]
+            .into_iter()
+            .map(|wire| {
+                let face = Face::new(vec![wire], surface.clone())
+                    .map_err(|_| NativeTrimError::FaceTopology)?;
+                if !face.is_geometric_consistent() {
+                    return Err(NativeTrimError::FaceGeometry);
+                }
+                Ok(face)
+            })
+            .collect()
+    }
+}
+
+pub(super) struct BandContext<'a> {
+    pub carrier: SurfaceCarrier,
+    pub surface: &'a Surface,
+    pub outward: bool,
+    pub evidence: &'a MeshEvidence,
+    pub supports: &'a [usize],
+    pub positions: &'a [Point3],
+    pub graph: &'a SharedTrimGraph,
+    pub options: NativeTrimOptions,
+}
+
+impl BandContext<'_> {
+    pub(super) fn plan(
+        &self,
+        boundary: &RegionTrimLoops,
+        trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    ) -> Option<BandPlan> {
+        let [first, second] = boundary.loops.as_slice() else {
+            return None;
+        };
+        let rings = [self.ring(first)?, self.ring(second)?];
+        if rings[0].axis != rings[1].axis || rings[0].positive == rings[1].positive {
+            return None;
+        }
+        let axis = rings[0].axis;
+        let other = 1 - axis;
+        // In an outward (azimuth,meridian/axial) chart, a positive
+        // azimuth winding bounds the lower meridian coordinate; a positive
+        // meridian winding bounds the upper azimuth coordinate.
+        let first_lower = (rings[0].positive == (axis == 0)) == self.outward;
+        let (lower, upper) = if first_lower {
+            (rings[0].fixed, rings[1].fixed)
+        } else {
+            (rings[1].fixed, rings[0].fixed)
+        };
+        let span = if periodic_coordinate(self.carrier, other) {
+            (upper - lower).rem_euclid(TAU)
+        } else {
+            upper - lower
+        };
+        if span <= self.coordinate_tolerance(other) {
+            return None;
+        }
+        if !self.covers_band(other, lower, span) {
+            return None;
+        }
+        let mut changed = BTreeMap::new();
+        for reference in first.iter().chain(second) {
+            changed.entry(reference.trim).or_insert_with(|| {
+                trims
+                    .get(reference.trim)
+                    .and_then(|v| v.as_ref().ok())
+                    .cloned()
+            });
+        }
+        let mut endpoints = Vec::new();
+        for (cycle, ring) in [first, second].into_iter().zip(rings) {
+            let vertices = [0.0, PI].map(|angle| {
+                let mut uv = [0.0; 2];
+                uv[axis] = angle;
+                uv[other] = ring.fixed;
+                let point = world_point(self.carrier, uv)?;
+                cut_ring(
+                    cycle,
+                    point,
+                    &mut changed,
+                    self.options.intersection_tolerance,
+                )
+            });
+            let [a, b] = vertices;
+            endpoints.push([a?, b?]);
+        }
+        let vertices: [[Vertex; 2]; 2] = endpoints.try_into().ok()?;
+        let signed_span = if first_lower { span } else { -span };
+        let seams = [0.0, PI]
+            .into_iter()
+            .enumerate()
+            .map(|(id, angle)| {
+                self.seam(
+                    axis,
+                    angle,
+                    rings[0].fixed,
+                    signed_span,
+                    &vertices[0][id],
+                    &vertices[1][id],
+                )
+            })
+            .collect::<Option<Vec<_>>>()?
+            .try_into()
+            .ok()?;
+        let updates = changed
+            .into_iter()
+            .map(|(id, edges)| Some((id, edges?)))
+            .collect::<Option<Vec<_>>>()?;
+        for (id, edges) in updates {
+            trims[id] = Ok(edges);
+        }
+        Some(BandPlan { vertices, seams })
+    }
+
+    fn ring(&self, cycle: &[OrientedTrim]) -> Option<Ring> {
+        let mut coords = Vec::new();
+        for reference in cycle {
+            let trim = self.graph.trims.get(reference.trim)?;
+            if !matches!(trim.geometry, SharedTrimGeometry::Circle(_)) {
+                return None;
+            }
+            if reference.reversed {
+                for edge in trim.source_edges.iter().rev() {
+                    coords.push(chart_point(
+                        self.carrier,
+                        self.positions[edge.vertices[1]],
+                        self.options.angular_resolution,
+                    )?);
+                }
+            } else {
+                for edge in &trim.source_edges {
+                    coords.push(chart_point(
+                        self.carrier,
+                        self.positions[edge.vertices[0]],
+                        self.options.angular_resolution,
+                    )?);
+                }
+            }
+        }
+        let first = *coords.first()?;
+        for axis in 0..2 {
+            if !periodic_coordinate(self.carrier, axis) {
+                continue;
+            }
+            let other = 1 - axis;
+            let fixed = first[other];
+            if !coords.iter().all(|uv| {
+                coordinate_difference(self.carrier, other, uv[other], fixed).abs()
+                    <= self.coordinate_tolerance(other)
+            }) {
+                continue;
+            }
+            let sweep = coords
+                .iter()
+                .zip(coords.iter().cycle().skip(1))
+                .map(|(a, b)| (b[axis] - a[axis] + PI).rem_euclid(TAU) - PI)
+                .sum::<f64>();
+            if (sweep.abs() - TAU).abs() > self.options.angular_resolution {
+                continue;
+            }
+            let expected = parameter_circle(self.carrier, axis, fixed)?;
+            // All constituent analytic trims must be this same complete
+            // isoparametric circle, not merely interpolate ring samples.
+            let valid = cycle.iter().all(|reference| {
+                let SharedTrimGeometry::Circle(circle) = self.graph.trims[reference.trim].geometry
+                else {
+                    return false;
+                };
+                let tol = self.options.intersection_tolerance;
+                (circle.center - expected.center).magnitude() <= tol
+                    && (circle.radius - expected.radius).abs() <= tol
+                    && circle.normal.cross(expected.normal).magnitude() * expected.radius <= tol
+            });
+            if valid {
+                return Some(Ring {
+                    axis,
+                    fixed,
+                    positive: sweep > 0.0,
+                });
+            }
+        }
+        None
+    }
+
+    const fn coordinate_tolerance(&self, axis: usize) -> f64 {
+        if axis == 1 && matches!(self.carrier, SurfaceCarrier::LinearRevolution { .. }) {
+            self.options.intersection_tolerance
+        } else {
+            self.options.angular_resolution
+        }
+    }
+
+    fn covers_band(&self, other: usize, lower: f64, span: f64) -> bool {
+        self.supports.iter().all(|&id| {
+            self.evidence.planar_supports[id]
+                .source_face_indices
+                .iter()
+                .all(|&polygon| {
+                    let Some(ids) = self.evidence.source_polygon_vertices(polygon) else {
+                        return false;
+                    };
+                    ids.iter().all(|&id| {
+                        let Some(uv) = chart_point(
+                            self.carrier,
+                            self.positions[id],
+                            self.options.angular_resolution,
+                        ) else {
+                            return false;
+                        };
+                        let mut coordinate = uv[other] - lower;
+                        if periodic_coordinate(self.carrier, other) {
+                            coordinate = coordinate.rem_euclid(TAU);
+                            if TAU - coordinate <= self.options.angular_resolution {
+                                coordinate = 0.0;
+                            }
+                        }
+                        coordinate >= -self.coordinate_tolerance(other)
+                            && coordinate <= span + self.coordinate_tolerance(other)
+                    })
+                })
+        })
+    }
+
+    fn seam(
+        &self,
+        axis: usize,
+        angle: f64,
+        start: f64,
+        sweep: f64,
+        front: &Vertex,
+        back: &Vertex,
+    ) -> Option<Vec<Edge>> {
+        let other = 1 - axis;
+        let edges = if let Some(circle) = parameter_circle(self.carrier, other, angle) {
+            // Isoparametric curve can itself be periodic. Split long
+            // connector arcs so each native edge has distinct endpoints.
+            let count = if sweep.abs() > PI { 2 } else { 1 };
+            let mut edges = Vec::new();
+            let mut vertex = front.clone();
+            for i in 0..count {
+                let next = if i + 1 == count {
+                    back.clone()
+                } else {
+                    let mut uv = [0.0; 2];
+                    uv[axis] = angle;
+                    uv[other] = sweep.mul_add(0.5, start);
+                    builder::vertex(world_point(self.carrier, uv)?)
+                };
+                edges.push(
+                    native_circle_edge(
+                        &vertex,
+                        &next,
+                        circle.center,
+                        circle.normal,
+                        circle.radius,
+                        sweep / f64::from(count),
+                        self.options.intersection_tolerance,
+                    )
+                    .ok()?,
+                );
+                vertex = next;
+            }
+            edges
+        } else {
+            vec![builder::line(front, back)]
+        };
+        edges
+            .iter()
+            .all(|e| e.is_geometric_consistent() && self.surface.include(&e.curve()))
+            .then_some(edges)
+    }
+}
+
+fn coordinate_difference(carrier: SurfaceCarrier, axis: usize, a: f64, b: f64) -> f64 {
+    if periodic_coordinate(carrier, axis) {
+        (a - b + PI).rem_euclid(TAU) - PI
+    } else {
+        a - b
+    }
+}
+
+fn world_point(carrier: SurfaceCarrier, [theta, profile]: [f64; 2]) -> Option<Point3> {
+    match carrier {
+        SurfaceCarrier::Plane { .. } => None,
+        SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin,
+            slope,
+        } => {
+            let (u, v) = normal_basis(axis);
+            let (sin, cos) = theta.sin_cos();
+            Some(
+                origin
+                    + axis * profile
+                    + (u * cos + v * sin) * slope.mul_add(profile, radius_at_origin),
+            )
+        }
+        SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        } => {
+            let (u, v) = normal_basis(axis);
+            let (sin, cos) = theta.sin_cos();
+            let (z, rho) = profile.sin_cos();
+            Some(
+                axial_center
+                    + axis * (profile_radius * z)
+                    + (u * cos + v * sin) * profile_radius.mul_add(rho, radial_center),
+            )
+        }
+    }
+}
+
+fn parameter_circle(carrier: SurfaceCarrier, varying: usize, fixed: f64) -> Option<Circle> {
+    match carrier {
+        SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin,
+            slope,
+        } if varying == 0 => Some(Circle {
+            center: origin + axis * fixed,
+            normal: axis,
+            radius: slope.mul_add(fixed, radius_at_origin),
+        }),
+        SurfaceCarrier::Plane { .. } | SurfaceCarrier::LinearRevolution { .. } => None,
+        SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        } => {
+            if varying == 0 {
+                let (sin, cos) = fixed.sin_cos();
+                Some(Circle {
+                    center: axial_center + axis * (profile_radius * sin),
+                    normal: axis,
+                    radius: profile_radius.mul_add(cos, radial_center),
+                })
+            } else {
+                let (u, v) = normal_basis(axis);
+                let (sin, cos) = fixed.sin_cos();
+                let radial = u * cos + v * sin;
+                Some(Circle {
+                    center: axial_center + radial * radial_center,
+                    normal: radial.cross(axis),
+                    radius: profile_radius,
+                })
+            }
+        }
+    }
+    .filter(|circle| circle.radius > 0.0)
+}
+
+fn cut_ring(
+    cycle: &[OrientedTrim],
+    point: Point3,
+    trims: &mut BTreeMap<usize, Option<Vec<Edge>>>,
+    tolerance: f64,
+) -> Option<Vertex> {
+    for reference in cycle {
+        let edges = trims.get(&reference.trim)?.as_ref()?;
+        for edge in edges {
+            for vertex in [edge.front(), edge.back()] {
+                if (vertex.point() - point).magnitude() <= tolerance {
+                    return Some(vertex.clone());
+                }
+            }
+        }
+    }
+    let vertex = builder::vertex(point);
+    let mut cuts = Vec::new();
+    for reference in cycle {
+        let edges = trims.get(&reference.trim)?.as_ref()?;
+        for (index, edge) in edges.iter().enumerate() {
+            if let Some((left, right)) = edge.cut(&vertex)
+                && left.is_geometric_consistent()
+                && right.is_geometric_consistent()
+            {
+                cuts.push((reference.trim, index, left, right));
+            }
+        }
+    }
+    let [(id, index, left, right)] = cuts.as_slice() else {
+        return None;
+    };
+    trims
+        .get_mut(id)?
+        .as_mut()?
+        .splice(*index..=*index, [left.clone(), right.clone()]);
+    Some(vertex)
+}
+
+fn split_wire(wire: &Wire, first: &Vertex, second: &Vertex) -> Option<[Vec<Edge>; 2]> {
+    let edges = wire.edge_iter().cloned().collect::<Vec<_>>();
+    let start = edges.iter().position(|edge| edge.front() == first)?;
+    let end = edges.iter().position(|edge| edge.front() == second)?;
+    if start == end {
+        return None;
+    }
+    let distance = (end + edges.len() - start) % edges.len();
+    Some([
+        (0..distance)
+            .map(|i| edges[(start + i) % edges.len()].clone())
+            .collect(),
+        (distance..edges.len())
+            .map(|i| edges[(start + i) % edges.len()].clone())
+            .collect(),
+    ])
+}

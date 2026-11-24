@@ -180,7 +180,18 @@ fn accepts_circle(
     supplied: bool,
 ) -> bool {
     let angular = tolerance / circle.radius;
-    let corroborated = independently_constrained_circle(&circle, carriers, tolerance);
+    let independently_constrained = independently_constrained_circle(&circle, carriers, tolerance);
+    // An open path still has one independent surface. Three noncollinear
+    // source points can test a unique circle supplied by that surface,
+    // but two points alone cannot choose a trim on an open face.
+    let source_corroborates = supplied
+        && carriers.len() == 1
+        && fit.source_vertex_count >= 3
+        && fit.circle.is_some_and(|observed| {
+            observed.plane_span_strength * span > tolerance
+                && super::trim_intersections::same_circle(&observed, &circle, tolerance)
+        });
+    let corroborated = independently_constrained || source_corroborates;
     let max_step = if corroborated {
         std::f64::consts::FRAC_PI_2
     } else {
@@ -507,6 +518,41 @@ mod tests {
         };
         assert!((circle.center - Point3::new(0.5, 0.0, 0.0)).magnitude() < 1.0e-10);
         assert!((circle.radius - radius).abs() < 1.0e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn open_path_three_samples_test_a_surface_supplied_circle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let points = [
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.5, 3.0_f64.sqrt() * 0.5, 0.0),
+            Point3::new(-0.5, 3.0_f64.sqrt() * 0.5, 0.0),
+        ];
+        let cylinder = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let mut open = path(2, false);
+        open.regions.1 = None;
+        let fitted = open
+            .segment_analytic_trims(&points, &[cylinder], options())
+            .ok_or("trim")?;
+        assert_eq!(fitted.pieces.len(), 1);
+        assert!(matches!(
+            fitted.pieces[0].geometry,
+            SharedTrimGeometry::Circle(_)
+        ));
+        open.edges.truncate(1);
+        let sparse = open
+            .segment_analytic_trims(&points, &[cylinder], options())
+            .ok_or("trim")?;
+        assert!(matches!(
+            sparse.pieces[0].geometry,
+            SharedTrimGeometry::Unresolved
+        ));
         Ok(())
     }
 

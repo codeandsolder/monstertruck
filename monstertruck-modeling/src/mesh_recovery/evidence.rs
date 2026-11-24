@@ -33,11 +33,13 @@ pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactCurveEvidence,
-    ContactLineEvidence, OrientedTrim, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
-    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
-    RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
-    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier,
-    SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
+    ContactLineEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
+    OrientedTrim, ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
+    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
+    RegionContactGraph, RegionContactPath, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim,
+    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
+    SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
+    SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,

@@ -11,7 +11,9 @@ mod coincidence;
 mod contacts;
 mod containment;
 mod curve_evidence;
+mod native;
 mod partition;
+mod reconcile;
 mod trim;
 mod trim_graph;
 mod trim_intersections;
@@ -19,7 +21,9 @@ pub use coincidence::CarrierCoincidenceEvidence;
 pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
+pub use native::{NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions};
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
+pub use reconcile::{ReconciledPartition, ReconciledPlane, ReconciliationOptions};
 pub use trim::{SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation};
 pub use trim_graph::{
     OrientedTrim, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGraph,

@@ -250,6 +250,18 @@ fn revolution_surface_includes_curve(
     }
 }
 
+// Sphere and ring-torus charts cover their complete analytic support.
+// If inverse parameter search misses a point near a periodic seam or pole,
+// a global polynomial incidence certificate is stronger than sampling.
+fn complete_analytic_surface_includes(surface: &Surface, curve: &Curve) -> bool {
+    use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
+    super::analytic_curve_incidence::certify_analytic_curve_on_surface(
+        curve,
+        surface,
+        crate::KERNEL_EPSILON,
+    ) == CurveIncidence::Proven
+}
+
 impl IncludeCurve<Curve> for Surface {
     #[inline]
     fn include(&self, curve: &Curve) -> bool {
@@ -280,8 +292,14 @@ impl IncludeCurve<Curve> for Surface {
                     .search_parameter(control.to_point(), None, 1)
                     .is_some()
             }),
-            Self::Sphere(surface) => analytic_surface_includes_curve(surface, curve),
-            Self::Torus(surface) => analytic_surface_includes_curve(surface, curve),
+            Self::Sphere(surface) => {
+                analytic_surface_includes_curve(surface, curve)
+                    || complete_analytic_surface_includes(self, curve)
+            }
+            Self::Torus(surface) => {
+                analytic_surface_includes_curve(surface, curve)
+                    || complete_analytic_surface_includes(self, curve)
+            }
             Self::Revolution(surface) => revolution_surface_includes_curve(surface, curve),
         }
     }
