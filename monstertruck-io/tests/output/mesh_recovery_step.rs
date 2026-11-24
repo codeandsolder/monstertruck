@@ -218,3 +218,111 @@ fn faceted_through_hole_stl_roundtrips_as_mixed_planar_cylindrical_step() {
     }
     assert_eq!((planes, cylinders), (6, 2));
 }
+
+#[test]
+fn shared_periodic_trim_graph_roundtrips_as_analytic_step_solid()
+-> Result<(), Box<dyn std::error::Error>> {
+    use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+    use monstertruck_modeling::mesh_recovery::{
+        EvidenceOptions, NativeTrimOptions, RegionBoundaryIndex, SharedTrimOptions, SurfaceCarrier,
+        SurfaceRegionBudget, analyze_mesh_evidence,
+    };
+    use monstertruck_modeling::{Point3, Shell, Vector3};
+
+    let sides = 16_usize;
+    let mut positions = Vec::new();
+    for z in [0.0, 3.0] {
+        for i in 0..sides {
+            let (sin, cos) = (std::f64::consts::TAU * i as f64 / sides as f64).sin_cos();
+            positions.push(Point3::new(2.0 * cos, 2.0 * sin, z));
+        }
+    }
+    let mut faces = (0..sides)
+        .map(|i| {
+            let j = (i + 1) % sides;
+            vec![i, j, j + sides, i + sides]
+        })
+        .collect::<Vec<_>>();
+    faces.push((0..sides).rev().collect());
+    faces.push((sides..2 * sides).collect());
+    let mesh = PolygonMesh::new(
+        StandardAttributes {
+            positions,
+            ..Default::default()
+        },
+        Faces::from_iter(faces),
+    )?;
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+    let boundary = RegionBoundaryIndex::new(&evidence)?;
+    let mut supports = evidence.source_planar_support[..sides].to_vec();
+    supports.sort_unstable();
+    supports.dedup();
+    let proposal = boundary
+        .measure_surface_region(
+            &supports,
+            SurfaceCarrier::LinearRevolution {
+                origin: Point3::new(0.0, 0.0, 0.0),
+                axis: Vector3::unit_z(),
+                radius_at_origin: 2.0,
+                slope: 0.0,
+            },
+            SurfaceRegionBudget {
+                vertex: 1.0e-8,
+                chord: 0.15,
+            },
+        )
+        .ok_or("cylinder proposal")?;
+    let partition = boundary.select_surface_partition(&[proposal], &evidence, 100)?;
+    let graph = boundary.assemble_shared_trims(
+        &partition,
+        &evidence.positions,
+        SharedTrimOptions {
+            absolute_tolerance: 1.0e-8,
+            relative_tolerance: 1.0e-4,
+            max_interval_edges: 128,
+        },
+    )?;
+    let native = boundary.construct_native_trims(
+        &partition,
+        &graph,
+        &evidence.positions,
+        NativeTrimOptions {
+            max_vertex_displacement: 1.0e-8,
+            intersection_tolerance: 1.0e-10,
+            angular_resolution: 1.0e-8,
+        },
+    )?;
+    assert!(native.regions.iter().all(|r| !r.requires_chart_cut));
+    let mut shell = Shell::new();
+    for region in native.regions {
+        shell.extend(region.faces?);
+    }
+    assert_eq!(shell.len(), 4);
+    assert_eq!(shell.shell_condition(), ShellCondition::Closed);
+    let solid = Solid::new(vec![shell])?;
+    assert!(solid.is_geometric_consistent());
+    let compressed = solid.compress_with_parameter_curves(1.0e-6);
+    let step =
+        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
+    assert!(step.contains("MANIFOLD_SOLID_BREP"));
+    assert!(step.contains("CYLINDRICAL_SURFACE("));
+    assert!(!step.contains("B_SPLINE_SURFACE"));
+    let table = Table::from_step(&step)?;
+    let shell = table.shell.values().next().ok_or("STEP shell")?;
+    let restored = table.to_compressed_trimmed_shell(shell)?;
+    assert_eq!(restored.faces.len(), 4);
+    assert_eq!(
+        restored
+            .faces
+            .iter()
+            .filter(|face| matches!(
+                face.surface,
+                step_geometry::Surface::Elementary(
+                    step_geometry::ElementarySurface::CylindricalSurface(_)
+                )
+            ))
+            .count(),
+        2
+    );
+    Ok(())
+}
