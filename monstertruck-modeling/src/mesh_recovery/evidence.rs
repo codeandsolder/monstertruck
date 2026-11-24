@@ -938,7 +938,7 @@ pub fn analyze_mesh_evidence(
     validate_evidence_options(options)?;
     let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
     seams::split_source_t_junctions(&positions, &mut polygons);
-    Ok(analyze_welded_evidence(positions, polygons, options))
+    Ok(analyze_welded_evidence(positions, &polygons, options))
 }
 
 fn validate_evidence_options(options: EvidenceOptions) -> Result<(), MeshRecoveryError> {
@@ -959,7 +959,7 @@ fn validate_evidence_options(options: EvidenceOptions) -> Result<(), MeshRecover
 
 fn analyze_welded_evidence(
     positions: Vec<Point3>,
-    polygons: Vec<InputPolygon>,
+    polygons: &[InputPolygon],
     options: EvidenceOptions,
 ) -> MeshEvidence {
     let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
@@ -968,12 +968,12 @@ fn analyze_welded_evidence(
         suppressed_coplanar,
         non_manifold,
         winding_conflicts,
-    } = select_edges(&polygons, &incidence, options);
+    } = select_edges(polygons, &incidence, options);
     let (source_planar_support, planar_supports) =
-        planar_supports(&polygons, &positions, &incidence, options.planar_support);
+        planar_supports(polygons, &positions, &incidence, options.planar_support);
     let (support_interfaces, support_interface_indices) = build_support_interfaces(
         &positions,
-        &polygons,
+        polygons,
         &incidence,
         &source_planar_support,
         planar_supports.len(),
@@ -982,7 +982,7 @@ fn analyze_welded_evidence(
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
     let mut source_polygon_vertex_offsets = Vec::with_capacity(polygons.len() + 1);
     let mut source_polygon_vertex_indices = Vec::new();
-    for polygon in &polygons {
+    for polygon in polygons {
         source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
         source_polygon_vertex_indices.extend_from_slice(&polygon.vertices);
     }
