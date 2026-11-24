@@ -328,6 +328,72 @@ mod tests {
     }
 
     #[test]
+    fn negative_radial_center_cannot_displace_native_planar_regions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{SurfaceCarrier, SurfaceRegionBudget};
+        let mut positions = Vec::new();
+        let mut faces = Vec::new();
+        // An exact circular fit on the positive-radial portion of a
+        // meridian centered at -2. The kernel's native torus cannot
+        // represent this signed branch; the source is still recoverable.
+        let ring = 8;
+        for station in 0..5_usize {
+            let z = crate::usize_to_f64(station) - 2.0;
+            let radius = 9.0_f64.mul_add(1.0, -(z * z)).sqrt() - 2.0;
+            for sample in 0..ring {
+                let (sin, cos) =
+                    (TAU * crate::usize_to_f64(sample) / crate::usize_to_f64(ring)).sin_cos();
+                positions.push(Point3::new(radius * cos, radius * sin, z));
+                if station < 4 {
+                    let a = station * ring + sample;
+                    let b = station * ring + (sample + 1) % ring;
+                    faces.push([a, b, b + ring, a + ring]);
+                }
+            }
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: -2.0,
+            profile_radius: 3.0,
+        };
+        // All original vertices are on the fitted surface; the generous
+        // chord budget cannot be the reason for rejection.
+        for &point in &evidence.positions {
+            assert!(
+                carrier
+                    .measure_segment(point, point)
+                    .ok_or("residual")?
+                    .witnessed_max
+                    < 1.0e-10
+            );
+        }
+        assert!(
+            boundary
+                .measure_surface_region(
+                    &supports,
+                    carrier,
+                    SurfaceRegionBudget {
+                        vertex: 1.0e-8,
+                        chord: 3.0
+                    }
+                )
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn station_graph_recovers_complete_curve_without_conical_strips()
     -> Result<(), Box<dyn std::error::Error>> {
         let mesh = mesh(5)?;

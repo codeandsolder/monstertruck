@@ -127,6 +127,12 @@ impl<'a> RegionBoundaryIndex<'a> {
                     profile_radius,
                 }
             }
+            // A signed negative radial center is a fitted meridian, not
+            // a supported native torus. Do not let an unrepresentable
+            // hypothesis displace feasible planar or linear regions.
+            SurfaceCarrier::CircularRevolution { radial_center, .. } if radial_center < 0.0 => {
+                return None;
+            }
             other => other,
         };
         let mut vertex_error = 0.0_f64;

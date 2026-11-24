@@ -4,8 +4,8 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, SharedTrimGeometry, SurfaceCarrier, analyze_mesh_evidence,
-    recover_analytic_evidence,
+    AnalyticRecoveryOptions, RecoveredAnalyticMesh, SharedTrimGeometry, SurfaceCarrier,
+    analyze_mesh_evidence, recover_analytic_evidence,
 };
 use serde_json::{Value, json};
 use std::{
@@ -79,6 +79,22 @@ fn trim_summary(
         }
     }
     (trim_edges, unresolved_contact_pairs)
+}
+
+// Preserve the exact source samples and provenance of every unresolved trim
+// so independent diagnostics need not repeat surface recognition.
+fn unresolved_trims(recovery: &RecoveredAnalyticMesh) -> Vec<Value> {
+    let provenance = &recovery.evidence.provenance.original_polygon_ids;
+    recovery.trims.trims.iter().filter(|trim| matches!(trim.geometry, SharedTrimGeometry::Unresolved)).map(|trim| {
+        let edges = trim.source_edges.iter().map(|edge| {
+            let vertices = edge.vertices.map(|id| {
+                let p = recovery.reconciled.positions[id];
+                [p.x, p.y, p.z]
+            });
+            json!({"vertices":edge.vertices,"points":vertices,"polygons":[Some(provenance[edge.interior_polygon]),edge.exterior_polygon.map(|id|provenance[id])]})
+        }).collect::<Vec<_>>();
+        json!({"contact_path":trim.contact_path,"regions":trim.regions,"edges":edges})
+    }).collect()
 }
 
 fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value> {
@@ -170,6 +186,9 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],
         "unresolved_source_edges":trim_edges[2],
         "unresolved_contact_pairs":unresolved_contact_pairs,
+        "unresolved_trims":unresolved_trims(&recovery),
+        "trim_absolute_tolerance":options.trim_options(&recovery.evidence).absolute_tolerance,
+        "trim_relative_tolerance":options.trim_options(&recovery.evidence).relative_tolerance,
         "limited_partition_components":partition.limited_components,
         "shell_condition":complete.as_ref().map(|shell|format!("{:?}",shell.shell_condition())),
         "shell_components":complete.as_ref().map(|shell|shell.connected_components().len()),
