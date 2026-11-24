@@ -119,10 +119,14 @@ pub(super) fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
 /// outside the other two exact coordinate bounds before robust predicates.
 /// This preserves exact T-junction detection while avoiding a quadratic scan
 /// of unrelated vertices on densely tessellated CAD surfaces.
-pub(super) fn split_source_t_junctions(positions: &[Point3], polygons: &mut [InputPolygon]) {
+pub(super) fn split_source_t_junctions<'a>(
+    positions: &[Point3],
+    polygons: impl IntoIterator<Item = &'a mut InputPolygon>,
+) {
+    let polygons = polygons.into_iter().collect::<Vec<_>>();
     let mut used = vec![false; positions.len()];
     let mut spokes = vec![Vec::new(); positions.len()];
-    for polygon in polygons.iter() {
+    for polygon in &polygons {
         for (i, &a) in polygon.vertices.iter().enumerate() {
             let b = polygon.vertices[(i + 1) % polygon.vertices.len()];
             used[a] = true;
@@ -150,7 +154,7 @@ pub(super) fn split_source_t_junctions(positions: &[Point3], polygons: &mut [Inp
         indices
     });
 
-    for polygon in polygons.iter_mut() {
+    for polygon in polygons {
         let mut split = Vec::with_capacity(polygon.vertices.len());
         for i in 0..polygon.vertices.len() {
             let a = polygon.vertices[i];

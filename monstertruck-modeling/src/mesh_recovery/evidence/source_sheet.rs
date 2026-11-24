@@ -140,7 +140,12 @@ impl MeshEvidence {
             .enumerate()
             .filter(|(id, _)| !removed.contains(id))
             .unzip();
-        let evidence = analyze_welded_evidence(self.positions.clone(), &retained, options);
+        let evidence = analyze_welded_evidence(
+            self.positions.clone(),
+            &retained,
+            options,
+            self.separated_vertices.clone(),
+        );
         Ok(Some(NormalizedSourceEvidence {
             evidence,
             original_polygon_ids,

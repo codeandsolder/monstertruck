@@ -62,14 +62,15 @@ pub use evidence::{
     ParallelPlacement, PlanarSupport, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
     RegionBoundary, RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap,
     RegionBoundaryIndex, RegionContactGraph, RegionContactPath, RegionTrimBoundary,
-    RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions,
-    SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation, SpatialTrackEvidence,
-    SpatialTrackJoinEvidence, StationLinearCandidate, StationMeridianCandidate,
-    StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
-    SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
-    measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,
-    measure_spatial_support_set, trace_curvature_tracks,
+    RegionTrimLoops, SeparatedSourceVertex, SharedAnalyticTrim, SharedTrimGeometry,
+    SharedTrimGraph, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation,
+    SourceCircleObservation, SpatialTrackEvidence, SpatialTrackJoinEvidence,
+    StationLinearCandidate, StationMeridianCandidate, StationMeridianDiscovery,
+    SupportBoundaryTopology, SupportInterface, SupportNormalRotationEvidence, SurfaceCarrier,
+    SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
+    analyze_mesh_evidence, discover_circle_axes, measure_circular_meridian,
+    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
+    trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.

@@ -19,6 +19,7 @@ mod join;
 mod meridian;
 mod region_boundary;
 mod source_sheet;
+mod source_topology;
 mod spatial;
 mod station_graph;
 mod support;
@@ -43,6 +44,7 @@ pub use region_boundary::{
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use source_sheet::{CanceledSourceSheet, NormalizedSourceEvidence};
+pub use source_topology::SeparatedSourceVertex;
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
     measure_spatial_support_set,
@@ -256,8 +258,11 @@ pub struct SupportNormalRotationEvidence {
 /// Reusable primitive-free geometric evidence for a source mesh.
 #[derive(Clone, Debug)]
 pub struct MeshEvidence {
-    /// Exactly welded source positions.
+    /// Exactly welded source positions, except separately certified closed
+    /// component vertices that retain distinct topological IDs at contacts.
     pub positions: Vec<Point3>,
+    /// Coordinate-identical copies created to preserve closed components.
+    pub separated_vertices: Vec<SeparatedSourceVertex>,
     /// Boundary and dihedral source edges in canonical index order.
     pub edges: Vec<FeatureEdge>,
     /// Maximal exact collinear straight-through chains.
@@ -920,8 +925,10 @@ fn measure_planar_support(
 /// Extract maximal exact straight feature chains and candidate parallel
 /// spatial arrangements without presupposing any analytic CAD primitive.
 ///
-/// Source coordinates are exactly welded; T-junctions are repaired using
-/// adaptive exact predicates; coplanar triangulation edges are suppressed.
+/// Source coordinates are exactly welded initially. Independently closed,
+/// nonzero-volume components retain distinct topological IDs at coincident
+/// contacts; exact T-junction repair operates only on unresolved components.
+/// Coplanar triangulation edges are suppressed.
 /// Other source edges retain polygon adjacency and measured dihedrals.
 /// Chain collinearity is exact in the stored coordinates, while direction
 /// groups are only bounded-angular hypotheses.
@@ -936,9 +943,37 @@ pub fn analyze_mesh_evidence(
     options: EvidenceOptions,
 ) -> Result<MeshEvidence, MeshRecoveryError> {
     validate_evidence_options(options)?;
-    let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
-    seams::split_source_t_junctions(&positions, &mut polygons);
-    Ok(analyze_welded_evidence(positions, &polygons, options))
+    let (mut positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
+    let mut separated_vertices = Vec::new();
+    let closed = source_topology::separate_closed_components(
+        &mut positions,
+        &mut polygons,
+        &mut separated_vertices,
+    );
+    // A component whose original edge uses already form a closed chain
+    // has no T-junctions to repair. Do not split it at another body's
+    // coincident geometry, or use its vertices to attach unresolved faces.
+    if closed.contains(&false) {
+        seams::split_source_t_junctions(
+            &positions,
+            polygons
+                .iter_mut()
+                .zip(&closed)
+                .filter_map(|(p, &closed)| (!closed).then_some(p)),
+        );
+        // Exact subdivision can reveal additional independently closed chains.
+        source_topology::separate_closed_components(
+            &mut positions,
+            &mut polygons,
+            &mut separated_vertices,
+        );
+    }
+    Ok(analyze_welded_evidence(
+        positions,
+        &polygons,
+        options,
+        separated_vertices,
+    ))
 }
 
 fn validate_evidence_options(options: EvidenceOptions) -> Result<(), MeshRecoveryError> {
@@ -961,6 +996,7 @@ fn analyze_welded_evidence(
     positions: Vec<Point3>,
     polygons: &[InputPolygon],
     options: EvidenceOptions,
+    separated_vertices: Vec<SeparatedSourceVertex>,
 ) -> MeshEvidence {
     let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let EdgeSelection {
@@ -989,6 +1025,7 @@ fn analyze_welded_evidence(
     source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
     MeshEvidence {
         positions,
+        separated_vertices,
         edges,
         chains,
         parallel_bundles,
