@@ -142,19 +142,20 @@ struct SphereDiscovery<'a> {
 }
 
 impl SphereDiscovery<'_> {
-    fn tolerance(&self, sphere: SphereSeed) -> f64 {
-        self.absolute_tolerance
-            .min(self.relative_tolerance * sphere.radius)
+    fn strict_tolerance(&self, sphere: SphereSeed) -> f64 {
+        self.absolute_tolerance.min(self.surface_tolerance(sphere))
     }
 
-    fn accepts(&self, support: usize, sphere: SphereSeed, outward: bool) -> bool {
+    fn surface_tolerance(&self, sphere: SphereSeed) -> f64 {
+        self.relative_tolerance * sphere.radius
+    }
+
+    fn accepts(&self, support: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> bool {
         let sample = &self.samples[support];
-        let Some(circle) = sample.circle else {
-            return false;
-        };
-        let tolerance = self.tolerance(sphere);
-        let normal = self.evidence.planar_supports[support].normal;
-        let offset = (circle.center - sphere.center).dot(normal);
+        // A support need not itself be cyclic (e.g. a tessellated seam
+        // with extra coplanar samples). Test its actual source vertices.
+        let plane = &self.evidence.planar_supports[support];
+        let offset = (plane.origin - sphere.center).dot(plane.normal);
         if offset.abs() <= tolerance || (offset > 0.0) != outward {
             return false;
         }
@@ -164,12 +165,12 @@ impl SphereDiscovery<'_> {
         })
     }
 
-    fn grow(&self, seed: usize, sphere: SphereSeed, outward: bool) -> Vec<usize> {
+    fn grow(&self, seed: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> Vec<usize> {
         let mut tested = BTreeSet::from([seed]);
         let mut accepted = Vec::new();
         let mut queue = VecDeque::from([seed]);
         while let Some(id) = queue.pop_front() {
-            if !self.accepts(id, sphere, outward) {
+            if !self.accepts(id, sphere, outward, tolerance) {
                 continue;
             }
             accepted.push(id);
@@ -226,7 +227,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             let Some(sphere) = SphereSeed::from_circles(first, second, absolute_tolerance) else {
                 continue;
             };
-            let tolerance = discovery.tolerance(sphere);
+            let tolerance = discovery.strict_tolerance(sphere);
             if discovery.seen[a].iter().any(|&id| {
                 discovery.seen[b].contains(&id) && discovery.seeds[id].same(sphere, tolerance)
             }) {
@@ -234,10 +235,12 @@ impl<'a> RegionBoundaryIndex<'a> {
             }
             let outward =
                 (first.center - sphere.center).dot(self.evidence.planar_supports[a].normal) > 0.0;
-            if !discovery.accepts(a, sphere, outward) || !discovery.accepts(b, sphere, outward) {
+            if !discovery.accepts(a, sphere, outward, tolerance)
+                || !discovery.accepts(b, sphere, outward, tolerance)
+            {
                 continue;
             }
-            let supports = discovery.grow(a, sphere, outward);
+            let supports = discovery.grow(a, sphere, outward, tolerance);
             if supports.binary_search(&b).is_err() {
                 continue;
             }
@@ -252,6 +255,35 @@ impl<'a> RegionBoundaryIndex<'a> {
                 radial_center: 0.0,
                 profile_radius: sphere.radius,
             };
+            // Certify an independently constrained, precise interior core
+            // before admitting less accurate adjacent source samples.
+            // Neither rank nor seed fitting uses the relaxed seam budget.
+            if !independently_tested(self.evidence, &supports, tolerance) {
+                continue;
+            }
+            let expanded = discovery.grow(a, sphere, outward, discovery.surface_tolerance(sphere));
+            if expanded != supports
+                && let Some(proposal) = self.measure_surface_region(
+                    &expanded,
+                    carrier,
+                    SurfaceRegionBudget {
+                        vertex: discovery.surface_tolerance(sphere),
+                        chord: discovery.chord_fraction * sphere.radius,
+                    },
+                )
+            {
+                // The strict, connected core is a subset of the expanded
+                // support union and independently tests the same carrier.
+                proposals.push(proposal.with_independent_profile());
+                // A second seed of this same sphere inside the expansion
+                // cannot add a new maximal connected candidate.
+                for support in expanded {
+                    if !discovery.seen[support].contains(&id) {
+                        discovery.seen[support].push(id);
+                    }
+                }
+                continue;
+            }
             if let Some(proposal) = self.measure_surface_region(
                 &supports,
                 carrier,
@@ -259,9 +291,8 @@ impl<'a> RegionBoundaryIndex<'a> {
                     vertex: tolerance,
                     chord: discovery.chord_fraction * sphere.radius,
                 },
-            ) && proposal.independently_tested_profile()
-            {
-                proposals.push(proposal);
+            ) {
+                proposals.push(proposal.with_independent_profile());
             }
         }
         proposals
@@ -275,12 +306,12 @@ mod tests {
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
     use std::f64::consts::TAU;
 
-    #[test]
-    fn independent_sphere_recovers_unstructured_spherical_patch()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let steps = 6_usize;
-        let center = Point3::new(17.0, -3.0, 5.0);
-        let radius = 2.5;
+    fn octant_mesh(
+        steps: usize,
+        center: Point3,
+        radius: f64,
+        boundary_offset: f64,
+    ) -> Result<PolygonMesh, Box<dyn std::error::Error>> {
         // Barycentric subdivision projected to a sphere: no assumption
         // that samples lie on a set of latitudes around a preferred axis.
         let mut positions = Vec::new();
@@ -297,7 +328,13 @@ mod tests {
                 // Cyclic permutation and arbitrary rigid placement.
                 let rotated = Vector3::new(v.z, v.x, v.y);
                 row.push(positions.len());
-                positions.push(center + rotated * radius);
+                let on_boundary = i == 0 || j == 0 || i + j == steps;
+                let r = if on_boundary {
+                    radius + boundary_offset
+                } else {
+                    radius
+                };
+                positions.push(center + rotated * r);
             }
             rows.push(row);
         }
@@ -313,13 +350,22 @@ mod tests {
                 }
             }
         }
-        let mesh = PolygonMesh::new(
+        Ok(PolygonMesh::new(
             StandardAttributes {
                 positions,
                 ..Default::default()
             },
             Faces::from_iter(triangles),
-        )?;
+        )?)
+    }
+
+    #[test]
+    fn independent_sphere_recovers_unstructured_spherical_patch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let steps = 6;
+        let center = Point3::new(17.0, -3.0, 5.0);
+        let radius = 2.5;
+        let mesh = octant_mesh(steps, center, radius, 0.0)?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let proposals = index.discover_spherical_regions(1.0e-4, 1.0e-8, 0.3);
@@ -372,6 +418,41 @@ mod tests {
         let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
         assert_eq!(recovered.native.regions.len(), 1);
         assert!(recovered.complete_shell().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn precise_core_extends_to_bounded_seam_samples() -> Result<(), Box<dyn std::error::Error>> {
+        let steps = 12;
+        let center = Point3::new(-1.0, 3.0, 17.0);
+        let radius = 2.5;
+        let seam_displacement = 2.0e-5;
+        let mesh = octant_mesh(steps, center, radius, seam_displacement)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let proposals = index.discover_spherical_regions(1.0e-4, 1.0e-8, 0.3);
+        let proposal = proposals
+            .iter()
+            .find(|p| p.source_polygons() == steps * steps)
+            .ok_or("expanded spherical proposal")?;
+        assert!(proposal.independently_tested_profile());
+        let SurfaceCarrier::CircularRevolution {
+            axial_center,
+            radial_center,
+            profile_radius,
+            ..
+        } = proposal.carrier()
+        else {
+            return Err("unexpected carrier".into());
+        };
+        assert!((axial_center - center).magnitude() < 1.0e-9);
+        assert!(radial_center.abs() < 1.0e-9 && (profile_radius - radius).abs() < 1.0e-9);
+        let max_error = proposal.relative_vertex_error() * radius * 1.0e-4;
+        assert!((max_error - seam_displacement).abs() < 1.0e-9);
+        // The identical geometry must not be admitted as a complete
+        // region when the configured surface budget excludes the seam.
+        let strict = index.discover_spherical_regions(1.0e-6, 1.0e-8, 0.3);
+        assert!(strict.iter().all(|p| p.source_polygons() < steps * steps));
         Ok(())
     }
 

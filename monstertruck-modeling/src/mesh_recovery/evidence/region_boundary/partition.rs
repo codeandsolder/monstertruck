@@ -45,6 +45,13 @@ impl SurfaceRegionProposal<'_> {
     #[must_use = "interpolation alone does not resolve profile ambiguity"]
     pub const fn independently_tested_profile(&self) -> bool { self.independently_tested_profile }
 
+    // Only used by a sibling discovery stage after it has independently
+    // tested a strict connected subset of this exact carrier's samples.
+    pub(super) const fn with_independent_profile(mut self) -> Self {
+        self.independently_tested_profile = true;
+        self
+    }
+
     /// Maximum source-vertex residual divided by its budget.
     #[must_use = "fit error is distinct from chord approximation"]
     pub const fn relative_vertex_error(&self) -> f64 { self.relative_vertex_error }
