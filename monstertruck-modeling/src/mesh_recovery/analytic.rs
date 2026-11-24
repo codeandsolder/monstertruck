@@ -338,9 +338,8 @@ pub fn discover_analytic_regions(
     }
     let mut axes = independent_axes(evidence, spatial, tracks, options);
     let circle_axes = extend_with_circle_axes(evidence, &mut axes, options);
-    let (active, refinement_passes) = refine_supports(evidence, &axes, options)?;
+    let (active, refinement_passes, candidates) = refine_and_discover(evidence, &axes, options)?;
     let boundary = RegionBoundaryIndex::new(&active)?;
-    let candidates = discover_on_axes(&active, &boundary, &axes, options);
     let selection = choose_partition(&active, evidence, &boundary, &candidates, grown, options)?;
     let stats = AnalyticDiscoveryStats {
         circle_axes,
@@ -363,40 +362,45 @@ pub fn discover_analytic_regions(
     })
 }
 
-fn refine_supports(
+fn refine_and_discover(
     evidence: &MeshEvidence,
     axes: &[PlacedAxis],
     options: AnalyticRecoveryOptions,
-) -> Result<(MeshEvidence, Vec<SupportRefinementPass>), MeshRecoveryError> {
-    let mut refined = None;
+) -> Result<(MeshEvidence, Vec<SupportRefinementPass>, CandidateDiscovery), AnalyticRecoveryError> {
+    let mut active = evidence.clone();
     let mut passes = Vec::new();
     loop {
-        let active = refined.as_ref().unwrap_or(evidence);
-        let split = axes
-            .iter()
-            .filter_map(|placed| {
-                MeridianStationGraph::new(
-                    active,
-                    placed.origin,
-                    placed.axis,
-                    graph_options(active, placed, options),
-                )
-            })
-            .flat_map(|graph| graph.mixed_support_refinements())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
+        let boundary = RegionBoundaryIndex::new(&active)?;
+        let mut split = BTreeSet::new();
+        let mut candidates = AxisCandidates::default();
+        for placed in axes {
+            let Some(graph) = MeridianStationGraph::new(
+                &active,
+                placed.origin,
+                placed.axis,
+                graph_options(&active, placed, options),
+            ) else {
+                continue;
+            };
+            split.extend(graph.mixed_support_refinements());
+            // On the final (unchanged) pass, the exact same graph also
+            // supplies discovery. Once any refinement is requested,
+            // earlier proposals refer to obsolete support IDs and all
+            // subsequent discovery is skipped until the next pass.
+            if split.is_empty() {
+                candidates.discover(placed, &graph, &boundary);
+            }
+        }
         passes.push(SupportRefinementPass {
             support_count: active.planar_supports.len(),
             split_supports: split.len(),
         });
         if split.is_empty() {
-            break;
+            return Ok((active, passes, candidates.finish()));
         }
         // Monotone, finite refinement: each split makes original singletons.
-        refined = Some(active.refine_planar_supports(&split)?);
+        active = active.refine_planar_supports(&split.into_iter().collect::<Vec<_>>())?;
     }
-    Ok((refined.unwrap_or_else(|| evidence.clone()), passes))
 }
 
 /// Construct native shared curves and faces from a discovered partition.
@@ -677,26 +681,25 @@ fn curved_proposal<'a>(
     )
 }
 
-fn discover_on_axes(
-    evidence: &MeshEvidence,
-    boundary: &RegionBoundaryIndex<'_>,
-    axes: &[PlacedAxis],
-    options: AnalyticRecoveryOptions,
-) -> CandidateDiscovery {
-    let mut results = Vec::new();
-    let mut candidates = BTreeMap::<Vec<usize>, StationMeridianCandidate>::new();
-    let mut linear = BTreeMap::<Vec<usize>, StationLinearCandidate>::new();
-    for placed in axes {
-        let graph_options = graph_options(evidence, placed, options);
-        let Some(graph) =
-            MeridianStationGraph::new(evidence, placed.origin, placed.axis, graph_options)
-        else {
-            continue;
-        };
+#[derive(Default)]
+struct AxisCandidates {
+    axes: Vec<AxisDiscoverySummary>,
+    circular: BTreeMap<Vec<usize>, StationMeridianCandidate>,
+    linear: BTreeMap<Vec<usize>, StationLinearCandidate>,
+}
+
+impl AxisCandidates {
+    fn discover(
+        &mut self,
+        placed: &PlacedAxis,
+        graph: &MeridianStationGraph<'_>,
+        boundary: &RegionBoundaryIndex<'_>,
+    ) {
         let linear_candidates = graph.discover_linear(boundary);
         let linear_count = linear_candidates.len();
         for candidate in linear_candidates {
-            let entry = linear
+            let entry = self
+                .linear
                 .entry(candidate.supports.clone())
                 .or_insert_with(|| candidate.clone());
             if candidate.max_vertex_residual < entry.max_vertex_residual {
@@ -705,7 +708,7 @@ fn discover_on_axes(
         }
         if !placed.circular_seed {
             if linear_count > 0 {
-                results.push(AxisDiscoverySummary {
+                self.axes.push(AxisDiscoverySummary {
                     source_track: placed.source_track,
                     source_circle_group: placed.source_circle_group,
                     axis: placed.axis,
@@ -718,10 +721,10 @@ fn discover_on_axes(
                     profile_count: 0,
                 });
             }
-            continue;
+            return;
         }
         let found = graph.discover_circular(boundary);
-        results.push(AxisDiscoverySummary {
+        self.axes.push(AxisDiscoverySummary {
             source_track: placed.source_track,
             source_circle_group: placed.source_circle_group,
             axis: placed.axis,
@@ -738,7 +741,8 @@ fn discover_on_axes(
             linear_candidates: linear_count,
         });
         for candidate in found.candidates {
-            let entry = candidates
+            let entry = self
+                .circular
                 .entry(candidate.supports.clone())
                 .or_insert_with(|| candidate.clone());
             if candidate.fit.max_vertex_residual < entry.fit.max_vertex_residual {
@@ -746,21 +750,24 @@ fn discover_on_axes(
             }
         }
     }
-    let mut candidates = candidates.into_values().collect::<Vec<_>>();
-    candidates.sort_unstable_by(|a, b| {
-        b.source_polygons
-            .cmp(&a.source_polygons)
-            .then_with(|| {
-                a.fit
-                    .max_vertex_residual
-                    .total_cmp(&b.fit.max_vertex_residual)
-            })
-            .then_with(|| a.supports.cmp(&b.supports))
-    });
-    CandidateDiscovery {
-        axes: results,
-        circular: candidates,
-        linear: linear.into_values().collect(),
+
+    fn finish(self) -> CandidateDiscovery {
+        let mut circular = self.circular.into_values().collect::<Vec<_>>();
+        circular.sort_unstable_by(|a, b| {
+            b.source_polygons
+                .cmp(&a.source_polygons)
+                .then_with(|| {
+                    a.fit
+                        .max_vertex_residual
+                        .total_cmp(&b.fit.max_vertex_residual)
+                })
+                .then_with(|| a.supports.cmp(&b.supports))
+        });
+        CandidateDiscovery {
+            axes: self.axes,
+            circular,
+            linear: self.linear.into_values().collect(),
+        }
     }
 }
 
