@@ -535,7 +535,7 @@ fn periodic_full_rings_pair_into_cylinder_strip() {
         0.01,
     );
 
-    assert_eq!(boundary.loops.len(), 1);
+    assert_eq!(boundary.loops().len(), 1);
     assert!(boundary.include(Point2::new(0.5, TAU * 0.5)));
 
     let mesh = trimming_tessellation(
@@ -563,14 +563,14 @@ fn periodic_ring_closed_by_wrap_completes_to_full_period() {
     );
 
     assert!(
-        boundary.uv_max.y - boundary.uv_min.y >= TAU - 0.01,
+        boundary.uv_max().y - boundary.uv_min().y >= TAU - 0.01,
         "wrapped full rings should open to one complete period",
     );
     assert!(
-        boundary.uv_max.y - boundary.uv_min.y <= TAU + 0.01,
+        boundary.uv_max().y - boundary.uv_min().y <= TAU + 0.01,
         "paired wrapped rings should not span multiple periods",
     );
-    let middle_v = (boundary.uv_min.y + boundary.uv_max.y) * 0.5;
+    let middle_v = (boundary.uv_min().y + boundary.uv_max().y) * 0.5;
     assert!(boundary.include(Point2::new(0.5, middle_v)));
 
     let mesh = trimming_tessellation(
@@ -597,10 +597,10 @@ fn step_cylinder_ring_pair_compacts_to_one_period() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "STEP-style paired rings should not span multiple angular periods",
     );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
+    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
     assert!(boundary.include(Point2::new(middle_u, 0.5)));
 
     let mesh = trimming_tessellation(
@@ -627,10 +627,10 @@ fn shifted_step_cylinder_ring_pair_compacts_to_one_period() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "shifted STEP-style paired rings should not span multiple angular periods",
     );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
+    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
     assert!(boundary.include(Point2::new(middle_u, 0.5)));
 
     let mesh = trimming_tessellation(
@@ -657,10 +657,10 @@ fn seam_crossing_step_cylinder_ring_pair_compacts_to_one_period() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "seam-crossing STEP-style paired rings should not span multiple angular periods",
     );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
+    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
     assert!(boundary.include(Point2::new(middle_u, 0.5)));
 
     let mesh = trimming_tessellation(
@@ -687,10 +687,10 @@ fn mismatched_seam_step_cylinder_ring_pair_compacts_to_one_period() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "paired rings with mismatched seam starts should not span multiple angular periods",
     );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
+    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
     assert!(boundary.include(Point2::new(middle_u, 0.5)));
 
     let mesh = trimming_tessellation(
@@ -714,10 +714,10 @@ fn partial_periodic_loop_crossing_seam_compacts_to_short_arc() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= FRAC_PI_2 + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= FRAC_PI_2 + 0.01,
         "partial periodic loops crossing the seam should keep the short angular arc",
     );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
+    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
     assert!(boundary.include(Point2::new(middle_u, 0.5)));
 
     let mesh = trimming_tessellation(
@@ -741,7 +741,7 @@ fn periodic_cylinder_loop_spanning_two_laps_collapses_to_one_lap() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "periodic cylinder trim should not span two angular laps",
     );
     assert!(boundary.include(Point2::new(0.5 * TAU, 0.5)));
