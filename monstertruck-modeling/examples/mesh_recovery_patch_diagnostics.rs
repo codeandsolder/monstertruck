@@ -74,7 +74,7 @@ fn candidate_groups(recovery: &RecoveredAnalyticMesh) -> Vec<Vec<usize>> {
     groups
 }
 
-fn failure_class(error: RegionPatchError) -> &'static str {
+const fn failure_class(error: RegionPatchError) -> &'static str {
     match error {
         RegionPatchError::InvalidRegion => "region",
         RegionPatchError::Junction(_) => "junction",
