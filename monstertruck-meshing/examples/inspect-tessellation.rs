@@ -7,7 +7,7 @@ use monstertruck_mesh::{KERNEL_EPSILON, PolygonMesh};
 use monstertruck_meshing::{
     analyzers::Topology,
     filters::OptimizingFilter,
-    tessellation::{MeshableShape, MeshedShape, RobustMeshableShape},
+    tessellation::{MeshableShape, MeshedShape, RobustMeshableShape, stitch_compressed_shell},
 };
 use monstertruck_modeling::{
     Point3,
@@ -15,7 +15,12 @@ use monstertruck_modeling::{
 };
 use monstertruck_topology::compress::CompressedShell;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs::File, io::BufReader, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::{BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
+};
 
 type CShell = CompressedShell<Point3, Curve, Surface>;
 
@@ -80,6 +85,27 @@ fn components(shell: &CShell) -> Vec<Vec<usize>> {
     groups
 }
 
+// Preserve face-local polygon indices and original edge samples for
+// diagnosing connectivity defects before any coordinate welding.
+fn export_face_meshes(shell: &CShell, tolerance: f64, path: &Path) -> Result<()> {
+    let mesh = shell.triangulation(tolerance);
+    let faces=mesh.faces.iter().map(|face| {
+        face.surface.as_ref().map(|surface| {
+            let polygons=surface.faces().face_iter().map(|polygon|polygon.iter().map(|v|v.pos).collect::<Vec<_>>()).collect::<Vec<_>>();
+            json!({"positions":surface.positions(),"polygons":polygons,"orientation":face.orientation})
+        })
+    }).collect::<Vec<_>>();
+    let edges = mesh
+        .edges
+        .iter()
+        .map(|edge| &edge.curve.0)
+        .collect::<Vec<_>>();
+    let mut writer = BufWriter::new(File::create_new(path)?);
+    serde_json::to_writer(&mut writer, &json!({"faces":faces,"edges":edges}))?;
+    writer.flush()?;
+    Ok(())
+}
+
 fn inspect(shell: &CShell, tolerance: f64, robust: bool, groups: &[Vec<usize>]) -> Value {
     let mesh = if robust {
         shell.robust_triangulation(tolerance)
@@ -92,7 +118,7 @@ fn inspect(shell: &CShell, tolerance: f64, robust: bool, groups: &[Vec<usize>]) 
         match &tessellated.surface {
             None => missing.entry(kind(&face.surface)).or_default().push(i),
             Some(polygon) if polygon.faces().is_empty() => {
-                empty.entry(kind(&face.surface)).or_default().push(i)
+                empty.entry(kind(&face.surface)).or_default().push(i);
             }
             Some(_) => {}
         }
@@ -118,6 +144,20 @@ fn inspect(shell: &CShell, tolerance: f64, robust: bool, groups: &[Vec<usize>]) 
         "polygon":stats(mesh.to_polygon()),"components":components})
 }
 
+fn export_stitched(shell: &CShell, tolerance: f64, path: &Path) -> Result<()> {
+    let meshed = shell.triangulation(tolerance);
+    let polygon = stitch_compressed_shell(&meshed, KERNEL_EPSILON)?;
+    let mut writer = BufWriter::new(File::create_new(path)?);
+    monstertruck_mesh::obj::write(&polygon, &mut writer)?;
+    writer.flush()?;
+    println!(
+        "{}",
+        json!({"condition":format!("{:?}",polygon.shell_condition()),
+        "polygons":polygon.faces().len(),"vertices":polygon.positions().len()})
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("expected compressed shell JSON")?);
@@ -127,11 +167,22 @@ fn main() -> Result<()> {
         .to_str()
         .context("non-UTF8 tolerance")?
         .parse()?;
+    let export = args.next();
+    let destination = args.next().map(PathBuf::from);
     anyhow::ensure!(
         args.next().is_none() && tolerance.is_finite() && tolerance > 0.0,
-        "usage: inspect-tessellation SHELL_JSON TOLERANCE"
+        "usage: inspect-tessellation SHELL_JSON TOLERANCE [faces|stitched DESTINATION]"
     );
     let shell: CShell = serde_json::from_reader(BufReader::new(File::open(path)?))?;
+    match (
+        export.as_deref().and_then(std::ffi::OsStr::to_str),
+        destination,
+    ) {
+        (Some("faces"), Some(path)) => return export_face_meshes(&shell, tolerance, &path),
+        (Some("stitched"), Some(path)) => return export_stitched(&shell, tolerance, &path),
+        (None, None) if export.is_none() => {}
+        _ => anyhow::bail!("expected faces or stitched and destination"),
+    }
     let groups = components(&shell);
     let standard = inspect(&shell, tolerance, false, &groups);
     let robust = inspect(&shell, tolerance, true, &groups);

@@ -891,4 +891,6 @@ where
     }
 }
 
+mod stitch;
 mod triangulation;
+pub use stitch::{MeshStitchError, stitch_compressed_shell};
