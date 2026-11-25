@@ -1515,6 +1515,39 @@ mod tests {
         Ok(())
     }
 
+    /// A standalone round-end cutter has two regular crossing-cylinder
+    /// branches. Verify the actual emitted STEP, not just the SSI leader.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn crossing_cylinder_cutter_exports_certified_analytic_chains() -> Result<()> {
+        use crate::{
+            boundary_proof::{BoundaryChainKey, analytic_boundary_diagnostic},
+            cad_kernel::{CadKernel, monstertruck::MonstertruckKernel},
+        };
+        let (model, upper, _) = mixed_fixture_models::rounding_caps()?;
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let body = kernel.evaluate(&model, upper)?;
+        anyhow::ensure!(kernel.summarize(&body).is_single_solid());
+        let (id, entities) = evaluated_step_solid(&kernel, &body)?
+            .ok_or_else(|| anyhow::anyhow!("expected one exported cutter"))?;
+        let diagnostic = analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+        anyhow::ensure!(
+            diagnostic.supported,
+            "unsupported emitted cutter: {:?}",
+            diagnostic.reason
+        );
+        let signature = diagnostic
+            .signature
+            .ok_or_else(|| anyhow::anyhow!("missing cutter boundary signature"))?;
+        let count = signature
+            .chains
+            .iter()
+            .filter(|chain| matches!(chain, BoundaryChainKey::CylinderIntersection { .. }))
+            .count();
+        assert_eq!(count, 2);
+        Ok(())
+    }
+
     /// Full source-measured CAD sketches exercised as one editable six-part
     /// constructive tree. The cap and lobe are extracted from the original
     /// STEP; the remaining analytic fixture models still need automatic

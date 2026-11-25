@@ -157,7 +157,11 @@ pub(super) fn recover<K: CadKernel>(
         // This is only candidate selection, never a material admission proof.
         // For spline profiles the analytic ray predicate is not available;
         // leave the decision to the complete source proof.
-        let spline_host = host.prism.profile_loops().flatten().any(|c| c.is_spline());
+        let spline_host = host
+            .prism
+            .profile_loops()
+            .flatten()
+            .any(crate::profile_curves::RecoveredProfileCurve::is_spline);
         let eligible = cutters
             .iter()
             .filter(|(_, points)| spline_host || points.iter().all(|&p| cap_contains(&host_cap, p)))

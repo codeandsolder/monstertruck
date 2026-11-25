@@ -78,7 +78,9 @@ fn curve_residual(first: &RecoveredProfileCurve, second: &RecoveredProfileCurve)
             },
         ) => {
             let sweep = (ae - as_) - (be - bs);
-            distance2(*a, *b) + (ar - br).abs() + sweep.abs() * ar.max(*br)
+            sweep
+                .abs()
+                .mul_add(ar.max(*br), distance2(*a, *b) + (ar - br).abs())
         }
         (
             Bezier {
