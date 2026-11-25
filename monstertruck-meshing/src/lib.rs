@@ -66,6 +66,8 @@ mod common;
 /// Edits meshes. Add normals, optimizing data, and so on.
 #[cfg(feature = "filters")]
 pub mod filters;
+#[cfg(any(feature = "analyzers", feature = "tessellation"))]
+mod spatial_hierarchy;
 /// Tessellates shapes.
 #[cfg(feature = "tessellation")]
 pub mod tessellation;
