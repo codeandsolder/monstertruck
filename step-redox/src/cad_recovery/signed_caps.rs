@@ -404,4 +404,53 @@ mod tests {
         assert!(source.proves(&fragment.model, fragment.root, None)?);
         Ok(())
     }
+    #[test]
+    fn mixed_source_assembly_discovers_all_attached_features() -> Result<()> {
+        use crate::{
+            reduced_brep::ReducedSolid, solid_lofts::detect_extended_ruled_end_extensions,
+        };
+        let exchange = ParsedStepSource::parse(include_bytes!(
+            "../../validation/fixtures/native_mixed_treatment_4a6356.step"
+        ))?
+        .exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let reduced = ReducedSolid::from_step(171, entities, &index).context("mixed source")?;
+        let proposals = detect_signed_cap_pairs_for_solid_with_index(171, entities, &index);
+        let host = proposals
+            .iter()
+            .find(|p| p.interval == CapInterval::Material && p.prism.cap_face_ids == [620, 1159])
+            .context("host")?;
+        let cutter = proposals
+            .iter()
+            .find(|p| p.interval == CapInterval::Void && p.prism.cap_face_ids == [391, 429])
+            .context("channel")?;
+        let extensions = detect_extended_ruled_end_extensions(&reduced);
+        let additions = additive_features(&reduced, host, &proposals, &extensions)?;
+        assert!(
+            additions.iter().any(|p| p
+                .model
+                .nodes
+                .iter()
+                .any(|n| matches!(n, CadNode::Loft { sections } if sections.len() == 4))),
+            "missing attached multistage loft"
+        );
+        assert!(
+            additions
+                .iter()
+                .any(|p| p.face_ids.contains(&175) && p.face_ids.contains(&299)),
+            "missing attached tangent lip"
+        );
+        let rounds = super::super::channel_round_ends::detect(&reduced, &cutter.prism);
+        assert_eq!(rounds.len(), 2);
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let source = SourceRecovery::new(171, entities, &index, &kernel);
+        // The unmodified source is known to contain off-carrier edges.
+        // Candidate construction does not promote those defects to equality.
+        assert!(source.is_none());
+        let (model, root) = compose(host, &additions, &[cutter], &rounds)?;
+        assert_eq!(model.roots, [root]);
+        model.validate()?;
+        Ok(())
+    }
 }
