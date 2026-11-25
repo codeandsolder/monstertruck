@@ -584,6 +584,28 @@ fn periodic_ring_closed_by_wrap_completes_to_full_period() {
     assert!(mesh.tri_faces().len() > 16);
 }
 
+fn assert_step_cylinder_boundary(
+    surface: &Processor<RevolutionSurface<Line<Point3>>, Matrix4>,
+    boundary: &PolyBoundary,
+    max_span: f64,
+    message: &str,
+) {
+    assert!(
+        boundary.uv_max().x - boundary.uv_min().x <= max_span + 0.01,
+        "{message}"
+    );
+    let middle_u = boundary.uv_min().x.midpoint(boundary.uv_max().x);
+    assert!(boundary.include(Point2::new(middle_u, 0.5)), "{message}");
+    let mesh = trimming_tessellation(
+        surface,
+        boundary,
+        0.01,
+        TessellationPrimitiveOptions::default(),
+        usize::MAX,
+    );
+    assert!(mesh.tri_faces().len() > 16, "{message}");
+}
+
 #[test]
 fn step_cylinder_ring_pair_compacts_to_one_period() {
     let surface = step_cylinder_surface();
@@ -596,22 +618,12 @@ fn step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
-        "STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -626,22 +638,12 @@ fn shifted_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
-        "shifted STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "shifted STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -656,22 +658,12 @@ fn seam_crossing_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
-        "seam-crossing STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "seam-crossing STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -686,22 +678,12 @@ fn mismatched_seam_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
-        "paired rings with mismatched seam starts should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "paired rings with mismatched seam starts should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -713,22 +695,12 @@ fn partial_periodic_loop_crossing_seam_compacts_to_short_arc() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max().x - boundary.uv_min().x <= FRAC_PI_2 + 0.01,
-        "partial periodic loops crossing the seam should keep the short angular arc",
-    );
-    let middle_u = (boundary.uv_min().x + boundary.uv_max().x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        FRAC_PI_2,
+        "partial periodic loops crossing the seam should keep the short angular arc",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
