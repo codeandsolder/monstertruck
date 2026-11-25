@@ -19,6 +19,7 @@ mod cap_cover;
 mod multi_axis_sheet;
 mod proposal_extent;
 pub(crate) mod sectional;
+mod signed_caps;
 mod solid;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
@@ -105,6 +106,12 @@ pub enum CadFragmentSource {
         solid_id: u64,
         face_ids: Vec<u64>,
         cap_face_ids: Vec<u64>,
+    },
+    /// A source-proven material prism with translated empty-channel cutters.
+    SignedCapAssembly {
+        solid_id: u64,
+        host_cap_face_ids: [u64; 2],
+        cutter_cap_face_ids: Vec<[u64; 2]>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
@@ -942,6 +949,7 @@ enum MaterialFamily {
     Sectional,
     FormedSheet,
     CapCover,
+    SignedCaps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1111,6 +1119,11 @@ pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
     best.consider(
         family,
         cap_cover::recover(source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::SignedCaps;
+    best.consider(
+        family,
+        signed_caps::recover(source, best.ceiling(ceiling, family)),
     )?;
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.

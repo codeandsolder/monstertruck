@@ -257,7 +257,7 @@ fn pair(solid_id: u64, first: &FaceInfo, second: &FaceInfo) -> Option<SignedCapP
     })
 }
 
-pub(super) fn detect_for_solid(
+pub fn detect_signed_cap_pairs_for_solid_with_index(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
@@ -289,7 +289,9 @@ pub fn detect_signed_cap_pairs(entities: &[EntityInstance]) -> Vec<SignedCapPair
     let index = build_index(entities);
     brep::manifold_solid_ids(entities)
         .into_iter()
-        .flat_map(|solid_id| detect_for_solid(solid_id, entities, &index))
+        .flat_map(|solid_id| {
+            detect_signed_cap_pairs_for_solid_with_index(solid_id, entities, &index)
+        })
         .collect()
 }
 

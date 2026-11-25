@@ -22,6 +22,7 @@ use step_p21::ast::EntityInstance;
 mod loop_containment;
 mod side_chains;
 mod signed_cap_pairs;
+pub(crate) use signed_cap_pairs::detect_signed_cap_pairs_for_solid_with_index;
 pub use signed_cap_pairs::{CapInterval, SignedCapPairProposal, detect_signed_cap_pairs};
 
 const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
