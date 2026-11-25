@@ -408,7 +408,7 @@ mod tests {
         let snapshot = kernel.edited_source_to_step(&edited)?;
         let exchange =
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
-        let host = super::super::recognize_single_healed_host(&exchange, &kernel)?
+        let host = super::super::recognize_single_healed_host(&exchange, &kernel, None)?
             .context("normalized TE host did not pass analytic boundary proof")?;
         assert!(matches!(
             host.source,

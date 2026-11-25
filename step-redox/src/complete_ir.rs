@@ -1034,10 +1034,10 @@ fn finish_native_boundary_feature_replay<
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let mut journal = native_peels::Journal::default();
     journal.boundary(replay);
-    let Some((fragment, evaluated)) = journal.finish(
+    let Some(fragment) = journal.finish(
         kernel,
         &mut edited,
-        source,
+        native_peels::ReplayTarget { source, proof },
         provenance,
         native_peels::NextPeel::Treatment,
         None,
@@ -1045,18 +1045,11 @@ fn finish_native_boundary_feature_replay<
     else {
         return Ok(None);
     };
-    // Certify the entire evaluated result against the original, unpeeled
-    // source. Unsupported boundaries keep their existing structural status;
-    // successful proof also supplies the safe candidate-complexity ceiling.
+    // The journal has already qualified the complete replay against the
+    // original supported boundary, before choosing a host representation.
     Ok(Some(match proof {
-        Some(proof)
-            if proof
-                .matches_evaluated_boundary(&evaluated)
-                .unwrap_or(false) =>
-        {
-            KernelRecoveryCandidate::certified(fragment, proof)
-        }
-        _ => KernelRecoveryCandidate::structural(fragment),
+        Some(proof) => KernelRecoveryCandidate::certified(fragment, proof),
+        None => KernelRecoveryCandidate::structural(fragment),
     }))
 }
 
@@ -1120,10 +1113,10 @@ fn recover_kernel_topology_normalized_fragment<
     }
     let mut journal = native_peels::Journal::default();
     journal.treatment(layers);
-    let Some((mut fragment, evaluated)) = journal.finish(
+    let Some(mut fragment) = journal.finish(
         kernel,
         &mut edited,
-        source,
+        native_peels::ReplayTarget { source, proof },
         &provenance,
         native_peels::NextPeel::Boundary,
         stop,
@@ -1150,9 +1143,6 @@ fn recover_kernel_topology_normalized_fragment<
     let Some(proof) = proof else {
         bail!("native edge-treatment replay lacks a supported source boundary proof");
     };
-    if !proof.matches_evaluated_boundary(&evaluated)? {
-        bail!("native edge-treatment replay did not prove source boundary equivalence");
-    }
     Ok(Some(KernelRecoveryCandidate::certified(fragment, proof)))
 }
 
@@ -1169,16 +1159,6 @@ fn replayable_source_treatments(
     );
     evidence.sort_by_key(|item| item.treatment_face_id);
     evidence
-}
-
-/// Prefer native exact-trim semantic recognition while retaining the general
-/// STEP-record recognizer for shapes not yet consumed by the native adapter.
-fn recognize_edited_host_with_fallback<K: SourceTopologyEditor>(
-    kernel: &K,
-    edited: &K::EditedSource,
-    fallback: impl FnOnce() -> Result<Option<CadFragment>>,
-) -> Result<Option<CadFragment>> {
-    recognize_native_edited_host(kernel, edited)?.map_or_else(fallback, |host| Ok(Some(host)))
 }
 
 /// Recognize exact analytic hosts from the edited native B-rep, with no STEP
@@ -1203,13 +1183,6 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
 }
 
 fn recognize_single_healed_host<K: CadKernel>(
-    healed: &Exchange,
-    kernel: &K,
-) -> Result<Option<CadFragment>> {
-    recognize_single_healed_host_matching(healed, kernel, None)
-}
-
-fn recognize_single_healed_host_matching<K: CadKernel>(
     healed: &Exchange,
     kernel: &K,
     acceptance: Option<&CandidateAcceptance<'_>>,
@@ -1252,16 +1225,22 @@ fn recognize_single_healed_host_matching<K: CadKernel>(
             )?);
         }
     }
-    let refs = candidates
-        .iter()
-        .filter(|fragment| acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root)))
-        .collect::<Vec<_>>();
-    let selected = select_cheapest_whole_solid_fragments(&refs)?;
-    if let Some(host) = selected
-        .get(solid_id)
-        .filter(|host| is_constructive_source(&host.source))
-    {
-        return Ok(Some((*host).clone()));
+    // Direct constructive candidates are tried in canonical complexity order,
+    // not evaluated eagerly. A rejected candidate cannot suppress another
+    // executable representation of the same host.
+    let mut candidates = candidates
+        .into_iter()
+        .filter(|fragment| {
+            source_solid_id(&fragment.source) == *solid_id
+                && is_constructive_source(&fragment.source)
+        })
+        .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
+        .collect::<Result<Vec<_>>>()?;
+    candidates.sort_by_key(|(cost, _)| *cost);
+    for (_, fragment) in candidates {
+        if acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root)) {
+            return Ok(Some(fragment));
+        }
     }
     // Apply all independently certified material recognizers to this
     // immutable final native snapshot, not just the sectional family.
@@ -4140,7 +4119,7 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel)?
+        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel, None)?
             .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
@@ -4712,7 +4691,7 @@ END-ISO-10303-21;
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None)?
             .context("no constructive healed sectional host")?;
         assert!(matches!(
             host.source,
@@ -4736,7 +4715,7 @@ END-ISO-10303-21;
             include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None)?
             .context("no constructive healed union host")?;
         assert!(is_constructive_source(&host.source), "{:?}", host.source);
         assert_eq!(source_solid_id(&host.source), 16);
@@ -5792,7 +5771,7 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel)?
+        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel, None)?
             .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(

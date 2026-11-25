@@ -448,10 +448,11 @@ fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &Cad
     })
 }
 
-/// Immutable section-local evidence, shared by every material proposal. A
-/// complexity ceiling may only come from a previously certified candidate.
+/// Additional qualification of an independently proven material candidate.
 pub(crate) type CandidateAcceptance<'a> = dyn Fn(&CadModel, NodeId) -> bool + 'a;
 
+/// Immutable section-local evidence, shared by every material proposal. A
+/// complexity ceiling may only come from a previously certified candidate.
 pub(crate) struct SourceRecovery<'a, K> {
     solid_id: u64,
     entities: &'a [EntityInstance],
