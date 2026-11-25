@@ -3,7 +3,7 @@ use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, NodeId,
     ProofStatus, Provenance, RigidTransform,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::cad_recovery::{
     CadFragment, CadFragmentSource, CandidateAcceptance, SourceRecovery,
     recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
@@ -761,27 +761,46 @@ pub fn recover_complete_ir_with_kernel_bytes<
         } else {
             None
         };
-        if !build.recovery.selected.contains_key(&source) {
+        let modes = if proof.is_some() && kernel.supports_analytic_replay() {
+            &[ReplayMode::AnalyticOnly, ReplayMode::General][..]
+        } else {
+            &[ReplayMode::General][..]
+        };
+        for &mode in modes {
+            if build.recovery.selected.contains_key(&source) {
+                break;
+            }
+            let target = native_peels::ReplayTarget {
+                source,
+                proof: proof.as_ref(),
+                mode,
+            };
             let candidate = recover_kernel_boundary_feature_fragment(
-                source,
+                &target,
                 &source_load,
                 &document,
                 kernel,
                 index,
-                proof.as_ref(),
             );
-            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
-        }
-        if !build.recovery.selected.contains_key(&source) {
-            let candidate = recover_kernel_topology_normalized_fragment(
-                &document,
-                source,
-                &source_load,
-                kernel,
-                index,
-                proof.as_ref(),
+            failures.extend(
+                build
+                    .recovery
+                    .admit_replay_candidate(source, candidate, mode),
             );
-            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+            if !build.recovery.selected.contains_key(&source) {
+                let candidate = recover_kernel_topology_normalized_fragment(
+                    &document,
+                    &target,
+                    &source_load,
+                    kernel,
+                    index,
+                );
+                failures.extend(
+                    build
+                        .recovery
+                        .admit_replay_candidate(source, candidate, mode),
+                );
+            }
         }
         let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
         let Some(proof) = proof else {
@@ -815,13 +834,13 @@ pub fn recover_complete_ir_with_kernel_bytes<
 fn recover_kernel_boundary_feature_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
     kernel: &K,
     index: &HashMap<u64, usize>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
         return Ok(None);
     };
@@ -896,7 +915,7 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, edited, provenance, replay, proof)
+    finish_native_boundary_feature_replay(kernel, target, edited, provenance, replay)
 }
 
 struct NativeBoundaryPass {
@@ -1026,18 +1045,17 @@ fn finish_native_boundary_feature_replay<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     kernel: &K,
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     mut edited: K::EditedSource,
     provenance: &KernelTopologyProvenance,
     replay: Vec<RecoveredBoundaryFeatureFamily>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let mut journal = native_peels::Journal::default();
     journal.boundary(replay);
     let Some(fragment) = journal.finish(
         kernel,
         &mut edited,
-        &native_peels::ReplayTarget { source, proof },
+        target,
         provenance,
         native_peels::NextPeel::Treatment,
         None,
@@ -1047,7 +1065,7 @@ fn finish_native_boundary_feature_replay<
     };
     // The journal has already qualified the complete replay against the
     // original supported boundary, before choosing a host representation.
-    Ok(Some(match proof {
+    Ok(Some(match target.proof {
         Some(proof) => KernelRecoveryCandidate::certified(fragment, proof),
         None => KernelRecoveryCandidate::structural(fragment),
     }))
@@ -1057,12 +1075,13 @@ fn recover_kernel_topology_normalized_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     document: &K::Document,
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
     index: &HashMap<u64, usize>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
+    let proof = target.proof;
     let exchange = document.as_ref();
     let Some(load) = source_load
         .solids
@@ -1116,7 +1135,7 @@ fn recover_kernel_topology_normalized_fragment<
     let Some(mut fragment) = journal.finish(
         kernel,
         &mut edited,
-        &native_peels::ReplayTarget { source, proof },
+        target,
         &provenance,
         native_peels::NextPeel::Boundary,
         stop,
@@ -1299,6 +1318,26 @@ impl WholeSolidRecoveryState {
                     && is_constructive_source(&selected.fragment.source)
             })
             .map(|selected| selected.complexity)
+    }
+
+    // Restricted replay is speculative: only independently certified
+    // success may suppress the complete search. Structural candidates and
+    // solver deferrals must still be handled by the general pass.
+    fn admit_replay_candidate(
+        &mut self,
+        source: SourceEntity,
+        candidate: Result<Option<KernelRecoveryCandidate>>,
+        mode: ReplayMode,
+    ) -> Option<KernelRecoveryFailure> {
+        if mode == ReplayMode::General {
+            return self.admit_kernel_candidate(source, candidate);
+        }
+        if let Ok(Some(candidate)) = candidate
+            && candidate.boundary_verification.is_certified()
+        {
+            let _ = self.admit_kernel_candidate(source, Ok(Some(candidate)));
+        }
+        None
     }
 
     fn admit_kernel_candidate(
@@ -4264,12 +4303,15 @@ END-ISO-10303-21;
             let index = crate::step_graph::build_index(entities);
             let proof = SourceRecovery::new(source.source.id, entities, &index, &kernel);
             let fragment = recover_kernel_boundary_feature_fragment(
-                source.source,
+                &native_peels::ReplayTarget {
+                    source: source.source,
+                    proof: proof.as_ref(),
+                    mode: ReplayMode::General,
+                },
                 &load,
                 &document,
                 &kernel,
                 &index,
-                proof.as_ref(),
             )?
             .context("native relief did not reconstruct a whole body")?;
             assert!(
@@ -4804,12 +4846,15 @@ END-ISO-10303-21;
         let index = crate::step_graph::build_index(entities);
         let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
         let recovered = recover_kernel_boundary_feature_fragment(
-            solid.source,
+            &native_peels::ReplayTarget {
+                source: solid.source,
+                proof: proof.as_ref(),
+                mode: ReplayMode::General,
+            },
             &load,
             &document,
             &kernel,
             &index,
-            proof.as_ref(),
         )?
         .context("native boundary-feature recovery refused")?;
         assert!(matches!(

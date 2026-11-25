@@ -10,7 +10,7 @@ use crate::{
     SourceEntity,
     brep::face_loops,
     cad_ir::CadModel,
-    cad_kernel::EvaluationSeed,
+    cad_kernel::{EvaluationSeed, ReplayMode},
     cad_recovery::SourceRecovery,
     kernel_source_load::{KernelTopologyId, KernelTopologyProvenance},
     kernel_topology::{KernelPatchEdgeRef, KernelPatchEdgeUse, SourceTopologyEditor},
@@ -41,6 +41,7 @@ pub(super) enum NextPeel {
 pub(super) struct ReplayTarget<'a, 's, K: CadKernel> {
     pub(super) source: SourceEntity,
     pub(super) proof: Option<&'a SourceRecovery<'s, K>>,
+    pub(super) mode: ReplayMode,
 }
 
 impl Journal {
@@ -110,11 +111,8 @@ impl Journal {
         seed: Option<EvaluationSeed<'_, K>>,
     ) -> Result<CadFragment> {
         let fragment = self.replay(host, target.source.id)?;
-        let evaluated = if let Some(seed) = seed {
-            kernel.evaluate_extended(&fragment.model, fragment.root, seed)?
-        } else {
-            kernel.evaluate(&fragment.model, fragment.root)?
-        };
+        let evaluated =
+            kernel.evaluate_replay(&fragment.model, fragment.root, seed, target.mode)?;
         ensure!(
             kernel.summarize(&evaluated).is_single_solid(),
             "native feature replay did not produce one solid"

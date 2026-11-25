@@ -63,6 +63,16 @@ impl<K: CadKernel> EvaluationSeed<'_, K> {
     pub const fn evaluated(&self) -> &K::Evaluated { &self.evaluated }
 }
 
+/// Solver paths permitted during speculative history qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplayMode {
+    /// Use all available constructive solvers.
+    #[default]
+    General,
+    /// Try only native analytic construction, deferring general fallbacks.
+    AnalyticOnly,
+}
+
 /// Narrow execution boundary for constructive CAD.
 ///
 /// The associated evaluated value is intentionally backend-defined and opaque to
@@ -120,6 +130,32 @@ pub trait CadKernel {
         self.evaluate(model, root)
     }
 
+    /// Whether the backend can explicitly defer general solver paths.
+    fn supports_analytic_replay(&self) -> bool { false }
+
+    /// Qualify a constructive history using the requested solver paths.
+    ///
+    /// # Errors
+    /// Returns an error if the requested mode is unsupported, the seed
+    /// is invalid, or construction fails.
+    fn evaluate_replay(
+        &self,
+        model: &CadModel,
+        root: NodeId,
+        seed: Option<EvaluationSeed<'_, Self>>,
+        mode: ReplayMode,
+    ) -> Result<Self::Evaluated>
+    where
+        Self: Sized,
+    {
+        anyhow::ensure!(mode == ReplayMode::General, "analytic replay unavailable");
+        if let Some(seed) = seed {
+            self.evaluate_extended(model, root, seed)
+        } else {
+            self.evaluate(model, root)
+        }
+    }
+
     fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
 
     /// Whether this kernel supports exporting evaluated CAD as STEP.
@@ -153,7 +189,7 @@ impl<K: CadKernel> EvaluationSeed<'_, K> {
 
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod monstertruck {
-    use super::{CadKernel, EvaluationSeed, GeometryPolicy, KernelSummary};
+    use super::{CadKernel, EvaluationSeed, GeometryPolicy, KernelSummary, ReplayMode};
     use crate::cad_ir::{
         Axis3, BooleanOp, CadModel, CadNode, Curve2d, EdgeSelector, EdgeTreatmentEdge,
         EdgeTreatmentProfile, LoftSection, NodeId, Primitive, Profile2d, RigidTransform,
@@ -535,6 +571,7 @@ pub mod monstertruck {
     struct EvaluationCache {
         solids: HashMap<EvaluationKey, Solid>,
         remaining: Option<HashMap<EvaluationKey, usize>>,
+        replay_mode: ReplayMode,
     }
 
     impl EvaluationCache {
@@ -564,6 +601,7 @@ pub mod monstertruck {
             Ok(Self {
                 solids: HashMap::new(),
                 remaining: Some(remaining),
+                replay_mode: ReplayMode::General,
             })
         }
 
@@ -1301,14 +1339,19 @@ pub mod monstertruck {
             // solids, certifying each pair independently before general
             // intersection. One non-contact tool must not disable exact
             // contact for every other tool in the batch.
-            return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
+            return joined.map_or_else(
+                || fold_boolean(op, solids.into_iter().map(Ok), policy, cache.replay_mode),
+                Ok,
+            );
         }
+        let replay_mode = cache.replay_mode;
         fold_boolean(
             op,
             children
                 .iter()
                 .map(|&id| evaluate_node(model, id, policy, cache)),
             policy,
+            replay_mode,
         )
     }
 
@@ -1316,6 +1359,7 @@ pub mod monstertruck {
         op: BooleanOp,
         mut operands: impl Iterator<Item = Result<Solid>>,
         policy: GeometryPolicy,
+        replay_mode: ReplayMode,
     ) -> Result<Solid> {
         let mut result = operands
             .next()
@@ -1330,10 +1374,20 @@ pub mod monstertruck {
                     {
                         joined
                     } else {
+                        ensure!(
+                            replay_mode == ReplayMode::General,
+                            "general Boolean deferred"
+                        );
                         monstertruck_solid::or(&result, &rhs, kernel_policy)?
                     }
                 }
-                BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
+                BooleanOp::Intersection => {
+                    ensure!(
+                        replay_mode == ReplayMode::General,
+                        "general intersection deferred"
+                    );
+                    monstertruck_solid::and(&result, &rhs, kernel_policy)?
+                }
                 BooleanOp::Difference => {
                     if let Some(joined) = monstertruck_solid::try_planar_contact_many(
                         &result,
@@ -1343,6 +1397,10 @@ pub mod monstertruck {
                     )? {
                         joined
                     } else {
+                        ensure!(
+                            replay_mode == ReplayMode::General,
+                            "general Boolean deferred"
+                        );
                         monstertruck_solid::difference(&result, &rhs, kernel_policy)?
                     }
                 }
@@ -1609,7 +1667,14 @@ pub mod monstertruck {
         };
         let fillet_profile = match profile {
             EdgeTreatmentProfile::Chamfer => {
-                monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                if cache.replay_mode == ReplayMode::AnalyticOnly {
+                    ensure!(
+                        monstertruck_modeling::try_chamfer_planar_edges(shell, &selected, &radii),
+                        "general chamfer deferred"
+                    );
+                } else {
+                    monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                }
                 return Ok(Solid::new(boundaries)?);
             }
             EdgeTreatmentProfile::CarrierChamfer {
@@ -1634,6 +1699,14 @@ pub mod monstertruck {
                 second_setback_mm,
             },
         };
+        if cache.replay_mode == ReplayMode::AnalyticOnly {
+            ensure!(
+                matches!(profile, EdgeTreatmentProfile::Round)
+                    && monstertruck_modeling::try_round_planar_edges(shell, &selected, &radii),
+                "general fillet deferred"
+            );
+            return Ok(Solid::new(boundaries)?);
+        }
         let options = FilletOptions {
             radius: RadiusSpec::PerEdge(radii),
             profile: fillet_profile,
@@ -1725,20 +1798,33 @@ pub mod monstertruck {
             root: NodeId,
             seed: EvaluationSeed<'_, Self>,
         ) -> Result<Self::Evaluated> {
-            seed.validate(self, model)?;
+            self.evaluate_replay(model, root, Some(seed), ReplayMode::General)
+        }
+
+        fn supports_analytic_replay(&self) -> bool { true }
+
+        fn evaluate_replay(
+            &self,
+            model: &CadModel,
+            root: NodeId,
+            seed: Option<EvaluationSeed<'_, Self>>,
+            mode: ReplayMode,
+        ) -> Result<Self::Evaluated> {
             model.validate()?;
             let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
-            // Only reuse the base-policy key. A SolverTolerance override
-            // may request the same node at another policy and must
-            // independently evaluate it. Fused analytic fast paths may
-            // bypass the cached dependency; that is also valid.
-            let key = (seed.root, PolicyKey::from(self.policy));
-            if cache
-                .remaining
-                .as_ref()
-                .is_some_and(|remaining| remaining.contains_key(&key))
-            {
-                cache.solids.insert(key, seed.evaluated.solid);
+            cache.replay_mode = mode;
+            if let Some(seed) = seed {
+                seed.validate(self, model)?;
+                // Only reuse the base-policy key. Fused analytic paths
+                // may bypass the cached dependency.
+                let key = (seed.root, PolicyKey::from(self.policy));
+                if cache
+                    .remaining
+                    .as_ref()
+                    .is_some_and(|remaining| remaining.contains_key(&key))
+                {
+                    cache.solids.insert(key, seed.evaluated.solid);
+                }
             }
             Ok(EvaluatedShape {
                 solid: evaluate_node(model, root, self.policy, &mut cache)?,
@@ -2375,6 +2461,8 @@ pub mod monstertruck {
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&model, root)?;
+            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)?;
+            assert_same_analytic_boundary(&kernel, &evaluated, &analytic)?;
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
@@ -3229,6 +3317,11 @@ pub mod monstertruck {
             });
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
+            assert!(
+                kernel
+                    .evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)
+                    .is_err()
+            );
             let evaluated = kernel.evaluate(&model, root)?;
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
@@ -3310,6 +3403,7 @@ pub mod monstertruck {
                 BooleanOp::Difference,
                 [Ok(host), Ok(blind), Ok(through)].into_iter(),
                 kernel.policy,
+                ReplayMode::General,
             )?;
             let actual = EvaluatedShape { solid };
             assert!(kernel.summarize(&actual).is_single_solid());

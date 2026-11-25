@@ -131,7 +131,10 @@ mod topo_impls;
 #[cfg(feature = "fillet")]
 mod fillet_impl;
 #[cfg(feature = "fillet")]
-pub use fillet_impl::{chamfer_carrier_edges, chamfer_planar_edges, fillet_edges};
+pub use fillet_impl::{
+    chamfer_carrier_edges, chamfer_planar_edges, fillet_edges, try_chamfer_planar_edges,
+    try_round_planar_edges,
+};
 
 /// Font outline ingestion and conversion to wires.
 ///
