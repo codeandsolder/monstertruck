@@ -21,6 +21,7 @@ use std::{
 
 mod band;
 mod hybrid;
+mod planar_domain;
 pub use hybrid::{HybridPatchEvidence, HybridPolygonFaces, HybridRecovery, HybridRecoveryError};
 
 /// Numerical and displacement policies for native trim vertex reconciliation.
@@ -59,6 +60,9 @@ pub enum NativeTrimError {
     /// Kernel topology construction rejected the oriented shared wires.
     #[error("invalid native face topology")]
     FaceTopology,
+    /// A continuous projected native planar trim crosses another trim.
+    #[error("self-crossing planar native trim domain")]
+    PlanarTrimCrossing,
     /// Native curve containment or endpoint consistency failed.
     #[error("native face geometry inconsistent")]
     FaceGeometry,
@@ -272,7 +276,73 @@ struct FaceAssembly<'a> {
     trims: &'a [Result<Vec<Edge>, NativeTrimError>],
     groups: &'a [Vec<usize>],
 }
+struct RegionWires {
+    wires: Vec<Wire>,
+    areas: Vec<f64>,
+    unresolved_chart: bool,
+}
+
 impl FaceAssembly<'_> {
+    fn region_wires(
+        &self,
+        boundary: &super::RegionTrimLoops,
+        carrier: SurfaceCarrier,
+        outward: bool,
+    ) -> Result<RegionWires, NativeTrimError> {
+        let mut unresolved_chart = false;
+        let mut wires = Vec::new();
+        let mut areas = Vec::new();
+        for cycle in &boundary.loops {
+            let mut edges = Vec::new();
+            let mut source = Vec::new();
+            for reference in cycle {
+                let trim = self
+                    .chart
+                    .graph
+                    .trims
+                    .get(reference.trim)
+                    .ok_or(NativeTrimError::InvalidSource)?;
+                let native = self
+                    .trims
+                    .get(reference.trim)
+                    .ok_or(NativeTrimError::InvalidSource)?
+                    .as_ref()
+                    .map_err(|&error| error)?;
+                if reference.reversed {
+                    edges.extend(native.iter().rev().map(Edge::inverse));
+                    source.extend(trim.source_edges.iter().rev().map(|e| e.vertices[1]));
+                } else {
+                    edges.extend(native.iter().cloned());
+                    source.extend(trim.source_edges.iter().map(|e| e.vertices[0]));
+                }
+            }
+            let area = chart_loop_area(
+                carrier,
+                self.positions,
+                &source,
+                self.options.angular_resolution,
+            );
+            unresolved_chart |= area.is_none();
+            areas.push(area.unwrap_or(0.0) * if outward { 1.0 } else { -1.0 });
+            wires.push(Wire::from(edges));
+        }
+        if let SurfaceCarrier::Plane { origin, normal } = carrier
+            && planar_domain::has_crossing(
+                &wires,
+                origin,
+                normal,
+                self.options.intersection_tolerance,
+            )
+        {
+            return Err(NativeTrimError::PlanarTrimCrossing);
+        }
+        Ok(RegionWires {
+            wires,
+            areas,
+            unresolved_chart,
+        })
+    }
+
     fn region(
         &self,
         region: &super::RegionTrimBoundary,
@@ -314,42 +384,12 @@ impl FaceAssembly<'_> {
                 self.positions,
                 self.options,
             )?;
-            let mut wires = Vec::new();
-            let mut areas = Vec::new();
-            for cycle in &boundary.loops {
-                let mut edges = Vec::new();
-                let mut source = Vec::new();
-                for reference in cycle {
-                    let trim = self
-                        .chart
-                        .graph
-                        .trims
-                        .get(reference.trim)
-                        .ok_or(NativeTrimError::InvalidSource)?;
-                    let native = self
-                        .trims
-                        .get(reference.trim)
-                        .ok_or(NativeTrimError::InvalidSource)?
-                        .as_ref()
-                        .map_err(|&error| error)?;
-                    if reference.reversed {
-                        edges.extend(native.iter().rev().map(Edge::inverse));
-                        source.extend(trim.source_edges.iter().rev().map(|e| e.vertices[1]));
-                    } else {
-                        edges.extend(native.iter().cloned());
-                        source.extend(trim.source_edges.iter().map(|e| e.vertices[0]));
-                    }
-                }
-                let area = chart_loop_area(
-                    carrier,
-                    self.positions,
-                    &source,
-                    self.options.angular_resolution,
-                );
-                requires_chart_cut |= area.is_none();
-                areas.push(area.unwrap_or(0.0) * if outward { 1.0 } else { -1.0 });
-                wires.push(Wire::from(edges));
-            }
+            let RegionWires {
+                mut wires,
+                areas,
+                unresolved_chart,
+            } = self.region_wires(boundary, carrier, outward)?;
+            requires_chart_cut |= unresolved_chart;
             if let Some(plan) = plan {
                 let faces = plan.faces(&wires, &surface)?;
                 requires_chart_cut = false;
