@@ -200,27 +200,35 @@ impl SurfaceRegionPartition {
     ///
     /// # Errors
     /// A selected ID does not refer to an active region.
-    pub fn connected_region_groups(&self, regions:&[usize]) -> Result<Vec<Vec<usize>>,RegionBoundaryError> {
+    pub fn connected_region_groups(
+        &self,
+        regions: &[usize],
+    ) -> Result<Vec<Vec<usize>>, RegionBoundaryError> {
         let mut remaining = regions.iter().copied().collect::<BTreeSet<_>>();
-        if remaining.iter().any(|&id|self.carriers.get(id).is_none_or(Option::is_none)) {
+        if remaining
+            .iter()
+            .any(|&id| self.carriers.get(id).is_none_or(Option::is_none))
+        {
             return Err(RegionBoundaryError::InvalidPartition);
         }
-        let mut adjacency=BTreeMap::<usize,Vec<usize>>::new();
+        let mut adjacency = BTreeMap::<usize, Vec<usize>>::new();
         for path in &self.contacts.paths {
-            if let (a,Some(b))=path.regions
-                && remaining.contains(&a) && remaining.contains(&b) {
+            if let (a, Some(b)) = path.regions
+                && remaining.contains(&a)
+                && remaining.contains(&b)
+            {
                 adjacency.entry(a).or_default().push(b);
                 adjacency.entry(b).or_default().push(a);
             }
         }
-        let mut groups=Vec::new();
-        while let Some(start)=remaining.pop_first() {
-            let mut group=Vec::new();
-            let mut pending=vec![start];
-            while let Some(region)=pending.pop() {
+        let mut groups = Vec::new();
+        while let Some(start) = remaining.pop_first() {
+            let mut group = Vec::new();
+            let mut pending = vec![start];
+            while let Some(region) = pending.pop() {
                 group.push(region);
-                if let Some(neighbors)=adjacency.get(&region) {
-                    pending.extend(neighbors.iter().copied().filter(|id|remaining.remove(id)));
+                if let Some(neighbors) = adjacency.get(&region) {
+                    pending.extend(neighbors.iter().copied().filter(|id| remaining.remove(id)));
                 }
             }
             group.sort_unstable();

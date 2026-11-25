@@ -5,9 +5,9 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, RecoveredAnalyticMesh, RegionBoundaryIndex, RegionPatchError,
-    RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionPartition,
-    recover_analytic_mesh,
+    AnalyticRecoveryOptions, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryIndex,
+    RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
+    SurfaceRegionPartition, recover_analytic_mesh,
 };
 use serde_json::{Value, json};
 use std::{
@@ -20,52 +20,35 @@ use std::{
 
 fn connected_groups(
     partition: &SurfaceRegionPartition,
-    mut candidates: BTreeSet<usize>,
-) -> Vec<Vec<usize>> {
-    let mut adjacency = BTreeMap::<usize, BTreeSet<usize>>::new();
+    candidates: BTreeSet<usize>,
+) -> Result<Vec<Vec<usize>>> {
     let mut touches_curved = BTreeSet::new();
     for path in &partition.contacts.paths {
         let (a, Some(b)) = path.regions else {
             continue;
         };
-        match (candidates.contains(&a), candidates.contains(&b)) {
-            (true, true) => {
-                adjacency.entry(a).or_default().insert(b);
-                adjacency.entry(b).or_default().insert(a);
-            }
-            (true, false)
-                if !matches!(partition.carriers[b], Some(SurfaceCarrier::Plane { .. })) =>
+        for (inside, outside) in [(a, b), (b, a)] {
+            if candidates.contains(&inside)
+                && !candidates.contains(&outside)
+                && !matches!(
+                    partition.carriers[outside],
+                    Some(SurfaceCarrier::Plane { .. })
+                )
             {
-                touches_curved.insert(a);
+                touches_curved.insert(inside);
             }
-            (false, true)
-                if !matches!(partition.carriers[a], Some(SurfaceCarrier::Plane { .. })) =>
-            {
-                touches_curved.insert(b);
-            }
-            _ => {}
         }
     }
-    let mut groups = Vec::new();
-    while let Some(start) = candidates.pop_first() {
-        let mut group = Vec::new();
-        let mut queue = vec![start];
-        while let Some(region) = queue.pop() {
-            group.push(region);
-            if let Some(neighbors) = adjacency.get(&region) {
-                queue.extend(neighbors.iter().copied().filter(|id| candidates.remove(id)));
-            }
-        }
-        if group.iter().any(|id| touches_curved.contains(id)) {
-            group.sort_unstable();
-            groups.push(group);
-        }
-    }
-    groups
+    Ok(partition
+        .connected_region_groups(&candidates.into_iter().collect::<Vec<_>>())?
+        .into_iter()
+        .filter(|group| group.iter().any(|id| touches_curved.contains(id)))
+        .collect())
 }
 
 struct CandidateSelection {
     groups: Vec<Vec<usize>>,
+    initial_groups: Vec<Vec<usize>>,
     required: BTreeSet<usize>,
     polygons_by_region: BTreeMap<usize, usize>,
 }
@@ -88,8 +71,8 @@ fn candidate_groups(
         })
         .map(|r| r.region)
         .collect::<BTreeSet<_>>();
-    let initial = connected_groups(partition, failed);
-    let required = initial.into_iter().flatten().collect::<BTreeSet<_>>();
+    let initial = connected_groups(partition, failed)?;
+    let required = initial.iter().flatten().copied().collect::<BTreeSet<_>>();
     let mut polygons_by_region = BTreeMap::<usize, usize>::new();
     for &region in &partition.region_by_polygon {
         *polygons_by_region.entry(region).or_default() += 1;
@@ -112,9 +95,10 @@ fn candidate_groups(
         &required.iter().copied().collect::<Vec<_>>(),
         &connectors,
     )?;
-    let groups = connected_groups(partition, selected.into_iter().collect());
+    let groups = connected_groups(partition, selected.into_iter().collect())?;
     Ok(CandidateSelection {
         groups,
+        initial_groups: initial,
         required,
         polygons_by_region,
     })
@@ -129,6 +113,121 @@ const fn failure_class(error: RegionPatchError) -> &'static str {
     }
 }
 
+#[derive(Default)]
+struct Census {
+    groups: Vec<Value>,
+    failures: BTreeMap<&'static str, usize>,
+    selected: BTreeSet<usize>,
+    attempted_polygons: usize,
+    connector_polygons: usize,
+    accepted_polygons: usize,
+    accepted_required_polygons: usize,
+    accepted_groups: usize,
+}
+
+struct PatchAttempt<'a> {
+    index: &'a RegionBoundaryIndex<'a>,
+    partition: &'a SurfaceRegionPartition,
+    selection: &'a CandidateSelection,
+    options: RegionPatchOptions,
+}
+impl PatchAttempt<'_> {
+    fn attempt(&self, group: &[usize], census: &mut Census) -> bool {
+        let polygons = group
+            .iter()
+            .map(|id| self.selection.polygons_by_region[id])
+            .sum::<usize>();
+        let required = group
+            .iter()
+            .filter(|id| self.selection.required.contains(id))
+            .map(|id| self.selection.polygons_by_region[id])
+            .sum::<usize>();
+        census.attempted_polygons += polygons;
+        census.connector_polygons += polygons - required;
+        let result = match self
+            .index
+            .approximate_region_patch(self.partition, group, self.options)
+        {
+            Ok(patch) => {
+                census.accepted_groups += 1;
+                census.accepted_polygons += patch.source_polygons.len();
+                census.accepted_required_polygons += required;
+                census.selected.extend(group.iter().copied());
+                json!({"regions":group,"source_polygons":polygons,"required_polygons":required,
+                    "native_faces":patch.approximation.shell.len(),"boundary_edges":patch.boundary_edges.len(),
+                    "vertex_displacement":patch.approximation.vertex_displacement,
+                    "deviation_bound":patch.approximation.deviation_upper_bound})
+            }
+            Err(error) => {
+                *census.failures.entry(failure_class(error)).or_default() += 1;
+                json!({"regions":group,"source_polygons":polygons,"required_polygons":required,"error":error.to_string()})
+            }
+        };
+        let accepted = result.get("error").is_none();
+        census.groups.push(result);
+        accepted
+    }
+}
+impl Census {
+    fn report(&self) -> Value {
+        json!({"attempted_groups":self.groups.len(),"attempted_polygons":self.attempted_polygons,
+            "connector_polygons":self.connector_polygons,"accepted_groups":self.accepted_groups,
+            "accepted_polygons":self.accepted_polygons,"accepted_required_polygons":self.accepted_required_polygons,
+            "failures":self.failures,"groups":self.groups})
+    }
+}
+
+fn global_trial(
+    recovery: &RecoveredAnalyticMesh,
+    options: RegionPatchOptions,
+    selected: &BTreeSet<usize>,
+) -> Value {
+    if selected.is_empty() {
+        return json!({"status":"no_candidates"});
+    }
+    let start = Instant::now();
+    let analytic = AnalyticRecoveryOptions::default();
+    let strict = NativeTrimOptions {
+        max_vertex_displacement: analytic.trim_options(&recovery.evidence).absolute_tolerance,
+        intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
+        angular_resolution: analytic.axis_relative_resolution,
+    };
+    match recovery.construct_hybrid(
+        &selected.iter().copied().collect::<Vec<_>>(),
+        options,
+        strict,
+    ) {
+        Ok(result) => {
+            let before = recovery
+                .native
+                .regions
+                .iter()
+                .filter(|r| r.faces.is_err())
+                .count();
+            let after = result
+                .native
+                .regions
+                .iter()
+                .filter(|r| r.faces.is_err())
+                .count();
+            let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
+            let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
+            let shell = result.complete_shell();
+            json!({"status":"ok","selected_regions":selected.len(),
+                "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
+                "before_failed_regions":before,"failed_regions":after,
+                "before_failed_trims":old_trims,"failed_trims":new_trims,
+                "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
+                "approximate_polygons":result.patches.iter().map(|p|p.polygons.len()).sum::<usize>(),
+                "max_deviation":result.patches.iter().map(|p|p.deviation_upper_bound).fold(0.0_f64,f64::max),
+                "shell_condition":shell.as_ref().map(|s|format!("{:?}",s.shell_condition())),
+                "seconds":start.elapsed().as_secs_f64()})
+        }
+        Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
+            "error":error.to_string(),"seconds":start.elapsed().as_secs_f64()}),
+    }
+}
+
 fn census(recovery: &RecoveredAnalyticMesh, budget: SurfaceRegionBudget) -> Result<Value> {
     let index = RegionBoundaryIndex::new(&recovery.evidence)?;
     let partition = &recovery.reconciled.partition;
@@ -138,54 +237,64 @@ fn census(recovery: &RecoveredAnalyticMesh, budget: SurfaceRegionBudget) -> Resu
         angular_resolution: 1.0e-8,
     };
     let start = Instant::now();
-    let CandidateSelection {
-        groups,
-        required,
-        polygons_by_region,
-    } = candidate_groups(recovery, &index)?;
-    let mut failures = BTreeMap::new();
-    let mut results = Vec::new();
-    let mut accepted_polygons = 0;
-    let mut attempted_polygons = 0;
-    let mut accepted = 0;
-    let mut accepted_required_polygons = 0;
-    let mut connector_polygons = 0;
-    for group in &groups {
-        let polygons = group.iter().map(|id| polygons_by_region[id]).sum::<usize>();
-        attempted_polygons += polygons;
-        let required_polygons = group
+    let selection = candidate_groups(recovery, &index)?;
+    let attempt = PatchAttempt {
+        index: &index,
+        partition,
+        selection: &selection,
+        options,
+    };
+    let mut expanded = Census::default();
+    let mut fallback = Census::default();
+    let original_by_region = selection
+        .initial_groups
+        .iter()
+        .enumerate()
+        .flat_map(|(id, group)| group.iter().map(move |&r| (r, id)))
+        .collect::<BTreeMap<_, _>>();
+    for group in &selection.groups {
+        if attempt.attempt(group, &mut expanded) {
+            continue;
+        }
+        let original = group
             .iter()
-            .filter(|id| required.contains(id))
-            .map(|id| polygons_by_region[id])
-            .sum::<usize>();
-        connector_polygons += polygons - required_polygons;
-        let result = match index.approximate_region_patch(partition, group, options) {
-            Ok(patch) => {
-                accepted += 1;
-                accepted_polygons += patch.source_polygons.len();
-                accepted_required_polygons += required_polygons;
-                json!({
-                    "regions":group,"source_polygons":polygons,"required_polygons":required_polygons,
-                    "native_faces":patch.approximation.shell.len(),
-                    "boundary_edges":patch.boundary_edges.len(),
-                    "vertex_displacement":patch.approximation.vertex_displacement,
-                    "deviation_bound":patch.approximation.deviation_upper_bound,
-                })
+            .filter_map(|r| original_by_region.get(r))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for id in original {
+            let subset = &selection.initial_groups[id];
+            if subset != group {
+                attempt.attempt(subset, &mut fallback);
             }
-            Err(error) => {
-                *failures.entry(failure_class(error)).or_insert(0_usize) += 1;
-                json!({"regions":group,"source_polygons":polygons,"required_polygons":required_polygons,"error":error.to_string()})
-            }
-        };
-        results.push(result);
+        }
     }
-    Ok(json!({
-        "vertex_budget":budget.vertex,"chord_budget":budget.chord,
-        "attempted_groups":groups.len(),"attempted_polygons":attempted_polygons,
-        "accepted_groups":accepted,"accepted_polygons":accepted_polygons,
-        "accepted_required_polygons":accepted_required_polygons,"connector_polygons":connector_polygons,
-        "failures":failures,"seconds":start.elapsed().as_secs_f64(),"groups":results
-    }))
+    let seconds = start.elapsed().as_secs_f64();
+    let selected = expanded
+        .selected
+        .union(&fallback.selected)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut report = expanded.report();
+    let fields = report.as_object_mut().context("census object")?;
+    fields.extend([
+        ("vertex_budget".to_string(), json!(budget.vertex)),
+        ("chord_budget".to_string(), json!(budget.chord)),
+        ("seconds".to_string(), json!(seconds)),
+        ("fallback".to_string(), fallback.report()),
+        (
+            "combined_accepted_polygons".to_string(),
+            json!(expanded.accepted_polygons + fallback.accepted_polygons),
+        ),
+        (
+            "combined_accepted_required_polygons".to_string(),
+            json!(expanded.accepted_required_polygons + fallback.accepted_required_polygons),
+        ),
+        (
+            "global_hybrid".to_string(),
+            global_trial(recovery, options, &selected),
+        ),
+    ]);
+    Ok(report)
 }
 
 fn main() -> Result<()> {

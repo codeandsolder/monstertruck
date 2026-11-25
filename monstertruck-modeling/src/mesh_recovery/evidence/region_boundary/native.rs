@@ -20,6 +20,8 @@ use std::{
 };
 
 mod band;
+mod hybrid;
+pub use hybrid::{HybridPatchEvidence, HybridPolygonFaces, HybridRecovery, HybridRecoveryError};
 
 /// Numerical and displacement policies for native trim vertex reconciliation.
 #[derive(Clone, Copy, Debug)]
@@ -138,62 +140,16 @@ impl RegionBoundaryIndex<'_> {
                 vertex.as_ref().map(|v| (v.point() - source).magnitude())
             })
             .fold(0.0_f64, f64::max);
-        let mut groups = vec![Vec::new(); partition.carriers.len()];
-        for (id, &region) in partition.region_by_support.iter().enumerate() {
-            groups
-                .get_mut(region)
-                .ok_or(NativeTrimError::InvalidSource)?
-                .push(id);
-        }
-        let plans = graph
-            .regions
-            .iter()
-            .map(|region| {
-                let carrier = partition.carriers.get(region.region).copied().flatten()?;
-                let supports = groups.get(region.region)?;
-                let boundary = region.boundary.as_ref().ok()?;
-                let carrier = chart_carrier(
-                    carrier,
-                    boundary,
-                    graph,
-                    self.evidence,
-                    supports,
-                    positions,
-                    options,
-                );
-                let (surface, outward) =
-                    native_surface(carrier, self.evidence, supports, positions, options).ok()?;
-                if !boundary.pinched_vertices.is_empty() {
-                    return None;
-                }
-                band::BandContext {
-                    carrier,
-                    surface: &surface,
-                    outward,
-                    evidence: self.evidence,
-                    supports,
-                    positions,
-                    graph,
-                    options,
-                }
-                .plan(boundary, &mut trims)
-            })
-            .collect::<Vec<_>>();
-        let assembly = FaceAssembly {
+        let regions = RegionAssemblyInput {
             evidence: self.evidence,
             partition,
             graph,
             positions,
             options,
-            trims: &trims,
-            groups: &groups,
-        };
-        let regions = graph
-            .regions
-            .iter()
-            .zip(&plans)
-            .map(|(region, plan)| assembly.region(region, plan.as_ref()))
-            .collect();
+            approximated: &std::collections::BTreeSet::new(),
+            lifted_deviations: &[],
+        }
+        .assemble(&mut trims)?;
         Ok(NativeTrimGraph {
             vertices,
             trims,
@@ -203,10 +159,114 @@ impl RegionBoundaryIndex<'_> {
     }
 }
 
-struct FaceAssembly<'a> {
+struct RegionAssemblyInput<'a> {
     evidence: &'a MeshEvidence,
     partition: &'a SurfaceRegionPartition,
     graph: &'a SharedTrimGraph,
+    positions: &'a [Point3],
+    options: NativeTrimOptions,
+    approximated: &'a std::collections::BTreeSet<usize>,
+    lifted_deviations: &'a [Option<f64>],
+}
+
+impl RegionAssemblyInput<'_> {
+    fn assemble(
+        &self,
+        trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    ) -> Result<Vec<NativeRegionFace>, NativeTrimError> {
+        let mut groups = vec![Vec::new(); self.partition.carriers.len()];
+        for (id, &region) in self.partition.region_by_support.iter().enumerate() {
+            groups
+                .get_mut(region)
+                .ok_or(NativeTrimError::InvalidSource)?
+                .push(id);
+        }
+        let plans = self
+            .graph
+            .regions
+            .iter()
+            .map(|region| {
+                if self.approximated.contains(&region.region) {
+                    return None;
+                }
+                let carrier = self
+                    .partition
+                    .carriers
+                    .get(region.region)
+                    .copied()
+                    .flatten()?;
+                let supports = groups.get(region.region)?;
+                let boundary = region.boundary.as_ref().ok()?;
+                let carrier = chart_carrier(
+                    carrier,
+                    boundary,
+                    ChartTrimEvidence {
+                        graph: self.graph,
+                        lifted_deviations: self.lifted_deviations,
+                    },
+                    self.evidence,
+                    supports,
+                    self.positions,
+                    self.options,
+                );
+                let (surface, outward) = native_surface(
+                    carrier,
+                    self.evidence,
+                    supports,
+                    self.positions,
+                    self.options,
+                )
+                .ok()?;
+                if !boundary.pinched_vertices.is_empty() {
+                    return None;
+                }
+                band::BandContext {
+                    carrier,
+                    surface: &surface,
+                    outward,
+                    evidence: self.evidence,
+                    supports,
+                    positions: self.positions,
+                    graph: self.graph,
+                    options: self.options,
+                }
+                .plan(boundary, trims)
+            })
+            .collect::<Vec<_>>();
+        let assembly = FaceAssembly {
+            evidence: self.evidence,
+            partition: self.partition,
+            chart: ChartTrimEvidence {
+                graph: self.graph,
+                lifted_deviations: self.lifted_deviations,
+            },
+            positions: self.positions,
+            options: self.options,
+            trims,
+            groups: &groups,
+        };
+        let regions = self
+            .graph
+            .regions
+            .iter()
+            .zip(&plans)
+            .filter(|(region, _)| !self.approximated.contains(&region.region))
+            .map(|(region, plan)| assembly.region(region, plan.as_ref()))
+            .collect();
+        Ok(regions)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ChartTrimEvidence<'a> {
+    graph: &'a SharedTrimGraph,
+    lifted_deviations: &'a [Option<f64>],
+}
+
+struct FaceAssembly<'a> {
+    evidence: &'a MeshEvidence,
+    partition: &'a SurfaceRegionPartition,
+    chart: ChartTrimEvidence<'a>,
     positions: &'a [Point3],
     options: NativeTrimOptions,
     trims: &'a [Result<Vec<Edge>, NativeTrimError>],
@@ -241,7 +301,7 @@ impl FaceAssembly<'_> {
             let carrier = chart_carrier(
                 carrier,
                 boundary,
-                self.graph,
+                self.chart,
                 self.evidence,
                 supports,
                 self.positions,
@@ -261,6 +321,7 @@ impl FaceAssembly<'_> {
                 let mut source = Vec::new();
                 for reference in cycle {
                     let trim = self
+                        .chart
                         .graph
                         .trims
                         .get(reference.trim)
@@ -766,7 +827,7 @@ fn native_circle_edge(
 fn chart_carrier(
     carrier: SurfaceCarrier,
     boundary: &super::RegionTrimLoops,
-    graph: &SharedTrimGraph,
+    chart: ChartTrimEvidence<'_>,
     evidence: &MeshEvidence,
     supports: &[usize],
     points: &[Point3],
@@ -784,17 +845,19 @@ fn chart_carrier(
     if radial_center.abs() > crate::KERNEL_EPSILON {
         return carrier;
     }
-    let Some(axis) = circular_rim_axis(axial_center, boundary, graph, options).or_else(|| {
-        compact_sphere_axis(
-            axial_center,
-            boundary,
-            graph,
-            evidence,
-            supports,
-            points,
-            options,
-        )
-    }) else {
+    let Some(axis) =
+        circular_rim_axis(axial_center, boundary, chart.graph, options).or_else(|| {
+            compact_sphere_axis(
+                axial_center,
+                boundary,
+                chart,
+                evidence,
+                supports,
+                points,
+                options,
+            )
+        })
+    else {
         return carrier;
     };
     SurfaceCarrier::CircularRevolution {
@@ -843,7 +906,7 @@ fn circular_rim_axis(
 fn compact_sphere_axis(
     center: Point3,
     boundary: &super::RegionTrimLoops,
-    graph: &SharedTrimGraph,
+    chart: ChartTrimEvidence<'_>,
     evidence: &MeshEvidence,
     supports: &[usize],
     points: &[Point3],
@@ -874,7 +937,7 @@ fn compact_sphere_axis(
     // arc the distance from its projected chord is at most its sagitta.
     // Add the original endpoint projection errors and junction movement.
     for reference in boundary.loops.iter().flatten() {
-        let trim = graph.trims.get(reference.trim)?;
+        let trim = chart.graph.trims.get(reference.trim)?;
         let deviation = match trim.geometry {
             SharedTrimGeometry::Line(line) => line.max_vertex_offset,
             SharedTrimGeometry::Circle(circle) => {
@@ -884,9 +947,10 @@ fn compact_sphere_axis(
                         .max_plane_residual
                         .hypot(circle.max_vertex_radial_residual)
             }
-            SharedTrimGeometry::Conic(_)
-            | SharedTrimGeometry::ToroidalSection(_)
-            | SharedTrimGeometry::Unresolved => return None,
+            SharedTrimGeometry::Conic(_) | SharedTrimGeometry::ToroidalSection(_) => return None,
+            SharedTrimGeometry::Unresolved => {
+                *chart.lifted_deviations.get(reference.trim)?.as_ref()?
+            }
         };
         if trim
             .source_edges

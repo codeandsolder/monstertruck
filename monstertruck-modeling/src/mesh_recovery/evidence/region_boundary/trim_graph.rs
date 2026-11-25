@@ -31,7 +31,7 @@ pub struct OrientedTrim {
 }
 
 /// Winding-preserving loops of shared trim references.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RegionTrimLoops {
     /// Cyclic sequences of globally shared edges.
     pub loops: Vec<Vec<OrientedTrim>>,
@@ -40,7 +40,7 @@ pub struct RegionTrimLoops {
 }
 
 /// The shared trim boundary of one selected or fallback region.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RegionTrimBoundary {
     /// Active region ID in the surface partition.
     pub region: usize,
@@ -49,7 +49,7 @@ pub struct RegionTrimBoundary {
 }
 
 /// Topological trim graph before geometric vertex reconciliation and charts.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SharedTrimGraph {
     /// Every regular inter-region or open boundary source edge belongs to
     /// exactly one entry, even if analytic fitting was unsuccessful.

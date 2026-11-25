@@ -242,7 +242,13 @@ impl RegionBoundaryIndex<'_> {
                     .map(|region| partition.carriers[region])
                     .collect::<Option<Vec<_>>>()
                     .ok_or(RegionPatchError::InvalidRegion)?;
-                let point = reconcile_point(source, &carriers, reconciliation)
+                let fine = ReconciliationOptions {
+                    intersection_tolerance: junction_roundoff(source, &carriers)
+                        .min(reconciliation.intersection_tolerance),
+                    ..reconciliation
+                };
+                let point = reconcile_point(source, &carriers, fine)
+                    .or_else(|| reconcile_point(source, &carriers, reconciliation))
                     .ok_or(RegionPatchError::Junction(id))?;
                 Ok((id, builder::vertex(point)))
             })
@@ -257,35 +263,92 @@ impl RegionBoundaryIndex<'_> {
         back: &Vertex,
         options: RegionPatchOptions,
     ) -> Result<Edge, RegionPatchError> {
-        let error = RegionPatchError::Edge(ids);
-        let source = ids.map(|id| self.evidence.positions[id]);
+        lift_native_source_edge(
+            Some(carrier),
+            ids.map(|id| self.evidence.positions[id]),
+            front,
+            back,
+            options,
+        )
+        .map(|(edge, _)| edge)
+        .ok_or(RegionPatchError::Edge(ids))
+    }
+}
+
+// A topologically consistent edge may still have its actual curve
+// endpoint slightly outside the exact angular wedge defined by its
+// shared native vertex. First seek a solution to arithmetic precision;
+// retain the original admissibility tolerance if no such point exists.
+pub(super) fn junction_roundoff(source: crate::Point3, carriers: &[SurfaceCarrier]) -> f64 {
+    let scale = |p: crate::Point3| p.x.abs().max(p.y.abs()).max(p.z.abs());
+    let maximum = carriers
+        .iter()
+        .fold(scale(source).max(1.0), |bound, carrier| {
+            let size = match *carrier {
+                SurfaceCarrier::Plane { origin, .. } => scale(origin),
+                SurfaceCarrier::LinearRevolution {
+                    origin,
+                    radius_at_origin,
+                    ..
+                } => scale(origin).max(radius_at_origin.abs()),
+                SurfaceCarrier::CircularRevolution {
+                    axial_center,
+                    radial_center,
+                    profile_radius,
+                    ..
+                } => scale(axial_center)
+                    .max(radial_center.abs())
+                    .max(profile_radius.abs()),
+            };
+            bound.max(size)
+        });
+    32.0 * f64::EPSILON * maximum
+}
+
+/// Construct a single source-segment edge with one shared endpoint
+/// identity at either end. The bound is measured against the original
+/// source chord, not the displaced native vertex chord.
+pub(super) fn lift_native_source_edge(
+    carrier: Option<SurfaceCarrier>,
+    source: [crate::Point3; 2],
+    front: &Vertex,
+    back: &Vertex,
+    options: RegionPatchOptions,
+) -> Option<(Edge, f64)> {
+    let movement = (front.point() - source[0])
+        .magnitude()
+        .max((back.point() - source[1]).magnitude());
+    if !movement.is_finite() || movement > options.budget.vertex || front == back {
+        return None;
+    }
+    let (edge, bound) = if let Some(carrier) = carrier {
         let budget = SurfaceRegionBudget {
             vertex: options.intersection_tolerance,
             chord: options.budget.chord + options.budget.vertex,
         };
-        let lifted = carrier
-            .lift_source_chord([front.point(), back.point()], budget)
-            .ok_or(error)?;
+        let lifted = carrier.lift_source_chord([front.point(), back.point()], budget)?;
         if lifted
             .endpoints
             .iter()
             .zip(source)
             .any(|(&point, original)| (point - original).magnitude() > options.budget.vertex)
-            || bound_nurbs_segment_locus(&lifted.curve, source[0], source[1], options.budget.chord)
-                .is_none_or(|bound| bound > options.budget.chord)
         {
-            return Err(error);
+            return None;
         }
-        let edge = Edge::new(front, back, Curve::NurbsCurve(lifted.curve)).map_err(|_| error)?;
-        if !edge.is_geometric_consistent() {
-            return Err(error);
-        }
-        Ok(edge)
-    }
+        let bound =
+            bound_nurbs_segment_locus(&lifted.curve, source[0], source[1], options.budget.chord)?;
+        (
+            Edge::new(front, back, Curve::NurbsCurve(lifted.curve)).ok()?,
+            bound,
+        )
+    } else {
+        (builder::line(front, back), movement)
+    };
+    (bound <= options.budget.chord && edge.is_geometric_consistent()).then_some((edge, bound))
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{
         BoundedCurve, ParametricCurve, Point3, Vector3,
@@ -294,8 +357,15 @@ mod tests {
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
     use monstertruck_topology::shell::ShellCondition;
 
-    #[test]
-    fn region_patch_lifts_shared_spherical_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    pub(in crate::mesh_recovery::evidence::region_boundary) fn spherical_fixture() -> Result<
+        (
+            crate::mesh_recovery::MeshEvidence,
+            SurfaceRegionPartition,
+            Vec<usize>,
+            usize,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let q = std::f64::consts::FRAC_1_SQRT_2;
         let positions = vec![
             Point3::new(1.0, 0.0, 0.0),
@@ -356,6 +426,13 @@ mod tests {
         fallback.sort_unstable();
         fallback.dedup();
         assert!(!fallback.contains(&sphere_region));
+        Ok((evidence, partition, fallback, sphere_region))
+    }
+
+    #[test]
+    fn region_patch_lifts_shared_spherical_boundary() -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, partition, fallback, _) = spherical_fixture()?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
         let options = RegionPatchOptions {
             budget: SurfaceRegionBudget {
                 vertex: 1.0e-9,

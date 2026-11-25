@@ -38,9 +38,10 @@ pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
 pub(in crate::mesh_recovery) use region_boundary::RimLinearOptions;
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactConicEvidence,
-    ContactCurveEvidence, ContactLineEvidence, ContactToroidalSectionEvidence, LiftedRegionPatch,
-    LiftedSourceChord, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
-    OrientedTrim, ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
+    ContactCurveEvidence, ContactLineEvidence, ContactToroidalSectionEvidence, HybridPatchEvidence,
+    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, LiftedRegionPatch, LiftedSourceChord,
+    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim,
+    ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
     RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
     RegionContactGraph, RegionContactPath, RegionPatchError, RegionPatchOptions,
     RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,

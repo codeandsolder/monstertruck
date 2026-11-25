@@ -32,7 +32,10 @@ pub use coincidence::CarrierCoincidenceEvidence;
 pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
-pub use native::{NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions};
+pub use native::{
+    HybridPatchEvidence, HybridPolygonFaces, HybridRecovery, HybridRecoveryError, NativeRegionFace,
+    NativeTrimError, NativeTrimGraph, NativeTrimOptions,
+};
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
 pub use patch_lift::{LiftedRegionPatch, RegionPatchError, RegionPatchOptions};
 pub use reconcile::{ReconciledPartition, ReconciledPlane, ReconciliationOptions};
