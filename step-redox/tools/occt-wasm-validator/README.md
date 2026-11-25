@@ -120,3 +120,14 @@ equality is deliberately not required. Exit status 0 indicates equality,
 The tolerances and adaptive integration targets retain the previous native
 oracle's definitions; the new implementation uses the independently built
 WASM kernel without native Python/OCP.
+
+For diagnosing a nonzero paired-volume residual, add `--face-flux` to
+`solid-diagnostics` or `paired-volume`. The optional detail is part of the
+paired-volume report and reuses exactly its integration terms. This includes the ordered, oriented shell/face occurrences,
+carrier types, bounds, UV bounds, surface areas, and signed integrals and
+quadrature error estimates at the four shared reference points for both
+quadrature tolerances. The report
+also sums the signed contributions by carrier type using the same accurate
+summation as paired volume. Carrier families can change under exact
+reconstruction, so a family difference alone is not a geometric error or a
+face correspondence. The optional report does not change acceptance policy.

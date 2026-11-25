@@ -81,6 +81,9 @@ enum Command {
         candidate: PathBuf,
         #[arg(long)]
         absolute_tolerance: f64,
+        /// Include per-face signed fluxes at both quadrature tolerances.
+        #[arg(long)]
+        face_flux: bool,
     },
 }
 
@@ -323,12 +326,18 @@ fn main() -> Result<ExitCode> {
             reference,
             candidate,
             absolute_tolerance,
+            face_flux,
         } => {
             let mut kernel = OcctKernel::new()?;
             let (a, _) = load(&mut kernel, &reference)?;
             let (b, _) = load(&mut kernel, &candidate)?;
-            let report =
-                paired_volume::paired_volume(&mut kernel, a.shape, b.shape, absolute_tolerance)?;
+            let report = paired_volume::paired_volume(
+                &mut kernel,
+                a.shape,
+                b.shape,
+                absolute_tolerance,
+                face_flux,
+            )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(if report.within_absolute_tolerance {
                 ExitCode::SUCCESS
