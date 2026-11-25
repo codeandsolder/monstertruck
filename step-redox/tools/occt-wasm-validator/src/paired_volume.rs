@@ -243,7 +243,9 @@ pub fn paired_volume(
             b: spread(&samples, |sample| sample.b.volume)?,
         },
         samples,
-        face_flux: flux.map(|flux| flux.finish(references)).transpose()?,
+        face_flux: flux
+            .map(|flux| flux.finish(references, tolerance))
+            .transpose()?,
     })
 }
 

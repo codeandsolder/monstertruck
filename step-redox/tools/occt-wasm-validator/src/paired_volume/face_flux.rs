@@ -274,7 +274,11 @@ impl FaceFluxAccumulator {
         record_terms(&mut self.b, index, coarse[1], fine[1])
     }
 
-    pub(super) fn finish(mut self, references: [[f64; 3]; 4]) -> Result<FaceFluxReport> {
+    pub(super) fn finish(
+        mut self,
+        references: [[f64; 3]; 4],
+        tolerance: f64,
+    ) -> Result<FaceFluxReport> {
         for face in self.a.iter_mut().chain(&mut self.b) {
             if let Some(AnalyticSphere::Available { flux }) = &mut face.analytic_sphere {
                 flux.set_references(references);
@@ -285,9 +289,9 @@ impl FaceFluxAccumulator {
         }
         let surface_families = families(&self.a, &self.b)?;
         let analytic_substitution =
-            substitution::summarize(&self.a, &self.b, substitution::Method::Geodesic)?;
+            substitution::summarize(&self.a, &self.b, substitution::Method::Geodesic, tolerance)?;
         let spatial_substitution =
-            substitution::summarize(&self.a, &self.b, substitution::Method::Spatial)?;
+            substitution::summarize(&self.a, &self.b, substitution::Method::Spatial, tolerance)?;
         Ok(FaceFluxReport {
             references,
             quadrature_eps: EPSILONS,

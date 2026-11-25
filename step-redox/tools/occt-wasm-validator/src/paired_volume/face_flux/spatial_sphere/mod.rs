@@ -192,6 +192,13 @@ impl SpatialFlux {
     pub(super) const fn volumes(&self, index: usize) -> [f64; 2] {
         [self.coarse.volume[index], self.fine.volume[index]]
     }
+
+    pub(super) const fn quadrature_error(&self, index: usize) -> [f64; 2] {
+        [
+            self.coarse.estimated_volume_quadrature_error[index],
+            self.fine.estimated_volume_quadrature_error[index],
+        ]
+    }
 }
 
 fn integrate(

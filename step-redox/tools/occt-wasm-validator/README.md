@@ -163,3 +163,8 @@ trims and complementary spherical regions are supported; ambiguous empty/full
 regions and unsupported curves remain explicit rejections. The
 `spatial_substitution` diagnostic combines these fluxes with the original
 quadrature for other faces, without changing the raw gate or its exit status.
+Its separate `observed_within_tolerance` diagnostic requires every spherical
+face to be covered and the measured paired difference, coarse/fine drift,
+and shared-reference spread (plus the summed estimated spatial quadrature
+error) to fit the requested absolute tolerance. This is not a rigorous
+interval enclosure or an alternative process exit criterion.
