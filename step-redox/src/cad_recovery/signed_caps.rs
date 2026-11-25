@@ -22,6 +22,8 @@ use anyhow::Result;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{HashMap, HashSet};
 
+mod convex;
+
 fn cap(prism: &RecoveredSolidExtrusion) -> RecoveredSourceCapExtrusion {
     RecoveredSourceCapExtrusion {
         solid_id: prism.solid_id,
@@ -115,7 +117,8 @@ fn compose(
     let mut models = Vec::with_capacity(cutters.len() + 1);
     models.push(model(&host.prism)?);
     for cutter in cutters {
-        models.push(model(&cutter.prism)?);
+        let extended = convex::through_openings(&host.prism, &cutter.prism);
+        models.push(model(extended.as_ref().unwrap_or(&cutter.prism))?);
     }
     let steps = models
         .iter()
@@ -167,7 +170,15 @@ pub(super) fn recover<K: CadKernel>(
             .filter(|(_, points)| spline_host || points.iter().all(|&p| cap_contains(&host_cap, p)))
             .map(|(proposal, _)| *proposal)
             .collect::<Vec<_>>();
-        let selected = adjacent_pairs(&eligible);
+        let mut selected: Vec<&SignedCapPairProposal> = Vec::new();
+        for candidate in adjacent_pairs(&eligible) {
+            if !selected
+                .iter()
+                .any(|other| convex::equivalent(&candidate.prism, &other.prism))
+            {
+                selected.push(candidate);
+            }
+        }
         if selected.is_empty() {
             continue;
         }
