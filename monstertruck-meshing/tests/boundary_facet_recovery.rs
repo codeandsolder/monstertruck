@@ -34,7 +34,7 @@ fn reconstructed_curved_facet_tessellates_without_dropped_faces() -> anyhow::Res
     assert_eq!(mesh.face_iter().count(), 3);
     for face in mesh.face_iter() {
         let polygon = face.surface().expect("no dropped face");
-        assert_ne!(polygon.tri_faces(), []);
+        assert_ne!(polygon.tri_faces(), &[] as &[[StandardVertex; 3]]);
         assert!(polygon.positions().iter().all(|p| p.z.abs() <= 0.2));
     }
     Ok(())
@@ -114,7 +114,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     assert_eq!(mesh.face_iter().count(), 10);
     for face in mesh.face_iter() {
         let polygon = face.surface().expect("hybrid face tessellates");
-        assert_ne!(polygon.tri_faces(), []);
+        assert_ne!(polygon.tri_faces(), &[] as &[[StandardVertex; 3]]);
     }
     let mut polygon = mesh.to_polygon();
     polygon
