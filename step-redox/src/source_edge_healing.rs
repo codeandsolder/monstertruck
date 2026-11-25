@@ -24,6 +24,12 @@ use monstertruck_geometry::prelude::{
 };
 use serde::Serialize;
 
+mod cylinder_intersection;
+pub use cylinder_intersection::{
+    CylinderHealingCandidate, CylinderHealingEvidence, CylinderHealingRequest,
+    propose_cylinder_intersection_healing,
+};
+
 /// Source face-bound loop use of a single original topological edge.
 ///
 /// The parameter direction includes the original `FACE_BOUND` orientation,

@@ -6,7 +6,11 @@
 //! remains a separate geometric object, not an exact intersection certificate.
 
 use super::{CylinderCarrier, CylinderIntersectionArc, IntersectionBranch};
-use crate::{analytic_curve_incidence::valid, prelude::*};
+use crate::{
+    analytic_curve_incidence::valid,
+    analytic_radial_deviation::{RadialDeviationBounds, bound_nurbs_radial_deviation},
+    prelude::*,
+};
 use std::f64::consts::{PI, TAU};
 
 /// A newly proposed analytic intersection, selected using the entire source
@@ -20,6 +24,85 @@ pub struct SourceIntersectionProposal {
     pub source_start_residual: f64,
     pub source_end_residual: f64,
     pub angular_arithmetic_margin: f64,
+}
+
+/// Whole-locus deviation from the original spline to a new analytical arc.
+/// Bounds include finite-f64 conditioning allowances, not directed-rounding
+/// interval arithmetic. Neither bound certifies the adjacent trimmed faces.
+#[derive(Clone, Copy, Debug)]
+pub struct BoundedSourceIntersection {
+    pub proposal: SourceIntersectionProposal,
+    pub primary_deviation: RadialDeviationBounds,
+    pub secondary_deviation: RadialDeviationBounds,
+    /// Lower witness to the Hausdorff distance.
+    pub separation_lower: f64,
+    /// Upper bound in both directions, using continuous angular coverage.
+    pub separation_upper: f64,
+}
+
+impl BoundedSourceIntersection {
+    /// Select and bound the same source curve in one operation, so incidence
+    /// bounds cannot accidentally be attached to an unrelated branch.
+    #[must_use = "inspect the whole-locus separation bounds"]
+    pub fn from_spline(
+        primary: CylinderCarrier,
+        secondary: CylinderCarrier,
+        source: &NurbsCurve<Vector4>,
+        endpoint_tolerance: f64,
+        target_gap: f64,
+    ) -> Option<Self> {
+        let proposal = SourceIntersectionProposal::from_spline(
+            primary,
+            secondary,
+            source,
+            endpoint_tolerance,
+        )?;
+        let bound = |carrier: CylinderCarrier| {
+            bound_nurbs_radial_deviation(
+                source,
+                carrier.origin,
+                carrier.axis,
+                carrier.radius,
+                0.0,
+                target_gap,
+            )
+        };
+        let primary_deviation = bound(primary)?;
+        let secondary_deviation = bound(secondary)?;
+        let arc = proposal.arc;
+        let a = primary_deviation.upper;
+        let e = a + secondary_deviation.upper;
+        // Radially project a source point onto the primary cylinder while
+        // preserving angle and axial position. Its displacement is <= a,
+        // and its distance to the secondary cylinder is <= e. Its signed
+        // transverse root coordinate remains positive if the hull margin
+        // exceeds a. Factoring s²-s_exact² then bounds the axial correction.
+        let source_root = proposal.source_branch_margin - a - arc.arithmetic_margin;
+        if source_root <= 0.0 || !source_root.is_finite() {
+            return None;
+        }
+        let axial =
+            e * (2.0 * secondary.radius + e) / ((source_root + arc.min_root) * arc.axis_sine);
+        // Angular projection covers the entire directed interval, so the
+        // same pointwise correspondence supplies the reverse bound too.
+        let speed_bound =
+            primary.radius * (1.0 + (1.0 + secondary.radius / arc.min_root) / arc.axis_sine);
+        let rounding = arc.arithmetic_margin + speed_bound * proposal.angular_arithmetic_margin;
+        let separation_upper = a + axial + rounding;
+        let separation_lower = (primary_deviation.lower.max(secondary_deviation.lower)
+            - arc.arithmetic_margin)
+            .max(0.0);
+        if !separation_upper.is_finite() || separation_lower > separation_upper {
+            return None;
+        }
+        Some(Self {
+            proposal,
+            primary_deviation,
+            secondary_deviation,
+            separation_lower,
+            separation_upper,
+        })
+    }
 }
 
 fn clamped_continuous(curve: &BsplineCurve<Vector4>) -> bool {
@@ -236,6 +319,17 @@ mod tests {
             .expect("two regular source quarter spans");
         assert!((proposal.arc.sweep() - PI).abs() < 1e-12);
         assert!(proposal.source_branch_margin > 0.9);
+        let bounded =
+            BoundedSourceIntersection::from_spline(primary, secondary, &source, 1e-9, 1e-9)
+                .expect("whole-locus bounds");
+        assert!(bounded.separation_lower > 0.0);
+        assert!(bounded.separation_upper < 0.1);
+        for i in 0..=200 {
+            let p = source.evaluate(f64::from(i) / 200.0);
+            let angle = p.y.atan2(p.x).clamp(0.0, PI);
+            let q = bounded.proposal.arc.evaluate(angle).expect("arc point");
+            assert!((p - q).magnitude() <= bounded.separation_upper);
+        }
         points[2].z = -1.0;
         let bad = NurbsCurve::new(BsplineCurve::new_unchecked(knots, points));
         assert!(SourceIntersectionProposal::from_spline(primary, secondary, &bad, 1e-9).is_none());
