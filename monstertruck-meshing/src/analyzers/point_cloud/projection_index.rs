@@ -167,12 +167,11 @@ mod tests {
     use super::*;
     use crate::{Faces, StandardAttributes};
 
-    #[test]
-    fn projection_index_matches_one_shot_sweep() -> anyhow::Result<()> {
+    fn grid_mesh(width: u32, height: u32) -> anyhow::Result<PolygonMesh> {
         let mut positions = Vec::new();
         let mut faces = Vec::new();
-        for x in 0..12 {
-            for y in 0..9 {
+        for x in 0..width {
+            for y in 0..height {
                 let offset = positions.len();
                 let x = f64::from(x) * 0.5;
                 let y = f64::from(y) * 0.5;
@@ -186,13 +185,18 @@ mod tests {
         }
         // Degenerate triangle must remain excluded, as in the sweep.
         faces.push([0, 0, 0]);
-        let mesh = PolygonMesh::new(
+        Ok(PolygonMesh::new(
             StandardAttributes {
                 positions,
                 ..Default::default()
             },
             Faces::from_iter(faces),
-        )?;
+        )?)
+    }
+
+    #[test]
+    fn projection_index_matches_one_shot_sweep() -> anyhow::Result<()> {
+        let mesh = grid_mesh(12, 9)?;
         for tolerance in [0.0, 1e-6, 0.05, 0.25, 1.0] {
             let index = ProjectionNeighborhood::new(&mesh, tolerance);
             for x in -3..27 {
@@ -211,6 +215,62 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+    /// Run explicitly in release mode; wall times are evidence, not a
+    /// flaky threshold in the regression suite.
+    #[test]
+    #[ignore = "release-mode proximity microbenchmark"]
+    fn repeated_three_point_queries_benchmark() -> anyhow::Result<()> {
+        use std::hint::black_box;
+        use web_time::Instant;
+
+        let mesh = grid_mesh(100, 100)?;
+        let tolerance = 0.05;
+        let queries = (0_u32..600)
+            .map(|i| {
+                let x = f64::from((i * 37) % 100) * 0.5;
+                let y = f64::from((i * 61) % 100) * 0.5;
+                let z = if i % 3 == 0 { 0.1 } else { 0.02 };
+                [
+                    Point3::new(x + 0.05, y + 0.05, z),
+                    Point3::new(x + 0.10, y + 0.10, z),
+                    Point3::new(x + 0.15, y + 0.15, z),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let start = Instant::now();
+        let expected = queries
+            .iter()
+            .map(|points| {
+                black_box(
+                    super::super::sort_end_points::pointcloud_in_polygon_neighborhood(
+                        black_box(&mesh),
+                        black_box(points),
+                        tolerance,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let sweep_time = start.elapsed();
+        let start = Instant::now();
+        let index = ProjectionNeighborhood::new(&mesh, tolerance);
+        let build_time = start.elapsed();
+        let start = Instant::now();
+        let actual = queries
+            .iter()
+            .map(|points| black_box(index.includes(black_box(points))))
+            .collect::<Vec<_>>();
+        let query_time = start.elapsed();
+        assert_eq!(expected, actual);
+        eprintln!(
+            "10,000 triangles, {} three-point queries: one-shot {:?}, index build {:?}, index queries {:?}, total speedup {:.2}x",
+            queries.len(),
+            sweep_time,
+            build_time,
+            query_time,
+            sweep_time.as_secs_f64() / (build_time + query_time).as_secs_f64()
+        );
         Ok(())
     }
 }
