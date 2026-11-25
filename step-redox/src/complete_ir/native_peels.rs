@@ -219,7 +219,7 @@ impl Journal {
         loop {
             let mut candidate = edited.clone();
             let prefix = self.steps.len();
-            let step = match next {
+            let transaction = match next {
                 NextPeel::Boundary => {
                     match peel_projected_features(
                         kernel,
@@ -267,7 +267,7 @@ impl Journal {
                 }
             };
             checkpoints.push((prefix, std::mem::replace(edited, candidate)));
-            self.steps.push(step);
+            self.steps.push(transaction);
         }
         loop {
             // At the initial checkpoint the native fast path was already
