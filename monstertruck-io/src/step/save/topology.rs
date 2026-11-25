@@ -2,26 +2,14 @@ use super::{
     BooleanDisplay, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell,
     CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Display, Formatter,
     IndexSliceDisplay, Result, StepCurve, StepDisplay, StepFormat, StepLength,
-    StepMeasurementContext, StepModel, StepModelEntityIds, StepModels, StepShellEntityIds,
-    StepSurface,
+    StepMeasurementContext, StepModel, StepModelEntityIds, StepModels, StepPcurve,
+    StepShellEntityIds, StepSurface, canonical_step_encoding,
 };
-trait StepAssociatedEntity {
-    fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result;
-    fn step_length(&self) -> usize;
-}
-
-impl<T> StepAssociatedEntity for T
-where T: StepFormat + StepLength
-{
-    fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result {
-        StepFormat::fmt(self, idx, formatter)
-    }
-
-    fn step_length(&self) -> usize { StepLength::step_length(self) }
-}
-
 enum StepAssociatedGeometry<'a> {
-    ExactParameterCurve(&'a dyn StepAssociatedEntity),
+    ExactParameterCurve {
+        curve: &'a dyn StepPcurve,
+        support_reference: Option<usize>,
+    },
     /// Reference to an already-emitted surface entity (the adjacent face's
     /// surface). It emits nothing and claims no entity index; the enclosing
     /// `SURFACE_CURVE` argument list points at the stored index directly,
@@ -32,7 +20,16 @@ enum StepAssociatedGeometry<'a> {
 impl StepFormat for StepAssociatedGeometry<'_> {
     fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result {
         match self {
-            Self::ExactParameterCurve(curve) => curve.fmt(idx, formatter),
+            Self::ExactParameterCurve {
+                curve,
+                support_reference,
+            } => {
+                if let Some(surface_idx) = support_reference {
+                    curve.fmt_referencing_surface(idx, *surface_idx, formatter)
+                } else {
+                    StepFormat::fmt(*curve, idx, formatter)
+                }
+            }
             Self::SurfaceRef(_) => Ok(()),
         }
     }
@@ -41,7 +38,16 @@ impl StepFormat for StepAssociatedGeometry<'_> {
 impl StepLength for StepAssociatedGeometry<'_> {
     fn step_length(&self) -> usize {
         match self {
-            Self::ExactParameterCurve(curve) => curve.step_length(),
+            Self::ExactParameterCurve {
+                curve,
+                support_reference,
+            } => {
+                if support_reference.is_some() {
+                    curve.step_length_referencing_surface()
+                } else {
+                    StepLength::step_length(*curve)
+                }
+            }
             Self::SurfaceRef(_) => 0,
         }
     }
@@ -59,7 +65,10 @@ struct StepFace<'a, S> {
 /// so a surface is emitted once (as the face geometry) and referenced, not
 /// duplicated, per bounding edge.
 enum EdgeAssociationSource<'a> {
-    ExactParameterCurve(&'a dyn StepAssociatedEntity),
+    ExactParameterCurve {
+        curve: &'a dyn StepPcurve,
+        face_reference: Option<usize>,
+    },
     /// Position of the adjacent face in the shell's face list.
     FaceSurface(usize),
 }
@@ -86,7 +95,7 @@ where C: StepFormat + StepLength
                     indices.push(*surface_idx);
                     (indices, cursor)
                 }
-                StepAssociatedGeometry::ExactParameterCurve(_) => {
+                StepAssociatedGeometry::ExactParameterCurve { .. } => {
                     indices.push(cursor);
                     (indices, cursor + StepLength::step_length(entry))
                 }
@@ -250,7 +259,8 @@ where
         is_open: bool,
     ) -> Self
     where
-        T: StepFormat + StepLength,
+        T: StepPcurve,
+        S: StepFormat,
     {
         let faces = shell
             .faces
@@ -282,14 +292,19 @@ where
             .take(shell.edges.len())
             .collect::<Vec<_>>();
         shell.faces.iter().enumerate().for_each(|(face_pos, face)| {
+            let encoded_surface = canonical_step_encoding(&face.surface);
             face.boundaries.iter().for_each(|wire| {
                 for edge_use in wire {
-                    let association = edge_use
-                        .trim_curve
-                        .as_ref()
-                        .map_or(EdgeAssociationSource::FaceSurface(face_pos), |trim_curve| {
-                            EdgeAssociationSource::ExactParameterCurve(trim_curve)
-                        });
+                    let association = edge_use.trim_curve.as_ref().map_or(
+                        EdgeAssociationSource::FaceSurface(face_pos),
+                        |trim_curve| EdgeAssociationSource::ExactParameterCurve {
+                            curve: trim_curve,
+                            face_reference: encoded_surface
+                                .as_deref()
+                                .filter(|encoding| trim_curve.matches_surface_encoding(encoding))
+                                .map(|_| face_pos),
+                        },
+                    );
                     edge_associations[edge_use.index].push(association);
                 }
             });
@@ -355,9 +370,13 @@ where
                     let associated_geometry = sources
                         .into_iter()
                         .map(|source| match source {
-                            EdgeAssociationSource::ExactParameterCurve(curve) => {
-                                StepAssociatedGeometry::ExactParameterCurve(curve)
-                            }
+                            EdgeAssociationSource::ExactParameterCurve {
+                                curve,
+                                face_reference,
+                            } => StepAssociatedGeometry::ExactParameterCurve {
+                                curve,
+                                support_reference: face_reference.map(|pos| surface_indices[pos]),
+                            },
                             EdgeAssociationSource::FaceSurface(face_pos) => {
                                 StepAssociatedGeometry::SurfaceRef(surface_indices[face_pos])
                             }
@@ -607,7 +626,9 @@ where
     S: StepLength,
 {
     fn new_trimmed<T>(solid: &'a CompressedTrimmedSolid<P, C, S, T>, idx: usize) -> Self
-    where T: StepFormat + StepLength {
+    where
+        T: StepPcurve,
+        S: StepFormat, {
         let mut cursor = idx + 1;
         let boundaries = solid
             .boundaries
@@ -709,8 +730,8 @@ impl<'a, P, C, S, T> From<&'a CompressedTrimmedShell<P, C, S, T>> for PreStepMod
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    T: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    T: StepPcurve,
 {
     fn from(shell: &'a CompressedTrimmedShell<P, C, S, T>) -> Self {
         Self::Shell(StepShell::new_trimmed(shell, 17, true))
@@ -721,8 +742,8 @@ impl<'a, P, C, S, T> From<&'a CompressedTrimmedSolid<P, C, S, T>> for PreStepMod
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    T: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    T: StepPcurve,
 {
     fn from(solid: &'a CompressedTrimmedSolid<P, C, S, T>) -> Self {
         Self::Solid(StepSolid::new_trimmed(solid, 16))
@@ -823,8 +844,8 @@ impl<'a, P, C, S, T> From<&'a CompressedTrimmedShell<P, C, S, T>> for StepModel<
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    T: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    T: StepPcurve,
 {
     fn from(shell: &'a CompressedTrimmedShell<P, C, S, T>) -> Self {
         Self(shell.into(), StepMeasurementContext::default())
@@ -835,8 +856,8 @@ impl<'a, P, C, S, T> From<&'a CompressedTrimmedSolid<P, C, S, T>> for StepModel<
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    T: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    T: StepPcurve,
 {
     fn from(solid: &'a CompressedTrimmedSolid<P, C, S, T>) -> Self {
         Self(solid.into(), StepMeasurementContext::default())
@@ -971,7 +992,9 @@ where
 {
     /// Pushes a trimmed shell to step models.
     pub fn push_trimmed_shell<T>(&mut self, shell: &'a CompressedTrimmedShell<P, C, S, T>)
-    where T: StepFormat + StepLength {
+    where
+        T: StepPcurve,
+        S: StepFormat, {
         let model = PreStepModel::Shell(StepShell::new_trimmed(shell, self.next_idx + 1, true));
         self.next_idx += model.step_length();
         self.models.push(model);
@@ -979,7 +1002,9 @@ where
 
     /// Pushes a trimmed solid to step models.
     pub fn push_trimmed_solid<T>(&mut self, solid: &'a CompressedTrimmedSolid<P, C, S, T>)
-    where T: StepFormat + StepLength {
+    where
+        T: StepPcurve,
+        S: StepFormat, {
         let model = PreStepModel::Solid(StepSolid::new_trimmed(solid, self.next_idx));
         self.next_idx += model.step_length();
         self.models.push(model);
@@ -1039,8 +1064,8 @@ impl<'a, P, C, S, U> FromIterator<&'a CompressedTrimmedShell<P, C, S, U>>
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    U: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    U: StepPcurve,
 {
     fn from_iter<T: IntoIterator<Item = &'a CompressedTrimmedShell<P, C, S, U>>>(iter: T) -> Self {
         let mut next_idx = 16;
@@ -1065,8 +1090,8 @@ impl<'a, P, C, S, U> FromIterator<&'a CompressedTrimmedSolid<P, C, S, U>>
 where
     P: Copy,
     C: StepLength,
-    S: StepLength,
-    U: StepFormat + StepLength,
+    S: StepFormat + StepLength,
+    U: StepPcurve,
 {
     fn from_iter<T: IntoIterator<Item = &'a CompressedTrimmedSolid<P, C, S, U>>>(iter: T) -> Self {
         let mut next_idx = 16;
