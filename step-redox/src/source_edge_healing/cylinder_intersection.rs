@@ -1,7 +1,10 @@
 //! Construct an explicitly separate regular intersection of two authored
 //! cylindrical carriers incident on the same defective source edge.
 
-use super::{SourceFaceEdgeUse, point3, source_edge_topology, unique_original_face_edge_use};
+use super::{
+    SourceEdgeTopology, SourceFaceEdgeUse, point3, source_edge_topology,
+    unique_original_face_edge_use,
+};
 use crate::brep::{self, CurveSupport, SurfaceSupport};
 use crate::source_edge_locus::{StepEdge, source_solid_length_scale_mm};
 use crate::step_entities::named_entity_parameters;
@@ -10,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use monstertruck_geometry::analytic_cylinder_intersection::{
     BoundedSourceIntersection, CylinderCarrier, CylinderIntersectionArc,
 };
-use monstertruck_geometry::prelude::{InnerSpace, Vector3};
+use monstertruck_geometry::prelude::{InnerSpace, Point3, Vector3};
 use serde::Serialize;
 
 #[derive(Clone, Copy)]
@@ -40,6 +43,7 @@ pub struct CylinderHealingEvidence {
     pub primary_deviation_mm: [f64; 2],
     pub secondary_deviation_mm: [f64; 2],
     pub locus_separation_mm: [f64; 2],
+    pub original_endpoint_residual_mm: [f64; 2],
     pub healed_endpoint_residual_mm: [f64; 2],
     pub angular_sweep_rad: f64,
     pub minimum_transverse_root_mm: f64,
@@ -116,6 +120,30 @@ fn incident_cylinders(
     Ok([first, second])
 }
 
+fn directed_vertex_residuals(
+    mut endpoints: [Point3; 2],
+    topology: SourceEdgeTopology,
+    scale: f64,
+    tolerance: f64,
+) -> Result<[f64; 2]> {
+    if !topology.curve_same_sense {
+        endpoints.reverse();
+    }
+    let residual = [
+        (endpoints[0] - point3(topology.start, scale)).magnitude(),
+        (endpoints[1] - point3(topology.end, scale)).magnitude(),
+    ];
+    if !residual
+        .iter()
+        .all(|value| value.is_finite() && *value <= tolerance)
+        || topology.start_vertex_id == topology.end_vertex_id
+        || (point3(topology.start, scale) - point3(topology.end, scale)).magnitude() <= tolerance
+    {
+        bail!("curve does not match distinct authored directed vertices");
+    }
+    Ok(residual)
+}
+
 /// Propose a new regular analytical edge only for a proven source defect.
 /// Resolve source units, uncertainty and both carriers from the original
 /// solid. A full-domain source angular certificate chooses the branch; the
@@ -152,6 +180,22 @@ pub fn propose_cylinder_intersection_healing(
     }
     let curve = spline.rational_curve().context("invalid source spline")?;
     let tolerance = request.endpoint_tolerance_mm;
+    let original_endpoint_residual_mm = directed_vertex_residuals(
+        [
+            point3(
+                *spline.control_points_mm.first().context("empty spline")?,
+                1.0,
+            ),
+            point3(
+                *spline.control_points_mm.last().context("empty spline")?,
+                1.0,
+            ),
+        ],
+        topology,
+        scale,
+        tolerance,
+    )?;
+
     let mut candidates =
         [(first, second), (second, first)]
             .into_iter()
@@ -181,24 +225,15 @@ pub fn propose_cylinder_intersection_healing(
         bail!("source defect does not exceed the authored uncertainty");
     }
     let arc = bound.proposal.arc;
-    let mut endpoints = [
-        arc.evaluate(0.0).context("invalid analytic start")?,
-        arc.evaluate(arc.sweep()).context("invalid analytic end")?,
-    ];
-    if !topology.curve_same_sense {
-        endpoints.reverse();
-    }
-    let residual = [
-        (endpoints[0] - point3(topology.start, scale)).magnitude(),
-        (endpoints[1] - point3(topology.end, scale)).magnitude(),
-    ];
-    if !residual
-        .iter()
-        .all(|value| value.is_finite() && *value <= tolerance)
-        || topology.start_vertex_id == topology.end_vertex_id
-    {
-        bail!("analytic edge does not match distinct authored directed vertices");
-    }
+    let residual = directed_vertex_residuals(
+        [
+            arc.evaluate(0.0).context("invalid analytic start")?,
+            arc.evaluate(arc.sweep()).context("invalid analytic end")?,
+        ],
+        topology,
+        scale,
+        tolerance,
+    )?;
     Ok(CylinderHealingCandidate {
         evidence: CylinderHealingEvidence {
             original_solid_id: request.solid_id,
@@ -219,6 +254,7 @@ pub fn propose_cylinder_intersection_healing(
                 bound.secondary_deviation.upper,
             ],
             locus_separation_mm: [bound.separation_lower, bound.separation_upper],
+            original_endpoint_residual_mm,
             healed_endpoint_residual_mm: residual,
             angular_sweep_rad: arc.sweep(),
             minimum_transverse_root_mm: arc.minimum_root(),
