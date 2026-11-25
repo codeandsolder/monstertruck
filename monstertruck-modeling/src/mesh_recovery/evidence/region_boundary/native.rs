@@ -63,6 +63,9 @@ pub enum NativeTrimError {
     /// A continuous projected native planar trim crosses another trim.
     #[error("self-crossing planar native trim domain")]
     PlanarTrimCrossing,
+    /// Shared trims cross on a locally injective revolution chart.
+    #[error("crossing shared trim on linear revolution")]
+    RevolutionTrimCrossing,
     /// Native curve containment or endpoint consistency failed.
     #[error("native face geometry inconsistent")]
     FaceGeometry,
@@ -174,6 +177,49 @@ struct RegionAssemblyInput<'a> {
 }
 
 impl RegionAssemblyInput<'_> {
+    fn reject_revolution_crossings(&self, trims: &mut [Result<Vec<Edge>, NativeTrimError>]) {
+        let mut rejected = std::collections::BTreeSet::new();
+        for region in &self.graph.regions {
+            if self.approximated.contains(&region.region) {
+                continue;
+            }
+            let Some(SurfaceCarrier::LinearRevolution { origin, axis, .. }) = self
+                .partition
+                .carriers
+                .get(region.region)
+                .copied()
+                .flatten()
+            else {
+                continue;
+            };
+            let Ok(boundary) = &region.boundary else {
+                continue;
+            };
+            let edges = boundary
+                .loops
+                .iter()
+                .flatten()
+                .flat_map(|reference| {
+                    trims
+                        .get(reference.trim)
+                        .and_then(|t| t.as_ref().ok())
+                        .into_iter()
+                        .flatten()
+                        .map(move |edge| (reference.trim, edge))
+                })
+                .collect::<Vec<_>>();
+            rejected.extend(planar_domain::revolution_crossings(
+                &edges,
+                origin,
+                axis,
+                self.options.intersection_tolerance,
+            ));
+        }
+        for id in rejected {
+            trims[id] = Err(NativeTrimError::RevolutionTrimCrossing);
+        }
+    }
+
     fn assemble(
         &self,
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
@@ -185,6 +231,7 @@ impl RegionAssemblyInput<'_> {
                 .ok_or(NativeTrimError::InvalidSource)?
                 .push(id);
         }
+        self.reject_revolution_crossings(trims);
         let plans = self
             .graph
             .regions

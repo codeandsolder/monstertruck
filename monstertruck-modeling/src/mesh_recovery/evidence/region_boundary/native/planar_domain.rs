@@ -12,7 +12,7 @@
 //! Tangencies, overlapping curves and unresolved near-incidence are not
 //! certified by this test.
 
-use crate::{InnerSpace, Point3, Vector2, Vector3, Wire};
+use crate::{Edge, InnerSpace, Point3, Vector2, Vector3, Wire};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };
@@ -194,14 +194,15 @@ fn self_crossing(span: &Span, depth: usize, remaining: &mut usize) -> bool {
     })
 }
 
-fn projected_spans(
-    wires: &[Wire],
+fn projected_spans<'a>(
+    edges: impl Iterator<Item = (usize, &'a Edge)>,
     origin: Point3,
     basis: [Vector3; 2],
+    halfspace: Option<Vector3>,
     tolerance: f64,
-) -> Option<Vec<Span>> {
+) -> Option<Vec<(usize, Span)>> {
     let mut spans = Vec::new();
-    for edge in wires.iter().flatten() {
+    for (id, edge) in edges {
         let curve = edge.oriented_curve().try_into_homogeneous_bspline_curve()?;
         for span in proof_bezier_spans(&curve)? {
             let maximum = span.controls.iter().map(|p| p[3]).fold(0.0_f64, f64::max);
@@ -227,6 +228,15 @@ fn projected_spans(
             if !arithmetic.is_finite() {
                 return None;
             }
+            let margin = tolerance.max(arithmetic);
+            if let Some(direction) = halfspace {
+                for p in &span.controls {
+                    let q = Point3::new(p[0] / p[3], p[1] / p[3], p[2] / p[3]) - origin;
+                    if q.dot(direction) <= margin {
+                        return None;
+                    }
+                }
+            }
             let controls = span
                 .controls
                 .into_iter()
@@ -236,7 +246,7 @@ fn projected_spans(
                     [q.dot(basis[0]) * w, q.dot(basis[1]) * w, 0.0, w]
                 })
                 .collect();
-            spans.push(Span::new(controls, tolerance.max(arithmetic))?);
+            spans.push((id, Span::new(controls, margin)?));
         }
     }
     Some(spans)
@@ -251,39 +261,124 @@ pub(super) fn has_crossing(
     tolerance: f64,
 ) -> bool {
     let basis = super::normal_basis(normal).into();
-    let Some(mut spans) = projected_spans(wires, origin, basis, tolerance) else {
+    let Some(spans) = projected_spans(
+        wires.iter().flatten().enumerate(),
+        origin,
+        basis,
+        None,
+        tolerance,
+    ) else {
         return false;
     };
-    let mut remaining = MAX_PAIR_VISITS;
-    if spans
+    !crossing_ids(spans, true).is_empty()
+}
+
+// Orthogonal projection onto axial/tangential coordinates is injective on
+// a positive-radius linear revolution restricted to one open radial halfspace.
+// The entire rational control hull must lie in that halfspace.
+pub(super) fn revolution_crossings(
+    edges: &[(usize, &Edge)],
+    origin: Point3,
+    axis: Vector3,
+    tolerance: f64,
+) -> Vec<usize> {
+    let radial = edges
         .iter()
-        .any(|span| self_crossing(span, MAX_SUBDIVISION, &mut remaining))
-    {
-        return true;
+        .fold(Vector3::new(0.0, 0.0, 0.0), |sum, (_, edge)| {
+            let p = edge.front().point() - origin;
+            let q = edge.back().point() - origin;
+            let midpoint = p + q;
+            sum + midpoint - axis * midpoint.dot(axis)
+        });
+    let length = radial.magnitude();
+    if length <= tolerance || !length.is_finite() {
+        return Vec::new();
     }
-    // Sweep the conservative projected hull bounds. Do not spend
-    // quadratic work on pairs with disjoint horizontal intervals.
-    spans.sort_by(|a, b| (a.bounds[0].x - a.margin).total_cmp(&(b.bounds[0].x - b.margin)));
-    for (i, a) in spans.iter().enumerate() {
-        for b in &spans[i + 1..] {
+    let normal = radial / length;
+    let Some(spans) = projected_spans(
+        edges.iter().copied(),
+        origin,
+        [axis, axis.cross(normal)],
+        Some(normal),
+        tolerance,
+    ) else {
+        return Vec::new();
+    };
+    crossing_ids(spans, false)
+}
+
+fn crossing_ids(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<usize> {
+    let mut remaining = MAX_PAIR_VISITS;
+    let mut result = std::collections::BTreeSet::new();
+    for (id, span) in &spans {
+        if self_crossing(span, MAX_SUBDIVISION, &mut remaining) {
+            if first_only {
+                return vec![*id];
+            }
+            result.insert(*id);
+        }
+    }
+    // Sweep conservative projected hull bounds.
+    spans.sort_by(|(_, a), (_, b)| {
+        (a.bounds[0].x - a.margin).total_cmp(&(b.bounds[0].x - b.margin))
+    });
+    for (i, (left, a)) in spans.iter().enumerate() {
+        for (right, b) in &spans[i + 1..] {
             if remaining == 0 {
-                return false;
+                return result.into_iter().collect();
             }
             if b.bounds[0].x - b.margin > a.bounds[1].x + a.margin {
                 break;
             }
             if crossing(a, b, MAX_SUBDIVISION, &mut remaining) {
-                return true;
+                if first_only {
+                    return vec![*left];
+                }
+                result.extend([*left, *right]);
             }
         }
     }
-    false
+    result.into_iter().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BsplineCurve, Curve, Edge, EuclideanSpace, KnotVector, NurbsCurve, builder};
+
+    #[test]
+    fn revolution_chart_rejects_crossing_trims_without_changing_carrier()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Exact rational quarter-circle XY coordinates, with independent
+        // rational Z coordinates. Both curves lie on the unit cylinder.
+        let weight = std::f64::consts::FRAC_1_SQRT_2;
+        let arc =
+            |height: f64, middle: f64, side: f64| -> Result<Edge, Box<dyn std::error::Error>> {
+                let a = Point3::new(side, 0.0, height);
+                let b = Point3::new(0.0, side, height);
+                let mid = Point3::new(side, side, middle);
+                let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+                    KnotVector::bezier_knot(2),
+                    vec![
+                        a.to_vec().extend(1.0),
+                        mid.to_vec().extend(1.0) * weight,
+                        b.to_vec().extend(1.0),
+                    ],
+                )?));
+                Ok(Edge::new(&builder::vertex(a), &builder::vertex(b), curve)?)
+            };
+        let bow = arc(0.0, 4.0, 1.0)?;
+        let level = arc(1.0, 1.0, 1.0)?;
+        let clear = arc(0.0, 0.0, 1.0)?;
+        let opposite = arc(1.0, 1.0, -1.0)?;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vector3::unit_z();
+        let check = |a, b| revolution_crossings(&[(3, a), (7, b)], origin, axis, 1e-8);
+        assert_eq!(check(&bow, &level), vec![3, 7]);
+        assert!(check(&clear, &level).is_empty());
+        assert!(check(&bow, &opposite).is_empty());
+        Ok(())
+    }
 
     #[test]
     fn curved_planar_trim_crossing_is_not_a_valid_native_domain()
