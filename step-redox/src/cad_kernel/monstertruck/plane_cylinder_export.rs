@@ -110,8 +110,8 @@ impl Section {
         let (x, sweep) = self.sweep(points, tolerance)?;
         let y = self.axis.cross(x);
         // At most four rational quadratic pieces for a single revolution.
-        let count =
-            (1..=4).find(|n| sweep.abs() <= f64::from(*n) * FRAC_PI_2 + tolerance / self.radius)?;
+        let count = (1..=4)
+            .find(|n| sweep.abs() <= f64::from(*n).mul_add(FRAC_PI_2, tolerance / self.radius))?;
         let step = sweep / f64::from(count);
         let w = (step * 0.5).cos();
         let control = |angle: f64, weight: f64| {
@@ -123,7 +123,7 @@ impl Section {
         let mut knots = vec![0.0; 3];
         for i in 0..count {
             let start = f64::from(i) * step;
-            controls.push(control(start + step * 0.5, w));
+            controls.push(control(step.mul_add(0.5, start), w));
             controls.push(control(start + step, 1.0));
             let knot = f64::from(i + 1) / f64::from(count);
             knots.extend([knot; 2]);

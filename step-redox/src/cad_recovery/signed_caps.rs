@@ -191,6 +191,94 @@ fn additive_features(
     Ok(features)
 }
 
+fn select_cutters<'a>(
+    host: &SignedCapPairProposal,
+    cutters: &[(&'a SignedCapPairProposal, Vec<[f64; 3]>)],
+) -> Vec<&'a SignedCapPairProposal> {
+    let host_cap = cap(&host.prism);
+    // Actual boundary witnesses of a cutter must be contained by the
+    // positive prism if this simple subtraction grammar is sufficient.
+    // This is only candidate selection, never a material admission proof.
+    // For spline profiles the analytic ray predicate is not available;
+    // leave the decision to the complete source proof.
+    let spline_host = host
+        .prism
+        .profile_loops()
+        .flatten()
+        .any(crate::profile_curves::RecoveredProfileCurve::is_spline);
+    let eligible = cutters
+        .iter()
+        .filter(|(_, points)| spline_host || points.iter().all(|&p| cap_contains(&host_cap, p)))
+        .map(|(proposal, _)| *proposal)
+        .collect::<Vec<_>>();
+    let mut selected: Vec<&SignedCapPairProposal> = Vec::new();
+    for candidate in adjacent_pairs(&eligible) {
+        if !selected
+            .iter()
+            .any(|other| convex::equivalent(&candidate.prism, &other.prism))
+        {
+            selected.push(candidate);
+        }
+    }
+    selected
+}
+
+/// Called only after the complete oriented source-boundary proof succeeds.
+fn proven_assembly_fragment(
+    solid_id: u64,
+    host: &SignedCapPairProposal,
+    additions: &[AdditiveFeature],
+    selected: &[&SignedCapPairProposal],
+    rounds: &[super::channel_round_ends::RoundEndProposal],
+    mut model: CadModel,
+    root: NodeId,
+) -> Result<CadFragment> {
+    let cutter_cap_face_ids = selected
+        .iter()
+        .map(|c| c.prism.cap_face_ids)
+        .collect::<Vec<_>>();
+    let round_end_face_ids = rounds
+        .iter()
+        .flat_map(|round| round.round_face_ids().iter().copied())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let additive_face_ids = additions
+        .iter()
+        .flat_map(|feature| feature.face_ids.iter().copied())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut ids = HashSet::from([solid_id]);
+    ids.extend(additive_face_ids.iter().copied());
+    ids.extend(host.prism.cap_face_ids);
+    ids.extend(cutter_cap_face_ids.iter().flatten().copied());
+    for round in rounds {
+        ids.extend(round.source_entity_ids().iter().copied());
+    }
+    let mut source_entity_ids = ids.into_iter().collect::<Vec<_>>();
+    source_entity_ids.sort_unstable();
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids,
+            proof: ProofStatus::WithinTolerance,
+            max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+        },
+    )?;
+    Ok(CadFragment {
+        source: CadFragmentSource::SignedCapAssembly {
+            solid_id,
+            host_cap_face_ids: host.prism.cap_face_ids,
+            cutter_cap_face_ids,
+            round_end_face_ids,
+            additive_face_ids,
+        },
+        model,
+        root,
+    })
+}
+
 pub(super) fn recover<K: CadKernel>(
     source: &SourceRecovery<'_, K>,
     ceiling: Option<u64>,
@@ -219,31 +307,7 @@ pub(super) fn recover<K: CadKernel>(
         .iter()
         .filter(|p| p.interval == CapInterval::Material)
     {
-        let host_cap = cap(&host.prism);
-        // Actual boundary witnesses of a cutter must be contained by the
-        // positive prism if this simple subtraction grammar is sufficient.
-        // This is only candidate selection, never a material admission proof.
-        // For spline profiles the analytic ray predicate is not available;
-        // leave the decision to the complete source proof.
-        let spline_host = host
-            .prism
-            .profile_loops()
-            .flatten()
-            .any(crate::profile_curves::RecoveredProfileCurve::is_spline);
-        let eligible = cutters
-            .iter()
-            .filter(|(_, points)| spline_host || points.iter().all(|&p| cap_contains(&host_cap, p)))
-            .map(|(proposal, _)| *proposal)
-            .collect::<Vec<_>>();
-        let mut selected: Vec<&SignedCapPairProposal> = Vec::new();
-        for candidate in adjacent_pairs(&eligible) {
-            if !selected
-                .iter()
-                .any(|other| convex::equivalent(&candidate.prism, &other.prism))
-            {
-                selected.push(candidate);
-            }
-        }
+        let selected = select_cutters(host, &cutters);
         let additions = match reduced
             .as_ref()
             .map(|solid| additive_features(solid, host, &proposals, &extensions))
@@ -284,7 +348,7 @@ pub(super) fn recover<K: CadKernel>(
             }
             Some(pair)
         }) {
-            let (mut model, root) = match compose(host, additions, &selected, rounds) {
+            let (model, root) = match compose(host, additions, &selected, rounds) {
                 Ok(candidate) => candidate,
                 Err(error) => {
                     best.consider(MaterialFamily::SignedCaps, Err(error))?;
@@ -301,52 +365,18 @@ pub(super) fn recover<K: CadKernel>(
             {
                 continue;
             }
-            let cutter_cap_face_ids = selected
-                .iter()
-                .map(|c| c.prism.cap_face_ids)
-                .collect::<Vec<_>>();
-            let round_end_face_ids = rounds
-                .iter()
-                .flat_map(|round| round.round_face_ids().iter().copied())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let additive_face_ids = additions
-                .iter()
-                .flat_map(|feature| feature.face_ids.iter().copied())
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let mut ids = HashSet::from([source.solid_id]);
-            ids.extend(additive_face_ids.iter().copied());
-            ids.extend(host.prism.cap_face_ids);
-            ids.extend(cutter_cap_face_ids.iter().flatten().copied());
-            for round in rounds {
-                ids.extend(round.source_entity_ids().iter().copied());
-            }
-            let mut source_entity_ids = ids.into_iter().collect::<Vec<_>>();
-            source_entity_ids.sort_unstable();
-            model.set_provenance(
-                root,
-                Provenance {
-                    source_entity_ids,
-                    proof: ProofStatus::WithinTolerance,
-                    max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-                },
-            )?;
             best.consider(
                 MaterialFamily::SignedCaps,
-                Ok(Some(CadFragment {
-                    source: CadFragmentSource::SignedCapAssembly {
-                        solid_id: source.solid_id,
-                        host_cap_face_ids: host.prism.cap_face_ids,
-                        cutter_cap_face_ids,
-                        round_end_face_ids,
-                        additive_face_ids,
-                    },
+                proven_assembly_fragment(
+                    source.solid_id,
+                    host,
+                    additions,
+                    &selected,
+                    rounds,
                     model,
                     root,
-                })),
+                )
+                .map(Some),
             )?;
         }
     }

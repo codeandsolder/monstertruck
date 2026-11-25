@@ -66,7 +66,7 @@ impl RoundFrame {
         if !radius.is_finite()
             || radius <= LENGTH
             || dot(axis, width_axis).abs() > DIRECTION
-            || (2.0 * radius - channel.height_mm).abs() > LENGTH
+            || (2.0_f64.mul_add(radius, -channel.height_mm)).abs() > LENGTH
             || (dot(sub(cylinder.axis_origin_mm, channel.origin_mm), width_axis) - radius).abs()
                 > LENGTH
         {

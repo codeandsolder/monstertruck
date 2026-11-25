@@ -72,12 +72,12 @@ impl LipProposal {
     fn annular_profile(&self, back: f64, front: f64) -> Option<Vec<Curve2d>> {
         let inner = self.band.inner;
         let outer = self.band.outer;
-        let a = [back, Band::radial_at(back, inner)?];
-        let b = [0.0, inner];
-        let c = [front, inner];
-        let d = [front, outer];
-        let e = [0.0, outer];
-        let f = [back, Band::radial_at(back, outer)?];
+        let inner_back = [back, Band::radial_at(back, inner)?];
+        let inner_tangent = [0.0, inner];
+        let inner_front = [front, inner];
+        let outer_front = [front, outer];
+        let outer_tangent = [0.0, outer];
+        let outer_back = [back, Band::radial_at(back, outer)?];
         let line = |start_mm, end_mm| Curve2d::Line { start_mm, end_mm };
         let arc = |radius_mm, start: [f64; 2], end: [f64; 2]| Curve2d::CircleArc {
             center_mm: [0.0, 0.0],
@@ -87,21 +87,21 @@ impl LipProposal {
         };
         Some(if front > 0.0 {
             vec![
-                arc(inner, a, b),
-                line(b, c),
-                line(c, d),
-                line(d, e),
-                arc(outer, e, f),
-                line(f, a),
+                arc(inner, inner_back, inner_tangent),
+                line(inner_tangent, inner_front),
+                line(inner_front, outer_front),
+                line(outer_front, outer_tangent),
+                arc(outer, outer_tangent, outer_back),
+                line(outer_back, inner_back),
             ]
         } else {
             vec![
-                line(a, f),
-                arc(outer, f, e),
-                line(e, d),
-                line(d, c),
-                line(c, b),
-                arc(inner, b, a),
+                line(inner_back, outer_back),
+                arc(outer, outer_back, outer_tangent),
+                line(outer_tangent, outer_front),
+                line(outer_front, inner_front),
+                line(inner_front, inner_tangent),
+                arc(inner, inner_tangent, inner_back),
             ]
         })
     }
@@ -112,8 +112,8 @@ impl LipProposal {
         // polygon. The annular root remains separated from tangency.
         let clearance = 0.25 * (self.band.outer - self.band.inner);
         let back_clearance = clearance.min(0.25 * (self.band.inner - self.back.abs()));
-        let back = self.back - sign * back_clearance;
-        let front = self.front + sign * clearance;
+        let back = sign.mul_add(-back_clearance, self.back);
+        let front = sign.mul_add(clearance, self.front);
         let mut model = CadModel::new();
         let profile = self
             .annular_profile(back, front)
@@ -122,7 +122,7 @@ impl LipProposal {
         let curved = extrude_profile_in_frame(
             &mut model,
             profile,
-            self.width_mm + 2.0 * clearance,
+            2.0_f64.mul_add(clearance, self.width_mm),
             add(f.origin, mul(f.width, -clearance)),
             [f.side, f.radial, f.width],
         );
