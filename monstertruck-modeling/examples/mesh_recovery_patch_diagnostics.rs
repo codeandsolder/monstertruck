@@ -54,6 +54,32 @@ struct CandidateSelection {
     polygons_by_region: BTreeMap<usize, usize>,
 }
 
+// A singleton source facet is the minimal interpolation data for a plane.
+fn region_polygon_counts(partition: &SurfaceRegionPartition) -> BTreeMap<usize, usize> {
+    let mut counts = BTreeMap::new();
+    for &region in &partition.region_by_polygon {
+        *counts.entry(region).or_default() += 1;
+    }
+    counts
+}
+
+fn singleton_planar_connectors(
+    partition: &SurfaceRegionPartition,
+    counts: &BTreeMap<usize, usize>,
+) -> Vec<usize> {
+    counts
+        .iter()
+        .filter_map(|(&region, &count)| {
+            (count == 1
+                && matches!(
+                    partition.carriers[region],
+                    Some(SurfaceCarrier::Plane { .. })
+                ))
+            .then_some(region)
+        })
+        .collect()
+}
+
 fn candidate_groups(
     recovery: &RecoveredAnalyticMesh,
     index: &RegionBoundaryIndex<'_>,
@@ -74,23 +100,8 @@ fn candidate_groups(
         .collect::<BTreeSet<_>>();
     let initial = connected_groups(partition, failed)?;
     let required = initial.iter().flatten().copied().collect::<BTreeSet<_>>();
-    let mut polygons_by_region = BTreeMap::<usize, usize>::new();
-    for &region in &partition.region_by_polygon {
-        *polygons_by_region.entry(region).or_default() += 1;
-    }
-    // One source facet is the minimal interpolation data for a plane.
-    // Do not automatically replace any region backed by multiple facets.
-    let connectors = polygons_by_region
-        .iter()
-        .filter_map(|(&region, &count)| {
-            (count == 1
-                && matches!(
-                    partition.carriers[region],
-                    Some(SurfaceCarrier::Plane { .. })
-                ))
-            .then_some(region)
-        })
-        .collect::<Vec<_>>();
+    let polygons_by_region = region_polygon_counts(partition);
+    let connectors = singleton_planar_connectors(partition, &polygons_by_region);
     let selected = index.complete_patch_fans(
         partition,
         &required.iter().copied().collect::<Vec<_>>(),
@@ -231,21 +242,7 @@ fn global_trial(
         },
         |limit| {
             let partition = &recovery.reconciled.partition;
-            let mut counts = BTreeMap::<usize, usize>::new();
-            for &region in &partition.region_by_polygon {
-                *counts.entry(region).or_default() += 1;
-            }
-            let allowed = counts
-                .iter()
-                .filter_map(|(&region, &count)| {
-                    (count == 1
-                        && matches!(
-                            partition.carriers[region],
-                            Some(SurfaceCarrier::Plane { .. })
-                        ))
-                    .then_some(region)
-                })
-                .collect::<Vec<_>>();
+            let allowed = singleton_planar_connectors(partition, &region_polygon_counts(partition));
             recovery
                 .construct_hybrid_with_connectors(
                     &required,
