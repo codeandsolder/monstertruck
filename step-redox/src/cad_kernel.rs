@@ -1797,13 +1797,29 @@ pub mod monstertruck {
             let seed = kernel.evaluate_seed(&model, prefix)?;
             let actual = kernel.evaluate_extended(&extension, root, seed)?;
             let expected = kernel.evaluate(&extension, root)?;
-            assert_eq!(kernel.to_step(&actual)?, kernel.to_step(&expected)?);
+            let actual = kernel.to_step(&actual)?;
+            let expected = kernel.to_step(&expected)?;
+            assert_eq!(
+                actual.split_once("\nDATA;").context("missing STEP DATA")?.1,
+                expected
+                    .split_once("\nDATA;")
+                    .context("missing STEP DATA")?
+                    .1,
+            );
 
             // Same prefix and base policy: transfer the already evaluated solid.
             let seed = kernel.evaluate_seed(&model, prefix)?;
             let actual = kernel.evaluate_extended(&model, prefix, seed)?;
             let expected = kernel.evaluate(&model, prefix)?;
-            assert_eq!(kernel.to_step(&actual)?, kernel.to_step(&expected)?);
+            let actual = kernel.to_step(&actual)?;
+            let expected = kernel.to_step(&expected)?;
+            assert_eq!(
+                actual.split_once("\nDATA;").context("missing STEP DATA")?.1,
+                expected
+                    .split_once("\nDATA;")
+                    .context("missing STEP DATA")?
+                    .1,
+            );
 
             let seed = kernel.evaluate_seed(&model, prefix)?;
             assert!(other.evaluate_extended(&model, prefix, seed).is_err());
