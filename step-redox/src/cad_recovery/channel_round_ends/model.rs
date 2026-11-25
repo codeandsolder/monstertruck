@@ -2,35 +2,12 @@
 
 use super::{EndCarriers, LENGTH, RoundEndProposal, RoundFrame};
 use crate::{
-    cad_ir::{
-        BooleanOp, CadModel, CadNode, Curve2d, NodeId, Profile2d, ProfileLoop, ProofStatus,
-        Provenance,
-    },
-    cad_recovery::solid::local_frame_transform,
+    cad_ir::{BooleanOp, CadModel, CadNode, Curve2d, NodeId, ProofStatus, Provenance},
+    cad_recovery::solid::extrude_profile_in_frame as extrude,
     math3::{add, mul},
 };
 use anyhow::{Result, ensure};
 use std::f64::consts::PI;
-
-fn extrude(
-    model: &mut CadModel,
-    profile: Vec<Curve2d>,
-    height: f64,
-    origin: [f64; 3],
-    axes: [[f64; 3]; 3],
-) -> NodeId {
-    let body = model.add_node(CadNode::Extrude {
-        profile: Profile2d {
-            loops: vec![ProfileLoop { curves: profile }],
-        },
-        vector_mm: [0.0, 0.0, height],
-    });
-    let [x, y, z] = axes;
-    model.add_node(CadNode::Transform {
-        child: body,
-        transform: local_frame_transform(origin, x, y, z),
-    })
-}
 
 fn semicircle(model: &mut CadModel, frame: RoundFrame, lower: f64, upper: f64) -> NodeId {
     let r = frame.radius;

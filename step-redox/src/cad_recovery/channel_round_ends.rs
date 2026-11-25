@@ -5,6 +5,7 @@
 //! cutter hypotheses only; admitting any composed body still requires the
 //! independent oriented whole-source boundary proof.
 
+use super::source_incidence::FaceIncidence;
 use crate::{
     brep::{CurveSupport, CylinderSupport, OrientedEdgeUse, SurfaceSupport},
     math3::{canonical_unit_direction, cross, distance, dot, norm, normalize, sub},
@@ -12,7 +13,7 @@ use crate::{
     solid_extrusions::{RecoveredSolidExtrusion, source_boundary_edge_witness_points},
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 mod model;
 
@@ -114,7 +115,7 @@ impl RoundFrame {
     }
 }
 
-fn coaxial(first: CylinderSupport, second: CylinderSupport) -> bool {
+pub(super) fn coaxial(first: CylinderSupport, second: CylinderSupport) -> bool {
     let (Some(a), Some(b)) = (
         normalize(first.axis, DIRECTION),
         normalize(second.axis, DIRECTION),
@@ -129,66 +130,37 @@ fn same_cylinder(first: CylinderSupport, second: CylinderSupport) -> bool {
     coaxial(first, second) && (first.radius_mm - second.radius_mm).abs() <= LENGTH
 }
 
-struct Incidence<'a> {
-    edge_faces: BTreeMap<u64, Vec<&'a ReducedFace>>,
-}
-
-impl<'a> Incidence<'a> {
-    fn new(solid: &'a ReducedSolid) -> Self {
-        let mut edge_faces = BTreeMap::<_, Vec<_>>::new();
-        for face in solid.faces() {
-            for edge in face.loop_edges() {
-                edge_faces.entry(edge.edge_id).or_default().push(face);
+fn group<'a>(
+    incidence: &FaceIncidence<'a>,
+    first: &'a ReducedFace,
+    cylinder: CylinderSupport,
+) -> Option<Vec<&'a ReducedFace>> {
+    let mut seen = BTreeSet::from([first.id]);
+    let mut faces = vec![first];
+    let mut index = 0;
+    while let Some(face) = faces.get(index).copied() {
+        for edge in face.loop_edges() {
+            // An authored periodic seam has two uses on this same face.
+            // It is not an external neighbor.
+            if incidence
+                .owners(edge.edge_id)?
+                .iter()
+                .all(|f| f.id == face.id)
+            {
+                continue;
+            }
+            let neighbor = incidence.neighbor(face.id, edge.edge_id)?;
+            if !neighbor.surface_forward
+                && let SurfaceSupport::Cylinder(other) = neighbor.surface
+                && same_cylinder(cylinder, other)
+                && seen.insert(neighbor.id)
+            {
+                faces.push(neighbor);
             }
         }
-        Self { edge_faces }
+        index += 1;
     }
-
-    fn neighbor(&self, face: u64, edge: u64) -> Option<&'a ReducedFace> {
-        let owners = self.edge_faces.get(&edge)?;
-        let [first, second] = owners.as_slice() else {
-            return None;
-        };
-        match (first.id == face, second.id == face) {
-            (true, false) => Some(second),
-            (false, true) => Some(first),
-            _ => None,
-        }
-    }
-
-    fn group(
-        &self,
-        first: &'a ReducedFace,
-        cylinder: CylinderSupport,
-    ) -> Option<Vec<&'a ReducedFace>> {
-        let mut seen = BTreeSet::from([first.id]);
-        let mut faces = vec![first];
-        let mut index = 0;
-        while let Some(face) = faces.get(index).copied() {
-            for edge in face.loop_edges() {
-                // An authored periodic seam has two uses on this same face.
-                // It is not an external neighbor.
-                if self
-                    .edge_faces
-                    .get(&edge.edge_id)?
-                    .iter()
-                    .all(|f| f.id == face.id)
-                {
-                    continue;
-                }
-                let neighbor = self.neighbor(face.id, edge.edge_id)?;
-                if !neighbor.surface_forward
-                    && let SurfaceSupport::Cylinder(other) = neighbor.surface
-                    && same_cylinder(cylinder, other)
-                    && seen.insert(neighbor.id)
-                {
-                    faces.push(neighbor);
-                }
-            }
-            index += 1;
-        }
-        Some(faces)
-    }
+    Some(faces)
 }
 
 struct EndBoundary<'a> {
@@ -197,7 +169,7 @@ struct EndBoundary<'a> {
 }
 
 fn external_boundaries<'a>(
-    incidence: &Incidence<'a>,
+    incidence: &FaceIncidence<'a>,
     group: &[&'a ReducedFace],
     channel: &RecoveredSolidExtrusion,
     frame: RoundFrame,
@@ -208,8 +180,7 @@ fn external_boundaries<'a>(
     for face in group {
         for edge in face.loop_edges() {
             if incidence
-                .edge_faces
-                .get(&edge.edge_id)?
+                .owners(edge.edge_id)?
                 .iter()
                 .all(|f| ids.contains(&f.id))
             {
@@ -355,7 +326,7 @@ fn coaxial_ends(frame: RoundFrame, boundaries: &[EndBoundary<'_>]) -> Option<End
 
 fn proposal(
     solid_id: u64,
-    incidence: &Incidence<'_>,
+    incidence: &FaceIncidence<'_>,
     group: &[&ReducedFace],
     channel: &RecoveredSolidExtrusion,
     mut frame: RoundFrame,
@@ -382,7 +353,7 @@ pub(super) fn detect(
     solid: &ReducedSolid,
     channel: &RecoveredSolidExtrusion,
 ) -> Vec<RoundEndProposal> {
-    let incidence = Incidence::new(solid);
+    let incidence = FaceIncidence::new(solid);
     let mut seen = BTreeSet::new();
     let mut proposals = Vec::new();
     for face in solid.faces() {
@@ -395,7 +366,7 @@ pub(super) fn detect(
         let Some(frame) = RoundFrame::from_channel(cylinder, channel) else {
             continue;
         };
-        let Some(group) = incidence.group(face, cylinder) else {
+        let Some(group) = group(&incidence, face, cylinder) else {
             continue;
         };
         seen.extend(group.iter().map(|f| f.id));

@@ -112,11 +112,12 @@ fn adjacent_pairs<'a>(candidates: &[&'a SignedCapPairProposal]) -> Vec<&'a Signe
 
 fn compose(
     host: &SignedCapPairProposal,
+    additions: &[AdditiveFeature],
     cutters: &[&SignedCapPairProposal],
     rounds: &[super::channel_round_ends::RoundEndProposal],
 ) -> Result<(CadModel, NodeId)> {
-    let mut models = Vec::with_capacity(cutters.len() + rounds.len() + 1);
-    models.push(model(&host.prism)?);
+    let host_model = model(&host.prism)?;
+    let mut models = Vec::with_capacity(cutters.len() + rounds.len());
     for cutter in cutters {
         let extended = convex::through_openings(&host.prism, &cutter.prism);
         models.push(model(extended.as_ref().unwrap_or(&cutter.prism))?);
@@ -124,16 +125,63 @@ fn compose(
     for round in rounds {
         models.push(round.model()?);
     }
-    let steps = models
-        .iter()
-        .enumerate()
-        .map(|(index, (model, root))| ConstructiveStep {
-            model,
-            root: *root,
-            operation: (index != 0).then_some(BooleanOp::Difference),
-        })
-        .collect::<Vec<_>>();
+    let mut steps = vec![ConstructiveStep {
+        model: &host_model.0,
+        root: host_model.1,
+        operation: None,
+    }];
+    steps.extend(additions.iter().map(|addition| ConstructiveStep {
+        model: &addition.model,
+        root: addition.root,
+        operation: Some(BooleanOp::Union),
+    }));
+    steps.extend(models.iter().map(|(model, root)| ConstructiveStep {
+        model,
+        root: *root,
+        operation: Some(BooleanOp::Difference),
+    }));
     compose_constructive_sequence_model(&steps)
+}
+
+struct AdditiveFeature {
+    model: CadModel,
+    root: NodeId,
+    face_ids: Vec<u64>,
+}
+
+fn additive_features(
+    solid: &crate::reduced_brep::ReducedSolid,
+    host: &SignedCapPairProposal,
+    proposals: &[SignedCapPairProposal],
+    extensions: &[crate::solid_lofts::RuledEndExtension],
+) -> Result<Vec<AdditiveFeature>> {
+    let host_cap = cap(&host.prism);
+    let mut features = Vec::new();
+    for extension in extensions {
+        if !cap_contains(&host_cap, extension.shoulder_point_mm)
+            || cap_contains(&host_cap, extension.tip_point_mm)
+        {
+            continue;
+        }
+        let CadFragmentSource::RuledEndExtension { tip_face_id, wall_face_ids, .. } =
+            &extension.fragment.source
+        else {
+            continue;
+        };
+        let face_ids = std::iter::once(*tip_face_id)
+            .chain(wall_face_ids.iter().copied())
+            .collect();
+        features.push(AdditiveFeature {
+            model: extension.fragment.model.clone(),
+            root: extension.fragment.root,
+            face_ids,
+        });
+    }
+    for lip in super::tapered_lip::detect(solid, &host.prism, proposals) {
+        let (model, root) = lip.model()?;
+        features.push(AdditiveFeature { model, root, face_ids: lip.source_face_ids().to_vec() });
+    }
+    Ok(features)
 }
 
 pub(super) fn recover<K: CadKernel>(
@@ -150,15 +198,13 @@ pub(super) fn recover<K: CadKernel>(
         .filter(|p| p.interval == CapInterval::Void)
         .filter_map(|p| Some((p, cutter_cap_witnesses(source, p)?)))
         .collect::<Vec<_>>();
-    if cutters.is_empty() {
-        return Ok(None);
-    }
     let mut best = CheapestProvenFragment::default();
     let reduced = crate::reduced_brep::ReducedSolid::from_step(
         source.solid_id,
         source.entities,
         source.index,
     );
+    let extensions = reduced.as_ref().map_or_else(Vec::new, crate::solid_lofts::detect_extended_ruled_end_extensions);
     for host in proposals
         .iter()
         .filter(|p| p.interval == CapInterval::Material)
@@ -188,7 +234,14 @@ pub(super) fn recover<K: CadKernel>(
                 selected.push(candidate);
             }
         }
-        if selected.is_empty() {
+        let additions = match reduced.as_ref().map(|solid| additive_features(solid, host, &proposals, &extensions)).transpose() {
+            Ok(features) => features.unwrap_or_default(),
+            Err(error) => {
+                best.consider(MaterialFamily::SignedCaps, Err(error))?;
+                continue;
+            }
+        };
+        if selected.is_empty() && additions.is_empty() {
             continue;
         }
         let rounds = reduced.as_ref().map_or_else(Vec::new, |solid| {
@@ -197,14 +250,24 @@ pub(super) fn recover<K: CadKernel>(
                 .flat_map(|cutter| super::channel_round_ends::detect(solid, &cutter.prism))
                 .collect::<Vec<_>>()
         });
-        for rounds in [
-            Some(&[][..]),
-            (!rounds.is_empty()).then_some(rounds.as_slice()),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let (mut model, root) = match compose(host, &selected, rounds) {
+        // Compare the plain interval grammar with all independently witnessed
+        // additions and terminations. No arbitrary feature-subset search.
+        for (additions, rounds) in [
+            (&[][..], &[][..]),
+            (&[][..], rounds.as_slice()),
+            (additions.as_slice(), &[][..]),
+            (additions.as_slice(), rounds.as_slice()),
+        ].into_iter().enumerate().filter_map(|(variant, pair)| {
+            let (additions, rounds) = pair;
+            if (variant & 1 != 0 && rounds.is_empty())
+                || (variant & 2 != 0 && additions.is_empty())
+                || (selected.is_empty() && additions.is_empty())
+            {
+                return None;
+            }
+            Some(pair)
+        }) {
+            let (mut model, root) = match compose(host, additions, &selected, rounds) {
                 Ok(candidate) => candidate,
                 Err(error) => {
                     best.consider(MaterialFamily::SignedCaps, Err(error))?;
@@ -231,7 +294,12 @@ pub(super) fn recover<K: CadKernel>(
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            let additive_face_ids = additions.iter()
+                .flat_map(|feature| feature.face_ids.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter().collect::<Vec<_>>();
             let mut ids = HashSet::from([source.solid_id]);
+            ids.extend(additive_face_ids.iter().copied());
             ids.extend(host.prism.cap_face_ids);
             ids.extend(cutter_cap_face_ids.iter().flatten().copied());
             for round in rounds {
@@ -255,6 +323,7 @@ pub(super) fn recover<K: CadKernel>(
                         host_cap_face_ids: host.prism.cap_face_ids,
                         cutter_cap_face_ids,
                         round_end_face_ids,
+                        additive_face_ids,
                     },
                     model,
                     root,
