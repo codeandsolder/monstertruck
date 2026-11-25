@@ -98,6 +98,7 @@ struct Sample {
     volume: [f64; 4],
     unit_gauge_disagreement: f64,
     estimated_unit_quadrature_error: f64,
+    estimated_volume_quadrature_error: [f64; 4],
 }
 
 fn wrap_area(area: f64, sense: f64, ambiguity: f64) -> Result<f64> {
@@ -148,6 +149,7 @@ fn sample(
         volume: [0.0; 4],
         unit_gauge_disagreement: disagreement,
         estimated_unit_quadrature_error: estimated_error,
+        estimated_volume_quadrature_error: [0.0; 4],
     })
 }
 
@@ -171,6 +173,17 @@ impl SpatialFlux {
             sample.volume = references.map(|reference| {
                 (self.radius * sample.signed_area
                     + dot(sub(self.center, reference), sample.vector_area))
+                    / 3.0
+            });
+            // Propagate the maximum component-wise quadrature estimate through
+            // the signed flux functional. This is not an interval enclosure or
+            // a bound on the geometric radial/closure residuals.
+            sample.estimated_volume_quadrature_error = references.map(|reference| {
+                let offset_l1: f64 = sub(self.center, reference).iter().map(|x| x.abs()).sum();
+                self.radius
+                    * self.radius
+                    * (self.radius + 0.5 * offset_l1)
+                    * sample.estimated_unit_quadrature_error
                     / 3.0
             });
         }

@@ -22,8 +22,12 @@ enum AnalyticSphere {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum SpatialSphere {
-    Available { flux: spatial_sphere::SpatialFlux },
-    Unsupported { reason: String },
+    Available {
+        flux: Box<spatial_sphere::SpatialFlux>,
+    },
+    Unsupported {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -109,7 +113,9 @@ fn face_metadata(
         });
     let spatial_sphere = (surface_kind == "sphere").then(|| {
         match spatial_sphere::evaluate(kernel, face, &orientation) {
-            Ok(flux) => SpatialSphere::Available { flux },
+            Ok(flux) => SpatialSphere::Available {
+                flux: Box::new(flux),
+            },
             Err(error) => SpatialSphere::Unsupported {
                 reason: format!("{error:#}"),
             },
