@@ -192,10 +192,16 @@ fn ordered_sweep(
         sign = delta.signum();
         angles.push(angles.last()? + delta);
     }
+    let accumulated_margin = margin * crate::usize_to_f64(points.len());
+    if !accumulated_margin.is_finite() || accumulated_margin >= PI / 2.0 {
+        return None;
+    }
     let degree = curve.degree();
     let knots = curve.knot_vector();
     for i in degree..points.len() {
-        if knots[i] < knots[i + 1] && (angles[i] - angles[i - degree]).abs() >= PI - margin {
+        if knots[i] < knots[i + 1]
+            && (angles[i] - angles[i - degree]).abs() >= PI - accumulated_margin
+        {
             return None;
         }
     }
@@ -204,7 +210,6 @@ fn ordered_sweep(
     let sweep = ((total - principal) / TAU).round().mul_add(TAU, principal);
     // The accumulated angle is only used to identify an integral turn. A
     // margin proportional to the count accounts for finite-f64 unwrapping.
-    let accumulated_margin = margin * crate::usize_to_f64(points.len());
     if !sweep.is_finite()
         || (sweep - total).abs() > accumulated_margin
         || sweep.abs() <= margin
@@ -212,7 +217,10 @@ fn ordered_sweep(
     {
         return None;
     }
-    Some((sweep, accumulated_margin))
+    // Once the integral turn is disambiguated, the sweep is calculated
+    // from the two endpoint rays, not the accumulated interior angles.
+    // Interior control count therefore does not multiply its error.
+    Some((sweep, 2.0 * margin))
 }
 
 impl SourceIntersectionProposal {
@@ -284,6 +292,52 @@ impl SourceIntersectionProposal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_axis_origin_preserves_fine_intersection_leader_proof() {
+        // Deliberately place the secondary reference far along its axis,
+        // as canonical cylinder keys do. Use a small half-turn intersection
+        // far from the global origin, with a many-span near-exact leader.
+        let center = Point3::new(67.7545, 5.161372032, 0.0);
+        let secondary_origin = Point3::new(67.7545, 5.364572032, 1.679434121);
+        let primary = CylinderCarrier::new(center, Vector3::unit_z(), 0.1524).expect("primary");
+        let secondary =
+            CylinderCarrier::new(secondary_origin, Vector3::unit_x(), 0.3429).expect("secondary");
+        let height = (0.3429_f64.powi(2) - (center.y - secondary_origin.y).powi(2)).sqrt();
+        let start = Point3::new(center.x - 0.1524, center.y, secondary_origin.z + height);
+        let arc = CylinderIntersectionArc::new(
+            primary,
+            secondary,
+            start,
+            -PI,
+            IntersectionBranch::Positive,
+            1e-8,
+        )
+        .expect("regular arc");
+        let leader = arc.cubic_leader(1.9e-10, 8192).expect("fine leader");
+        let curve = NurbsCurve::from(leader.curve);
+        let quantized_primary = CylinderCarrier::new(
+            Point3::new(67.7545, 5.1613720, 0.0),
+            Vector3::unit_z(),
+            0.1524,
+        )
+        .expect("quantized primary");
+        let quantized_secondary = CylinderCarrier::new(
+            Point3::new(0.0, 5.3645720, 1.6794341),
+            Vector3::unit_x(),
+            0.3429,
+        )
+        .expect("remote quantized secondary");
+        let bound = BoundedSourceIntersection::from_spline(
+            quantized_primary,
+            quantized_secondary,
+            &curve,
+            4e-7,
+            4e-7 / 64.0,
+        )
+        .expect("bounded remote-origin intersection");
+        assert!(bound.separation_upper <= 4e-7, "{bound:?}");
+    }
 
     #[test]
     fn source_control_rays_choose_the_half_turn_and_reject_branch_switch() {

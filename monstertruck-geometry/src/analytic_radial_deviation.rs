@@ -74,7 +74,7 @@ fn residual(
     slope: f64,
 ) -> Option<f64> {
     let (delta, radius) = expected_radius(point, origin, axis, reference_radius, slope)?;
-    let radial = (delta - axis * delta.dot(axis)).magnitude();
+    let radial = delta.cross(axis).magnitude();
     let result = (radial - radius).abs();
     result.is_finite().then_some(result)
 }
@@ -98,7 +98,7 @@ fn span_upper(
     // rho >= min(projected radius) on the entire subspan. This bound tightens
     // under subdivision, unlike rho >= 0, which leaves a factor-of-two gap.
     let first_delta = expected_radius(controls.first()?, origin, axis, reference_radius, slope)?.0;
-    let radial = first_delta - axis * first_delta.dot(axis);
+    let radial = first_delta.cross(axis);
     let radial_length = radial.magnitude();
     let min_radial = if radial_length > 0.0 && radial_length.is_finite() {
         let direction = radial / radial_length;
@@ -106,7 +106,7 @@ fn span_upper(
             .iter()
             .try_fold(f64::INFINITY, |minimum, control| {
                 let delta = expected_radius(control, origin, axis, reference_radius, slope)?.0;
-                let projection = (delta - axis * delta.dot(axis)).dot(direction);
+                let projection = delta.cross(axis).dot(direction);
                 projection.is_finite().then_some(minimum.min(projection))
             })?
             .max(0.0)
@@ -203,6 +203,7 @@ pub fn bound_nurbs_radial_deviation(
     {
         return None;
     }
+    let axis = axis.normalize();
     let cone_normal = 1.0_f64.hypot(slope);
     let radial_target_gap = target_gap * cone_normal;
     if !radial_target_gap.is_finite() || radial_target_gap <= 0.0 {
@@ -234,7 +235,12 @@ pub fn bound_nurbs_radial_deviation(
             slope,
         )?;
         let upper = span_upper(controls, reference_origin, axis, reference_radius, slope)?;
-        Some((first.max(last), upper))
+        let witness = first.max(last);
+        // Independent floating-point evaluation of an endpoint and the
+        // coefficient hull can disagree by roundoff near exact incidence.
+        // Increasing the upper bound is safe; the full arithmetic allowance
+        // is still applied to both ends of the final bracket.
+        Some((witness, upper.max(witness)))
     })?;
     let radial_margin = max_margin * crate::usize_to_f64(bracket.max_depth + 1);
     let radial_upper = bracket.upper + radial_margin;

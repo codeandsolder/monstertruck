@@ -130,11 +130,18 @@ pub(crate) fn reference_cone_polynomial(
     reference_radius: f64,
     slope: f64,
 ) -> Option<Vec<f64>> {
-    let [x, y, z, w] = coordinates(points, origin)?;
+    // Compute the transverse vector directly in homogeneous coordinates.
+    // Subtracting axial² from |delta|² loses all radial precision when
+    // a cylinder's reference origin is far along its own axis.
+    let transverse = [
+        centered(points, origin, Vector3::new(0.0, -axis.z, axis.y))?,
+        centered(points, origin, Vector3::new(axis.z, 0.0, -axis.x))?,
+        centered(points, origin, Vector3::new(-axis.y, axis.x, 0.0))?,
+    ];
     let axial = centered(points, origin, axis)?;
-    let radial_squared = add_scaled(&dot3(&[x, y, z])?, &squared(&axial)?, -1.0)?;
+    let radial_squared = dot3(&transverse)?;
+    let w = points.iter().map(|p| p[3]);
     let radius = w
-        .iter()
         .zip(axial)
         .map(|(weight, height)| {
             let value = slope.mul_add(height, reference_radius * weight);
