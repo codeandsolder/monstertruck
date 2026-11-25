@@ -32,6 +32,9 @@ enum Analysis {
     ExtrusionCore {
         input: PathBuf,
     },
+    SignedCapPairs {
+        input: PathBuf,
+    },
     DominantExtrusion {
         input: PathBuf,
     },
@@ -60,6 +63,7 @@ impl Analysis {
             | Self::RadialSlot { input }
             | Self::Extrusion { input }
             | Self::ExtrusionCore { input }
+            | Self::SignedCapPairs { input }
             | Self::DominantExtrusion { input }
             | Self::EdgeTreatment { input }
             | Self::BoundaryFeature { input }
@@ -101,6 +105,9 @@ fn inspect(command: &Analysis, data: &[u8], output: &mut impl Write) -> Result<(
             &step_redox::detect_extrusion_core_candidates_bytes(data)?,
             output,
         ),
+        Analysis::SignedCapPairs { .. } => {
+            json(&step_redox::detect_signed_cap_pairs_bytes(data)?, output)
+        }
         Analysis::DominantExtrusion { .. } => json(
             &step_redox::detect_dominant_extrusion_candidates_bytes(data)?,
             output,
@@ -158,6 +165,7 @@ mod tests {
             "radial-slot",
             "extrusion",
             "extrusion-core",
+            "signed-cap-pairs",
             "dominant-extrusion",
             "edge-treatment",
             "boundary-feature",
