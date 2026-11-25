@@ -45,7 +45,7 @@ pub use analytic::{
 };
 mod boundary_facet;
 pub use boundary_facet::{
-    BoundaryFacetApproximation, BoundaryFacetError, approximate_boundary_facet,
+    BoundaryFacetApproximation, BoundaryFacetError, BoundaryFacetInput, approximate_boundary_facet,
 };
 mod boundary_patch;
 pub use boundary_patch::{

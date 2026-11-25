@@ -5,10 +5,10 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, HybridConnectorOptions, HybridRecoveryError, HybridRefinementOptions,
-    NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryIndex, RegionPatchError,
-    RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionPartition,
-    recover_analytic_mesh,
+    AnalyticRecoveryOptions, BoundaryFacetInput, BoundaryPatchError, HybridConnectorOptions,
+    HybridRecoveryError, HybridRefinementOptions, NativeTrimOptions, RecoveredAnalyticMesh,
+    RegionBoundaryIndex, RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
+    SurfaceRegionPartition, recover_analytic_mesh,
 };
 use serde_json::{Value, json};
 use std::{
@@ -116,12 +116,35 @@ fn candidate_groups(
     })
 }
 
-const fn failure_class(error: RegionPatchError) -> &'static str {
+const fn failure_class(error: &RegionPatchError) -> &'static str {
     match error {
         RegionPatchError::InvalidRegion => "region",
         RegionPatchError::Junction(_) => "junction",
         RegionPatchError::Edge(_) => "edge",
         RegionPatchError::Assembly(_) => "assembly",
+    }
+}
+
+fn failed_facet(error: &BoundaryPatchError) -> Value {
+    match error {
+        BoundaryPatchError::Facet {
+            polygon,
+            error,
+            source_vertex_ids,
+            input,
+        } => json!({
+            "polygon": polygon, "source_vertex_ids": source_vertex_ids, "reason": error.to_string(),
+            "input": input,
+        }),
+        _ => Value::Null,
+    }
+}
+
+fn hybrid_failed_facet(error: &HybridRecoveryError) -> Value {
+    match error {
+        HybridRecoveryError::Patch { error, .. } => failed_facet(error),
+        HybridRecoveryError::ConnectorSearch { last, .. } => hybrid_failed_facet(last),
+        _ => Value::Null,
     }
 }
 
@@ -172,8 +195,12 @@ impl PatchAttempt<'_> {
                     "seam_deviation_bound":patch.approximation.seam_deviation_upper_bound})
             }
             Err(error) => {
-                *census.failures.entry(failure_class(error)).or_default() += 1;
-                json!({"regions":group,"source_polygons":polygons,"required_polygons":required,"error":error.to_string()})
+                *census.failures.entry(failure_class(&error)).or_default() += 1;
+                let facet = match &error {
+                    RegionPatchError::Assembly(error) => failed_facet(error),
+                    _ => Value::Null,
+                };
+                json!({"regions":group,"source_polygons":polygons,"required_polygons":required,"error":error.to_string(),"failed_facet":facet})
             }
         };
         let accepted = result.get("error").is_none();
@@ -310,7 +337,7 @@ fn global_trial(
                 "seconds":start.elapsed().as_secs_f64()})
         }
         Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
-            "error":error.to_string(),"retained_trim":retained_trim_diagnostic(recovery,&error),"seconds":start.elapsed().as_secs_f64()}),
+            "error":error.to_string(),"retained_trim":retained_trim_diagnostic(recovery,&error),"failed_facet":hybrid_failed_facet(&error),"seconds":start.elapsed().as_secs_f64()}),
     })
 }
 
@@ -466,15 +493,35 @@ fn refined_trial(
                 "seconds":start.elapsed().as_secs_f64()})
         }
         Err(error) => {
-            json!({"status":"rejected","error":error.to_string(),"seconds":start.elapsed().as_secs_f64()})
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"seconds":start.elapsed().as_secs_f64()})
         }
     };
     Ok(result)
 }
 
+fn replay_facet(path: &Path) -> Result<()> {
+    let input: BoundaryFacetInput = serde_json::from_reader(BufReader::new(File::open(path)?))?;
+    let start = Instant::now();
+    let report = match input.approximate() {
+        Ok(result) => json!({"status":"ok", "native_faces":result.faces.len(),
+            "max_deviation":result.deviation_upper_bound,"max_seam_deviation":result.seam_deviation_upper_bound}),
+        Err(error) => json!({"status":"rejected","error":error.to_string()}),
+    };
+    println!(
+        "{}",
+        json!({"source":path,"seconds":start.elapsed().as_secs_f64(),"facet":report})
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
-    let path = PathBuf::from(args.next().context("expected OBJ path")?);
+    let path = PathBuf::from(args.next().context("expected OBJ path or --replay-facet")?);
+    if path.as_os_str() == "--replay-facet" {
+        let input = PathBuf::from(args.next().context("expected facet input JSON")?);
+        anyhow::ensure!(args.next().is_none(), "usage: --replay-facet INPUT_JSON");
+        return replay_facet(&input);
+    }
     let read_budget = |arg: Option<std::ffi::OsString>| -> Result<f64> {
         arg.context("expected explicit approximation budget")?
             .to_str()

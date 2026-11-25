@@ -39,7 +39,7 @@ pub struct LiftedRegionPatch {
 }
 
 /// A requested fallback patch could not be certified.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum RegionPatchError {
     /// Invalid or pinched source region union, inconsistent partition or options.
     #[error("invalid source region patch")]

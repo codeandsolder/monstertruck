@@ -6,6 +6,8 @@
 //! convex source facet. The shared edge itself is never approximated again.
 
 mod apex;
+mod replay;
+pub use replay::BoundaryFacetInput;
 
 use crate::{
     BsplineCurve, BsplineSurface, Edge, EuclideanSpace, Face, InnerSpace, KnotVector, NurbsSurface,

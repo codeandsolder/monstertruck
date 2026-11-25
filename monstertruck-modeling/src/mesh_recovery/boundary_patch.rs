@@ -3,8 +3,8 @@
 //! retained by identity, not copied into independent approximations.
 
 use super::{
-    BoundaryFacetError, SurfaceRegionBudget, approximate_boundary_facet, edge_key,
-    source_edge_incidence,
+    BoundaryFacetError, BoundaryFacetInput, SurfaceRegionBudget, approximate_boundary_facet,
+    edge_key, source_edge_incidence,
 };
 use crate::{Edge, InnerSpace, Point3, Shell, Vertex, builder};
 use monstertruck_topology::shell::ShellCondition;
@@ -39,7 +39,7 @@ pub struct BoundaryPatchApproximation {
 }
 
 /// The patch could not be constructed with the requested topology and budgets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum BoundaryPatchError {
     /// Source or prescribed edge incidence is inconsistent.
     #[error("invalid boundary patch incidence")]
@@ -54,6 +54,10 @@ pub enum BoundaryPatchError {
         polygon: usize,
         /// Local geometric rejection.
         error: BoundaryFacetError,
+        /// Original source vertex IDs in polygon boundary order.
+        source_vertex_ids: Vec<usize>,
+        /// Exact geometric input needed to replay this failed certificate.
+        input: Box<BoundaryFacetInput>,
     },
     /// Native output failed connected, oriented manifold validation.
     #[error("invalid boundary patch shell")]
@@ -224,8 +228,15 @@ fn assemble_patch_faces(
                 }
             })
             .collect::<Vec<_>>();
-        let approximation = approximate_boundary_facet(&points, &boundary, budget.chord)
-            .map_err(|error| BoundaryPatchError::Facet { polygon, error })?;
+        let approximation =
+            approximate_boundary_facet(&points, &boundary, budget.chord).map_err(|error| {
+                BoundaryPatchError::Facet {
+                    polygon,
+                    error,
+                    source_vertex_ids: indices.to_vec(),
+                    input: Box::new(BoundaryFacetInput::capture(points, &boundary, budget.chord)),
+                }
+            })?;
         deviation_upper_bound = deviation_upper_bound.max(approximation.deviation_upper_bound);
         seam_deviation_upper_bound =
             seam_deviation_upper_bound.max(approximation.seam_deviation_upper_bound);
