@@ -280,6 +280,50 @@ mod tests {
     }
 
     #[test]
+    fn independently_integrates_real_occt_octant_and_cavity() -> Result<()> {
+        let mut kernel = crate::test_kernel()?;
+        let sphere = kernel.make_sphere(1.0)?;
+        // Put the sphere's poles outside the positive octant and the
+        // longitude seam on the opposite hemisphere, avoiding artificial
+        // degeneracy at the chart poles.
+        let x = unit([-1.0; 3])?;
+        let z = unit([1.0, -1.0, 0.0])?;
+        let y = cross(z, x);
+        let matrix = [
+            x[0], y[0], z[0], 0.0, x[1], y[1], z[1], 0.0, x[2], y[2], z[2], 0.0,
+        ];
+        let sphere = kernel.transform(sphere, &matrix)?;
+        let positive_octant = kernel.make_box(2.0, 2.0, 2.0)?;
+        let octant = kernel.common(sphere, positive_octant)?;
+        ensure!(kernel.is_valid(octant)?, "invalid OCCT octant");
+        let outer = kernel.make_box_from_corners(-2.0, -2.0, -2.0, 2.0, 2.0, 2.0)?;
+        let cavity = kernel.cut(outer, octant)?;
+        ensure!(kernel.is_valid(cavity)?, "invalid OCCT octant cavity");
+        for (solid, sense) in [(octant, 1.0), (cavity, -1.0)] {
+            let faces = kernel.get_sub_shape_occurrences(solid, "face")?;
+            let mut spherical = Vec::new();
+            for face in faces {
+                if kernel.surface_type(face)? == "sphere" {
+                    let orientation = kernel.shape_orientation(face)?;
+                    spherical.push(evaluate(&mut kernel, face, &orientation)?);
+                }
+            }
+            let [flux] = spherical.as_mut_slice() else {
+                bail!("expected one spherical octant, got {}", spherical.len());
+            };
+            flux.set_references([[0.0; 3]; 4]);
+            assert!((flux.signed_area - sense * std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+            assert!((flux.volume[0] - sense * std::f64::consts::PI / 6.0).abs() < 1e-12);
+            assert!(
+                flux.vector_area
+                    .iter()
+                    .all(|v| (v - sense * std::f64::consts::FRAC_PI_4).abs() < 1e-12)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn octant_flux_and_reversed_winding() -> Result<()> {
         let points = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         let arcs = |reverse: bool| {
