@@ -269,7 +269,7 @@ mod tests {
         let end = [0.0, 1.0, 0.0];
         let normal = [0.0, 0.0, 1.0];
         let good = vec![[1.0, 0.0, 0.0, 1.0], [w, w, 0.0, w], [0.0, 1.0, 0.0, 1.0]];
-        let (plane, radial) = check_spline(&[good.clone()], start, end, normal)?;
+        let (plane, radial) = check_spline(std::slice::from_ref(&good), start, end, normal)?;
         assert!(plane < 1e-15 && radial < 1e-15);
         let mut bad = good;
         bad[1][0] += 1e-5;
