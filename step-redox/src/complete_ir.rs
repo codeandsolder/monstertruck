@@ -5459,11 +5459,41 @@ END-ISO-10303-21;
                 report.kernel_recovery_failures
             );
             let fragment = selected_unique_source_fragment(&report)?;
-            assert!(
-                family.matches(&fragment.source, solid_id),
-                "{label}: unexpected constructive family {:?}",
-                fragment.source
-            );
+            if !family.matches(&fragment.source, solid_id) {
+                // Independently exercise the historical loft recognizer
+                // even if a cheaper, separately proven construction wins.
+                assert!(
+                    matches!(family, TargetedFamily::Loft),
+                    "{label}: unexpected constructive family {:?}",
+                    fragment.source
+                );
+                let index = crate::step_graph::build_index(&section.entities);
+                let reduced = crate::reduced_brep::ReducedSolid::from_step(
+                    solid_id,
+                    &section.entities,
+                    &index,
+                )
+                .ok_or_else(|| anyhow::anyhow!("{label}: missing source topology"))?;
+                let loft = crate::solid_lofts::detect_sectioned_planar_loft(&reduced).ok_or_else(
+                    || anyhow::anyhow!("{label}: historical loft recognizer regressed"),
+                )?;
+                let evaluated = kernel.evaluate(&loft.model, loft.root)?;
+                assert!(kernel.summarize(&evaluated).is_single_solid(), "{label}");
+                assert!(
+                    rebuilt_kernel_boundary_matches_source(
+                        &kernel,
+                        &evaluated,
+                        solid_id,
+                        &section.entities
+                    )?,
+                    "{label}: historical loft boundary differs"
+                );
+                assert!(
+                    fragment.model.complexity_score(fragment.root)?
+                        <= loft.model.complexity_score(loft.root)?,
+                    "{label}: selected construction is more expensive than the proven loft"
+                );
+            }
             fragment.model.validate()?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).is_single_solid(), "{label}");
