@@ -7,7 +7,7 @@
 //! to the separate structural precision budget.
 
 use super::{BooleanTolerance, PolylineCurve, polyline_leader_bspline, prove_iso_candidate};
-use crate::transversal::classic::{ShapeOpsSurface, loops_store::certified_circular_cylinder};
+use crate::transversal::classic::ShapeOpsSurface;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::{
     analytic_cylinder_intersection::{BoundedSourceIntersection, CylinderCarrier},
@@ -15,12 +15,7 @@ use monstertruck_geometry::{
 };
 
 fn carrier<S: ShapeOpsSurface>(surface: &S) -> Option<CylinderCarrier> {
-    let mut net = surface.try_into_homogeneous_bspline_surface()?;
-    if net.degrees() == (1, 2) {
-        net.swap_axes();
-    }
-    let (origin, axis, radius, _) = certified_circular_cylinder(&net)?;
-    CylinderCarrier::new(origin, axis, radius)
+    CylinderCarrier::from_homogeneous_surface(surface.try_into_homogeneous_bspline_surface()?)
 }
 
 /// Construct an independently bounded leader in the original traversal

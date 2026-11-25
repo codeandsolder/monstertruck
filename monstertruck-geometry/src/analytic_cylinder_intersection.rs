@@ -9,8 +9,10 @@
 use crate::prelude::*;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::{PI, TAU};
+mod carrier;
 mod leader;
 mod source;
+pub use carrier::{certified_circular_cylinder, project_positive_homogeneous_point};
 pub use leader::IntersectionLeader;
 pub use source::{BoundedSourceIntersection, SourceIntersectionProposal};
 
@@ -43,6 +45,18 @@ impl CylinderCarrier {
             axis: axis / length,
             radius,
         })
+    }
+
+    /// Certify a rational quadratic circular extrusion, accepting either
+    /// parameter-axis order. The input must describe the complete surface
+    /// domain, not merely an approximate or local control net.
+    #[must_use = "inspect the structurally recognized cylindrical support"]
+    pub fn from_homogeneous_surface(mut surface: BsplineSurface<Vector4>) -> Option<Self> {
+        if surface.degrees() == (1, 2) {
+            surface.swap_axes();
+        }
+        let (origin, axis, radius, _) = certified_circular_cylinder(&surface)?;
+        Self::new(origin, axis, radius)
     }
 
     /// Euclidean distance to the unbounded cylinder.

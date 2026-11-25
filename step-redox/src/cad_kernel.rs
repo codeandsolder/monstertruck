@@ -217,6 +217,7 @@ pub mod monstertruck {
     use std::collections::HashMap;
 
     mod circular_selection;
+    mod cylinder_boundary_export;
     mod parallel_prisms;
     mod planar_boundary_export;
     mod planar_loft;
@@ -464,6 +465,11 @@ pub mod monstertruck {
         }
         if let Some(exact) =
             planar_boundary_export::certified_planar_boundary_step_guide(curve, &points, tolerance)
+        {
+            return Ok(exact);
+        }
+        if let Some(exact) =
+            cylinder_boundary_export::bounded_crossing_cylinder_step_guide(curve, tolerance)
         {
             return Ok(exact);
         }
