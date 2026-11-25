@@ -226,14 +226,15 @@ impl PolyBoundaryPiece {
         let mut previous = None;
         let vec = boundary
             .into_iter()
-            .map(|uv| Self::normalize_uv(surface, (uv.x, uv.y), previous))
-            .collect::<Option<Vec<_>>>()?
-            .into_iter()
-            .map(|(u, v)| {
+            .map(|uv| {
+                let (u, v) = Self::normalize_uv(surface, (uv.x, uv.y), previous)?;
                 previous = Some((u, v));
-                SurfacePoint::from((Point2::new(u, v), surface.evaluate(u, v)))
+                Some(SurfacePoint::from((
+                    Point2::new(u, v),
+                    surface.evaluate(u, v),
+                )))
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
         Self::from_surface_points(vec)
     }
 
@@ -298,17 +299,23 @@ impl PolyBoundaryPiece {
         C: ParameterBoundary2D<S> + ExactParameterBoundary2D<S> + 'a,
         <C as ExactParameterBoundary2D<S>>::BoundaryCurve: ExactTrimBoundary2D,
     {
-        wire.map(|(trim_curve, edge_curve, polyline)| {
-            trim_curve
+        let mut previous = None::<SurfacePoint>;
+        wire.map(|(trim_curve, _edge_curve, polyline)| {
+            let seed_uv = previous.map(|p| (p.x, p.y));
+            let projected = trim_curve
                 .and_then(|trim_curve| {
                     let mut previous_t = None;
-                    let mut previous_uv = None;
+                    let mut previous_uv = seed_uv;
                     polyline
                         .iter()
                         .copied()
                         .map(|point| {
-                            let (t, uv) = trim_curve.project_boundary_point(point, previous_t)?;
+                            let (t, uv) =
+                                trim_curve.project_boundary_point(point, previous_t, tolerance)?;
                             let (u, v) = Self::normalize_uv(surface, (uv.x, uv.y), previous_uv)?;
+                            if surface.evaluate(u, v).distance(point) > tolerance {
+                                return None;
+                            }
                             previous_t = Some(t);
                             previous_uv = Some((u, v));
                             Some(SurfacePoint::from((Point2::new(u, v), point)))
@@ -316,25 +323,16 @@ impl PolyBoundaryPiece {
                         .collect::<Option<Vec<_>>>()
                 })
                 .or_else(|| {
-                    let mut previous = None;
-                    polyline
-                        .iter()
-                        .copied()
-                        .map(|point| {
-                            let (u, v) = sp(surface, point, previous)
-                                .and_then(|uv| Self::normalize_uv(surface, uv, previous))?;
-                            previous = Some((u, v));
-                            Some(SurfacePoint::from((Point2::new(u, v), point)))
+                    Self::projected_polyline_piece(surface, &polyline, sp, previous)
+                        .map(|(piece, _)| piece)
+                        .filter(|piece| {
+                            piece
+                                .iter()
+                                .all(|p| surface.evaluate(p.x, p.y).distance(p.point) <= tolerance)
                         })
-                        .collect::<Option<Vec<_>>>()
-                })
-                .or_else(|| {
-                    edge_curve
-                        .parameter_boundary_2d(surface, tolerance)
-                        .map(|boundary| simplify_parameter_boundary(surface, boundary, tolerance))
-                        .and_then(|boundary| Self::from_parameter_boundary(surface, boundary))
-                        .map(|piece| piece.0)
-                })
+                })?;
+            previous = projected.last().copied();
+            Some(projected)
         })
         .collect::<Option<Vec<Vec<SurfacePoint>>>>()
         .and_then(|pieces| {
@@ -544,7 +542,8 @@ impl PolyBoundaryPiece {
         }
         if let Some(previous) = previous {
             if let Some(period) = period {
-                Some(periodic_min_difference(value, previous, period))
+                let normalized = periodic_min_difference(value, previous, period);
+                normalized.is_finite().then_some(normalized)
             } else if let Some(range) = range {
                 Some(Self::clamp_near_range(value, range))
             } else {
@@ -573,6 +572,8 @@ impl PolyBoundaryPiece {
             } else {
                 Some(Self::clamp_near_range(value, (min, max)))
             }
+        } else if let Some(period) = period {
+            Some(value.rem_euclid(period))
         } else {
             Some(value)
         }

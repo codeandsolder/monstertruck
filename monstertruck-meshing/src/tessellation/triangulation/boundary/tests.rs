@@ -316,3 +316,16 @@ fn cdt_insertion_splits_duplicate_seam_chords_through_existing_vertices() {
 
     assert!(added_constraints > 0);
 }
+
+#[test]
+fn unwrap_distant_periodic_branches_without_moving_local_samples() {
+    let previous = 0.31;
+    let actual = 0.42;
+    for turns in [-1_000_000.0_f64, -9.0, 0.0, 27.0, 1_000_000.0] {
+        let shifted = turns.mul_add(TAU, actual);
+        let normalized =
+            PolyBoundaryPiece::normalize_axis(shifted, Some(previous), Some(TAU), Some((0.0, TAU)))
+                .expect("finite periodic coordinate");
+        assert!((normalized - actual).abs() < 1e-8);
+    }
+}

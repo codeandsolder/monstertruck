@@ -50,7 +50,12 @@ pub trait ExactTrimBoundary2D {
     fn exact_trim_boundary_2d(&self, tolerance: f64) -> Vec<Point2>;
 
     /// Projects a point on the spatial boundary back onto this trim boundary.
-    fn project_boundary_point(&self, _point: Point3, _hint: Option<f64>) -> Option<(f64, Point2)> {
+    fn project_boundary_point(
+        &self,
+        _point: Point3,
+        _hint: Option<f64>,
+        _tolerance: f64,
+    ) -> Option<(f64, Point2)> {
         None
     }
 }
@@ -66,17 +71,62 @@ where
         lifted_trim_boundary_2d(self, tolerance)
     }
 
-    fn project_boundary_point(&self, point: Point3, hint: Option<f64>) -> Option<(f64, Point2)> {
-        // A boundary is walked from the trim's start. A trim closed in space
-        // but open in parameter space matches its start with both ends, and
-        // an unseeded search can land on the far one, sending every later
-        // projection off the curve. So an absent hint means the start.
-        let hint = Some(hint.unwrap_or_else(|| self.curve().range_tuple().0));
-        self.search_parameter(point, hint, 100)
-            .or_else(|| self.search_nearest_parameter(point, hint, 100))
-            .or_else(|| self.search_parameter(point, None, 100))
-            .or_else(|| self.search_nearest_parameter(point, None, 100))
-            .map(|t| (t, self.curve().evaluate(t)))
+    fn project_boundary_point(
+        &self,
+        point: Point3,
+        hint: Option<f64>,
+        tolerance: f64,
+    ) -> Option<(f64, Point2)> {
+        let (start, end) = self.curve().range_tuple();
+        if !start.is_finite()
+            || !end.is_finite()
+            || start > end
+            || !tolerance.is_finite()
+            || tolerance <= 0.0
+        {
+            return None;
+        }
+        // Newton's method is unconstrained. A stationary point of an
+        // extrapolated (or periodically repeated) trim is not a point
+        // on this finite edge. Verify the lifted residual even for the
+        // checked inverse, which searches the surface and curve separately.
+        let seed = hint
+            .filter(|t| t.is_finite())
+            .unwrap_or(start)
+            .clamp(start, end);
+        let candidate = |t: f64| {
+            if !t.is_finite() {
+                return None;
+            }
+            let t = t.clamp(start, end);
+            let uv = self.curve().evaluate(t);
+            (uv.x.is_finite()
+                && uv.y.is_finite()
+                && self.surface().evaluate(uv.x, uv.y).distance(point) <= tolerance)
+                .then_some((t, uv))
+        };
+        // Closed spatial trims can have both endpoints at the same point.
+        // Prefer the endpoint adjacent to the caller's seed when coincident.
+        let mut ends = [start, end];
+        ends.sort_by(|a, b| (a - seed).abs().total_cmp(&(b - seed).abs()));
+        for t in ends {
+            let uv = self.curve().evaluate(t);
+            if self.surface().evaluate(uv.x, uv.y).distance(point) <= KERNEL_EPSILON.min(tolerance)
+            {
+                return candidate(t);
+            }
+        }
+        self.search_parameter(point, Some(seed), 100)
+            .and_then(candidate)
+            .or_else(|| {
+                self.search_nearest_parameter(point, Some(seed), 100)
+                    .and_then(candidate)
+            })
+            .or_else(|| self.search_parameter(point, None, 100).and_then(candidate))
+            .or_else(|| {
+                self.search_nearest_parameter(point, None, 100)
+                    .and_then(candidate)
+            })
     }
 }
 

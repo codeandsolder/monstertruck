@@ -65,7 +65,7 @@ fn assert_projects_to_start(trim: &ParameterCurve<BsplineCurve<Point2>, NurbsSur
     );
     [start, end].into_iter().for_each(|at| {
         let (parameter, uv) = trim
-            .project_boundary_point(trim.evaluate(at), None)
+            .project_boundary_point(trim.evaluate(at), None, KERNEL_EPSILON)
             .expect("the start of the trim projects onto it");
         assert!(
             (parameter - start).abs() < (parameter - end).abs(),
@@ -98,4 +98,25 @@ fn a_trim_running_up_the_seam_projects_its_start_to_its_start() {
 #[test]
 fn a_trim_running_down_the_seam_projects_its_start_to_its_start() {
     assert_projects_to_start(&circle_trim(TAU, 0.0, 1.0));
+}
+
+#[test]
+fn refuses_extrapolated_trim_projection() {
+    let trim = ParameterCurve::new(
+        Line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
+        Plane::xy(),
+    );
+    assert!(
+        trim.project_boundary_point(Point3::new(2.0, 0.0, 0.0), None, 1e-6)
+            .is_none()
+    );
+    assert!(
+        trim.project_boundary_point(Point3::new(0.5, 0.2, 0.0), None, 1e-6)
+            .is_none()
+    );
+    let (t, uv) = trim
+        .project_boundary_point(Point3::new(0.5, 0.0, 0.0), Some(1e12), 1e-6)
+        .expect("in-range projection");
+    assert!((0.0..=1.0).contains(&t));
+    assert!(uv.near(&Point2::new(0.5, 0.0)));
 }
