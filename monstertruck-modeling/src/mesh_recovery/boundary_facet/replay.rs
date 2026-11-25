@@ -77,7 +77,7 @@ mod tests {
     use crate::{
         BsplineCurve, EuclideanSpace, KnotVector, NurbsCurve, Vector4,
         mesh_recovery::{
-            BoundaryPatchError, PrescribedSourceEdge, SurfaceRegionBudget,
+            BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge, SurfaceRegionBudget,
             approximate_boundary_patch,
         },
     };
@@ -139,10 +139,10 @@ mod tests {
             &source,
             &polygons,
             &prescribed,
-            SurfaceRegionBudget {
+            BoundaryPatchOptions::new(SurfaceRegionBudget {
                 vertex: 0.0,
                 chord: 0.1,
-            },
+            }),
         )
         .err()
         .ok_or("expected a failed patch")?;

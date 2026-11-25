@@ -45,7 +45,8 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     use monstertruck_modeling::{
         Face, Matrix4, Processor, Sphere, Surface, Vector3, Wire,
         mesh_recovery::{
-            PrescribedSourceEdge, SurfaceCarrier, SurfaceRegionBudget, approximate_boundary_patch,
+            BoundaryPatchOptions, PrescribedSourceEdge, SurfaceCarrier, SurfaceRegionBudget,
+            approximate_boundary_patch,
         },
     };
 
@@ -99,8 +100,12 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
         Surface::Sphere(Processor::new(Sphere::new(Point3::new(0.0, 0.0, 0.0), 1.0))),
     )?;
     let fallback_polygons: [&[usize]; 3] = [&[1, 0, 3], &[2, 1, 3], &[0, 2, 3]];
-    let approximation =
-        approximate_boundary_patch(&source, &fallback_polygons, &prescribed, budget)?;
+    let approximation = approximate_boundary_patch(
+        &source,
+        &fallback_polygons,
+        &prescribed,
+        BoundaryPatchOptions::new(budget),
+    )?;
     let mut shell = approximation.shell;
     shell.push(analytic);
     shell.check_solid_boundary()?;

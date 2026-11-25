@@ -49,7 +49,7 @@ pub use boundary_facet::{
 };
 mod boundary_patch;
 pub use boundary_patch::{
-    BoundaryPatchApproximation, BoundaryPatchError, PrescribedSourceEdge,
+    BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge,
     approximate_boundary_patch,
 };
 mod cylinder;

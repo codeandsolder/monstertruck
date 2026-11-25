@@ -15,8 +15,8 @@ use super::{
 use crate::{
     Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
     mesh_recovery::{
-        BoundaryPatchError, MeshEvidence, PrescribedSourceEdge, RecoveredAnalyticMesh,
-        RegionBoundaryError, RegionPatchOptions, approximate_boundary_patch,
+        BoundaryPatchError, BoundaryPatchOptions, MeshEvidence, PrescribedSourceEdge,
+        RecoveredAnalyticMesh, RegionBoundaryError, RegionPatchOptions, approximate_boundary_patch,
     },
 };
 use monstertruck_topology::shell::ShellCondition;
@@ -38,6 +38,7 @@ pub struct HybridPolygonFaces {
     /// Original selected region ID.
     pub region: usize,
     /// Native face range within that region's face list.
+    /// Source polygons in one certified merged cell share the same range.
     pub faces: Range<usize>,
 }
 
@@ -48,6 +49,8 @@ pub struct HybridPatchEvidence {
     pub regions: Vec<usize>,
     /// Source polygon-to-native-face provenance.
     pub polygons: Vec<HybridPolygonFaces>,
+    /// Number of certified cells covering multiple original polygons.
+    pub coalesced_cells: usize,
     /// Maximum movement of an original source vertex.
     pub vertex_displacement: f64,
     /// Maximum continuous two-sided facet deviation.
@@ -716,23 +719,43 @@ impl HybridInput<'_> {
             .map(|&id| self.evidence.source_polygon_vertices(id))
             .collect::<Option<Vec<_>>>()
             .ok_or(HybridRecoveryError::InvalidInput)?;
-        let approximation =
-            approximate_boundary_patch(&self.evidence.positions, &source, edges, self.patch.budget)
-                .map_err(|error| HybridRecoveryError::Patch {
-                    region: ids[0],
-                    error,
-                })?;
+        let owners = polygons
+            .iter()
+            .map(|&id| self.partition.region_by_polygon[id])
+            .collect::<Vec<_>>();
+        let approximation = approximate_boundary_patch(
+            &self.evidence.positions,
+            &source,
+            edges,
+            BoundaryPatchOptions {
+                owner_by_polygon: Some(&owners),
+                ..BoundaryPatchOptions::new(self.patch.budget)
+            },
+        )
+        .map_err(|error| HybridRecoveryError::Patch {
+            region: ids[0],
+            error,
+        })?;
         let mut faces = BTreeMap::<usize, Vec<Face>>::new();
+        let mut ranges = BTreeMap::<(usize, usize, usize), Range<usize>>::new();
         let mut provenance = Vec::with_capacity(polygons.len());
-        for (&polygon, range) in polygons.iter().zip(&approximation.source_face_ranges) {
-            let region = self.partition.region_by_polygon[polygon];
-            let native = faces.entry(region).or_default();
-            let start = native.len();
-            native.extend(approximation.shell[range.clone()].iter().cloned());
+        for ((&polygon, &region), range) in polygons
+            .iter()
+            .zip(&owners)
+            .zip(&approximation.source_face_ranges)
+        {
+            let native_range = ranges
+                .entry((region, range.start, range.end))
+                .or_insert_with(|| {
+                    let native = faces.entry(region).or_default();
+                    let start = native.len();
+                    native.extend(approximation.shell[range.clone()].iter().cloned());
+                    start..native.len()
+                });
             provenance.push(HybridPolygonFaces {
                 polygon,
                 region,
-                faces: start..native.len(),
+                faces: native_range.clone(),
             });
         }
         regions.extend(faces.into_iter().map(|(region, faces)| NativeRegionFace {
@@ -744,6 +767,7 @@ impl HybridInput<'_> {
         Ok(HybridPatchEvidence {
             regions: ids,
             polygons: provenance,
+            coalesced_cells: approximation.coalesced_cells,
             vertex_displacement: approximation.vertex_displacement,
             deviation_upper_bound: approximation.deviation_upper_bound,
             seam_deviation_upper_bound: approximation.seam_deviation_upper_bound,

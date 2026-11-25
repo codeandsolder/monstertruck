@@ -8,7 +8,7 @@ use super::{
 use crate::{
     Curve, Edge, InnerSpace, Vertex, builder,
     mesh_recovery::{
-        BoundaryPatchApproximation, BoundaryPatchError, PrescribedSourceEdge,
+        BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge,
         approximate_boundary_patch,
     },
 };
@@ -140,11 +140,18 @@ impl RegionBoundaryIndex<'_> {
                 edge: native,
             });
         }
+        let owners = source_polygons
+            .iter()
+            .map(|&id| partition.region_by_polygon[id])
+            .collect::<Vec<_>>();
         let approximation = approximate_boundary_patch(
             &self.evidence.positions,
             &polygons,
             &boundary_edges,
-            options.budget,
+            BoundaryPatchOptions {
+                owner_by_polygon: Some(&owners),
+                ..BoundaryPatchOptions::new(options.budget)
+            },
         )?;
         Ok(LiftedRegionPatch {
             source_polygons,

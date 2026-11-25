@@ -189,7 +189,7 @@ impl PatchAttempt<'_> {
                 census.accepted_required_polygons += required;
                 census.selected.extend(group.iter().copied());
                 json!({"regions":group,"source_polygons":polygons,"required_polygons":required,
-                    "native_faces":patch.approximation.shell.len(),"boundary_edges":patch.boundary_edges.len(),
+                    "native_faces":patch.approximation.shell.len(),"coalesced_cells":patch.approximation.coalesced_cells,"boundary_edges":patch.boundary_edges.len(),
                     "vertex_displacement":patch.approximation.vertex_displacement,
                     "deviation_bound":patch.approximation.deviation_upper_bound,
                     "seam_deviation_bound":patch.approximation.seam_deviation_upper_bound})
@@ -325,7 +325,7 @@ fn global_trial(
                 false
             };
             json!({"status":"ok","selected_regions":selected_count,"connector_added_polygons":added_polygons,"connector_trials":trials,"connector_releases":releases,
-                "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
+                "patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
                 "before_failed_regions":before,"failed_regions":after,
                 "before_failed_trims":old_trims,"failed_trims":new_trims,
                 "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
@@ -481,7 +481,7 @@ fn refined_trial(
                 "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
                     "support":c.support,"parent_region":c.parent_region,"edge":c.edge,"distance_lower_witness":c.distance_lower_witness
                 })).collect::<Vec<_>>(),
-                "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
+                "patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
                 "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).map(|r|json!({"region":r.region,"error":r.faces.as_ref().err().map(ToString::to_string)})).collect::<Vec<_>>(),
                 "failed_trims":result.native.trims.iter().filter(|r|r.is_err()).count(),
                 "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
