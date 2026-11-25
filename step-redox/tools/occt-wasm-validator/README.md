@@ -152,8 +152,10 @@ The spatial spherical boundary diagnostic additionally integrates the actual
 3-D trim rather than the imported UV pcurve. Native circle trims are
 represented as exact rational quadratic spans; finite clamped rational
 B-splines retain their homogeneous Bézier spans. Full-domain Bernstein
-squared-radius bounds, directed wire closure and two independent certified
-nonsingular gauges are required. Solid angle is recovered modulo the full
+squared-radius bounds, directed wire closure by native vertex identity, and
+two independent certified nonsingular gauges are required. Tiny gaps between
+trim endpoints and successive spans are closed by explicit radially projected
+short chords; their total normalized length is reported separately. Solid angle is recovered modulo the full
 sphere using the actual face orientation, and vector area follows from
 Stokes' boundary integral. Two quadrature tolerances, their estimated errors
 and gauge disagreement are reported separately. Multiple wires, small-circle

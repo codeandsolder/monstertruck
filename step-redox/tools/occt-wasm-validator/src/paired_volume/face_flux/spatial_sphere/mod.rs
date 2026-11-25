@@ -11,7 +11,7 @@
 mod boundary;
 mod quadrature;
 
-use self::boundary::{RESIDUAL_LIMIT, Span, cartesian, point_derivative, radial_bound};
+use self::boundary::{ClosedWire, RESIDUAL_LIMIT, Span, cartesian, point_derivative, radial_bound};
 use super::super::accurate_sum;
 use crate::vector::{Point, cross, dot, norm, scale, sub};
 use anyhow::{Context, Result, bail, ensure};
@@ -198,25 +198,20 @@ fn integrate(
     center: Point,
     radius: f64,
     sense: f64,
-    wires: Vec<Vec<Vec<Span>>>,
+    wires: Vec<ClosedWire>,
 ) -> Result<SpatialFlux> {
     ensure!(
         radius.is_finite() && radius > 0.0 && center.iter().all(|x| x.is_finite()),
         "invalid spherical carrier"
     );
-    ensure!(
-        !wires.is_empty() && wires.iter().all(|w| !w.is_empty()),
-        "missing spherical boundary wires"
-    );
+    ensure!(!wires.is_empty(), "missing spherical boundary wires");
     let wire_count = wires.len();
-    let edge_count = wires.iter().map(Vec::len).sum();
-    let closure = accurate_sum(
-        wires
-            .iter()
-            .map(|wire| boundary::check_closed(wire))
-            .collect::<Result<Vec<_>>>()?,
-    )?;
-    let spans = wires.into_iter().flatten().flatten().collect::<Vec<_>>();
+    let edge_count = wires.iter().map(|wire| wire.edges).sum();
+    let closure = accurate_sum(wires.iter().map(|wire| wire.closure_error))?;
+    let spans = wires
+        .into_iter()
+        .flat_map(|wire| wire.spans)
+        .collect::<Vec<_>>();
     let radial = spans
         .iter()
         .map(|s| radial_bound(s))
@@ -257,12 +252,15 @@ pub(super) fn evaluate(
     };
     let mut wires = Vec::new();
     for wire in kernel.get_sub_shape_occurrences(face, "wire")? {
-        let edges = kernel
-            .get_sub_shape_occurrences(wire, "edge")?
-            .into_iter()
-            .map(|edge| boundary::edge_spans(kernel, edge, center, radius))
-            .collect::<Result<Vec<_>>>()?;
-        wires.push(edges);
+        let mut edges = Vec::new();
+        let mut vertices = Vec::new();
+        for edge in kernel.get_sub_shape_occurrences(wire, "edge")? {
+            vertices.push(boundary::directed_vertices(kernel, edge)?);
+            edges.push(boundary::edge_spans(kernel, edge, center, radius)?);
+        }
+        wires.push(boundary::close_wire(edges, |end, start| {
+            Ok(kernel.is_same(vertices[end][1], vertices[start][0])?)
+        })?);
     }
     integrate(center, radius, sense, wires)
 }
@@ -270,6 +268,19 @@ pub(super) fn evaluate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn integrate_test(
+        center: Point,
+        radius: f64,
+        sense: f64,
+        wires: Vec<Vec<Vec<Span>>>,
+    ) -> Result<SpatialFlux> {
+        let wires = wires
+            .into_iter()
+            .map(|edges| boundary::close_wire(edges, |_, _| Ok(true)))
+            .collect::<Result<Vec<_>>>()?;
+        integrate(center, radius, sense, wires)
+    }
 
     fn latitude(z: f64, reverse: bool) -> Result<Vec<Span>> {
         let mut spans = boundary::circle_spans(
@@ -305,7 +316,7 @@ mod tests {
             ),
         ];
         for (wires, sense, area, vector_z) in cases {
-            let mut flux = integrate([1.0, 2.0, 3.0], radius, sense, wires)?;
+            let mut flux = integrate_test([1.0, 2.0, 3.0], radius, sense, wires)?;
             flux.set_references([[1.0, 2.0, 3.0]; 4]);
             for sample in [&flux.coarse, &flux.fine] {
                 assert!(
@@ -376,7 +387,7 @@ mod tests {
     fn rejects_an_off_sphere_rational_boundary() -> Result<()> {
         let mut edge = latitude(0.25, false)?;
         edge[0][1][2] += 1e-5;
-        assert!(integrate([0.0; 3], 1.0, 1.0, vec![vec![edge]]).is_err());
+        assert!(integrate_test([0.0; 3], 1.0, 1.0, vec![vec![edge]]).is_err());
         Ok(())
     }
 }
