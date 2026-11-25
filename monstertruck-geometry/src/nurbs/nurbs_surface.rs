@@ -8,7 +8,7 @@ use super::{
     Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace,
     Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve, NurbsSurface,
     PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
-    ParametricSurface3D, Point3, Result, SearchNearestParameter, SearchParameter,
+    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
     SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed,
     Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
 };
@@ -725,6 +725,15 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
 }
 
 impl ParametricSurface3D for NurbsSurface<Vector4> {
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        super::iso_boundary::collapsed_boundary_parameter(self, point, hint, tolerance)
+    }
+
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         let pt = self.0.evaluate(u, v);
         let ud = self.0.derivative_u(u, v);
@@ -964,6 +973,10 @@ impl IncludeCurve<BsplineCurve<Point3>> for NurbsSurface<Vector4> {
             curve.front(),
             curve.knot_vector(),
             curve.degree(),
+        ) || super::iso_boundary::includes_clamped_boundary(
+            self,
+            &NurbsCurve::from(curve.clone()),
+            crate::prelude::KERNEL_EPSILON,
         )
     }
 }
@@ -977,6 +990,10 @@ impl IncludeCurve<NurbsCurve<Vector4>> for NurbsSurface<Vector4> {
             curve.front(),
             curve.knot_vector(),
             curve.degree(),
+        ) || super::iso_boundary::includes_clamped_boundary(
+            self,
+            curve,
+            crate::prelude::KERNEL_EPSILON,
         )
     }
 }

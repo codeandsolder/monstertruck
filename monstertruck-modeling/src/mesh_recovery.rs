@@ -43,6 +43,15 @@ pub use analytic::{
     SelectedSurfaceProposal, SupportRefinementPass, construct_analytic_recovery,
     discover_analytic_regions, recover_analytic_evidence, recover_analytic_mesh,
 };
+mod boundary_facet;
+pub use boundary_facet::{
+    BoundaryFacetApproximation, BoundaryFacetError, approximate_boundary_facet,
+};
+mod boundary_patch;
+pub use boundary_patch::{
+    BoundaryPatchApproximation, BoundaryPatchError, PrescribedSourceEdge,
+    approximate_boundary_patch,
+};
 mod cylinder;
 mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
@@ -57,12 +66,13 @@ pub use evidence::{
     ContactCircleEvidence, ContactConicEvidence, ContactCurveEvidence, ContactLineEvidence,
     ContactToroidalSectionEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
     CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
-    EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeridianGraphOptions, MeridianStation,
-    MeridianStationGraph, MeridianTransition, MeshEvidence, NativeRegionFace, NativeTrimError,
-    NativeTrimGraph, NativeTrimOptions, OrientedTrim, ParallelBundle, ParallelPlacement,
-    PlanarSupport, ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath, RegionTrimBoundary, RegionTrimLoops,
+    EvidenceOptions, FeatureEdge, FeatureEdgeKind, LiftedRegionPatch, LiftedSourceChord,
+    MeridianGraphOptions, MeridianStation, MeridianStationGraph, MeridianTransition, MeshEvidence,
+    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim,
+    ParallelBundle, ParallelPlacement, PlanarSupport, ReconciledPartition, ReconciledPlane,
+    ReconciliationOptions, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
+    RegionPatchError, RegionPatchOptions, RegionTrimBoundary, RegionTrimLoops,
     SeparatedSourceVertex, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
     SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation,
     SourceForcedPair, SourceProvenance, SourceSectorPair, SpatialTrackEvidence,

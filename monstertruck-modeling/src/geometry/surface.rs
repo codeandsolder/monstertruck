@@ -5,12 +5,12 @@ use super::{
     AnalyticSurfaceKind, BoundedSurface, BsplineCurve, BsplineSurface, Curve, Deserialize,
     ExtrusionSurface, From, Homogeneous, HomogeneousSurfaceConversion, HomotopySurface,
     IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
-    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point3,
-    Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterD2,
-    SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains, SurfaceParameter,
-    SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus, Transform, Transformed,
-    TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3,
-    Vector4, algo, env,
+    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point2,
+    Point3, Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterD2, SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains,
+    SurfaceParameter, SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus,
+    Transform, Transformed, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
 };
 use crate::SquareMatrix;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -142,6 +142,21 @@ macro_rules! derive_surface_self_method {
 }
 
 impl ParametricSurface3D for Surface {
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        derive_surface_method!(
+            self,
+            ParametricSurface3D::collapsed_boundary_parameter,
+            point,
+            hint,
+            tolerance
+        )
+    }
+
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         derive_surface_method!(self, ParametricSurface3D::normal, u, v)

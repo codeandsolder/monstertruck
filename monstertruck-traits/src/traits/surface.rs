@@ -225,6 +225,21 @@ impl<S: ParametricSurface<Point = Point2, Vector = Vector2>> ParametricSurface2D
 
 /// 3D parametric surface
 pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector3> {
+    /// A certified collapsed intrinsic boundary containing this point.
+    ///
+    /// Returns a UV representative preserving the free coordinate of the
+    /// hint (clamped to the active domain). The entire boundary must map
+    /// to the point within the geometric tolerance, not just a sample or
+    /// a vanishing derivative. Unknown surfaces return no certificate.
+    fn collapsed_boundary_parameter(
+        &self,
+        _point: Point3,
+        _hint: Point2,
+        _tolerance: f64,
+    ) -> Option<Point2> {
+        None
+    }
+
     /// Returns the normal vector at `(u, v)`.
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
@@ -261,11 +276,29 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
 }
 
 impl<S: ParametricSurface3D> ParametricSurface3D for &S {
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        (*self).collapsed_boundary_parameter(point, hint, tolerance)
+    }
+
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { (*self).normal(u, v) }
 }
 
 impl<S: ParametricSurface3D> ParametricSurface3D for Box<S> {
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        (**self).collapsed_boundary_parameter(point, hint, tolerance)
+    }
+
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { (**self).normal(u, v) }
 }

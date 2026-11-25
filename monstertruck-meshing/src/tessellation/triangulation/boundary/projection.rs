@@ -650,6 +650,46 @@ impl PolyBoundaryPiece {
         })
     }
 
+    // A collapsed nonperiodic side has the same 3D point across a
+    // finite UV interval. Preserve entry and exit parameters in the
+    // boundary polygon instead of spanning the interior of the chart.
+    fn pole_transition<S: PreMeshableSurface>(
+        surface: &S,
+        previous: Option<(f64, f64)>,
+        new_uv: Point2,
+        point: Point3,
+        tolerance: f64,
+    ) -> Vec<SurfacePoint> {
+        let current = SurfacePoint::from((new_uv, point));
+        let Some((u0, v0)) = previous else {
+            return vec![current];
+        };
+        let old_uv = Point2::new(u0, v0);
+        let previous_point = surface.evaluate(u0, v0);
+        let certified_exit = surface
+            .collapsed_boundary_parameter(previous_point, new_uv, tolerance)
+            .filter(|exit| {
+                surface
+                    .collapsed_boundary_parameter(previous_point, old_uv, tolerance)
+                    .is_some_and(|entry| entry.near(&old_uv))
+                    && (exit.x.near(&u0) || exit.y.near(&v0))
+                    && !exit.near(&old_uv)
+            });
+        let exit = certified_exit.or_else(|| {
+            if !u0.near(&new_uv.x) && surface.derivative_u(u0, v0).so_small() {
+                Some(Point2::new(new_uv.x, v0))
+            } else if !v0.near(&new_uv.y) && surface.derivative_v(u0, v0).so_small() {
+                Some(Point2::new(u0, new_uv.y))
+            } else {
+                None
+            }
+        });
+        exit.map_or_else(
+            || vec![current],
+            |exit| vec![SurfacePoint::from((exit, previous_point)), current],
+        )
+    }
+
     fn project_loop<S: PreMeshableSurface>(
         surface: &S,
         boundary: &[Point3],
@@ -670,8 +710,20 @@ impl PolyBoundaryPiece {
             .enumerate()
             .scan(None, |previous, (offset, pt)| {
                 let previous_before = *previous;
+                let collapse_tolerance = tolerance
+                    .min(DEFAULT_NUMERICAL_TOLERANCES.mesh_singularity_distance)
+                    .min(monstertruck_geometry::prelude::KERNEL_EPSILON);
                 let raw = initial_uv
                     .take()
+                    .or_else(|| {
+                        let (u, v) = (*previous)?;
+                        let pole = surface.collapsed_boundary_parameter(
+                            pt,
+                            Point2::new(u, v),
+                            collapse_tolerance,
+                        )?;
+                        Some((pole.x, pole.y))
+                    })
                     .or_else(|| sp(surface, pt, *previous))
                     .or_else(|| {
                         // A numerical inverse is undefined at a periodic pole.
@@ -701,23 +753,13 @@ impl PolyBoundaryPiece {
                 let uv = raw
                     .and_then(|uv| Self::normalize_uv(surface, uv, *previous))
                     .map(|(u, v)| {
-                        let points = if let Some((u0, v0)) = *previous {
-                            if !u0.near(&u) && surface.derivative_u(u0, v0).so_small() {
-                                vec![
-                                    SurfacePoint::from((Point2::new(u, v0), pt)),
-                                    SurfacePoint::from((Point2::new(u, v), pt)),
-                                ]
-                            } else if !v0.near(&v) && surface.derivative_v(u0, v0).so_small() {
-                                vec![
-                                    SurfacePoint::from((Point2::new(u0, v), pt)),
-                                    SurfacePoint::from((Point2::new(u, v), pt)),
-                                ]
-                            } else {
-                                vec![SurfacePoint::from((Point2::new(u, v), pt))]
-                            }
-                        } else {
-                            vec![SurfacePoint::from((Point2::new(u, v), pt))]
-                        };
+                        let points = Self::pole_transition(
+                            surface,
+                            *previous,
+                            Point2::new(u, v),
+                            pt,
+                            collapse_tolerance,
+                        );
                         *previous = Some((u, v));
                         points
                     });

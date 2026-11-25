@@ -7,15 +7,18 @@ use super::super::{
 use super::MeshEvidence;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+mod chord_lift;
 mod circular_growth;
 mod coincidence;
 mod conic;
 mod contacts;
 mod containment;
+pub use chord_lift::LiftedSourceChord;
 pub use conic::ContactConicEvidence;
 mod curve_evidence;
 mod native;
 mod partition;
+mod patch_lift;
 mod reconcile;
 mod rim_linear;
 mod sphere;
@@ -30,6 +33,7 @@ pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 pub use native::{NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions};
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
+pub use patch_lift::{LiftedRegionPatch, RegionPatchError, RegionPatchOptions};
 pub use reconcile::{ReconciledPartition, ReconciledPlane, ReconciliationOptions};
 pub(in crate::mesh_recovery) use rim_linear::RimLinearOptions;
 pub use trim::{SharedTrimGeometry, SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation};

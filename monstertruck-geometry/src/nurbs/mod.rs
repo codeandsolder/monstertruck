@@ -306,6 +306,7 @@ mod bspline_surface;
 /// Full-boundary continuity capability inspection.
 mod continuity;
 mod curve_inclusion;
+pub(crate) mod iso_boundary;
 mod knot_vector;
 mod nurbs_curve;
 mod nurbs_surface;

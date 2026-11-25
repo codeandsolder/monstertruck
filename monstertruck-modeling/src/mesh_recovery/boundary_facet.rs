@@ -1,0 +1,417 @@
+//! Boundary-constrained approximations of unresolved source facets.
+//!
+//! This is not spline-carrier recognition: sparse mesh samples generally
+//! do not determine the original freeform surface. Given certified shared
+//! boundary edges, construct an explicitly bounded replacement for a
+//! convex source facet. The shared edge itself is never approximated again.
+
+use crate::{
+    BsplineCurve, BsplineSurface, Edge, EuclideanSpace, Face, InnerSpace, KnotVector, NurbsSurface,
+    Point3, Surface, Vector3, Vector4, Wire, builder,
+};
+use monstertruck_geometry::{
+    prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
+};
+
+/// A piecewise rational approximation of a convex source facet.
+///
+/// The source facet's boundary is retained using the supplied native edge
+/// identities. Internal radial edges are shared between the fan faces.
+#[derive(Debug)]
+pub struct BoundaryFacetApproximation {
+    /// Oriented native fan faces, in source boundary order.
+    pub faces: Vec<Face>,
+    /// Continuous two-sided distance bound to the source polygon's
+    /// centroid fan, in source coordinate units.
+    pub deviation_upper_bound: f64,
+}
+
+/// Why a boundary-constrained facet cannot be certified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BoundaryFacetError {
+    /// Invalid input, nonconvex/degenerate source or displaced boundary.
+    #[error("invalid source facet or native boundary")]
+    InvalidBoundary,
+    /// The exact native curve lacks a positive-weight homogeneous net.
+    #[error("unsupported exact boundary curve")]
+    UnsupportedCurve,
+    /// The curve leaves its angular wedge or exceeds the approximation budget.
+    #[error("boundary approximation or orientation could not be certified")]
+    Uncertified,
+    /// The native kernel rejected the constructed fan face.
+    #[error("invalid native fan face")]
+    NativeFace,
+}
+
+fn finite(point: Point3) -> bool { [point.x, point.y, point.z].into_iter().all(f64::is_finite) }
+
+fn centroid(points: &[Point3]) -> Point3 {
+    let first = points[0];
+    first
+        + points
+            .iter()
+            .map(|&p| p - first)
+            .fold(Vector3::new(0.0, 0.0, 0.0), |sum, p| sum + p)
+            / crate::usize_to_f64(points.len())
+}
+
+fn directed_pairs<T>(values: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    values.iter().zip(values.iter().cycle().skip(1))
+}
+
+fn cross(normal: Vector3, a: Vector3, b: Vector3) -> f64 { normal.dot(a.cross(b)) }
+
+// Require a convex polygon and an interior apex in its projected plane.
+// With strict adjacent ray order this partitions the plane into disjoint
+// angular wedges, regardless of the actual edge parameter speed.
+fn convex_fan(points: &[Point3], apex: Point3, normal: Vector3) -> bool {
+    directed_pairs(points).all(|(&a, &b)| {
+        let edge = b - a;
+        let scale = edge.magnitude();
+        let allowance = 64.0 * f64::EPSILON * scale;
+        scale > 0.0
+            && cross(normal, edge, apex - a) > allowance * (apex - a).magnitude()
+            && points
+                .iter()
+                .all(|&p| cross(normal, edge, p - a) >= -allowance * (p - a).magnitude())
+    })
+}
+
+fn chord_distance(point: Point3, a: Point3, b: Point3) -> f64 {
+    let delta = b - a;
+    let t = ((point - a).dot(delta) / delta.magnitude2()).clamp(0.0, 1.0);
+    (point - (a + delta * t)).magnitude()
+}
+
+fn rational_point(control: Vector4) -> Point3 {
+    Point3::new(
+        control.x / control.w,
+        control.y / control.w,
+        control.z / control.w,
+    )
+}
+
+fn positive_weights(controls: &[Vector4]) -> bool {
+    controls
+        .iter()
+        .all(|&p| p.w > 0.0 && [p.x, p.y, p.z, p.w].into_iter().all(f64::is_finite))
+}
+
+struct Wedge {
+    apex: Point3,
+    normal: Vector3,
+    source: [Point3; 2],
+    rays: [Vector3; 2],
+    budget: f64,
+}
+
+impl Wedge {
+    // All projected control points must remain in the wedge bounded by
+    // the two endpoint rays. The rational angular derivative has the
+    // sign of n·(P×P'), where P is the homogeneous numerator measured
+    // relative to the apex. The derivative of the denominator cancels.
+    // A positive bound on every control/derivative pair certifies the
+    // entire span by the Bernstein convex-hull property.
+    fn monotone(&self, controls: &[Vector4], allowance: f64) -> bool {
+        let max_weight = controls.iter().map(|p| p.w).fold(0.0_f64, f64::max);
+        let local = controls
+            .iter()
+            .map(|p| {
+                Vector3::new(
+                    (-self.apex.x).mul_add(p.w, p.x),
+                    (-self.apex.y).mul_add(p.w, p.y),
+                    (-self.apex.z).mul_add(p.w, p.z),
+                ) / max_weight
+            })
+            .collect::<Vec<_>>();
+        let in_wedge = local.iter().all(|&p| {
+            let roundoff = (64.0 * f64::EPSILON).mul_add(p.magnitude(), allowance);
+            cross(self.normal, self.rays[0], p) >= -roundoff * self.rays[0].magnitude()
+                && cross(self.normal, p, self.rays[1]) >= -roundoff * self.rays[1].magnitude()
+        });
+        in_wedge
+            && local.windows(2).all(|pair| {
+                let derivative = pair[1] - pair[0];
+                let derivative_norm = derivative.magnitude();
+                local.iter().all(|&p| {
+                    let norm = p.magnitude();
+                    let uncertainty =
+                        2.0_f64.mul_add(allowance, 2.0_f64.mul_add(norm, derivative_norm));
+                    let error = (64.0 * f64::EPSILON * norm)
+                        .mul_add(derivative_norm, allowance * uncertainty);
+                    cross(self.normal, p, derivative) > error
+                })
+            })
+    }
+
+    fn certify(
+        &self,
+        controls: &[[f64; 4]],
+        allowance: f64,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Option<f64> {
+        *remaining = remaining.checked_sub(1)?;
+        let controls_vec = controls
+            .iter()
+            .map(|&[x, y, z, w]| Vector4::new(x, y, z, w))
+            .collect::<Vec<_>>();
+        if controls_vec.len() < 2 || !positive_weights(&controls_vec) {
+            return None;
+        }
+        // Positive rational weights keep the entire curve in the convex
+        // hull of Euclidean controls. Distance to a closed line segment
+        // is convex, so the maximum control distance is a valid bound.
+        let distances = controls_vec
+            .iter()
+            .map(|&p| chord_distance(rational_point(p), self.source[0], self.source[1]))
+            .collect::<Vec<_>>();
+        let bound = distances.iter().copied().fold(0.0_f64, f64::max) + allowance;
+        if !bound.is_finite()
+            || distances[0] + allowance > self.budget
+            || distances[distances.len() - 1] + allowance > self.budget
+        {
+            return None;
+        }
+        if bound <= self.budget && self.monotone(&controls_vec, allowance) {
+            return Some(bound);
+        }
+        if depth == 0 {
+            return None;
+        }
+        let (left, right) = subdivide_homogeneous_bezier(controls)?;
+        Some(
+            self.certify(&left, allowance, depth - 1, remaining)?
+                .max(self.certify(&right, allowance, depth - 1, remaining)?),
+        )
+    }
+
+    fn certify_curve(&self, curve: &BsplineCurve<Vector4>) -> Option<f64> {
+        let controls = curve.control_points();
+        let min_weight = controls.iter().map(|p| p.w).fold(f64::INFINITY, f64::min);
+        let max_weight = controls.iter().map(|p| p.w).fold(0.0_f64, f64::max);
+        let scale = controls
+            .iter()
+            .map(|&p| rational_point(p))
+            .chain(self.source)
+            .flat_map(|p| [p.x.abs(), p.y.abs(), p.z.abs()])
+            .fold(1.0_f64, f64::max);
+        // Same conditioning convention as the existing segment locus
+        // certificate. This is a numerical margin, not directed rounding.
+        let degree = crate::usize_to_f64(curve.degree());
+        let allowance =
+            256.0 * f64::EPSILON * (degree + 1.0).powi(2) * scale * (max_weight / min_weight);
+        if !allowance.is_finite() || allowance >= self.budget {
+            return None;
+        }
+        let spans = proof_bezier_spans(curve)?;
+        let point = |p: [f64; 4]| rational_point(Vector4::new(p[0], p[1], p[2], p[3]));
+        let front = point(*spans.first()?.controls.first()?);
+        let back = point(*spans.last()?.controls.last()?);
+        let endpoint_bound = (front - self.source[0])
+            .magnitude()
+            .max((back - self.source[1]).magnitude())
+            + allowance;
+        if endpoint_bound > self.budget {
+            return None;
+        }
+        // A positive-width knot interval may contain a discontinuity if
+        // interior multiplicity is degree+1. The fan is a continuous map,
+        // so reject unresolved jumps instead of treating them as chords.
+        for pair in spans.windows(2) {
+            let left = point(*pair[0].controls.last()?);
+            let right = point(*pair[1].controls.first()?);
+            if (left - right).magnitude() > allowance {
+                return None;
+            }
+        }
+        let mut remaining = 32768;
+        let hull = spans.iter().try_fold(0.0_f64, |bound, span| {
+            Some(bound.max(self.certify(&span.controls, allowance, 16, &mut remaining)?))
+        })?;
+        // Include the maximum numerically unresolved join gap for the
+        // reverse (chord-to-curve) inclusion.
+        let bound = hull.max(endpoint_bound) + allowance;
+        (bound <= self.budget).then_some(bound)
+    }
+
+    fn surface(&self, curve: &BsplineCurve<Vector4>) -> Option<Surface> {
+        // Repeat the base weights in the collapsed row. This makes the
+        // rational interpolation exactly (1-v)C(u)+v*apex, even for
+        // nonuniform rational weights and multi-span boundary splines.
+        let controls = curve
+            .control_points()
+            .iter()
+            .map(|&p| vec![p, self.apex.to_vec().extend(1.0) * p.w])
+            .collect();
+        Some(Surface::NurbsSurface(NurbsSurface::new(
+            BsplineSurface::new(
+                (curve.knot_vector().clone(), KnotVector::bezier_knot(1)),
+                controls,
+            )
+            .ok()?,
+        )))
+    }
+}
+
+/// Construct a boundary-constrained native approximation of a convex
+/// source facet, from one oriented exact native edge per source side.
+///
+/// Each edge is certified against its source chord and its angular wedge.
+/// The source and reconstructed fans have a common apex. Continuity of
+/// the curve's projection onto the chord, together with the endpoint
+/// displacement bound, proves the reverse distance bound as well; convex
+/// interpolation from the apex transfers both bounds to the whole fan.
+/// The projected angular derivative prevents folds within each wedge.
+///
+/// # Errors
+/// Rejects invalid winding, degenerate or nonconvex projected facets,
+/// incompatible native edge endpoints, unavailable exact rational nets,
+/// and approximations that cannot meet the specified budget. No source
+/// geometry or input edge identity is modified.
+pub fn approximate_boundary_facet(
+    source: &[Point3],
+    edges: &[Edge],
+    budget: f64,
+) -> Result<BoundaryFacetApproximation, BoundaryFacetError> {
+    use BoundaryFacetError::{InvalidBoundary, NativeFace, Uncertified, UnsupportedCurve};
+    if source.len() < 3
+        || source.len() != edges.len()
+        || !budget.is_finite()
+        || budget <= 0.0
+        || !source.iter().copied().all(finite)
+    {
+        return Err(InvalidBoundary);
+    }
+    let apex = centroid(source);
+    let normal = directed_pairs(source)
+        .map(|(&a, &b)| (a - apex).cross(b - apex))
+        .fold(Vector3::new(0.0, 0.0, 0.0), |sum, n| sum + n);
+    let length = normal.magnitude();
+    if length <= 0.0 || !length.is_finite() {
+        return Err(InvalidBoundary);
+    }
+    let normal = normal / length;
+    if !convex_fan(source, apex, normal)
+        || !directed_pairs(edges).all(|(a, b)| a.back() == b.front())
+    {
+        return Err(InvalidBoundary);
+    }
+    let native = edges.iter().map(|e| e.front().point()).collect::<Vec<_>>();
+    if !native.iter().copied().all(finite)
+        || !convex_fan(&native, apex, normal)
+        || !source
+            .iter()
+            .zip(&native)
+            .all(|(&a, &b)| (a - b).magnitude() <= budget)
+    {
+        return Err(InvalidBoundary);
+    }
+    let apex_vertex = builder::vertex(apex);
+    let radial = edges
+        .iter()
+        .map(|edge| builder::line(edge.front(), &apex_vertex))
+        .collect::<Vec<_>>();
+    let mut faces = Vec::with_capacity(edges.len());
+    let mut upper = 0.0_f64;
+    for (i, edge) in edges.iter().enumerate() {
+        let next = (i + 1) % edges.len();
+        if !edge.is_geometric_consistent() {
+            return Err(InvalidBoundary);
+        }
+        let curve = edge
+            .oriented_curve()
+            .try_into_homogeneous_bspline_curve()
+            .ok_or(UnsupportedCurve)?;
+        if !positive_weights(curve.control_points()) {
+            return Err(UnsupportedCurve);
+        }
+        let wedge = Wedge {
+            apex,
+            normal,
+            source: [source[i], source[next]],
+            rays: [native[i] - apex, native[next] - apex],
+            budget,
+        };
+        let bound = wedge.certify_curve(&curve).ok_or(Uncertified)?;
+        upper = upper.max(bound).max((native[i] - source[i]).magnitude());
+        let surface = wedge.surface(&curve).ok_or(NativeFace)?;
+        let face = Face::new(
+            vec![Wire::from(vec![
+                edge.clone(),
+                radial[next].clone(),
+                radial[i].inverse(),
+            ])],
+            surface,
+        )
+        .map_err(|_| NativeFace)?;
+        if !face.is_geometric_consistent() {
+            return Err(NativeFace);
+        }
+        faces.push(face);
+    }
+    Ok(BoundaryFacetApproximation {
+        faces,
+        deviation_upper_bound: upper,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Curve, ParametricSurface, Shell};
+
+    fn source() -> [Point3; 3] {
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ]
+    }
+
+    fn edges(curvature: f64) -> Result<Vec<Edge>, Box<dyn std::error::Error>> {
+        let [a, b, c] = source().map(builder::vertex);
+        let curve = Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                a.point().to_vec().extend(1.0),
+                Vector4::new(0.7, 0.0, curvature * 0.7, 0.7),
+                b.point().to_vec().extend(1.0),
+            ],
+        )?));
+        Ok(vec![
+            Edge::new(&a, &b, curve)?,
+            builder::line(&b, &c),
+            builder::line(&c, &a),
+        ])
+    }
+
+    #[test]
+    fn rational_curved_edge_is_shared_and_whole_facet_is_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let edges = edges(0.2)?;
+        let approximation = approximate_boundary_facet(&source(), &edges, 0.2)?;
+        assert_eq!(approximation.faces.len(), 3);
+        assert!(approximation.deviation_upper_bound <= 0.2);
+        let shell = approximation.faces.iter().cloned().collect::<Shell>();
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Oriented
+        );
+        assert!(shell.is_geometric_consistent());
+        for (i, face) in approximation.faces.iter().enumerate() {
+            let wire = face.boundaries().into_iter().next().ok_or("boundary")?;
+            assert_eq!(wire[0], edges[i]);
+            for u in 0..=10 {
+                for v in 0..=10 {
+                    let p = face
+                        .oriented_surface()
+                        .evaluate(f64::from(u) / 10.0, f64::from(v) / 10.0);
+                    assert!(p.z.abs() <= approximation.deviation_upper_bound + 1.0e-12);
+                }
+            }
+        }
+        assert!(approximate_boundary_facet(&source(), &edges, 0.001).is_err());
+        Ok(())
+    }
+}
