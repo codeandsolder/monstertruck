@@ -6,7 +6,7 @@
 //! within the mesh discretization budget. The cubic leader itself is generated
 //! to the separate structural precision budget.
 
-use super::{BooleanTolerance, polyline_leader_bspline, prove_iso_candidate};
+use super::{BooleanTolerance, PolylineCurve, polyline_leader_bspline, prove_iso_candidate};
 use crate::transversal::classic::{ShapeOpsSurface, loops_store::certified_circular_cylinder};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::{
