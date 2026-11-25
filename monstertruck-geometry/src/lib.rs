@@ -120,7 +120,6 @@ mod analytic_bezier_refinement;
 pub use analytic_bezier_refinement::subdivide_homogeneous_bezier;
 /// Checked geometric identities and orientation for analytic surface carriers.
 pub mod analytic_carrier;
-pub mod analytic_cone_deviation;
 /// Continuous exact axial/azimuthal chart for plane-cone hyperbola branches.
 pub mod analytic_cone_hyperbola_uv;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
@@ -131,6 +130,7 @@ pub mod analytic_line_segment;
 pub mod analytic_plane_cone_hyperbola;
 /// Global lower/upper bounds on spline distance to a plane.
 pub mod analytic_plane_deviation;
+pub mod analytic_radial_deviation;
 mod analytic_surface;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;

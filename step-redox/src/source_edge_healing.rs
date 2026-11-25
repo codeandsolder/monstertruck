@@ -9,15 +9,15 @@ use crate::source_edge_locus::{StepEdge, complete_bspline_edge, incident_edge_pl
 use crate::step_entities::{enumeration_bool, named_entity_parameters, vertex_point};
 use crate::step_graph::{build_index, entity_ref_value};
 use anyhow::{Context, Result, anyhow, bail};
-use monstertruck_geometry::analytic_cone_deviation::{
-    ConeDeviationBounds, bound_nurbs_cone_deviation,
-};
 use monstertruck_geometry::analytic_cone_hyperbola_uv::{ConeHyperbolaUv, ConeUvTrim};
 use monstertruck_geometry::analytic_plane_cone_hyperbola::{
     AxisParallelPlaneConeHyperbola, OrientedHyperbolaTrim,
 };
 use monstertruck_geometry::analytic_plane_deviation::{
     PlaneDeviationBounds, bound_nurbs_plane_deviation,
+};
+use monstertruck_geometry::analytic_radial_deviation::{
+    RadialDeviationBounds, bound_nurbs_radial_deviation,
 };
 use monstertruck_geometry::prelude::{
     InnerSpace, Matrix4, Point2, Point3, Processor, TrimmedCurve, UnitHyperbola, Vector3,
@@ -257,7 +257,7 @@ fn source_carrier_deviations(
     scale_mm: f64,
     endpoint_tolerance_mm: f64,
     target_gap_mm: f64,
-) -> Result<(PlaneDeviationBounds, ConeDeviationBounds)> {
+) -> Result<(PlaneDeviationBounds, RadialDeviationBounds)> {
     let source_curve = complete_bspline_edge(source, endpoint_tolerance_mm / scale_mm)?;
     let raw_target_gap = target_gap_mm / scale_mm;
     let raw_plane_origin = point3(plane.origin_mm, 1.0);
@@ -267,7 +267,7 @@ fn source_carrier_deviations(
     let plane =
         bound_nurbs_plane_deviation(&source_curve, raw_plane_origin, raw_normal, raw_target_gap)
             .ok_or_else(|| anyhow!("source curve's complete plane bound unsupported"))?;
-    let cone = bound_nurbs_cone_deviation(
+    let cone = bound_nurbs_radial_deviation(
         &source_curve,
         raw_cone_origin,
         raw_axis,
