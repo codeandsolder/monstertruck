@@ -36,13 +36,13 @@ struct Cli {
 enum Healing {
     /// Exact hyperbola from an axis-parallel plane and a cone.
     Hyperbolas {
-        /// Repeat DATA_SECTION:SOLID_ID:EDGE_ID:PLANE_FACE_ID:CONE_FACE_ID.
+        /// Repeat `DATA_SECTION:SOLID_ID:EDGE_ID:PLANE_FACE_ID:CONE_FACE_ID`.
         #[arg(long, required = true)]
         repair: Vec<String>,
     },
     /// Regular analytical branch of two nonparallel cylinders.
     Cylinders {
-        /// Repeat DATA_SECTION:SOLID_ID:EDGE_ID.
+        /// Repeat `DATA_SECTION:SOLID_ID:EDGE_ID`.
         #[arg(long, required = true)]
         repair: Vec<String>,
         /// Maximum whole-locus error of the serialized STEP leader in mm.
