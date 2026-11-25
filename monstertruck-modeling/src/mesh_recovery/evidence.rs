@@ -39,14 +39,15 @@ pub(in crate::mesh_recovery) use region_boundary::RimLinearOptions;
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactConicEvidence,
     ContactCurveEvidence, ContactLineEvidence, ContactToroidalSectionEvidence, HybridPatchEvidence,
-    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, LiftedRegionPatch, LiftedSourceChord,
-    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim,
-    ReconciledPartition, ReconciledPlane, ReconciliationOptions, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath, RegionPatchError, RegionPatchOptions,
-    RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
-    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SurfaceCarrier,
-    SurfaceCurveAgreement, SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal,
+    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, HybridRefinementOptions,
+    LiftedRegionPatch, LiftedSourceChord, NativeRegionFace, NativeTrimError, NativeTrimGraph,
+    NativeTrimOptions, OrientedTrim, PatchSupportConflict, ReconciledPartition, ReconciledPlane,
+    ReconciliationOptions, RefinedHybridRecovery, RegionBoundary, RegionBoundaryEdge,
+    RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph,
+    RegionContactPath, RegionPatchError, RegionPatchOptions, RegionTrimBoundary, RegionTrimLoops,
+    SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
+    SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
+    SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub use source_collapse::CollapsedSourceFacet;
 pub use source_sectors::SourceSectorPair;

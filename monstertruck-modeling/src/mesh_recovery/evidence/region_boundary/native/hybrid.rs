@@ -25,6 +25,9 @@ use std::{
     ops::Range,
 };
 
+mod refinement;
+pub use refinement::{HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery};
+
 /// Provenance of one original polygon in its approximate native region.
 #[derive(Debug, Clone)]
 pub struct HybridPolygonFaces {
@@ -117,6 +120,17 @@ pub enum HybridRecoveryError {
         trim: usize,
         /// Original source endpoint IDs.
         vertices: [usize; 2],
+    },
+    /// An unavoidable seam conflict would require an unauthorized support release.
+    #[error("hybrid support release is not permitted: {0:?}")]
+    ForbiddenSupport(PatchSupportConflict),
+    /// Additional original polygon ownership would exceed the authorized limit.
+    #[error("hybrid support release requires {required} additional polygons, limit {limit}")]
+    SupportLimit {
+        /// Minimum number found so far.
+        required: usize,
+        /// Authorized maximum.
+        limit: usize,
     },
     /// A previously valid retained analytic trim would fail.
     #[error("hybrid recovery would invalidate retained trim {0}")]

@@ -5,8 +5,8 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryIndex,
-    RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
+    AnalyticRecoveryOptions, HybridRefinementOptions, NativeTrimOptions, RecoveredAnalyticMesh,
+    RegionBoundaryIndex, RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
     SurfaceRegionPartition, recover_analytic_mesh,
 };
 use serde_json::{Value, json};
@@ -318,6 +318,90 @@ fn census(
     Ok(report)
 }
 
+fn refined_trial(
+    recovery: &RecoveredAnalyticMesh,
+    budget: SurfaceRegionBudget,
+    limit: usize,
+    shell_output: Option<&Path>,
+) -> Result<Value> {
+    let index = RegionBoundaryIndex::new(&recovery.evidence)?;
+    let selection = candidate_groups(recovery, &index)?;
+    let required = selection
+        .groups
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let partition = &recovery.reconciled.partition;
+    // This opt-in diagnostic permits only support-local releases from
+    // originally fitted curved regions, not removal of established planes.
+    let permitted = partition
+        .region_by_support
+        .iter()
+        .enumerate()
+        .filter_map(|(support, &region)| {
+            (!matches!(
+                partition.carriers[region],
+                Some(SurfaceCarrier::Plane { .. })
+            ))
+            .then_some(support)
+        })
+        .collect::<Vec<_>>();
+    let analytic = AnalyticRecoveryOptions::default();
+    let trim = analytic.trim_options(&recovery.evidence);
+    let options = HybridRefinementOptions {
+        patch: RegionPatchOptions {
+            budget,
+            intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
+            angular_resolution: analytic.axis_relative_resolution,
+        },
+        strict: NativeTrimOptions {
+            max_vertex_displacement: trim.absolute_tolerance,
+            intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
+            angular_resolution: analytic.axis_relative_resolution,
+        },
+        trim,
+        max_added_polygons: limit,
+    };
+    let start = Instant::now();
+    let result = match recovery.construct_refined_hybrid(
+        &required.iter().copied().collect::<Vec<_>>(),
+        &permitted,
+        options,
+    ) {
+        Ok(refined) => {
+            let result = refined.recovery;
+            let shell = result.complete_shell();
+            let exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
+                let mut writer = BufWriter::new(File::create_new(path)?);
+                serde_json::to_writer(&mut writer, &shell.compress())?;
+                writer.flush()?;
+                true
+            } else {
+                false
+            };
+            json!({"status":"ok","required_regions":required.len(),"selected_regions":refined.selected_regions,
+                "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
+                    "support":c.support,"parent_region":c.parent_region,"edge":c.edge,"distance_lower_witness":c.distance_lower_witness
+                })).collect::<Vec<_>>(),
+                "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
+                "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).map(|r|json!({"region":r.region,"error":r.faces.as_ref().err().map(ToString::to_string)})).collect::<Vec<_>>(),
+                "failed_trims":result.native.trims.iter().filter(|r|r.is_err()).count(),
+                "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
+                "approximate_polygons":result.patches.iter().map(|p|p.polygons.len()).sum::<usize>(),
+                "max_deviation":result.patches.iter().map(|p|p.deviation_upper_bound).fold(0.0_f64,f64::max),
+                "max_seam_deviation":result.patches.iter().map(|p|p.seam_deviation_upper_bound).fold(0.0_f64,f64::max),
+                "shell_condition":shell.as_ref().map(|s|format!("{:?}",s.shell_condition())),
+                "native_faces":shell.as_ref().map(|s|s.len()),"shell_exported":exported,
+                "seconds":start.elapsed().as_secs_f64()})
+        }
+        Err(error) => {
+            json!({"status":"rejected","error":error.to_string(),"seconds":start.elapsed().as_secs_f64()})
+        }
+    };
+    Ok(result)
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("expected OBJ path")?);
@@ -330,24 +414,43 @@ fn main() -> Result<()> {
     };
     let vertex = read_budget(args.next())?;
     let chord = read_budget(args.next())?;
-    let shell_output = args.next().map(PathBuf::from);
+    let mut args = args.peekable();
+    let shell_output = args
+        .peek()
+        .is_some_and(|arg| arg != "--release-conflicts")
+        .then(|| args.next().map(PathBuf::from))
+        .flatten();
+    let release_limit = if args.peek().is_some_and(|arg| arg == "--release-conflicts") {
+        args.next();
+        Some(
+            args.next()
+                .context("expected additional polygon limit")?
+                .to_str()
+                .context("non-UTF8 limit")?
+                .parse::<usize>()
+                .context("numeric polygon limit")?,
+        )
+    } else {
+        None
+    };
     anyhow::ensure!(
         args.next().is_none()
             && vertex.is_finite()
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON]"
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts MAX_ADDED_POLYGONS]"
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
     let recovery = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
     let recovery_seconds = start.elapsed().as_secs_f64();
-    let report = census(
-        &recovery,
-        SurfaceRegionBudget { vertex, chord },
-        shell_output.as_deref(),
-    )?;
+    let budget = SurfaceRegionBudget { vertex, chord };
+    let report = if let Some(limit) = release_limit {
+        refined_trial(&recovery, budget, limit, shell_output.as_deref())?
+    } else {
+        census(&recovery, budget, shell_output.as_deref())?
+    };
     println!(
         "{}",
         json!({"source":path,"recovery_seconds":recovery_seconds,"hybrid":report})
