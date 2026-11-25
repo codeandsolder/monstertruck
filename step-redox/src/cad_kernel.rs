@@ -149,11 +149,10 @@ pub trait CadKernel {
         Self: Sized,
     {
         anyhow::ensure!(mode == ReplayMode::General, "analytic replay unavailable");
-        if let Some(seed) = seed {
-            self.evaluate_extended(model, root, seed)
-        } else {
-            self.evaluate(model, root)
-        }
+        seed.map_or_else(
+            || self.evaluate(model, root),
+            |seed| self.evaluate_extended(model, root, seed),
+        )
     }
 
     fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
@@ -2461,8 +2460,15 @@ pub mod monstertruck {
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&model, root)?;
-            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)?;
-            assert_same_analytic_boundary(&kernel, &evaluated, &analytic)?;
+            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly);
+            if matches!(profile, EdgeTreatmentProfile::AsymmetricChamfer { .. }) {
+                let Err(error) = analytic else {
+                    bail!("expected general asymmetric chamfer");
+                };
+                assert!(error.to_string().contains("general fillet deferred"));
+            } else {
+                assert_same_analytic_boundary(&kernel, &evaluated, &analytic?)?;
+            }
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
@@ -3317,12 +3323,9 @@ pub mod monstertruck {
             });
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
-            assert!(
-                kernel
-                    .evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)
-                    .is_err()
-            );
+            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)?;
             let evaluated = kernel.evaluate(&model, root)?;
+            assert_same_analytic_boundary(&kernel, &evaluated, &analytic)?;
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);

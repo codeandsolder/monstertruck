@@ -761,47 +761,18 @@ pub fn recover_complete_ir_with_kernel_bytes<
         } else {
             None
         };
-        let modes = if proof.is_some() && kernel.supports_analytic_replay() {
-            &[ReplayMode::AnalyticOnly, ReplayMode::General][..]
-        } else {
-            &[ReplayMode::General][..]
-        };
-        for &mode in modes {
-            if build.recovery.selected.contains_key(&source) {
-                break;
-            }
-            let target = native_peels::ReplayTarget {
+        failures.extend(recover_native_histories(
+            &mut build.recovery,
+            &native_peels::ReplayTarget {
                 source,
                 proof: proof.as_ref(),
-                mode,
-            };
-            let candidate = recover_kernel_boundary_feature_fragment(
-                &target,
-                &source_load,
-                &document,
-                kernel,
-                index,
-            );
-            failures.extend(
-                build
-                    .recovery
-                    .admit_replay_candidate(source, candidate, mode),
-            );
-            if !build.recovery.selected.contains_key(&source) {
-                let candidate = recover_kernel_topology_normalized_fragment(
-                    &document,
-                    &target,
-                    &source_load,
-                    kernel,
-                    index,
-                );
-                failures.extend(
-                    build
-                        .recovery
-                        .admit_replay_candidate(source, candidate, mode),
-                );
-            }
-        }
+                mode: ReplayMode::General,
+            },
+            &source_load,
+            &document,
+            kernel,
+            index,
+        ));
         let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
         let Some(proof) = proof else {
             continue;
@@ -827,6 +798,48 @@ pub fn recover_complete_ir_with_kernel_bytes<
         failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
+}
+
+/// Prefer independently proven native histories before general solver replay.
+fn recover_native_histories<K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor>(
+    recovery: &mut WholeSolidRecoveryState,
+    initial: &native_peels::ReplayTarget<'_, '_, K>,
+    source_load: &KernelSourceLoadEvidence,
+    document: &K::Document,
+    kernel: &K,
+    index: &HashMap<u64, usize>,
+) -> Vec<KernelRecoveryFailure> {
+    let source = initial.source;
+    let mut failures = Vec::new();
+    let modes = if initial.proof.is_some() && kernel.supports_analytic_replay() {
+        &[ReplayMode::AnalyticOnly, ReplayMode::General][..]
+    } else {
+        &[ReplayMode::General][..]
+    };
+    for &mode in modes {
+        if recovery.selected.contains_key(&source) {
+            break;
+        }
+        let target = native_peels::ReplayTarget {
+            source,
+            proof: initial.proof,
+            mode,
+        };
+        let candidate =
+            recover_kernel_boundary_feature_fragment(&target, source_load, document, kernel, index);
+        failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        if !recovery.selected.contains_key(&source) {
+            let candidate = recover_kernel_topology_normalized_fragment(
+                document,
+                &target,
+                source_load,
+                kernel,
+                index,
+            );
+            failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        }
+    }
+    failures
 }
 
 /// Peel fully proven boundary-feature leaves on kernel-owned topology. The parser
