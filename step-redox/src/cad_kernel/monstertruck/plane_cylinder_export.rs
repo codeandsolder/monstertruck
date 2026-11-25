@@ -12,8 +12,8 @@ use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_modeling::{
-    BoundedCurve, BsplineCurve, Curve, EuclideanSpace, InnerSpace, KnotVector, NurbsCurve, Plane,
-    Point3, Surface, SurfaceCurve, Vector3, Vector4, algo,
+    BoundedCurve, BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Plane, Point3, Surface,
+    SurfaceCurve, Vector3, Vector4, algo,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 

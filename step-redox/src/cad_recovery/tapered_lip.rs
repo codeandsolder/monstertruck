@@ -48,7 +48,7 @@ struct Band {
 }
 
 impl Band {
-    fn radial_at(self, side: f64, radius: f64) -> Option<f64> {
+    fn radial_at(side: f64, radius: f64) -> Option<f64> {
         let gap = radius - side.abs();
         (gap > LENGTH && gap.is_finite()).then(|| (gap * (radius + side.abs())).sqrt())
     }
@@ -72,12 +72,12 @@ impl LipProposal {
     fn annular_profile(&self, back: f64, front: f64) -> Option<Vec<Curve2d>> {
         let inner = self.band.inner;
         let outer = self.band.outer;
-        let a = [back, self.band.radial_at(back, inner)?];
+        let a = [back, Band::radial_at(back, inner)?];
         let b = [0.0, inner];
         let c = [front, inner];
         let d = [front, outer];
         let e = [0.0, outer];
-        let f = [back, self.band.radial_at(back, outer)?];
+        let f = [back, Band::radial_at(back, outer)?];
         let line = |start_mm, end_mm| Curve2d::Line { start_mm, end_mm };
         let arc = |radius_mm, start: [f64; 2], end: [f64; 2]| Curve2d::CircleArc {
             center_mm: [0.0, 0.0],
@@ -126,9 +126,7 @@ impl LipProposal {
             add(f.origin, mul(f.width, -clearance)),
             [f.side, f.radial, f.width],
         );
-        let lower = self
-            .band
-            .radial_at(back, self.band.inner)
+        let lower = Band::radial_at(back, self.band.inner)
             .ok_or_else(|| anyhow::anyhow!("annular lip lower station"))?
             - clearance;
         let upper = self.band.outer + clearance;
@@ -278,8 +276,8 @@ fn back_station(
                 return None;
             }
             let station = a[1].midpoint(b[1]);
-            let inner = band.radial_at(station, band.inner)?;
-            let outer = band.radial_at(station, band.outer)?;
+            let inner = Band::radial_at(station, band.inner)?;
+            let outer = Band::radial_at(station, band.outer)?;
             if (a[2].min(b[2]) - inner).abs() > LENGTH || (a[2].max(b[2]) - outer).abs() > LENGTH {
                 return None;
             }
@@ -409,7 +407,7 @@ fn extend_rear(
     for i in 0..count {
         let p = intersection(equations[(i + count - 1) % count], equations[i])?;
         if !p.iter().all(|v| v.is_finite())
-            || (i != index && i != next && norm2(math2::sub(p, points[i])) > LENGTH)
+            || (i != index && i != next && math2::norm(math2::sub(p, points[i])) > LENGTH)
         {
             return None;
         }
@@ -422,8 +420,6 @@ fn extend_rear(
     }
     convex_polygon(points).then_some(front)
 }
-
-fn norm2(p: [f64; 2]) -> f64 { p[0].hypot(p[1]) }
 
 fn proposal(
     graph: &FaceIncidence<'_>,
