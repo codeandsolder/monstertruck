@@ -1133,6 +1133,11 @@ fn recover_kernel_topology_normalized_fragment<
     // rational spline extrusion). Do not needlessly serialize that source or
     // mislabel direct recovery as a topology-normalization operation.
     if unchanged {
+        // An unchanged structural host cannot be admitted by the restricted
+        // pass. Avoid evaluating it twice before the general pass.
+        if target.mode == ReplayMode::AnalyticOnly {
+            return Ok(None);
+        }
         let Some(mut host) = recognize_native_edited_host(kernel, &edited)? else {
             if let Some(reason) = stop {
                 bail!("inverse treatment fixed point: {reason}");
@@ -1218,6 +1223,7 @@ fn recognize_single_healed_host<K: CadKernel>(
     healed: &Exchange,
     kernel: &K,
     acceptance: Option<&CandidateAcceptance<'_, K>>,
+    mode: ReplayMode,
 ) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
@@ -1280,7 +1286,7 @@ fn recognize_single_healed_host<K: CadKernel>(
         return Ok(None);
     };
     let proof = if let Some(accept) = acceptance {
-        proof.requiring(accept)
+        proof.requiring(accept, mode)
     } else {
         proof
     };
@@ -4171,8 +4177,13 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel, None)?
-            .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
+        let host = recognize_single_healed_host(
+            healed_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
@@ -4746,7 +4757,7 @@ END-ISO-10303-21;
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel, None)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
             .context("no constructive healed sectional host")?;
         assert!(matches!(
             host.source,
@@ -4770,7 +4781,7 @@ END-ISO-10303-21;
             include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel, None)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
             .context("no constructive healed union host")?;
         assert!(is_constructive_source(&host.source), "{:?}", host.source);
         assert_eq!(source_solid_id(&host.source), 16);
@@ -5829,8 +5840,13 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel, None)?
-            .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
+        let legacy = recognize_single_healed_host(
+            legacy_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(
             kernel.summarize(&kernel.evaluate(&native_fragment.model, native_fragment.root)?),

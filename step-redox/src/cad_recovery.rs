@@ -1,7 +1,7 @@
 use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, FusedPeriodicChain, IndexedCount, NodeId, ProofStatus, Provenance,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::solid_extrusions::RecoveredSolidExtrusion;
@@ -424,8 +424,13 @@ fn evaluated_step_solid<K: CadKernel>(
     Ok(Some((*id, data.entities)))
 }
 
-fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> bool {
-    let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
+fn has_only_planar_cylindrical_carriers<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    fragment: &CadFragment,
+) -> bool {
+    let kernel = source.kernel;
+    let Ok(evaluated) = kernel.evaluate_replay(&fragment.model, fragment.root, None, source.mode)
+    else {
         return false;
     };
     if !kernel.summarize(&evaluated).is_single_solid() {
@@ -464,6 +469,7 @@ pub(crate) struct SourceRecovery<'a, K: CadKernel> {
     strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
     acceptance: Option<&'a CandidateAcceptance<'a, K>>,
+    mode: ReplayMode,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -530,13 +536,19 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             strip_face_sense_repairs,
             boundary_vertices,
             acceptance: None,
+            mode: ReplayMode::General,
         })
     }
 
     /// A peeled host must also support the remaining forward operations.
     /// Apply the caller's acceptance only after independent host proof.
-    pub(crate) fn requiring(mut self, acceptance: &'a CandidateAcceptance<'a, K>) -> Self {
+    pub(crate) fn requiring(
+        mut self,
+        acceptance: &'a CandidateAcceptance<'a, K>,
+        mode: ReplayMode,
+    ) -> Self {
         self.acceptance = Some(acceptance);
+        self.mode = mode;
         self
     }
 
@@ -565,7 +577,7 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
-        let seed = self.kernel.evaluate_seed(model, root)?;
+        let seed = self.kernel.evaluate_seed(model, root, self.mode)?;
         if !self.kernel.summarize(seed.evaluated()).is_single_solid() {
             return Ok(false);
         }
@@ -713,7 +725,7 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
             })
             && *self.analytic_extensions.get_or_init(|| {
                 self.extensions.iter().all(|extension| {
-                    has_only_planar_cylindrical_carriers(self.source.kernel, &extension.fragment)
+                    has_only_planar_cylindrical_carriers(self.source, &extension.fragment)
                 })
             })
         {

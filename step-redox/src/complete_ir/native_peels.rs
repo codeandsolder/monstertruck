@@ -164,7 +164,7 @@ impl Journal {
             }
         };
         if let Some(host) =
-            recognize_single_healed_host(document.as_ref(), kernel, Some(&acceptance))?
+            recognize_single_healed_host(document.as_ref(), kernel, Some(&acceptance), target.mode)?
         {
             // Qualification already evaluated this exact DAG and journal.
             // Recompose only the IR to retain the actual host's source kind;

@@ -54,6 +54,7 @@ pub struct EvaluationSeed<'a, K: CadKernel> {
     kernel: &'a K,
     model: &'a CadModel,
     root: NodeId,
+    mode: ReplayMode,
     evaluated: K::Evaluated,
 }
 
@@ -98,6 +99,7 @@ pub trait CadKernel {
         &'a self,
         model: &'a CadModel,
         root: NodeId,
+        mode: ReplayMode,
     ) -> Result<EvaluationSeed<'a, Self>>
     where
         Self: Sized,
@@ -106,7 +108,8 @@ pub trait CadKernel {
             kernel: self,
             model,
             root,
-            evaluated: self.evaluate(model, root)?,
+            mode,
+            evaluated: self.evaluate_replay(model, root, None, mode)?,
         })
     }
 
@@ -125,7 +128,7 @@ pub trait CadKernel {
     where
         Self: Sized,
     {
-        seed.validate(self, model)?;
+        seed.validate(self, model, ReplayMode::General)?;
         drop(seed);
         self.evaluate(model, root)
     }
@@ -172,8 +175,12 @@ pub trait CadKernel {
 }
 
 impl<K: CadKernel> EvaluationSeed<'_, K> {
-    fn validate(&self, kernel: &K, extended: &CadModel) -> Result<()> {
+    fn validate(&self, kernel: &K, extended: &CadModel, mode: ReplayMode) -> Result<()> {
         self.model.node(self.root)?;
+        anyhow::ensure!(
+            mode == ReplayMode::General || self.mode == mode,
+            "general evaluation seed cannot qualify restricted replay"
+        );
         anyhow::ensure!(
             std::ptr::eq(kernel, self.kernel),
             "CAD evaluation seed belongs to another kernel"
@@ -1813,7 +1820,7 @@ pub mod monstertruck {
             let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
             cache.replay_mode = mode;
             if let Some(seed) = seed {
-                seed.validate(self, model)?;
+                seed.validate(self, model, mode)?;
                 // Only reuse the base-policy key. Fused analytic paths
                 // may bypass the cached dependency.
                 let key = (seed.root, PolicyKey::from(self.policy));
@@ -1879,7 +1886,7 @@ pub mod monstertruck {
                 tolerance_mm: 0.001,
             });
             extension.add_root(root)?;
-            let seed = kernel.evaluate_seed(&model, prefix)?;
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
             let actual = kernel.evaluate_extended(&extension, root, seed)?;
             let expected = kernel.evaluate(&extension, root)?;
             let actual = kernel.to_step(&actual)?;
@@ -1893,7 +1900,7 @@ pub mod monstertruck {
             );
 
             // Same prefix and base policy: transfer the already evaluated solid.
-            let seed = kernel.evaluate_seed(&model, prefix)?;
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
             let actual = kernel.evaluate_extended(&model, prefix, seed)?;
             let expected = kernel.evaluate(&model, prefix)?;
             let actual = kernel.to_step(&actual)?;
@@ -1906,11 +1913,24 @@ pub mod monstertruck {
                     .1,
             );
 
-            let seed = kernel.evaluate_seed(&model, prefix)?;
+            // A general seed cannot bypass analytic-only solver selection.
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            assert!(
+                kernel
+                    .evaluate_replay(&model, prefix, Some(seed), ReplayMode::AnalyticOnly)
+                    .is_err()
+            );
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::AnalyticOnly)?;
+            let result =
+                kernel.evaluate_replay(&model, prefix, Some(seed), ReplayMode::AnalyticOnly)?;
+            assert!(kernel.summarize(&result).is_single_solid());
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::AnalyticOnly)?;
+            assert!(kernel.evaluate_extended(&model, prefix, seed).is_ok());
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
             assert!(other.evaluate_extended(&model, prefix, seed).is_err());
             let mut changed = model.clone();
             changed.nodes[prefix.0] = CadNode::Primitive(Primitive::Box { size_mm: [3.0; 3] });
-            let seed = kernel.evaluate_seed(&model, prefix)?;
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
             assert!(kernel.evaluate_extended(&changed, prefix, seed).is_err());
             Ok(())
         }
