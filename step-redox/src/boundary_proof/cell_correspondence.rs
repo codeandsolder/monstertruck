@@ -182,6 +182,7 @@ const fn chain_supports(chain: &mut BoundaryChainKey) -> &mut [OrientedSupportKe
         BoundaryChainKey::Open { supports, .. }
         | BoundaryChainKey::Circular { supports, .. }
         | BoundaryChainKey::CylinderSection { supports, .. }
+        | BoundaryChainKey::CylinderIntersection { supports, .. }
         | BoundaryChainKey::Spline { supports, .. } => supports,
     }
 }
@@ -205,7 +206,8 @@ fn map_chain_geometry(chain: &mut BoundaryChainKey, map: &mut dyn FnMut(CellKey)
                 map_vector(key, CellKind::Point, map);
             }
         }
-        BoundaryChainKey::CylinderSection { endpoints_mm, .. } => {
+        BoundaryChainKey::CylinderSection { endpoints_mm, .. }
+        | BoundaryChainKey::CylinderIntersection { endpoints_mm, .. } => {
             for key in endpoints_mm.iter_mut().flatten() {
                 map_vector(key, CellKind::Point, map);
             }
@@ -220,7 +222,8 @@ fn chain_endpoints(chain: &BoundaryChainKey) -> Result<Option<[PointKey; 2]>, ()
     Ok(match chain {
         BoundaryChainKey::Open { endpoints_mm, .. } => Some(*endpoints_mm),
         BoundaryChainKey::Circular { endpoints_mm, .. }
-        | BoundaryChainKey::CylinderSection { endpoints_mm, .. } => *endpoints_mm,
+        | BoundaryChainKey::CylinderSection { endpoints_mm, .. }
+        | BoundaryChainKey::CylinderIntersection { endpoints_mm, .. } => *endpoints_mm,
         BoundaryChainKey::Spline { curve, .. } => Some(curve.ends().ok_or(())?),
     })
 }
@@ -390,7 +393,15 @@ pub(super) fn compare(
                 *key = target.clone();
             }
         }
+        let reordered = supports[0] > supports[1];
         supports.sort();
+        if reordered
+            && let BoundaryChainKey::CylinderIntersection {
+                primary_is_second, ..
+            } = chain
+        {
+            *primary_is_second = !*primary_is_second;
+        }
     }
     Some(
         correspondence(&a.chains, &remapped, |target, key| {

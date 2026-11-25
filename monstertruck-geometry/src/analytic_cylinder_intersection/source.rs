@@ -27,6 +27,7 @@ pub struct SourceIntersectionProposal {
 }
 
 /// Whole-locus deviation from the original spline to a new analytical arc.
+///
 /// Bounds include finite-f64 conditioning allowances, not directed-rounding
 /// interval arithmetic. Neither bound certifies the adjacent trimmed faces.
 #[derive(Clone, Copy, Debug)]
@@ -81,13 +82,14 @@ impl BoundedSourceIntersection {
         if source_root <= 0.0 || !source_root.is_finite() {
             return None;
         }
-        let axial =
-            e * (2.0 * secondary.radius + e) / ((source_root + arc.min_root) * arc.axis_sine);
+        let axial = e * (2.0_f64.mul_add(secondary.radius, e))
+            / ((source_root + arc.min_root) * arc.axis_sine);
         // Angular projection covers the entire directed interval, so the
         // same pointwise correspondence supplies the reverse bound too.
         let speed_bound =
             primary.radius * (1.0 + (1.0 + secondary.radius / arc.min_root) / arc.axis_sine);
-        let rounding = arc.arithmetic_margin + speed_bound * proposal.angular_arithmetic_margin;
+        let rounding =
+            speed_bound.mul_add(proposal.angular_arithmetic_margin, arc.arithmetic_margin);
         let separation_upper = a + axial + rounding;
         let separation_lower = (primary_deviation.lower.max(secondary_deviation.lower)
             - arc.arithmetic_margin)
@@ -199,7 +201,7 @@ fn ordered_sweep(
     }
     let total = *angles.last()?;
     let principal = ray_angle(*rays.first()?, *rays.last()?, axis);
-    let sweep = principal + ((total - principal) / TAU).round() * TAU;
+    let sweep = ((total - principal) / TAU).round().mul_add(TAU, principal);
     // The accumulated angle is only used to identify an integral turn. A
     // margin proportional to the count accounts for finite-f64 unwrapping.
     let accumulated_margin = margin * crate::usize_to_f64(points.len());

@@ -1,6 +1,7 @@
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut, visit_entity_refs};
+use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
-use step_p21::ast::{EntityInstance, Name, Parameter, Record};
+use step_p21::ast::{DataSection, EntityInstance, Name, Parameter, Record};
 
 /// Resolve a STEP reference only when the index still names the requested entity.
 /// An in-bounds but stale index must not silently substitute another entity.
@@ -29,6 +30,32 @@ pub fn named_entity_parameters<'a>(
         return None;
     };
     Some(params)
+}
+
+/// Mutably resolve the same checked, simple-entity positional parameter list.
+pub(crate) fn simple_parameters_mut<'a>(
+    section: &'a mut DataSection,
+    index: &HashMap<u64, usize>,
+    id: u64,
+    expected: &str,
+) -> Result<&'a mut [Parameter]> {
+    let position = *index
+        .get(&id)
+        .ok_or_else(|| anyhow!("missing source entity #{id}"))?;
+    let entity = section
+        .entities
+        .get_mut(position)
+        .ok_or_else(|| anyhow!("invalid source entity index for #{id}"))?;
+    let EntityInstance::Simple { id: actual, record } = entity else {
+        bail!("source entity #{id} is complex, expected simple {expected}");
+    };
+    if *actual != id || record.name != expected {
+        bail!("source entity #{id} has unexpected type or stale ID");
+    }
+    let Parameter::List(parameters) = &mut record.parameter else {
+        bail!("source entity #{id} lacks a parameter list");
+    };
+    Ok(parameters)
 }
 
 /// Read an exactly three-component STEP coordinate tuple of the required entity kind.

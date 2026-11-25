@@ -136,3 +136,21 @@ visits; a valid curved edge need not have a globally monotone chord projection.
 Unsupported trim domains and unexamined face/curve families remain explicit.
 The caller's tolerance classifies the reported bounds only: it does not
 change the constructive recovery gate, source geometry or source uncertainty.
+
+For explicit source-distinct repairs of a proven defective crossing-cylinder
+spline, preserve the original carrier surfaces and edge/coedge/vertex
+identities and construct a bounded finite 3D leader for the analytic branch:
+
+    cargo run --release -p step-redox --features cad-kernel-monstertruck \
+      --bin step-heal-source-edges -- original.step repaired.step \
+      --endpoint-tolerance-mm 1e-8 --target-gap-mm 1e-9 \
+      cylinders --repair 0:171:1049 --repair 0:171:1063 \
+      --leader-tolerance-mm 2e-10 --max-leader-segments 8192
+
+The command refuses existing destinations. The manifest records the full
+source-to-analytic separation bracket, Hermite approximation and serialized
+control-hull bounds, and all original and new entity identities. The new
+document is independently checked as a new source; it is not admitted as
+equivalent to the original defective source. The same CLI's `hyperbolas`
+subcommand accepts the five-field DATA_SECTION:SOLID:EDGE:PLANE_FACE:CONE_FACE
+repair specification and the two common error budgets.

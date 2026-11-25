@@ -9,7 +9,9 @@
 use crate::prelude::*;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::{PI, TAU};
+mod leader;
 mod source;
+pub use leader::IntersectionLeader;
 pub use source::{BoundedSourceIntersection, SourceIntersectionProposal};
 
 /// A circular cylindrical carrier in physical coordinates.
@@ -89,7 +91,7 @@ pub struct CylinderIntersectionArc {
 }
 
 fn max_abs_trig(constant: f64, cosine: f64, sine: f64, sweep: f64) -> f64 {
-    let value = |angle: f64| constant + cosine * angle.cos() + sine * angle.sin();
+    let value = |angle: f64| sine.mul_add(angle.sin(), cosine.mul_add(angle.cos(), constant));
     let mut result = value(0.0).abs().max(value(sweep).abs());
     let phase = sine.atan2(cosine);
     let lo = sweep.min(0.0);
@@ -98,7 +100,7 @@ fn max_abs_trig(constant: f64, cosine: f64, sine: f64, sweep: f64) -> f64 {
     // The interval is anchored at zero and never exceeds one revolution.
     // The stationary points are phase+k*pi, both positive and negative.
     for k in -3..=3 {
-        let angle = phase + f64::from(k) * PI;
+        let angle = f64::from(k).mul_add(PI, phase);
         if angle >= lo - padding && angle <= hi + padding {
             result = result.max(value(angle).abs());
         }
@@ -211,6 +213,10 @@ impl CylinderIntersectionArc {
     #[must_use = "the angular interval is part of the arc identity"]
     pub const fn sweep(self) -> f64 { self.sweep }
 
+    /// Selected separated transverse branch in this ordered carrier frame.
+    #[must_use = "the branch is part of the intersection identity"]
+    pub const fn branch(self) -> IntersectionBranch { self.branch }
+
     /// Lower bound on the magnitude of the separated transverse root.
     #[must_use = "the branch margin quantifies its conditioning"]
     pub const fn minimum_root(self) -> f64 { self.min_root }
@@ -241,10 +247,11 @@ impl CylinderIntersectionArc {
             return None;
         }
         let root_first = -distance * distance_first / root;
-        let root_second = -(distance_first * distance_first + distance * distance_second) / root
+        let root_second = -distance.mul_add(distance_second, distance_first.powi(2)) / root
             - distance * distance * distance_first * distance_first / root.powi(3);
-        let axial =
-            |root: f64, projection: f64| (self.branch.sign() * root - projection) / self.axis_sine;
+        let axial = |root: f64, projection: f64| {
+            self.branch.sign().mul_add(root, -projection) / self.axis_sine
+        };
         let point = generator + self.primary.axis * axial(root, offset.dot(self.axial_projection));
         let derivative =
             first + self.primary.axis * axial(root_first, first.dot(self.axial_projection));

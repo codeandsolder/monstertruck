@@ -21,6 +21,10 @@ use monstertruck_geometry::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
+mod crossing_cylinders;
+use crossing_cylinders::certify_crossing_cylinders;
+pub(super) use crossing_cylinders::{CylinderIntersectionKey, normalize_intersections};
+
 const TOL: f64 = ANALYTIC_BOUNDARY_PROOF_TOL_MM;
 
 const fn point(p: [f64; 3]) -> Point3 { Point3::new(p[0], p[1], p[2]) }
@@ -265,6 +269,7 @@ pub(super) enum BoundedEdge {
     Line,
     Circle(CircleLocusKey, Arc),
     CylinderSection(Arc),
+    CylinderIntersection(CylinderIntersectionKey, Arc),
     Spline(super::spline_strip::ProfilePiece),
 }
 
@@ -480,7 +485,7 @@ impl CylinderSectionChart {
 
 /// A declared nonsimple curve may still be proved to traverse this
 /// ellipse exactly once. No general curve recognition relies on this path.
-pub(super) fn certify_flagged_cylinder_section(
+pub(super) fn certify_flagged_angular_section(
     edge: &EdgeGeometry,
     curve: &CurveSupport,
     loci: &[SupportLocusKey; 2],
@@ -488,10 +493,11 @@ pub(super) fn certify_flagged_cylinder_section(
     let CurveSupport::BSpline(spline) = curve else {
         return None;
     };
-    let chart = CylinderSectionChart::new(loci)?;
-    chart
-        .certify(edge, &spline.rational_curve()?)
+    let rational = spline.rational_curve()?;
+    CylinderSectionChart::new(loci)
+        .and_then(|chart| chart.certify(edge, &rational))
         .map(BoundedEdge::CylinderSection)
+        .or_else(|| certify_crossing_cylinders(edge, &rational, loci))
 }
 
 pub(super) fn classify(
@@ -523,6 +529,9 @@ pub(super) fn classify(
                 CylinderSectionChart::new(loci).and_then(|chart| chart.certify(edge, &rational))
             {
                 return Some(BoundedEdge::CylinderSection(arc));
+            }
+            if let Some(intersection) = certify_crossing_cylinders(edge, &rational, loci) {
+                return Some(intersection);
             }
             if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci) {
                 return Some(BoundedEdge::Spline(key));
@@ -989,7 +998,7 @@ mod tests {
         let e = edge([R, 0, R], [0, R, 0], true, ordinary);
         let loci = oblique_supports().each_ref().map(support_locus_key);
         assert!(matches!(
-            certify_flagged_cylinder_section(&e, &explicit, &loci),
+            certify_flagged_angular_section(&e, &explicit, &loci),
             Some(BoundedEdge::CylinderSection(_))
         ));
         let CurveSupport::BSpline(mut wrong) = explicit else {
@@ -997,7 +1006,7 @@ mod tests {
         };
         wrong.control_points_mm[1][2] += 0.01;
         assert!(
-            certify_flagged_cylinder_section(&e, &CurveSupport::BSpline(wrong), &loci).is_none()
+            certify_flagged_angular_section(&e, &CurveSupport::BSpline(wrong), &loci).is_none()
         );
         Ok(())
     }
