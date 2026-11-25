@@ -7,7 +7,9 @@ use super::{
 };
 mod hashed_point_cloud;
 use hashed_point_cloud::HashedPointCloud;
+mod projection_index;
 mod sort_end_points;
+pub use projection_index::ProjectionNeighborhood;
 
 /// Investigates positional relation between polygon mesh and point cloud.
 pub trait WithPointCloud {

@@ -34,6 +34,8 @@ struct FragmentValidation<'a, S> {
     polygon0: &'a PolygonMesh,
     surface1: &'a S,
     polygon1: &'a PolygonMesh,
+    proximity0: std::cell::OnceCell<ProjectionNeighborhood<'a>>,
+    proximity1: std::cell::OnceCell<ProjectionNeighborhood<'a>>,
     tolerance: f64,
     surface_residual: f64,
 }
@@ -170,11 +172,13 @@ where
     // predicates, preserving the exact admission criteria.
     let polygon_tolerance = 2.0 * validation.tolerance;
     if !validation
-        .polygon0
-        .neighborhood_include(&samples, polygon_tolerance)
+        .proximity0
+        .get_or_init(|| ProjectionNeighborhood::new(validation.polygon0, polygon_tolerance))
+        .includes(&samples)
         || !validation
-            .polygon1
-            .neighborhood_include(&samples, polygon_tolerance)
+            .proximity1
+            .get_or_init(|| ProjectionNeighborhood::new(validation.polygon1, polygon_tolerance))
+            .includes(&samples)
     {
         return false;
     }
@@ -214,6 +218,8 @@ where
         polygon0,
         surface1,
         polygon1,
+        proximity0: std::cell::OnceCell::new(),
+        proximity1: std::cell::OnceCell::new(),
         tolerance,
         surface_residual,
     };

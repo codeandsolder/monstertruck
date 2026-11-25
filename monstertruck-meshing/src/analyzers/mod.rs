@@ -53,6 +53,7 @@ fn sweep_coordinate_order_is_total_and_preserves_signed_zero() {
     }
 }
 
+mod active_sweep;
 mod collision;
 mod in_out_judge;
 mod point_cloud;
@@ -63,7 +64,7 @@ mod volume;
 pub use collision::Collision;
 pub use in_out_judge::{IncludingPointInDomain, SignedRayIndex};
 pub use monstertruck_topology::shell::ShellCondition;
-pub use point_cloud::WithPointCloud;
+pub use point_cloud::{ProjectionNeighborhood, WithPointCloud};
 pub use splitting::ExperimentalSplitters;
 pub use splitting::Splitting;
 pub use topology::Topology;
