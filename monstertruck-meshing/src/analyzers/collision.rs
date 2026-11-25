@@ -50,7 +50,7 @@ struct EndPoint {
 }
 
 impl EndPoint {
-    fn from_seg(seg: (f64, f64), index: usize, total: usize) -> [Self; 2] {
+    const fn from_seg(seg: (f64, f64), index: usize, total: usize) -> [Self; 2] {
         [
             Self {
                 coordinate: sweep_coordinate_key(seg.0),
@@ -221,18 +221,22 @@ fn interference_segments(
     poly1: &PolygonMesh,
 ) -> impl Iterator<Item = (Point3, Point3)> {
     let triangles = [poly0, poly1].map(|mesh| {
-        mesh.faces()
-            .triangle_iter()
-            .map(|face| TriangleData::new(make_pos_tri(mesh, face)))
-            .collect::<Vec<_>>()
+        if poly0.positions().is_empty() || poly1.positions().is_empty() {
+            Vec::new()
+        } else {
+            mesh.faces()
+                .triangle_iter()
+                .map(|face| TriangleData::new(make_pos_tri(mesh, face)))
+                .collect::<Vec<_>>()
+        }
     });
     let counts = triangles.each_ref().map(Vec::len);
     let events = poly0.positions().first().map_or_else(Vec::new, |&first| {
         sorted_endpoints(&triangles, hash::take_one_unit(first))
     });
     colliding_segment_pairs(events, counts).filter_map(move |(left, right)| {
-        let first = triangles[0][left];
-        let second = triangles[1][right];
+        let first = &triangles[0][left];
+        let second = &triangles[1][right];
         if disjoint_bdbs(first.bounds, second.bounds) {
             None
         } else {
@@ -241,31 +245,10 @@ fn interference_segments(
     })
 }
 
-#[test]
-fn streaming_pairs_preserve_exact_event_and_active_order() {
-    let counts = [73, 91];
-    let total = counts.iter().sum();
-    let mut events = Vec::new();
-    let mut original = Vec::new();
-    for (operand, count) in counts.into_iter().enumerate() {
-        for index in 0..count {
-            // Repeated, nested, zero-width and coincident intervals.
-            let low = f64::from(
-                u32::try_from((index * 17 + operand * 5) % 19).expect("small test index"),
-            ) - 9.0;
-            let high = low + f64::from(u32::try_from((index * 11) % 13).expect("small test index"));
-            let global = if operand == 0 {
-                index
-            } else {
-                counts[0] + index
-            };
-            events.extend(EndPoint::from_seg((low, high), global, total));
-            original.extend([(low, false, operand, index), (high, true, operand, index)]);
-        }
-    }
+#[cfg(test)]
+fn reference_pairs(mut original: Vec<(f64, bool, usize, usize)>) -> Vec<(usize, usize)> {
     original.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .expect("finite test data")
+        super::compare_sweep_coordinate(a.0, b.0)
             .then_with(|| a.1.cmp(&b.1))
             .then_with(|| a.2.cmp(&b.2))
             .then_with(|| a.3.cmp(&b.3))
@@ -290,11 +273,120 @@ fn streaming_pairs_preserve_exact_event_and_active_order() {
             }));
         }
     }
+    reference
+}
+
+#[test]
+fn streaming_pairs_preserve_exact_event_and_active_order() {
+    let counts = [73, 91];
+    let total = counts.iter().sum();
+    let mut events = Vec::new();
+    let mut original = Vec::new();
+    for (operand, count) in counts.into_iter().enumerate() {
+        for index in 0..count {
+            // Repeated, nested, zero-width and coincident intervals.
+            let low = f64::from(
+                u32::try_from((index * 17 + operand * 5) % 19).expect("small test index"),
+            ) - 9.0;
+            let high = low + f64::from(u32::try_from((index * 11) % 13).expect("small test index"));
+            let global = if operand == 0 {
+                index
+            } else {
+                counts[0] + index
+            };
+            events.extend(EndPoint::from_seg((low, high), global, total));
+            original.extend([(low, false, operand, index), (high, true, operand, index)]);
+        }
+    }
+    let reference = reference_pairs(original);
     events.sort_unstable();
     assert_eq!(
         colliding_segment_pairs(events, counts).collect::<Vec<_>>(),
         reference
     );
+}
+
+#[test]
+fn cached_collision_matches_original_order_and_narrow_phase() -> anyhow::Result<()> {
+    use super::{Faces, StandardAttributes};
+    let mesh = |vertical: bool, shift: f64| -> anyhow::Result<PolygonMesh> {
+        let mut points = Vec::new();
+        let mut faces = Vec::new();
+        for row in 0..12 {
+            for col in 0..9 {
+                let x = f64::from(col) * 0.2 - 0.6;
+                let y = f64::from(row) * 0.2 - 0.9;
+                let z = shift + f64::from((row + col) % 3) * 0.07;
+                let triangle = if vertical {
+                    [
+                        Point3::new(x, z, y),
+                        Point3::new(x + 0.29, z, y),
+                        Point3::new(x, z, y + 0.29),
+                    ]
+                } else {
+                    [
+                        Point3::new(x, y, z),
+                        Point3::new(x + 0.29, y, z),
+                        Point3::new(x, y + 0.29, z),
+                    ]
+                };
+                let start = points.len();
+                points.extend(triangle);
+                faces.push([start, start + 1, start + 2]);
+                if (row + col) % 7 == 0 {
+                    faces.push([start, start + 1, start + 1]);
+                }
+            }
+        }
+        Ok(PolygonMesh::new(
+            StandardAttributes {
+                positions: points,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?)
+    };
+    for shift in [-0.7, 0.0, 0.2, 4.0] {
+        let horizontal = mesh(false, 0.0)?;
+        let vertical = mesh(true, shift)?;
+        for (left, right) in [(&horizontal, &vertical), (&vertical, &horizontal)] {
+            let triangles = [left, right].map(|mesh| {
+                mesh.faces()
+                    .triangle_iter()
+                    .map(|face| make_pos_tri(mesh, face))
+                    .collect::<Vec<_>>()
+            });
+            let unit = hash::take_one_unit(left.positions()[0]);
+            let mut events = Vec::new();
+            for (operand, list) in triangles.iter().enumerate() {
+                for (index, &triangle) in list.iter().enumerate() {
+                    if !(triangle[1] - triangle[0])
+                        .cross(triangle[2] - triangle[0])
+                        .so_small()
+                    {
+                        let (low, high) = triangle_projection_interval(triangle, unit, 0.0);
+                        events.extend([(low, false, operand, index), (high, true, operand, index)]);
+                    }
+                }
+            }
+            let expected = reference_pairs(events)
+                .into_iter()
+                .filter_map(|(i, j)| {
+                    let first = triangles[0][i];
+                    let second = triangles[1][j];
+                    (!disjoint_bdbs(first.iter().collect(), second.iter().collect()))
+                        .then(|| collide_triangles(first, second))
+                        .flatten()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(left.extract_interference(right), expected, "shift={shift}");
+            assert_eq!(left.collide_with(right), expected.first().copied());
+            if shift == 0.0 {
+                assert!(!expected.is_empty());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]
