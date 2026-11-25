@@ -16,6 +16,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub(super) struct ReplayLayer {
     groups: Vec<TreatmentReplayGroup>,
 }
@@ -407,8 +408,13 @@ mod tests {
         let snapshot = kernel.edited_source_to_step(&edited)?;
         let exchange =
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
-        let host = super::super::recognize_single_healed_host(&exchange, &kernel)?
-            .context("normalized TE host did not pass analytic boundary proof")?;
+        let host = super::super::recognize_single_healed_host(
+            &exchange,
+            &kernel,
+            None,
+            crate::cad_kernel::ReplayMode::General,
+        )?
+        .context("normalized TE host did not pass analytic boundary proof")?;
         assert!(matches!(
             host.source,
             crate::cad_recovery::CadFragmentSource::SectionalExtrusionUnion { .. }

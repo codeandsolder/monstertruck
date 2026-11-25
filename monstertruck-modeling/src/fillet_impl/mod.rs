@@ -30,13 +30,41 @@ pub fn fillet_edges(
             RadiusSpec::PerEdge(radii) => Some(radii.as_slice()),
             RadiusSpec::Variable(_) => None,
         };
-        if let Some(rebuilt) = radii.and_then(|radii| try_round_planar_network(shell, edges, radii))
-        {
-            *shell = rebuilt;
+        if radii.is_some_and(|radii| try_round_planar_edges(shell, edges, radii)) {
             return Ok(());
         }
     }
     monstertruck_fillet::fillet_edges_generic(shell, edges, Some(options))
+}
+
+/// Attempt a native analytic planar rolling-ball network without general
+/// solver fallback. Failure leaves the shell unchanged.
+#[must_use = "check whether analytic construction succeeded before considering fallback"]
+pub fn try_round_planar_edges(
+    shell: &mut crate::Shell,
+    edges: &[crate::Edge],
+    radii: &[f64],
+) -> bool {
+    let Some(rebuilt) = try_round_planar_network(shell, edges, radii) else {
+        return false;
+    };
+    *shell = rebuilt;
+    true
+}
+
+/// Attempt native planar chamfer construction without general solver
+/// fallback. Failure leaves the shell unchanged.
+#[must_use = "check whether analytic construction succeeded before considering fallback"]
+pub fn try_chamfer_planar_edges(
+    shell: &mut crate::Shell,
+    edges: &[crate::Edge],
+    setbacks: &[f64],
+) -> bool {
+    let Some(rebuilt) = planar_network::try_chamfer_planar_network(shell, edges, setbacks) else {
+        return false;
+    };
+    *shell = rebuilt;
+    true
 }
 
 /// Form planar chamfers using physical, equal setbacks measured from the
@@ -53,8 +81,7 @@ pub fn chamfer_planar_edges(
     setbacks: &[f64],
 ) -> std::result::Result<(), monstertruck_fillet::FilletError> {
     use monstertruck_fillet::{FilletError, FilletOptions, FilletProfile, RadiusSpec};
-    if let Some(rebuilt) = planar_network::try_chamfer_planar_network(shell, edges, setbacks) {
-        *shell = rebuilt;
+    if try_chamfer_planar_edges(shell, edges, setbacks) {
         return Ok(());
     }
     let radii = planar_network::planar_chamfer_radii(shell, edges, setbacks).ok_or(

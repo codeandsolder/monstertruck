@@ -3,13 +3,14 @@ use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, NodeId,
     ProofStatus, Provenance, RigidTransform,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, SourceRecovery, recover_open_rectangular_sweep_fragments,
-    recover_periodic_chain_fragments, recover_proven_material_fragment,
-    recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
-    recover_round_sweep_fragments, recover_solid_extrusion_fragment,
-    recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
+    CadFragment, CadFragmentSource, CandidateAcceptance, SourceRecovery,
+    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    recover_proven_material_fragment, recover_radial_slot_revolution_fragments,
+    recover_revolved_round_tail_fragments, recover_round_sweep_fragments,
+    recover_solid_extrusion_fragment, recover_solid_extrusion_fragments,
+    recover_solid_revolution_fragments,
 };
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 use crate::cad_recovery::{
@@ -760,39 +761,25 @@ pub fn recover_complete_ir_with_kernel_bytes<
         } else {
             None
         };
-        if !build.recovery.selected.contains_key(&source) {
-            let candidate = recover_kernel_boundary_feature_fragment(
+        failures.extend(recover_native_histories(
+            &mut build.recovery,
+            &native_peels::ReplayTarget {
                 source,
-                &source_load,
-                &document,
-                kernel,
-                index,
-                proof.as_ref(),
-            );
-            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
-        }
-        if !build.recovery.selected.contains_key(&source) {
-            let candidate = recover_kernel_topology_normalized_fragment(
-                &document,
-                source,
-                &source_load,
-                kernel,
-                index,
-                proof.as_ref(),
-            );
-            failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
-        }
+                proof: proof.as_ref(),
+                mode: ReplayMode::General,
+            },
+            &source_load,
+            &document,
+            kernel,
+            index,
+        ));
         let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
         let Some(proof) = proof else {
             continue;
         };
-        let candidate =
-            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
-                |candidate| {
-                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
-                },
-            );
-        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        // A direct source feature is the canonical representation on an
+        // equal score. Prove it before searching alternative decompositions;
+        // strictly cheaper certified material candidates can still replace it.
         let candidate = recover_verified_direct_constructive_fragment(
             &proof,
             candidates,
@@ -802,8 +789,57 @@ pub fn recover_complete_ir_with_kernel_bytes<
             candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
         });
         failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        let candidate =
+            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
+                |candidate| {
+                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+                },
+            );
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
+}
+
+/// Prefer independently proven native histories before general solver replay.
+fn recover_native_histories<K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor>(
+    recovery: &mut WholeSolidRecoveryState,
+    initial: &native_peels::ReplayTarget<'_, '_, K>,
+    source_load: &KernelSourceLoadEvidence,
+    document: &K::Document,
+    kernel: &K,
+    index: &HashMap<u64, usize>,
+) -> Vec<KernelRecoveryFailure> {
+    let source = initial.source;
+    let mut failures = Vec::new();
+    let modes = if initial.proof.is_some() && kernel.supports_analytic_replay() {
+        &[ReplayMode::AnalyticOnly, ReplayMode::General][..]
+    } else {
+        &[ReplayMode::General][..]
+    };
+    for &mode in modes {
+        if recovery.selected.contains_key(&source) {
+            break;
+        }
+        let target = native_peels::ReplayTarget {
+            source,
+            proof: initial.proof,
+            mode,
+        };
+        let candidate =
+            recover_kernel_boundary_feature_fragment(&target, source_load, document, kernel, index);
+        failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        if !recovery.selected.contains_key(&source) {
+            let candidate = recover_kernel_topology_normalized_fragment(
+                document,
+                &target,
+                source_load,
+                kernel,
+                index,
+            );
+            failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        }
+    }
+    failures
 }
 
 /// Peel fully proven boundary-feature leaves on kernel-owned topology. The parser
@@ -811,13 +847,13 @@ pub fn recover_complete_ir_with_kernel_bytes<
 fn recover_kernel_boundary_feature_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
     kernel: &K,
     index: &HashMap<u64, usize>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
         return Ok(None);
     };
@@ -892,7 +928,7 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, edited, provenance, replay, proof)
+    finish_native_boundary_feature_replay(kernel, target, edited, provenance, replay)
 }
 
 struct NativeBoundaryPass {
@@ -1022,18 +1058,17 @@ fn finish_native_boundary_feature_replay<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     kernel: &K,
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     mut edited: K::EditedSource,
     provenance: &KernelTopologyProvenance,
     replay: Vec<RecoveredBoundaryFeatureFamily>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let mut journal = native_peels::Journal::default();
     journal.boundary(replay);
     let Some(fragment) = journal.finish(
         kernel,
         &mut edited,
-        source,
+        target,
         provenance,
         native_peels::NextPeel::Treatment,
         None,
@@ -1041,22 +1076,11 @@ fn finish_native_boundary_feature_replay<
     else {
         return Ok(None);
     };
-    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
-    if !kernel.summarize(&evaluated).is_single_solid() {
-        return Ok(None);
-    }
-    // Certify the entire evaluated result against the original, unpeeled
-    // source. Unsupported boundaries keep their existing structural status;
-    // successful proof also supplies the safe candidate-complexity ceiling.
-    Ok(Some(match proof {
-        Some(proof)
-            if proof
-                .matches_evaluated_boundary(&evaluated)
-                .unwrap_or(false) =>
-        {
-            KernelRecoveryCandidate::certified(fragment, proof)
-        }
-        _ => KernelRecoveryCandidate::structural(fragment),
+    // The journal has already qualified the complete replay against the
+    // original supported boundary, before choosing a host representation.
+    Ok(Some(match target.proof {
+        Some(proof) => KernelRecoveryCandidate::certified(fragment, proof),
+        None => KernelRecoveryCandidate::structural(fragment),
     }))
 }
 
@@ -1064,12 +1088,13 @@ fn recover_kernel_topology_normalized_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     document: &K::Document,
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
     index: &HashMap<u64, usize>,
-    proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
+    let proof = target.proof;
     let exchange = document.as_ref();
     let Some(load) = source_load
         .solids
@@ -1108,6 +1133,11 @@ fn recover_kernel_topology_normalized_fragment<
     // rational spline extrusion). Do not needlessly serialize that source or
     // mislabel direct recovery as a topology-normalization operation.
     if unchanged {
+        // An unchanged structural host cannot be admitted by the restricted
+        // pass. Avoid evaluating it twice before the general pass.
+        if target.mode == ReplayMode::AnalyticOnly {
+            return Ok(None);
+        }
         let Some(mut host) = recognize_native_edited_host(kernel, &edited)? else {
             if let Some(reason) = stop {
                 bail!("inverse treatment fixed point: {reason}");
@@ -1123,7 +1153,7 @@ fn recover_kernel_topology_normalized_fragment<
     let Some(mut fragment) = journal.finish(
         kernel,
         &mut edited,
-        source,
+        target,
         &provenance,
         native_peels::NextPeel::Boundary,
         stop,
@@ -1141,10 +1171,6 @@ fn recover_kernel_topology_normalized_fragment<
         };
         return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
-    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
-    if !kernel.summarize(&evaluated).is_single_solid() {
-        return Ok(None);
-    }
     if !kernel.supports_step_export() {
         return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
@@ -1154,9 +1180,6 @@ fn recover_kernel_topology_normalized_fragment<
     let Some(proof) = proof else {
         bail!("native edge-treatment replay lacks a supported source boundary proof");
     };
-    if !proof.matches_evaluated_boundary(&evaluated)? {
-        bail!("native edge-treatment replay did not prove source boundary equivalence");
-    }
     Ok(Some(KernelRecoveryCandidate::certified(fragment, proof)))
 }
 
@@ -1173,16 +1196,6 @@ fn replayable_source_treatments(
     );
     evidence.sort_by_key(|item| item.treatment_face_id);
     evidence
-}
-
-/// Prefer native exact-trim semantic recognition while retaining the general
-/// STEP-record recognizer for shapes not yet consumed by the native adapter.
-fn recognize_edited_host_with_fallback<K: SourceTopologyEditor>(
-    kernel: &K,
-    edited: &K::EditedSource,
-    fallback: impl FnOnce() -> Result<Option<CadFragment>>,
-) -> Result<Option<CadFragment>> {
-    recognize_native_edited_host(kernel, edited)?.map_or_else(fallback, |host| Ok(Some(host)))
 }
 
 /// Recognize exact analytic hosts from the edited native B-rep, with no STEP
@@ -1209,6 +1222,8 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
 fn recognize_single_healed_host<K: CadKernel>(
     healed: &Exchange,
     kernel: &K,
+    acceptance: Option<&CandidateAcceptance<'_, K>>,
+    mode: ReplayMode,
 ) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
@@ -1248,18 +1263,32 @@ fn recognize_single_healed_host<K: CadKernel>(
             )?);
         }
     }
-    let refs = candidates.iter().collect::<Vec<_>>();
-    let selected = select_cheapest_whole_solid_fragments(&refs)?;
-    if let Some(host) = selected
-        .get(solid_id)
-        .filter(|host| is_constructive_source(&host.source))
-    {
-        return Ok(Some((*host).clone()));
+    // Direct constructive candidates are tried in canonical complexity order,
+    // not evaluated eagerly. A rejected candidate cannot suppress another
+    // executable representation of the same host.
+    let mut candidates = candidates
+        .into_iter()
+        .filter(|fragment| {
+            source_solid_id(&fragment.source) == *solid_id
+                && is_constructive_source(&fragment.source)
+        })
+        .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
+        .collect::<Result<Vec<_>>>()?;
+    candidates.sort_by_key(|(cost, _)| *cost);
+    for (_, fragment) in candidates {
+        if acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root, None)) {
+            return Ok(Some(fragment));
+        }
     }
     // Apply all independently certified material recognizers to this
     // immutable final native snapshot, not just the sectional family.
     let Some(proof) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
         return Ok(None);
+    };
+    let proof = if let Some(accept) = acceptance {
+        proof.requiring(accept, mode)
+    } else {
+        proof
     };
     recover_proven_material_fragment(&proof, None)
 }
@@ -1308,6 +1337,26 @@ impl WholeSolidRecoveryState {
                     && is_constructive_source(&selected.fragment.source)
             })
             .map(|selected| selected.complexity)
+    }
+
+    // Restricted replay is speculative: only independently certified
+    // success may suppress the complete search. Structural candidates and
+    // solver deferrals must still be handled by the general pass.
+    fn admit_replay_candidate(
+        &mut self,
+        source: SourceEntity,
+        candidate: Result<Option<KernelRecoveryCandidate>>,
+        mode: ReplayMode,
+    ) -> Option<KernelRecoveryFailure> {
+        if mode == ReplayMode::General {
+            return self.admit_kernel_candidate(source, candidate);
+        }
+        if let Ok(Some(candidate)) = candidate
+            && candidate.boundary_verification.is_certified()
+        {
+            let _ = self.admit_kernel_candidate(source, Ok(Some(candidate)));
+        }
+        None
     }
 
     fn admit_kernel_candidate(
@@ -2183,6 +2232,7 @@ fn replay_edge_treatments(
 /// Owned forward operation. Geometry is captured in the inverse layer's
 /// current coordinate space, while provenance is independently mapped back
 /// to original STEP member identities.
+#[derive(Clone)]
 struct TreatmentReplayGroup {
     face_ids: Vec<u64>,
     profile: EdgeTreatmentProfile,
@@ -4127,8 +4177,13 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref(), &kernel)?
-            .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
+        let host = recognize_single_healed_host(
+            healed_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
@@ -4272,12 +4327,15 @@ END-ISO-10303-21;
             let index = crate::step_graph::build_index(entities);
             let proof = SourceRecovery::new(source.source.id, entities, &index, &kernel);
             let fragment = recover_kernel_boundary_feature_fragment(
-                source.source,
+                &native_peels::ReplayTarget {
+                    source: source.source,
+                    proof: proof.as_ref(),
+                    mode: ReplayMode::General,
+                },
                 &load,
                 &document,
                 &kernel,
                 &index,
-                proof.as_ref(),
             )?
             .context("native relief did not reconstruct a whole body")?;
             assert!(
@@ -4699,7 +4757,7 @@ END-ISO-10303-21;
         let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
             .context("no constructive healed sectional host")?;
         assert!(matches!(
             host.source,
@@ -4723,7 +4781,7 @@ END-ISO-10303-21;
             include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
         let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
-        let host = recognize_single_healed_host(&exchange, &kernel)?
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
             .context("no constructive healed union host")?;
         assert!(is_constructive_source(&host.source), "{:?}", host.source);
         assert_eq!(source_solid_id(&host.source), 16);
@@ -4812,12 +4870,15 @@ END-ISO-10303-21;
         let index = crate::step_graph::build_index(entities);
         let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
         let recovered = recover_kernel_boundary_feature_fragment(
-            solid.source,
+            &native_peels::ReplayTarget {
+                source: solid.source,
+                proof: proof.as_ref(),
+                mode: ReplayMode::General,
+            },
             &load,
             &document,
             &kernel,
             &index,
-            proof.as_ref(),
         )?
         .context("native boundary-feature recovery refused")?;
         assert!(matches!(
@@ -5779,8 +5840,13 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref(), &kernel)?
-            .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
+        let legacy = recognize_single_healed_host(
+            legacy_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(
             kernel.summarize(&kernel.evaluate(&native_fragment.model, native_fragment.root)?),

@@ -47,6 +47,33 @@ impl KernelSummary {
     }
 }
 
+/// An evaluated, immutable CAD prefix tied to the exact kernel instance
+/// and source model. The native value may be transferred into an extended
+/// evaluation without evaluating that prefix again.
+pub struct EvaluationSeed<'a, K: CadKernel> {
+    kernel: &'a K,
+    model: &'a CadModel,
+    root: NodeId,
+    mode: ReplayMode,
+    evaluated: K::Evaluated,
+}
+
+impl<K: CadKernel> EvaluationSeed<'_, K> {
+    /// The backend-owned geometry, for independent qualification.
+    #[must_use = "use the evaluated geometry for the source proof"]
+    pub const fn evaluated(&self) -> &K::Evaluated { &self.evaluated }
+}
+
+/// Solver paths permitted during speculative history qualification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReplayMode {
+    /// Use all available constructive solvers.
+    #[default]
+    General,
+    /// Try only native analytic construction, deferring general fallbacks.
+    AnalyticOnly,
+}
+
 /// Narrow execution boundary for constructive CAD.
 ///
 /// The associated evaluated value is intentionally backend-defined and opaque to
@@ -62,6 +89,74 @@ pub trait CadKernel {
     /// # Errors
     /// Returns an error when the model cannot be represented or evaluated by this kernel.
     fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated>;
+
+    /// Evaluate a prefix that can subsequently be transferred to a replay
+    /// of an extended CAD model.
+    ///
+    /// # Errors
+    /// Returns any error from evaluating the prefix.
+    fn evaluate_seed<'a>(
+        &'a self,
+        model: &'a CadModel,
+        root: NodeId,
+        mode: ReplayMode,
+    ) -> Result<EvaluationSeed<'a, Self>>
+    where
+        Self: Sized,
+    {
+        Ok(EvaluationSeed {
+            kernel: self,
+            model,
+            root,
+            mode,
+            evaluated: self.evaluate_replay(model, root, None, mode)?,
+        })
+    }
+
+    /// Evaluate an extension of the seed model. A backend without native
+    /// memoization can evaluate the full extension normally.
+    ///
+    /// # Errors
+    /// Returns an error when the seed does not belong to this kernel or
+    /// model prefix, or the extended evaluation fails.
+    fn evaluate_extended(
+        &self,
+        model: &CadModel,
+        root: NodeId,
+        seed: EvaluationSeed<'_, Self>,
+    ) -> Result<Self::Evaluated>
+    where
+        Self: Sized,
+    {
+        seed.validate(self, model, ReplayMode::General)?;
+        drop(seed);
+        self.evaluate(model, root)
+    }
+
+    /// Whether the backend can explicitly defer general solver paths.
+    fn supports_analytic_replay(&self) -> bool { false }
+
+    /// Qualify a constructive history using the requested solver paths.
+    ///
+    /// # Errors
+    /// Returns an error if the requested mode is unsupported, the seed
+    /// is invalid, or construction fails.
+    fn evaluate_replay(
+        &self,
+        model: &CadModel,
+        root: NodeId,
+        seed: Option<EvaluationSeed<'_, Self>>,
+        mode: ReplayMode,
+    ) -> Result<Self::Evaluated>
+    where
+        Self: Sized,
+    {
+        anyhow::ensure!(mode == ReplayMode::General, "analytic replay unavailable");
+        seed.map_or_else(
+            || self.evaluate(model, root),
+            |seed| self.evaluate_extended(model, root, seed),
+        )
+    }
 
     fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
 
@@ -79,9 +174,28 @@ pub trait CadKernel {
     fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String>;
 }
 
+impl<K: CadKernel> EvaluationSeed<'_, K> {
+    fn validate(&self, kernel: &K, extended: &CadModel, mode: ReplayMode) -> Result<()> {
+        self.model.node(self.root)?;
+        anyhow::ensure!(
+            mode == ReplayMode::General || self.mode == mode,
+            "general evaluation seed cannot qualify restricted replay"
+        );
+        anyhow::ensure!(
+            std::ptr::eq(kernel, self.kernel),
+            "CAD evaluation seed belongs to another kernel"
+        );
+        anyhow::ensure!(
+            extended.nodes.starts_with(&self.model.nodes),
+            "CAD evaluation seed prefix changed"
+        );
+        Ok(())
+    }
+}
+
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod monstertruck {
-    use super::{CadKernel, GeometryPolicy, KernelSummary};
+    use super::{CadKernel, EvaluationSeed, GeometryPolicy, KernelSummary, ReplayMode};
     use crate::cad_ir::{
         Axis3, BooleanOp, CadModel, CadNode, Curve2d, EdgeSelector, EdgeTreatmentEdge,
         EdgeTreatmentProfile, LoftSection, NodeId, Primitive, Profile2d, RigidTransform,
@@ -463,6 +577,7 @@ pub mod monstertruck {
     struct EvaluationCache {
         solids: HashMap<EvaluationKey, Solid>,
         remaining: Option<HashMap<EvaluationKey, usize>>,
+        replay_mode: ReplayMode,
     }
 
     impl EvaluationCache {
@@ -492,6 +607,7 @@ pub mod monstertruck {
             Ok(Self {
                 solids: HashMap::new(),
                 remaining: Some(remaining),
+                replay_mode: ReplayMode::General,
             })
         }
 
@@ -1229,14 +1345,19 @@ pub mod monstertruck {
             // solids, certifying each pair independently before general
             // intersection. One non-contact tool must not disable exact
             // contact for every other tool in the batch.
-            return joined.map_or_else(|| fold_boolean(op, solids.into_iter().map(Ok), policy), Ok);
+            return joined.map_or_else(
+                || fold_boolean(op, solids.into_iter().map(Ok), policy, cache.replay_mode),
+                Ok,
+            );
         }
+        let replay_mode = cache.replay_mode;
         fold_boolean(
             op,
             children
                 .iter()
                 .map(|&id| evaluate_node(model, id, policy, cache)),
             policy,
+            replay_mode,
         )
     }
 
@@ -1244,6 +1365,7 @@ pub mod monstertruck {
         op: BooleanOp,
         mut operands: impl Iterator<Item = Result<Solid>>,
         policy: GeometryPolicy,
+        replay_mode: ReplayMode,
     ) -> Result<Solid> {
         let mut result = operands
             .next()
@@ -1258,10 +1380,20 @@ pub mod monstertruck {
                     {
                         joined
                     } else {
+                        ensure!(
+                            replay_mode == ReplayMode::General,
+                            "general Boolean deferred"
+                        );
                         monstertruck_solid::or(&result, &rhs, kernel_policy)?
                     }
                 }
-                BooleanOp::Intersection => monstertruck_solid::and(&result, &rhs, kernel_policy)?,
+                BooleanOp::Intersection => {
+                    ensure!(
+                        replay_mode == ReplayMode::General,
+                        "general intersection deferred"
+                    );
+                    monstertruck_solid::and(&result, &rhs, kernel_policy)?
+                }
                 BooleanOp::Difference => {
                     if let Some(joined) = monstertruck_solid::try_planar_contact_many(
                         &result,
@@ -1271,6 +1403,10 @@ pub mod monstertruck {
                     )? {
                         joined
                     } else {
+                        ensure!(
+                            replay_mode == ReplayMode::General,
+                            "general Boolean deferred"
+                        );
                         monstertruck_solid::difference(&result, &rhs, kernel_policy)?
                     }
                 }
@@ -1537,7 +1673,14 @@ pub mod monstertruck {
         };
         let fillet_profile = match profile {
             EdgeTreatmentProfile::Chamfer => {
-                monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                if cache.replay_mode == ReplayMode::AnalyticOnly {
+                    ensure!(
+                        monstertruck_modeling::try_chamfer_planar_edges(shell, &selected, &radii),
+                        "general chamfer deferred"
+                    );
+                } else {
+                    monstertruck_modeling::chamfer_planar_edges(shell, &selected, &radii)?;
+                }
                 return Ok(Solid::new(boundaries)?);
             }
             EdgeTreatmentProfile::CarrierChamfer {
@@ -1562,6 +1705,14 @@ pub mod monstertruck {
                 second_setback_mm,
             },
         };
+        if cache.replay_mode == ReplayMode::AnalyticOnly {
+            ensure!(
+                matches!(profile, EdgeTreatmentProfile::Round)
+                    && monstertruck_modeling::try_round_planar_edges(shell, &selected, &radii),
+                "general fillet deferred"
+            );
+            return Ok(Solid::new(boundaries)?);
+        }
         let options = FilletOptions {
             radius: RadiusSpec::PerEdge(radii),
             profile: fillet_profile,
@@ -1647,6 +1798,45 @@ pub mod monstertruck {
             })
         }
 
+        fn evaluate_extended(
+            &self,
+            model: &CadModel,
+            root: NodeId,
+            seed: EvaluationSeed<'_, Self>,
+        ) -> Result<Self::Evaluated> {
+            self.evaluate_replay(model, root, Some(seed), ReplayMode::General)
+        }
+
+        fn supports_analytic_replay(&self) -> bool { true }
+
+        fn evaluate_replay(
+            &self,
+            model: &CadModel,
+            root: NodeId,
+            seed: Option<EvaluationSeed<'_, Self>>,
+            mode: ReplayMode,
+        ) -> Result<Self::Evaluated> {
+            model.validate()?;
+            let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
+            cache.replay_mode = mode;
+            if let Some(seed) = seed {
+                seed.validate(self, model, mode)?;
+                // Only reuse the base-policy key. Fused analytic paths
+                // may bypass the cached dependency.
+                let key = (seed.root, PolicyKey::from(self.policy));
+                if cache
+                    .remaining
+                    .as_ref()
+                    .is_some_and(|remaining| remaining.contains_key(&key))
+                {
+                    cache.solids.insert(key, seed.evaluated.solid);
+                }
+            }
+            Ok(EvaluatedShape {
+                solid: evaluate_node(model, root, self.policy, &mut cache)?,
+            })
+        }
+
         fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
             let boundaries = evaluated.solid.boundaries();
             KernelSummary {
@@ -1680,6 +1870,70 @@ pub mod monstertruck {
         )]
         use super::*;
         use monstertruck_modeling::{Curve2D, Line, ParameterCurve, Plane, Point2};
+
+        #[test]
+        fn evaluated_prefix_can_be_replayed_but_not_substituted_for_changed_geometry() -> Result<()>
+        {
+            let kernel = MonstertruckKernel::project_standard();
+            let other = MonstertruckKernel::equivalent();
+            let mut model = CadModel::new();
+            let prefix = model.add_node(CadNode::Primitive(Primitive::Box { size_mm: [2.0; 3] }));
+            model.add_root(prefix)?;
+            let mut extension = model.clone();
+            extension.roots.clear();
+            let root = extension.add_node(CadNode::SolverTolerance {
+                child: prefix,
+                tolerance_mm: 0.001,
+            });
+            extension.add_root(root)?;
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            let actual = kernel.evaluate_extended(&extension, root, seed)?;
+            let expected = kernel.evaluate(&extension, root)?;
+            let actual = kernel.to_step(&actual)?;
+            let expected = kernel.to_step(&expected)?;
+            assert_eq!(
+                actual.split_once("\nDATA;").context("missing STEP DATA")?.1,
+                expected
+                    .split_once("\nDATA;")
+                    .context("missing STEP DATA")?
+                    .1,
+            );
+
+            // Same prefix and base policy: transfer the already evaluated solid.
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            let actual = kernel.evaluate_extended(&model, prefix, seed)?;
+            let expected = kernel.evaluate(&model, prefix)?;
+            let actual = kernel.to_step(&actual)?;
+            let expected = kernel.to_step(&expected)?;
+            assert_eq!(
+                actual.split_once("\nDATA;").context("missing STEP DATA")?.1,
+                expected
+                    .split_once("\nDATA;")
+                    .context("missing STEP DATA")?
+                    .1,
+            );
+
+            // A general seed cannot bypass analytic-only solver selection.
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            assert!(
+                kernel
+                    .evaluate_replay(&model, prefix, Some(seed), ReplayMode::AnalyticOnly)
+                    .is_err()
+            );
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::AnalyticOnly)?;
+            let result =
+                kernel.evaluate_replay(&model, prefix, Some(seed), ReplayMode::AnalyticOnly)?;
+            assert!(kernel.summarize(&result).is_single_solid());
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::AnalyticOnly)?;
+            assert!(kernel.evaluate_extended(&model, prefix, seed).is_ok());
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            assert!(other.evaluate_extended(&model, prefix, seed).is_err());
+            let mut changed = model.clone();
+            changed.nodes[prefix.0] = CadNode::Primitive(Primitive::Box { size_mm: [3.0; 3] });
+            let seed = kernel.evaluate_seed(&model, prefix, ReplayMode::General)?;
+            assert!(kernel.evaluate_extended(&changed, prefix, seed).is_err());
+            Ok(())
+        }
 
         fn bowed_intersection(boundary_y: Option<f64>) -> Curve {
             let first = Surface::Plane(Plane::xy());
@@ -2226,6 +2480,15 @@ pub mod monstertruck {
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
             let evaluated = kernel.evaluate(&model, root)?;
+            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly);
+            if matches!(profile, EdgeTreatmentProfile::AsymmetricChamfer { .. }) {
+                let Err(error) = analytic else {
+                    bail!("expected general asymmetric chamfer");
+                };
+                assert!(error.to_string().contains("general fillet deferred"));
+            } else {
+                assert_same_analytic_boundary(&kernel, &evaluated, &analytic?)?;
+            }
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
@@ -3080,7 +3343,9 @@ pub mod monstertruck {
             });
             model.add_root(root)?;
             let kernel = MonstertruckKernel::project_standard();
+            let analytic = kernel.evaluate_replay(&model, root, None, ReplayMode::AnalyticOnly)?;
             let evaluated = kernel.evaluate(&model, root)?;
+            assert_same_analytic_boundary(&kernel, &evaluated, &analytic)?;
             let summary = kernel.summarize(&evaluated);
             assert!(summary.geometrically_consistent);
             assert_eq!(summary.shells, 1);
@@ -3161,6 +3426,7 @@ pub mod monstertruck {
                 BooleanOp::Difference,
                 [Ok(host), Ok(blind), Ok(through)].into_iter(),
                 kernel.policy,
+                ReplayMode::General,
             )?;
             let actual = EvaluatedShape { solid };
             assert!(kernel.summarize(&actual).is_single_solid());
