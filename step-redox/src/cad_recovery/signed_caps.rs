@@ -149,6 +149,37 @@ struct AdditiveFeature {
     face_ids: Vec<u64>,
 }
 
+/// Overlapping source wall claims describe competing terminal extensions,
+/// not independent additions. Prefer the maximal witnessed wall coverage.
+/// Tied incompatible claims are not selected by entity numbering.
+fn select_ruled_extensions(mut candidates: Vec<AdditiveFeature>) -> Vec<AdditiveFeature> {
+    for candidate in &mut candidates {
+        candidate.face_ids.sort_unstable();
+        candidate.face_ids.dedup();
+    }
+    let overlaps = |a: &AdditiveFeature, b: &AdditiveFeature| {
+        a.face_ids
+            .iter()
+            .any(|id| b.face_ids.binary_search(id).is_ok())
+    };
+    let preferred = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            !candidates.iter().enumerate().any(|(other_index, other)| {
+                index != other_index
+                    && other.face_ids.len() >= candidate.face_ids.len()
+                    && overlaps(candidate, other)
+            })
+        })
+        .collect::<Vec<_>>();
+    candidates
+        .into_iter()
+        .zip(preferred)
+        .filter_map(|(candidate, preferred)| preferred.then_some(candidate))
+        .collect()
+}
+
 fn additive_features(
     solid: &crate::reduced_brep::ReducedSolid,
     host: &SignedCapPairProposal,
@@ -180,6 +211,7 @@ fn additive_features(
             face_ids,
         });
     }
+    let mut features = select_ruled_extensions(features);
     for lip in super::tapered_lip::detect(solid, &host.prism, proposals) {
         let (model, root) = lip.model()?;
         features.push(AdditiveFeature {
@@ -470,6 +502,11 @@ mod tests {
                 .iter()
                 .any(|p| p.face_ids.contains(&175) && p.face_ids.contains(&299)),
             "missing attached tangent lip"
+        );
+        assert_eq!(
+            additions.len(),
+            2,
+            "competing partial lofts must not be composed twice"
         );
         let rounds = super::super::channel_round_ends::detect(&reduced, &cutter.prism);
         assert_eq!(rounds.len(), 2);
