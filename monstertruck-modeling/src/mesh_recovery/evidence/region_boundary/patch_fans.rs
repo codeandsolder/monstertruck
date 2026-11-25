@@ -73,10 +73,10 @@ impl FanSelection<'_, '_> {
             .opposite_polygon(polygon, self.index.outgoing_edge(polygon, vertex)?)
     }
 
-    fn gap(&self, start: usize, vertex: usize) -> Option<BTreeSet<usize>> {
+    fn gap(&self, start: usize, next: &BTreeMap<usize, Option<usize>>) -> Option<BTreeSet<usize>> {
         let mut polygon = start;
         let mut added = BTreeSet::new();
-        for _ in 0..self.incidence.vertex_polygons[vertex].len() {
+        for _ in 0..next.len() {
             let region = self.region(polygon)?;
             if self.selected.contains(&region) {
                 return (!added.is_empty()).then_some(added);
@@ -85,29 +85,47 @@ impl FanSelection<'_, '_> {
                 return None;
             }
             added.insert(region);
-            polygon = self.next(polygon, vertex).ok()??;
+            polygon = next.get(&polygon).copied().flatten()?;
         }
         None
     }
 
     fn connectors(&self, vertex: usize) -> BTreeSet<usize> {
+        let next = self.incidence.vertex_polygons[vertex]
+            .iter()
+            .map(|&polygon| self.next(polygon, vertex).map(|next| (polygon, next)))
+            .collect::<Result<BTreeMap<_, _>, _>>();
+        let Ok(next) = next else {
+            return BTreeSet::new();
+        };
+        let Some(fans) = source_fans(&next) else {
+            return BTreeSet::new();
+        };
+        fans.iter()
+            .flat_map(|fan| self.fan_connectors(fan, &next))
+            .collect()
+    }
+
+    fn fan_connectors(
+        &self,
+        fan: &[usize],
+        next: &BTreeMap<usize, Option<usize>>,
+    ) -> BTreeSet<usize> {
         let mut gaps = Vec::new();
-        for &polygon in &self.incidence.vertex_polygons[vertex] {
+        for &polygon in fan {
             let Some(region) = self.region(polygon) else {
                 return BTreeSet::new();
             };
             if !self.selected.contains(&region) {
                 continue;
             }
-            match self.next(polygon, vertex) {
-                Ok(Some(next))
+            match next[&polygon] {
+                Some(next)
                     if self
                         .region(next)
                         .is_some_and(|id| self.selected.contains(&id)) => {}
-                Ok(Some(next)) => gaps.push(self.gap(next, vertex)),
-                Ok(None) => gaps.push(None),
-                // No sector order can be established at this source edge.
-                Err(_) => return BTreeSet::new(),
+                Some(start) => gaps.push(self.gap(start, next)),
+                None => gaps.push(None),
             }
         }
         if gaps.len() < 2 {
@@ -133,6 +151,43 @@ impl FanSelection<'_, '_> {
         }
         gaps.into_iter().flatten().flatten().collect()
     }
+}
+
+// A canonical position can be shared by separate manifold sheets. Never
+// count the selected runs of two disconnected fans as sectors of one fan.
+fn source_fans(next: &BTreeMap<usize, Option<usize>>) -> Option<Vec<Vec<usize>>> {
+    let mut predecessors = BTreeSet::new();
+    for &id in next.values().flatten() {
+        if !next.contains_key(&id) || !predecessors.insert(id) {
+            return None;
+        }
+    }
+    let mut remaining = next.keys().copied().collect::<BTreeSet<_>>();
+    let mut starts = remaining
+        .difference(&predecessors)
+        .copied()
+        .collect::<Vec<_>>();
+    starts.extend(predecessors);
+    let mut fans = Vec::new();
+    for start in starts {
+        if !remaining.remove(&start) {
+            continue;
+        }
+        let mut fan = vec![start];
+        let mut current = start;
+        while let Some(id) = next[&current] {
+            if id == start {
+                break;
+            }
+            if !remaining.remove(&id) {
+                return None;
+            }
+            fan.push(id);
+            current = id;
+        }
+        fans.push(fan);
+    }
+    Some(fans)
 }
 
 impl RegionBoundaryIndex<'_> {
@@ -246,6 +301,64 @@ mod tests {
         mesh_recovery::{EvidenceOptions, analyze_mesh_evidence},
     };
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+
+    #[test]
+    fn point_contact_between_two_source_fans_cannot_expand_either()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                    Point3::new(-1.0, -1.0, 1.0),
+                    Point3::new(1.0, 0.0, -1.0),
+                    Point3::new(0.0, 1.0, -1.0),
+                    Point3::new(-1.0, -1.0, -1.0),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter([
+                [0, 1, 2],
+                [0, 2, 3],
+                [0, 3, 1],
+                [0, 4, 5],
+                [0, 5, 6],
+                [0, 6, 4],
+            ]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let partition = index.select_surface_partition(&[], &evidence, 100)?;
+        let ids = &partition.region_by_polygon;
+        assert_eq!(ids.iter().copied().collect::<BTreeSet<_>>().len(), 6);
+        let required = [ids[0], ids[3]];
+        let allowed = [ids[1], ids[2], ids[4], ids[5]];
+        let selected = index.complete_patch_fans(&partition, &required, &allowed)?;
+        assert_eq!(
+            selected.into_iter().collect::<BTreeSet<_>>(),
+            required.into_iter().collect()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn disconnected_vertex_fans_do_not_share_sector_counts() {
+        let next = BTreeMap::from([
+            (0, Some(1)),
+            (1, Some(2)),
+            (2, Some(0)),
+            (3, Some(4)),
+            (4, Some(5)),
+            (5, Some(3)),
+            (6, Some(7)),
+            (7, None),
+        ]);
+        let fans = source_fans(&next).expect("two cycles and one open fan");
+        assert_eq!(fans, vec![vec![6, 7], vec![0, 1, 2], vec![3, 4, 5]]);
+        let invalid = BTreeMap::from([(0, Some(2)), (1, Some(2)), (2, None)]);
+        assert!(source_fans(&invalid).is_none());
+    }
 
     #[test]
     fn fan_closure_uses_only_bounded_permitted_sectors() -> Result<(), Box<dyn std::error::Error>> {

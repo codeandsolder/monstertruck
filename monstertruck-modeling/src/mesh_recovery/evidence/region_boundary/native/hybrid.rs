@@ -578,12 +578,24 @@ impl HybridInput<'_> {
                 supports[group].push(support);
             }
         }
-        for group in &supports {
-            let boundary = index.boundary(group)?;
-            if !boundary.pinched_vertices.is_empty() {
-                return Err(NativeTrimError::InvalidBoundary.into());
-            }
-        }
+        let boundaries = supports
+            .iter()
+            .map(|group| {
+                let boundary = index.boundary(group)?;
+                if !boundary.pinched_vertices.is_empty() {
+                    return Err(HybridRecoveryError::Native(
+                        NativeTrimError::InvalidBoundary,
+                    ));
+                }
+                Ok(boundary
+                    .loops
+                    .iter()
+                    .flatten()
+                    .flat_map(|edge| edge.vertices)
+                    .collect::<BTreeSet<_>>())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.validate_patch_vertices(&by_region, &boundaries)?;
         let mut prescribed = vec![Vec::new(); groups.len()];
         for (id, trim) in plan.graph.trims.iter().enumerate() {
             if !matches!(plan.policy[id], TrimPolicy::Lifted(_)) {
@@ -610,6 +622,49 @@ impl HybridInput<'_> {
             .zip(prescribed)
             .map(|((ids, polygons), edges)| self.assemble_patch(ids, &polygons, &edges, regions))
             .collect()
+    }
+
+    // An interior source vertex is allocated within its own patch, not
+    // by the shared trim graph. A point-only contact to another component
+    // must not silently turn one source identity into two native vertices.
+    fn validate_patch_vertices(
+        &self,
+        by_region: &BTreeMap<usize, usize>,
+        boundaries: &[BTreeSet<usize>],
+    ) -> Result<(), HybridRecoveryError> {
+        let mut interior = BTreeMap::new();
+        for (polygon, region) in self.partition.region_by_polygon.iter().enumerate() {
+            let Some(&group) = by_region.get(region) else {
+                continue;
+            };
+            for &vertex in self
+                .evidence
+                .source_polygon_vertices(polygon)
+                .ok_or(HybridRecoveryError::InvalidInput)?
+            {
+                if !boundaries[group].contains(&vertex)
+                    && interior
+                        .insert(vertex, group)
+                        .is_some_and(|old| old != group)
+                {
+                    return Err(NativeTrimError::InvalidBoundary.into());
+                }
+            }
+        }
+        for (polygon, region) in self.partition.region_by_polygon.iter().enumerate() {
+            for vertex in self
+                .evidence
+                .source_polygon_vertices(polygon)
+                .ok_or(HybridRecoveryError::InvalidInput)?
+            {
+                if let Some(owner) = interior.get(vertex)
+                    && by_region.get(region) != Some(owner)
+                {
+                    return Err(NativeTrimError::InvalidBoundary.into());
+                }
+            }
+        }
+        Ok(())
     }
 
     fn assemble_patch(
