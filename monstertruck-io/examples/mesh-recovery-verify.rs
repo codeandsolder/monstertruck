@@ -1,26 +1,28 @@
 //! End-to-end native mesh recovery verification, independent of CAD labels.
 //! Volume measurements are numerical diagnostics, not an intersection proof.
-//! All STEP output is held in memory unless another caller explicitly saves it.
+//! STEP output is held in memory unless explicitly requested.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use monstertruck_io::step::{
     load::Table,
-    save::{CompleteStepDisplay, StepModel},
+    save::{CompleteStepDisplay, StepModel, StepModels},
 };
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_meshing::{
     analyzers::{CalcVolume, Topology},
-    filters::OptimizingFilter,
     tessellation::{
-        MeshableShape, MeshedShape, face_drop_count, reset_face_drop_count, shell_to_polygon_strict,
+        MeshableShape, face_drop_count, reset_face_drop_count, stitch_compressed_shell,
     },
 };
 use monstertruck_modeling::{
-    EuclideanSpace, KERNEL_EPSILON, Shell, Solid, ToCompressedTrimmedParameterCurves,
+    Curve, EuclideanSpace, KERNEL_EPSILON, Point3, Shell, Solid, Surface,
+    ToCompressedTrimmedParameterCurves,
     mesh_recovery::{AnalyticRecoveryOptions, recover_analytic_mesh},
 };
-use monstertruck_topology::{shell::ShellCondition, trimmed::TrimmedShell};
+use monstertruck_topology::{
+    compress::CompressedShell, shell::ShellCondition, trimmed::TrimmedShell,
+};
 use serde_json::{Value, json};
 use std::{
     fs::File,
@@ -40,23 +42,33 @@ struct Args {
     /// First tessellation tolerance in source units; second is four times finer.
     #[arg(long, default_value_t = 0.01)]
     tolerance: f64,
-    /// OBJ inputs.
+    /// Read exported compressed native shell JSON instead of recovering OBJ inputs.
+    #[arg(long)]
+    native_shell: bool,
+    /// Write the STEP exchange to this path (one input only).
+    #[arg(long)]
+    step_output: Option<PathBuf>,
+    /// Validate STEP topology and endpoints without reimport tessellation.
+    #[arg(long)]
+    step_topology_only: bool,
+    /// Inspect existing STEP files instead of recovering meshes.
+    #[arg(long, conflicts_with_all = ["native_shell", "step_output"])]
+    step_input: bool,
+    /// OBJ, compressed native shell JSON or STEP inputs.
     #[arg(required = true)]
     inputs: Vec<PathBuf>,
 }
 
 fn numerical_volume(shell: &Shell, tolerance: f64) -> Value {
     let _ = reset_face_drop_count();
-    match shell_to_polygon_strict(shell, tolerance) {
+    let mesh = shell.compress().triangulation(tolerance);
+    match stitch_compressed_shell(&mesh, KERNEL_EPSILON) {
+        Ok(mesh) if face_drop_count() == 0 => measure_polygon_volume(mesh, tolerance),
+        Ok(_) => {
+            json!({"tolerance":tolerance,"error":"empty tessellation face","dropped_faces":face_drop_count()})
+        }
         Err(error) => {
             json!({"tolerance":tolerance,"error":error.to_string(),"dropped_faces":face_drop_count()})
-        }
-        Ok(mesh) => {
-            let dropped = face_drop_count();
-            if dropped != 0 {
-                return json!({"tolerance":tolerance,"dropped_faces":dropped,"error":"empty tessellation face"});
-            }
-            measure_polygon_volume(mesh, tolerance)
         }
     }
 }
@@ -67,9 +79,6 @@ fn measure_polygon_volume(mut mesh: PolygonMesh, tolerance: f64) -> Value {
             *point -= origin.to_vec();
         }
     }
-    // Only for the tessellated diagnostic mesh, not the native B-rep.
-    // This joins independently emitted face vertices at numerical resolution.
-    mesh.put_together_same_attrs(KERNEL_EPSILON);
     let condition = mesh.shell_condition();
     let signed_integral = mesh.volume();
     json!({"tolerance":tolerance,"dropped_faces":0,
@@ -78,16 +87,49 @@ fn measure_polygon_volume(mut mesh: PolygonMesh, tolerance: f64) -> Value {
         "closed_signed_volume":(condition==ShellCondition::Closed).then_some(signed_integral)})
 }
 
-fn step_roundtrip(shell: &Shell, solid_eligible: bool, tolerance: f64) -> Result<Value> {
+fn step_roundtrip(
+    shell: &Shell,
+    solid_eligible: bool,
+    tolerance: f64,
+    output: Option<&Path>,
+    topology_only: bool,
+) -> Result<Value> {
     let step = if solid_eligible {
         let solid = Solid::new(vec![shell.clone()])?;
         let compressed = solid.compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
         CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
     } else {
-        let compressed = shell.compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
-        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
+        // A disconnected collection is not one connected STEP shell.
+        let compressed = shell
+            .connected_components()
+            .iter()
+            .map(|component| component.compress_with_parameter_curves(KERNEL_EPSILON * 100.0))
+            .collect::<Vec<_>>();
+        let models = compressed.iter().collect::<StepModels<_, _, _>>();
+        CompleteStepDisplay::new(models, Default::default()).to_string()
     };
     let table = Table::from_step(&step)?;
+    if let Some(path) = output {
+        let mut file = File::create_new(path).context("create STEP output")?;
+        file.write_all(step.as_bytes())?;
+        file.flush()?;
+    }
+    inspect_step(
+        &table,
+        step.len(),
+        Some(shell.len()),
+        tolerance,
+        !topology_only && shell.shell_condition() == ShellCondition::Closed,
+    )
+}
+
+fn inspect_step(
+    table: &Table,
+    bytes: usize,
+    expected_faces: Option<usize>,
+    tolerance: f64,
+    tessellate: bool,
+) -> Result<Value> {
     let mut restored_faces = 0;
     let mut restored_edges = 0;
     let mut restored_conditions = Vec::new();
@@ -100,7 +142,7 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, tolerance: f64) -> Result
         restored_edges += restored.edges.len();
         // Tessellate with the reloaded exact face-local trims, not a second
         // parameter projection from the original native boundary.
-        if shell.shell_condition() == ShellCondition::Closed {
+        if tessellate {
             let _ = reset_face_drop_count();
             let meshed = restored.triangulation(tolerance);
             let dropped = face_drop_count();
@@ -113,7 +155,10 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, tolerance: f64) -> Result
             {
                 restored_volumes.push(json!({"tolerance":tolerance,"dropped_faces":dropped,"error":"incomplete restored tessellation"}));
             } else {
-                restored_volumes.push(measure_polygon_volume(meshed.to_polygon(), tolerance));
+                restored_volumes.push(match stitch_compressed_shell(&meshed, KERNEL_EPSILON) {
+                    Ok(mesh) => measure_polygon_volume(mesh, tolerance),
+                    Err(error) => json!({"tolerance":tolerance,"error":error.to_string(),"dropped_faces":dropped}),
+                });
             }
         }
         let restored = TrimmedShell::try_from(restored)?;
@@ -129,8 +174,8 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, tolerance: f64) -> Result
             plain.edge_iter().all(|edge| edge.is_geometric_consistent());
     }
     Ok(
-        json!({"bytes":step.len(),"faces":restored_faces,"edges":restored_edges,
-        "face_count_preserved":restored_faces==shell.len(),"solid_breps":table.manifold_solid_brep.len(),
+        json!({"bytes":bytes,"faces":restored_faces,"edges":restored_edges,
+        "face_count_preserved":expected_faces.map(|expected| restored_faces == expected),"restored_tessellation_requested":tessellate,"solid_breps":table.manifold_solid_brep.len(),
         "restored_shell_conditions":restored_conditions,"restored_endpoints_consistent":restored_endpoints_consistent,
         "restored_parameter_curves":restored_parameter_curves,"restored_volumes":restored_volumes,
         "planes":table.plane.len(),"cylinders":table.cylindrical_surface.len(),"cones":table.conical_surface.len(),
@@ -186,11 +231,55 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
             && summary["volume"]["fine"]["closed_signed_volume"]
                 .as_f64()
                 .is_some_and(|v| v > 0.0);
-        summary["step"] = match step_roundtrip(&shell, solid_eligible, args.tolerance * 0.25) {
+        summary["step"] = match step_roundtrip(
+            &shell,
+            solid_eligible,
+            args.tolerance * 0.25,
+            args.step_output.as_deref(),
+            args.step_topology_only,
+        ) {
             Ok(info) => info,
             Err(error) => json!({"error":error.to_string()}),
         };
     }
+    Ok(summary)
+}
+
+fn verify_native(path: &Path, args: &Args) -> Result<Value> {
+    let compressed: CompressedShell<Point3, Curve, Surface> =
+        serde_json::from_reader(BufReader::new(File::open(path)?))
+            .context("read compressed native shell")?;
+    let shell = Shell::extract(compressed)?;
+    let condition = shell.shell_condition();
+    let components = shell.connected_components().len();
+    let coarse = numerical_volume(&shell, args.tolerance);
+    let fine = numerical_volume(&shell, args.tolerance * 0.25);
+    // The native JSON does not certify material classification.
+    let step = step_roundtrip(
+        &shell,
+        false,
+        args.tolerance * 0.25,
+        args.step_output.as_deref(),
+        args.step_topology_only,
+    )
+    .unwrap_or_else(|error| json!({"error":format!("{error:#}")}));
+    Ok(
+        json!({"source":path,"native_faces":shell.len(),"shell_condition":format!("{condition:?}"),
+        "shell_components":components,"volume":{"coarse":coarse,"fine":fine},"step":step}),
+    )
+}
+
+fn verify_step_input(path: &Path, args: &Args) -> Result<Value> {
+    let step = std::fs::read_to_string(path)?;
+    let table = Table::from_step(&step)?;
+    let mut summary = inspect_step(
+        &table,
+        step.len(),
+        None,
+        args.tolerance,
+        !args.step_topology_only,
+    )?;
+    summary["source"] = json!(path);
     Ok(summary)
 }
 
@@ -200,10 +289,20 @@ fn main() -> Result<()> {
         args.tolerance.is_finite() && args.tolerance >= 4.0 * KERNEL_EPSILON,
         "invalid tessellation tolerance"
     );
+    anyhow::ensure!(
+        args.step_output.is_none() || args.inputs.len() == 1,
+        "STEP output requires one input"
+    );
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     for path in &args.inputs {
-        let report = verify(path, &args)
-            .unwrap_or_else(|error| json!({"source":path,"error":format!("{error:#}")}));
+        let report = (if args.step_input {
+            verify_step_input(path, &args)
+        } else if args.native_shell {
+            verify_native(path, &args)
+        } else {
+            verify(path, &args)
+        })
+        .unwrap_or_else(|error| json!({"source":path,"error":format!("{error:#}")}));
         writeln!(out, "{report}")?;
         out.flush()?;
     }
