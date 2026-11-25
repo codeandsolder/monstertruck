@@ -30,7 +30,7 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
     let Curve::Intersection(intersection) = curve else {
         return None;
     };
-    let carriers = [
+    let [first, second] = [
         carrier(intersection.surface0())?,
         carrier(intersection.surface1())?,
     ];
@@ -52,7 +52,7 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
     );
     let guide = NurbsCurve::from(BsplineCurve::new(knots, points).ok()?);
     let mut selected = None::<BoundedSourceIntersection>;
-    for (primary, secondary) in [(carriers[0], carriers[1]), (carriers[1], carriers[0])] {
+    for (primary, secondary) in [(first, second), (second, first)] {
         let Some(bound) = BoundedSourceIntersection::from_spline(
             primary,
             secondary,
