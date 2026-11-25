@@ -9,6 +9,7 @@ use super::{
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
+mod cylinder;
 
 /// Convert a polyline leader to an exactly equivalent degree-1 B-spline.
 ///
@@ -400,7 +401,8 @@ pub(super) fn exact_iso_leader<S: ShapeOpsSurface>(
 /// Surface intersection curves already carry a cleaned marching leader. When
 /// that leader is provably an iso-parameter curve of either exact carrier,
 /// replace the mesh-derived polyline by the exact homogeneous section before
-/// serialization. Otherwise keep the leader exactly as a degree-1 B-spline.
+/// serialization. Regular crossing cylinders instead receive an independently
+/// bounded cubic leader. Otherwise keep the leader as a degree-1 B-spline.
 /// `SurfaceCurve` still carries both supporting surfaces in either case.
 pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     altshell: &AltCurveShell<C, S>,
@@ -415,7 +417,9 @@ pub(super) fn altshell_to_shell<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let surface1 = ic.surface1().clone();
                 let boundary0: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
                 let boundary1: Option<ParameterCurve<BoundaryCurve2D, S>> = None;
-                if let Some(nurbs) = exact_iso_leader(ic, tolerances) {
+                if let Some(nurbs) = cylinder::crossing_cylinder_leader(ic, tolerances)
+                    .or_else(|| exact_iso_leader(ic, tolerances))
+                {
                     Some(
                         SurfaceCurve::with_boundaries(
                             surface0, surface1, nurbs, boundary0, boundary1,

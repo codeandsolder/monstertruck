@@ -583,6 +583,7 @@ impl CompleteIrBuildState {
                         | CadFragmentSource::SectionalLoftUnion { .. }
                         | CadFragmentSource::FormedSheetExtrusionUnion { .. }
                         | CadFragmentSource::SourceCapExtrusionUnion { .. }
+                        | CadFragmentSource::SignedCapAssembly { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
                         | CadFragmentSource::CapExtrusionRuledEnds { .. }
                 )
@@ -2771,6 +2772,7 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::SectionalLoftUnion { solid_id, .. }
         | CadFragmentSource::FormedSheetExtrusionUnion { solid_id, .. }
         | CadFragmentSource::SourceCapExtrusionUnion { solid_id, .. }
+        | CadFragmentSource::SignedCapAssembly { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
         | CadFragmentSource::CapExtrusionRuledEnds { solid_id, .. }
         | CadFragmentSource::RuledEndExtension { solid_id, .. }
@@ -4759,11 +4761,21 @@ END-ISO-10303-21;
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
         let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
             .context("no constructive healed sectional host")?;
+        let entities = &exchange.data[0].entities;
+        let index = crate::step_graph::build_index(entities);
+        let source = crate::cad_recovery::SourceRecovery::new(99, entities, &index, &kernel)
+            .context("source boundary proof")?;
+        let sectional = crate::cad_recovery::sectional::recover(&source, None)?
+            .context("independently proven sectional candidate")?;
         assert!(matches!(
-            host.source,
+            sectional.source,
             CadFragmentSource::SectionalExtrusionUnion { slabs: 5, .. }
                 | CadFragmentSource::SectionalExtrusionTransitions { slabs: 5, .. }
         ));
+        assert!(
+            host.model.complexity_score(host.root)?
+                <= sectional.model.complexity_score(sectional.root)?
+        );
         let evaluated = kernel.evaluate(&host.model, host.root)?;
         assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
             &kernel,

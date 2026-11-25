@@ -672,6 +672,21 @@ pub fn detect_extrusion_core_candidates_bytes(
         .collect())
 }
 
+/// Discover signed material and void cap-pair hypotheses in every DATA section.
+///
+/// # Errors
+/// Returns an error for an invalid STEP exchange.
+pub fn detect_signed_cap_pairs_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_extrusions::SignedCapPairProposal>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_extrusions::detect_signed_cap_pairs(&section.entities))
+        .collect())
+}
+
 /// Recover the sharp extrusion core implied by one source solid and explicit cap pair.
 ///
 /// This proves cap-loop translation directly and deliberately makes no claim about
