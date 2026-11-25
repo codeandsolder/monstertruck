@@ -210,7 +210,7 @@ fn boolean_residual(kernel: &mut OcctKernel, a: ShapeHandle, b: ShapeHandle) -> 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum PairedDiagnostic {
-    Measured(paired_volume::PairedVolume),
+    Measured(Box<paired_volume::PairedVolume>),
     Failed {
         within_absolute_tolerance: bool,
         error: String,
@@ -275,7 +275,7 @@ fn compare(kernel: &mut OcctKernel, a: Selected, b: Selected, face_flux: bool) -
     // never a replacement for the established adaptive/Boolean decision.
     let paired =
         match paired_volume::paired_volume(kernel, a.shape, b.shape, ABS_VOLUME_TOL, face_flux) {
-            Ok(result) => PairedDiagnostic::Measured(result),
+            Ok(result) => PairedDiagnostic::Measured(Box::new(result)),
             Err(error) => PairedDiagnostic::Failed {
                 within_absolute_tolerance: false,
                 error: format!("{error:#}"),
