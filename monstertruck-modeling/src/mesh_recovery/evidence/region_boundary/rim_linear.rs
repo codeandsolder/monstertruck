@@ -258,6 +258,62 @@ impl<'a> LocalGrowth<'a> {
         result
     }
 
+    // Four connected original samples test a circle beyond interpolation.
+    // Follow only edges actually owned by this proposal. An observed
+    // interior section is just as valid as an exterior trim.
+    fn has_circle_arc(&self, supports: &[usize], samples: &[usize]) -> bool {
+        let mut visited = BTreeSet::new();
+        for &seed in samples {
+            if !visited.insert(seed) {
+                continue;
+            }
+            let mut count = 0;
+            let mut pending = VecDeque::from([seed]);
+            while let Some(id) = pending.pop_front() {
+                count += 1;
+                if count >= 4 {
+                    return true;
+                }
+                for &(other, owner) in &self.ring_edges[id] {
+                    if supports.binary_search(&owner).is_ok()
+                        && samples.binary_search(&other).is_ok()
+                        && visited.insert(other)
+                    {
+                        pending.push_back(other);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    // A ruling edge is an observation independent of the circle used
+    // to place the axis. It must connect two distinct axial positions
+    // at the same azimuth (or the independently fitted cone apex).
+    fn has_ruling(&self, profile: Profile, supports: &[usize], tolerance: f64) -> bool {
+        supports.iter().any(|&support| {
+            self.support_vertices[support].iter().any(|&id| {
+                self.ring_edges[id].iter().any(|&(other, owner)| {
+                    if owner != support || id >= other {
+                        return false;
+                    }
+                    let (za, va) = profile.sample(self.evidence.positions[id]);
+                    let (zb, vb) = profile.sample(self.evidence.positions[other]);
+                    if (za - zb).abs() <= tolerance {
+                        return false;
+                    }
+                    let ra = va.magnitude();
+                    let rb = vb.magnitude();
+                    if ra.min(rb) <= tolerance {
+                        return profile.expected(if ra < rb { za } else { zb }).abs() <= tolerance;
+                    }
+                    // Test azimuth in length units at the larger radius.
+                    (va / ra - vb / rb).magnitude() * ra.max(rb) <= tolerance
+                })
+            })
+        })
+    }
+
     fn proposal(
         &self,
         index: &RegionBoundaryIndex<'a>,
@@ -274,10 +330,14 @@ impl<'a> LocalGrowth<'a> {
             .options
             .absolute_tolerance
             .min(self.options.relative_tolerance * circle.radius);
-        let (z, radial) = self.support_vertices[seed]
-            .iter()
-            .map(|&id| profile.sample(self.evidence.positions[id]))
-            .max_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))?;
+        let &slope_sample = self.support_vertices[seed].iter().max_by(|&&a, &&b| {
+            profile
+                .sample(self.evidence.positions[a])
+                .0
+                .abs()
+                .total_cmp(&profile.sample(self.evidence.positions[b]).0.abs())
+        })?;
+        let (z, radial) = profile.sample(self.evidence.positions[slope_sample]);
         if z.abs() <= tolerance {
             return None;
         }
@@ -299,14 +359,9 @@ impl<'a> LocalGrowth<'a> {
             .iter()
             .flat_map(|&id| self.support_vertices[id].iter().copied())
             .collect::<BTreeSet<_>>();
-        // A circle must be represented by the grown lateral surface itself,
-        // not merely found on a neighboring unrelated planar patch.
-        if ids
-            .iter()
-            .filter(|id| circle.vertices.binary_search(id).is_ok())
-            .count()
-            < 4
-        {
+        // The sampled circle must occur as a connected source arc inside
+        // this carrier's ownership, including legitimate interior sections.
+        if !self.has_circle_arc(&supports, &circle.vertices) {
             return None;
         }
         let mut low = f64::INFINITY;
@@ -325,6 +380,30 @@ impl<'a> LocalGrowth<'a> {
             tolerance,
             self.options.chord_fraction,
         )?;
+        // The rim fixes the axis and radius; one off-rim point fixes the
+        // slope. Do not equate exact interpolation with independent
+        // identification. Arbitrary triangulations need not expose a
+        // ruling edge: an independently sampled second section or a
+        // full-rank set of off-rim observations also suffices.
+        let off_rim = ids
+            .iter()
+            .copied()
+            .filter(|id| circle.vertices.binary_search(id).is_err())
+            .collect::<Vec<_>>();
+        if !self.has_ruling(profile, &supports, tolerance)
+            && !has_independent_section(self.evidence, profile, &off_rim, tolerance)
+            && !independent_profile_rank(
+                self.evidence,
+                profile,
+                &off_rim
+                    .into_iter()
+                    .filter(|&id| id != slope_sample)
+                    .collect::<Vec<_>>(),
+                tolerance,
+            )
+        {
+            return None;
+        }
         // Two axial samples interpolate a slope. A third resolved sample
         // tests it independently, even if the off-rim samples are irregular.
         let independently_tested = axial
@@ -336,6 +415,135 @@ impl<'a> LocalGrowth<'a> {
             proposal
         })
     }
+}
+
+// Two independently resolved cross sections establish the same placed axis
+// and affine profile even on a triangulation without explicit ruling edges.
+fn has_independent_section(
+    evidence: &MeshEvidence,
+    profile: Profile,
+    ids: &[usize],
+    tolerance: f64,
+) -> bool {
+    let mut samples = ids
+        .iter()
+        .map(|&id| (profile.sample(evidence.positions[id]).0, id))
+        .collect::<Vec<_>>();
+    samples.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    let mut start = 0;
+    while start < samples.len() {
+        let z = samples[start].0;
+        let end = start + samples[start..].partition_point(|&(value, _)| value - z <= tolerance);
+        if z.abs() > tolerance && end - start >= 4 {
+            let station = samples[start..end]
+                .iter()
+                .map(|&(_, id)| id)
+                .collect::<Vec<_>>();
+            if let Some(fit) =
+                super::super::super::sample_fit::fit_circle_carrier(&evidence.positions, &station)
+            {
+                let delta = fit.center - profile.origin;
+                if fit.source_span * fit.plane_span_strength > tolerance
+                    && fit.max_plane_residual.max(fit.max_radial_residual) <= tolerance
+                    && delta.cross(profile.axis).magnitude() <= tolerance
+                    && fit.normal.cross(profile.axis).magnitude() * fit.radius <= tolerance
+                    && (fit.radius - profile.expected(delta.dot(profile.axis))).abs() <= tolerance
+                {
+                    return true;
+                }
+            }
+        }
+        start = end;
+    }
+    false
+}
+
+// Jacobian of rho-r-s*z for a general affine radial surface. The six
+// local parameters are transverse translations, axis tilts, radius and
+// slope. Exclude the seed observations and require an overdetermined,
+// full-rank system in its own right; merely counting distinct axial
+// coordinates would allow nearly degenerate planar interpolations.
+// Normalize length parameters by the sampled extent and use column-pivoted
+// modified Gram-Schmidt to measure rank without squaring conditioning.
+fn independent_profile_rank(
+    evidence: &MeshEvidence,
+    profile: Profile,
+    ids: &[usize],
+    tolerance: f64,
+) -> bool {
+    const PARAMETERS: usize = 6;
+    if ids.len() <= PARAMETERS {
+        return false;
+    }
+    let (u, v) = normal_basis(profile.axis);
+    let samples = ids
+        .iter()
+        .map(|&id| profile.sample(evidence.positions[id]))
+        .collect::<Vec<_>>();
+    let center = samples.iter().map(|&(z, _)| z).sum::<f64>() / crate::usize_to_f64(samples.len());
+    let scale = samples
+        .iter()
+        .map(|&(z, radial)| (z - center).abs().max(radial.magnitude()))
+        .fold(0.0_f64, f64::max);
+    if !scale.is_finite() || scale <= tolerance {
+        return false;
+    }
+    let mut columns: [Vec<f64>; PARAMETERS] =
+        std::array::from_fn(|_| Vec::with_capacity(samples.len()));
+    for (z, radial) in samples {
+        let radius = radial.magnitude();
+        if radius <= tolerance {
+            continue; // the apex has no unique radial derivative
+        }
+        let direction = radial / radius;
+        let axial = (z - center) / scale;
+        let tilt = profile.slope.mul_add(radius / scale, axial);
+        let a = direction.dot(u);
+        let b = direction.dot(v);
+        for (column, value) in columns
+            .iter_mut()
+            .zip([a, b, a * tilt, b * tilt, 1.0, axial])
+        {
+            column.push(value);
+        }
+    }
+    if columns[0].len() <= PARAMETERS {
+        return false;
+    }
+    let norm = |col: &[f64]| col.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let resolution =
+        (tolerance / scale).max(64.0 * f64::EPSILON) * crate::usize_to_f64(columns[0].len()).sqrt();
+    for i in 0..PARAMETERS {
+        let Some(pivot) =
+            (i..PARAMETERS).max_by(|&a, &b| norm(&columns[a]).total_cmp(&norm(&columns[b])))
+        else {
+            return false;
+        };
+        columns.swap(i, pivot);
+        let length = norm(&columns[i]);
+        if !length.is_finite() || length <= resolution {
+            return false;
+        }
+        let (head, tail) = columns.split_at_mut(i + 1);
+        let basis = &mut head[i];
+        for value in basis.iter_mut() {
+            *value /= length;
+        }
+        for column in tail {
+            // Reorthogonalize the remaining column against the pivot.
+            for _ in 0..2 {
+                let projection = column
+                    .iter()
+                    .zip(basis.iter())
+                    .map(|(a, b)| a * b)
+                    .sum::<f64>();
+                for (value, &direction) in column.iter_mut().zip(basis.iter()) {
+                    *value = (-projection).mul_add(direction, *value);
+                }
+            }
+        }
+    }
+    true
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
@@ -451,6 +659,170 @@ mod tests {
         assert!((radius_at_origin - 1.0).abs() < 1.0e-9);
         assert!(axis.cross(Vector3::unit_z()).magnitude() < 1.0e-9);
         assert!(slope.abs() < 1.0e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn interior_circle_can_seed_both_sides_of_a_cone() -> Result<(), Box<dyn std::error::Error>> {
+        let n = 16;
+        let mut positions = Vec::new();
+        for row in 0..3 {
+            for j in 0..n {
+                let angle = std::f64::consts::TAU * crate::usize_to_f64(j) / crate::usize_to_f64(n);
+                let (sin, cos) = angle.sin_cos();
+                let z = match row {
+                    0 => -0.8 + 0.1 * sin,
+                    1 => 0.0,
+                    _ => 0.8 + 0.1 * cos,
+                };
+                let radius = 0.3_f64.mul_add(z, 1.0);
+                positions.push(Point3::new(radius * cos, radius * sin, z));
+            }
+        }
+        let triangles = (0..2).flat_map(|row| {
+            (0..n).flat_map(move |j| {
+                let a = row * n + j;
+                let b = row * n + (j + 1) % n;
+                [[a, b, b + n], [a, b + n, a + n]]
+            })
+        });
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(triangles),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let circle = SourceCircleObservation {
+            vertices: evidence
+                .positions
+                .iter()
+                .enumerate()
+                .filter_map(|(id, p)| (p.z == 0.0).then_some(id))
+                .collect(),
+            center: Point3::new(0.0, 0.0, 0.0),
+            normal: Vector3::unit_z(),
+            radius: 1.0,
+            max_plane_residual: 0.0,
+            max_radial_residual: 0.0,
+            resolved_curvature_span: 1.0,
+        };
+        let candidates = index.discover_rim_linear_regions(&[circle], options());
+        assert!(
+            candidates
+                .iter()
+                .any(|proposal| proposal.source_polygons() == 4 * n)
+        );
+        Ok(())
+    }
+
+    // Oblique staggered triangles do not contain exact generator edges
+    // or repeated off-rim sections. Independently informative scattered
+    // samples must still recover a general affine radial profile.
+    #[test]
+    fn scattered_cone_without_generator_edges_is_recovered()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let n = 16;
+        let mut positions = Vec::new();
+        for row in 0..4 {
+            let height = crate::usize_to_f64(row);
+            for j in 0..n {
+                let angle = std::f64::consts::TAU * crate::usize_to_f64(j) / crate::usize_to_f64(n)
+                    + height * 0.13;
+                let (sin, cos) = angle.sin_cos();
+                let z = if row == 0 {
+                    0.0
+                } else {
+                    0.7 * height + 0.05 * sin + 0.03 * cos
+                };
+                let radius = 1.0 + 0.2 * z;
+                positions.push(Point3::new(radius * cos, radius * sin, z));
+            }
+        }
+        let triangles = (0..3).flat_map(|row| {
+            (0..n).flat_map(move |j| {
+                let a = row * n + j;
+                let b = row * n + (j + 1) % n;
+                [[a, b, b + n], [a, b + n, a + n]]
+            })
+        });
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(triangles),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let candidates = discover(&index);
+        let proposal = candidates
+            .iter()
+            .find(|p| p.source_polygons() == 6 * n)
+            .ok_or("missing scattered cone")?;
+        let SurfaceCarrier::LinearRevolution { axis, slope, .. } = proposal.carrier() else {
+            return Err("expected linear carrier".into());
+        };
+        assert!(axis.cross(Vector3::unit_z()).magnitude() < 1e-9);
+        assert!((slope.abs() - 0.2).abs() < 1e-9);
+        let profile = Profile::from_carrier(proposal.carrier()).ok_or("profile")?;
+        let growth = LocalGrowth::new(&index, options()).ok_or("growth")?;
+        assert!(!growth.has_ruling(profile, proposal.supports(), 1e-8));
+        Ok(())
+    }
+
+    // The seed circle and one more point can always interpolate a slope.
+    // A two-point off-rim row supplies neither another resolved circle nor
+    // a full-rank independent 3D test of the surface.
+    #[test]
+    fn interpolation_only_does_not_certify_a_rim_surface() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let samples = [
+            (0.0_f64, 0.0_f64),
+            (0.4, 0.0),
+            (0.8, 0.0),
+            (1.2, 0.0),
+            (0.3, 1.0),
+            (0.9, 1.0),
+        ];
+        let positions = samples
+            .into_iter()
+            .map(|(a, z)| {
+                let (sin, cos) = a.sin_cos();
+                let r = 0.2_f64.mul_add(z, 1.0);
+                Point3::new(r * cos, r * sin, z)
+            })
+            .collect();
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter([[0, 1, 4], [1, 5, 4], [1, 2, 5], [2, 3, 5]]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let circle = SourceCircleObservation {
+            vertices: evidence
+                .positions
+                .iter()
+                .enumerate()
+                .filter_map(|(id, p)| (p.z == 0.0).then_some(id))
+                .collect(),
+            center: Point3::new(0.0, 0.0, 0.0),
+            normal: Vector3::unit_z(),
+            radius: 1.0,
+            max_plane_residual: 0.0,
+            max_radial_residual: 0.0,
+            resolved_curvature_span: 0.1,
+        };
+        assert!(
+            index
+                .discover_rim_linear_regions(&[circle], options())
+                .is_empty()
+        );
         Ok(())
     }
 

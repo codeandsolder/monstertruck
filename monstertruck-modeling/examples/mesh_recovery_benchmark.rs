@@ -4,8 +4,8 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, RecoveredAnalyticMesh, SharedTrimGeometry, SurfaceCarrier,
-    analyze_mesh_evidence, recover_analytic_evidence,
+    AnalyticRecoveryOptions, RecoveredAnalyticMesh, SharedAnalyticTrim, SharedTrimGeometry,
+    SurfaceCarrier, analyze_mesh_evidence, recover_analytic_evidence,
 };
 use serde_json::{Value, json};
 use std::{
@@ -82,20 +82,56 @@ fn trim_summary(
     (trim_edges, unresolved_contact_pairs)
 }
 
-// Preserve the exact source samples and provenance of every unresolved trim
-// so independent diagnostics need not repeat surface recognition.
-fn unresolved_trims(recovery: &RecoveredAnalyticMesh) -> Vec<Value> {
+// Preserve the original, reconciled and native endpoint coordinates and
+// original polygon provenance, without rerunning region discovery.
+fn trim_edges(recovery: &RecoveredAnalyticMesh, trim: &SharedAnalyticTrim) -> Vec<Value> {
     let provenance = &recovery.evidence.provenance.original_polygon_ids;
-    recovery.trims.trims.iter().filter(|trim| matches!(trim.geometry, SharedTrimGeometry::Unresolved)).map(|trim| {
-        let edges = trim.source_edges.iter().map(|edge| {
-            let vertices = edge.vertices.map(|id| {
-                let p = recovery.reconciled.positions[id];
-                [p.x, p.y, p.z]
-            });
-            json!({"vertices":edge.vertices,"points":vertices,"polygons":[Some(provenance[edge.interior_polygon]),edge.exterior_polygon.map(|id|provenance[id])]})
-        }).collect::<Vec<_>>();
-        json!({"contact_path":trim.contact_path,"regions":trim.regions,"edges":edges})
+    trim.source_edges.iter().map(|edge| {
+        let source = edge.vertices.map(|id| {
+            let p = recovery.evidence.positions[id];
+            [p.x,p.y,p.z]
+        });
+        let points = edge.vertices.map(|id| {
+            let p = recovery.reconciled.positions[id];
+            [p.x,p.y,p.z]
+        });
+        let native = edge.vertices.map(|id| {
+            recovery.native.vertices[id].as_ref().map(|vertex| {
+                let p = vertex.point();
+                [p.x,p.y,p.z]
+            })
+        });
+        json!({"vertices":edge.vertices,"source":source,"points":points,"native":native,
+            "polygons":[Some(provenance[edge.interior_polygon]),edge.exterior_polygon.map(|id|provenance[id])]})
     }).collect()
+}
+
+// Separate unresolved analytical hypotheses from accepted trim geometries
+// that could not be constructed by the native kernel.
+fn trim_diagnostics(recovery: &RecoveredAnalyticMesh) -> (Vec<Value>, Vec<Value>) {
+    let mut unresolved = Vec::new();
+    let mut failed = Vec::new();
+    for (id, (trim, native)) in recovery
+        .trims
+        .trims
+        .iter()
+        .zip(&recovery.native.trims)
+        .enumerate()
+    {
+        if matches!(trim.geometry, SharedTrimGeometry::Unresolved) {
+            unresolved.push(
+                json!({"contact_path":trim.contact_path,"regions":trim.regions,
+                "edges":trim_edges(recovery,trim)}),
+            );
+        } else if let Err(error) = native {
+            failed.push(
+                json!({"trim":id,"contact_path":trim.contact_path,"regions":trim.regions,
+                "geometry":format!("{:?}",trim.geometry),"error":error.to_string(),
+                "edges":trim_edges(recovery,trim)}),
+            );
+        }
+    }
+    (unresolved, failed)
 }
 
 fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value> {
@@ -166,6 +202,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
     let (trim_edges, unresolved_contact_pairs) =
         trim_summary(&recovery.trims.trims, &partition.carriers);
     let complete = recovery.complete_shell();
+    let (unresolved_trims, failed_native_trims) = trim_diagnostics(&recovery);
     Ok(json!({
         "status":"ok","source":path,"source_polygons":mesh.face_iter().count(),
         "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
@@ -187,7 +224,8 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],
         "unresolved_source_edges":trim_edges[2],
         "unresolved_contact_pairs":unresolved_contact_pairs,
-        "unresolved_trims":unresolved_trims(&recovery),
+        "unresolved_trims":unresolved_trims,
+        "failed_native_trims":failed_native_trims,
         "trim_absolute_tolerance":options.trim_options(&recovery.evidence).absolute_tolerance,
         "trim_relative_tolerance":options.trim_options(&recovery.evidence).relative_tolerance,
         "limited_partition_components":partition.limited_components,
