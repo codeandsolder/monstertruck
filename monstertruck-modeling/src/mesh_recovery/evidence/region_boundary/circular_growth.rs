@@ -15,6 +15,15 @@ fn orientation(
     budget: SurfaceRegionBudget,
     angular_tolerance: f64,
 ) -> Option<bool> {
+    let SurfaceCarrier::CircularRevolution {
+        axial_center,
+        axis,
+        profile_radius,
+        ..
+    } = carrier
+    else {
+        return None;
+    };
     let support = evidence.planar_supports.get(id)?;
     let mut sign = None;
     for &polygon in &support.source_face_indices {
@@ -22,6 +31,14 @@ fn orientation(
         let first = *evidence.positions.get(*ids.first()?)?;
         let mut center = Vector3::new(0.0, 0.0, 0.0);
         let mut normals = Vec::with_capacity(ids.len());
+        let mut meridian_span = 0.0_f64;
+        let mut source_span = 0.0_f64;
+        let meridian = |point: crate::Point3| {
+            let offset = point - axial_center;
+            let axial = offset.dot(axis);
+            (axial, (offset - axis * axial).magnitude())
+        };
+        let reference = meridian(first);
         for &vertex in ids {
             let point = *evidence.positions.get(vertex)?;
             let (normal, residual) = carrier.signed_constraint(point)?;
@@ -29,7 +46,19 @@ fn orientation(
                 return None;
             }
             normals.push(normal);
+            let (axial, radial) = meridian(point);
+            meridian_span = meridian_span.max((axial - reference.0).hypot(radial - reference.1));
+            source_span = source_span.max((point - first).magnitude());
             center += point - first;
+        }
+        // A filled polygon whose vertices all occupy the same parallel
+        // circle has no sampled meridian extent. It may be a planar
+        // closure (particularly at a tangency), but is not a resolved
+        // two-dimensional sample of the rotational carrier. Apply the
+        // angular resolution to the smaller local scale, rather than
+        // imposing a minimum global facet size.
+        if meridian_span <= angular_tolerance * source_span.min(profile_radius) {
+            return None;
         }
         let centroid = first + center / crate::usize_to_f64(ids.len());
         let (expected, _) = carrier.signed_constraint(centroid)?;
@@ -111,6 +140,47 @@ mod tests {
         mesh_recovery::{EvidenceOptions, analyze_mesh_evidence},
     };
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+
+    #[test]
+    fn tangent_parallel_disk_does_not_extend_a_circular_carrier()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let major = 0.1;
+        let minor = 1.0;
+        let n = 16;
+        let mut positions = Vec::new();
+        for i in 0..n {
+            let (sin, cos) =
+                (std::f64::consts::TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n)).sin_cos();
+            positions.push(Point3::new(major * cos, major * sin, minor));
+        }
+        // Every vertex is exactly on the tangent parallel, but the
+        // polygon interior is a plane, not a meridional surface sample.
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter([(0..n).collect::<Vec<_>>()]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: major,
+            profile_radius: minor,
+        };
+        let budget = SurfaceRegionBudget {
+            vertex: 1.0e-8,
+            chord: 0.05,
+        };
+        assert!(
+            carrier
+                .measure_circular_source_facets(&evidence, &[0], budget.chord)
+                .is_some_and(|r| r.upper_bound <= budget.chord)
+        );
+        assert!(orientation(&evidence, 0, carrier, budget, 1.0e-5).is_none());
+        Ok(())
+    }
 
     #[test]
     fn precise_toroid_core_extends_to_irregular_source_strip()
