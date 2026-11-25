@@ -483,4 +483,36 @@ mod tests {
         model.validate()?;
         Ok(())
     }
+    #[test]
+    fn healed_mixed_source_recovers_as_complete_signed_cap_assembly() -> Result<()> {
+        use crate::full_source_cylinder_healing::{
+            FullSourceCylinderRepair, heal_cylinder_step_document,
+        };
+        let requests = [1049, 1063].map(|edge_id| FullSourceCylinderRepair {
+            data_section: 0,
+            solid_id: 171,
+            edge_id,
+            endpoint_tolerance_mm: 1e-8,
+            target_gap_mm: 1e-9,
+            leader_tolerance_mm: 2e-10,
+            max_leader_segments: 8192,
+        });
+        let healed = heal_cylinder_step_document(
+            include_bytes!("../../validation/fixtures/native_mixed_treatment_4a6356.step"),
+            &requests,
+        )?;
+        let exchange = ParsedStepSource::parse(healed.step.as_bytes())?.exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let source = SourceRecovery::new(171, entities, &index, &kernel)
+            .context("repaired source boundary not certified")?;
+        let fragment = recover(&source, None)?.context("complete mixed assembly not recovered")?;
+        assert!(matches!(
+            fragment.source,
+            CadFragmentSource::SignedCapAssembly { .. }
+        ));
+        assert!(source.proves(&fragment.model, fragment.root, None)?);
+        Ok(())
+    }
 }
