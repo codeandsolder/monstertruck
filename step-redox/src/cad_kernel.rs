@@ -47,6 +47,22 @@ impl KernelSummary {
     }
 }
 
+/// An evaluated, immutable CAD prefix tied to the exact kernel instance
+/// and source model. The native value may be transferred into an extended
+/// evaluation without evaluating that prefix again.
+pub struct EvaluationSeed<'a, K: CadKernel> {
+    kernel: &'a K,
+    model: &'a CadModel,
+    root: NodeId,
+    evaluated: K::Evaluated,
+}
+
+impl<K: CadKernel> EvaluationSeed<'_, K> {
+    /// The backend-owned geometry, for independent qualification.
+    #[must_use = "use the evaluated geometry for the source proof"]
+    pub const fn evaluated(&self) -> &K::Evaluated { &self.evaluated }
+}
+
 /// Narrow execution boundary for constructive CAD.
 ///
 /// The associated evaluated value is intentionally backend-defined and opaque to
@@ -62,6 +78,47 @@ pub trait CadKernel {
     /// # Errors
     /// Returns an error when the model cannot be represented or evaluated by this kernel.
     fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated>;
+
+    /// Evaluate a prefix that can subsequently be transferred to a replay
+    /// of an extended CAD model.
+    ///
+    /// # Errors
+    /// Returns any error from evaluating the prefix.
+    fn evaluate_seed<'a>(
+        &'a self,
+        model: &'a CadModel,
+        root: NodeId,
+    ) -> Result<EvaluationSeed<'a, Self>>
+    where
+        Self: Sized,
+    {
+        Ok(EvaluationSeed {
+            kernel: self,
+            model,
+            root,
+            evaluated: self.evaluate(model, root)?,
+        })
+    }
+
+    /// Evaluate an extension of the seed model. A backend without native
+    /// memoization can evaluate the full extension normally.
+    ///
+    /// # Errors
+    /// Returns an error when the seed does not belong to this kernel or
+    /// model prefix, or the extended evaluation fails.
+    fn evaluate_extended(
+        &self,
+        model: &CadModel,
+        root: NodeId,
+        seed: EvaluationSeed<'_, Self>,
+    ) -> Result<Self::Evaluated>
+    where
+        Self: Sized,
+    {
+        seed.validate(self, model)?;
+        drop(seed);
+        self.evaluate(model, root)
+    }
 
     fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary;
 
@@ -79,9 +136,24 @@ pub trait CadKernel {
     fn to_step(&self, evaluated: &Self::Evaluated) -> Result<String>;
 }
 
+impl<K: CadKernel> EvaluationSeed<'_, K> {
+    fn validate(&self, kernel: &K, extended: &CadModel) -> Result<()> {
+        self.model.node(self.root)?;
+        anyhow::ensure!(
+            std::ptr::eq(kernel, self.kernel),
+            "CAD evaluation seed belongs to another kernel"
+        );
+        anyhow::ensure!(
+            extended.nodes.starts_with(&self.model.nodes),
+            "CAD evaluation seed prefix changed"
+        );
+        Ok(())
+    }
+}
+
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod monstertruck {
-    use super::{CadKernel, GeometryPolicy, KernelSummary};
+    use super::{CadKernel, EvaluationSeed, GeometryPolicy, KernelSummary};
     use crate::cad_ir::{
         Axis3, BooleanOp, CadModel, CadNode, Curve2d, EdgeSelector, EdgeTreatmentEdge,
         EdgeTreatmentProfile, LoftSection, NodeId, Primitive, Profile2d, RigidTransform,
@@ -1647,6 +1719,32 @@ pub mod monstertruck {
             })
         }
 
+        fn evaluate_extended(
+            &self,
+            model: &CadModel,
+            root: NodeId,
+            seed: EvaluationSeed<'_, Self>,
+        ) -> Result<Self::Evaluated> {
+            seed.validate(self, model)?;
+            model.validate()?;
+            let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
+            // Only reuse the base-policy key. A SolverTolerance override
+            // may request the same node at another policy and must
+            // independently evaluate it. Fused analytic fast paths may
+            // bypass the cached dependency; that is also valid.
+            let key = (seed.root, PolicyKey::from(self.policy));
+            if cache
+                .remaining
+                .as_ref()
+                .is_some_and(|remaining| remaining.contains_key(&key))
+            {
+                cache.solids.insert(key, seed.evaluated.solid);
+            }
+            Ok(EvaluatedShape {
+                solid: evaluate_node(model, root, self.policy, &mut cache)?,
+            })
+        }
+
         fn summarize(&self, evaluated: &Self::Evaluated) -> KernelSummary {
             let boundaries = evaluated.solid.boundaries();
             KernelSummary {
@@ -1680,6 +1778,41 @@ pub mod monstertruck {
         )]
         use super::*;
         use monstertruck_modeling::{Curve2D, Line, ParameterCurve, Plane, Point2};
+
+        #[test]
+        fn evaluated_prefix_can_be_replayed_but_not_substituted_for_changed_geometry() -> Result<()>
+        {
+            let kernel = MonstertruckKernel::project_standard();
+            let other = MonstertruckKernel::equivalent();
+            let mut model = CadModel::new();
+            let prefix = model.add_node(CadNode::Primitive(Primitive::Box { size_mm: [2.0; 3] }));
+            model.add_root(prefix)?;
+            let mut extension = model.clone();
+            extension.roots.clear();
+            let root = extension.add_node(CadNode::SolverTolerance {
+                child: prefix,
+                tolerance_mm: 0.001,
+            });
+            extension.add_root(root)?;
+            let seed = kernel.evaluate_seed(&model, prefix)?;
+            let actual = kernel.evaluate_extended(&extension, root, seed)?;
+            let expected = kernel.evaluate(&extension, root)?;
+            assert_eq!(kernel.to_step(&actual)?, kernel.to_step(&expected)?);
+
+            // Same prefix and base policy: transfer the already evaluated solid.
+            let seed = kernel.evaluate_seed(&model, prefix)?;
+            let actual = kernel.evaluate_extended(&model, prefix, seed)?;
+            let expected = kernel.evaluate(&model, prefix)?;
+            assert_eq!(kernel.to_step(&actual)?, kernel.to_step(&expected)?);
+
+            let seed = kernel.evaluate_seed(&model, prefix)?;
+            assert!(other.evaluate_extended(&model, prefix, seed).is_err());
+            let mut changed = model.clone();
+            changed.nodes[prefix.0] = CadNode::Primitive(Primitive::Box { size_mm: [3.0; 3] });
+            let seed = kernel.evaluate_seed(&model, prefix)?;
+            assert!(kernel.evaluate_extended(&changed, prefix, seed).is_err());
+            Ok(())
+        }
 
         fn bowed_intersection(boundary_y: Option<f64>) -> Curve {
             let first = Surface::Plane(Plane::xy());

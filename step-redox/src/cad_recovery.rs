@@ -449,11 +449,12 @@ fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &Cad
 }
 
 /// Additional qualification of an independently proven material candidate.
-pub(crate) type CandidateAcceptance<'a> = dyn Fn(&CadModel, NodeId) -> bool + 'a;
+pub(crate) type CandidateAcceptance<'a, K> = dyn for<'m> Fn(&'m CadModel, NodeId, Option<crate::cad_kernel::EvaluationSeed<'m, K>>) -> bool
+    + 'a;
 
 /// Immutable section-local evidence, shared by every material proposal. A
 /// complexity ceiling may only come from a previously certified candidate.
-pub(crate) struct SourceRecovery<'a, K> {
+pub(crate) struct SourceRecovery<'a, K: CadKernel> {
     solid_id: u64,
     entities: &'a [EntityInstance],
     index: &'a HashMap<u64, usize>,
@@ -462,7 +463,7 @@ pub(crate) struct SourceRecovery<'a, K> {
     reconciled_entities: Option<Vec<EntityInstance>>,
     strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
-    acceptance: Option<&'a CandidateAcceptance<'a>>,
+    acceptance: Option<&'a CandidateAcceptance<'a, K>>,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -534,7 +535,7 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
 
     /// A peeled host must also support the remaining forward operations.
     /// Apply the caller's acceptance only after independent host proof.
-    pub(crate) fn requiring(mut self, acceptance: &'a CandidateAcceptance<'a>) -> Self {
+    pub(crate) fn requiring(mut self, acceptance: &'a CandidateAcceptance<'a, K>) -> Self {
         self.acceptance = Some(acceptance);
         self
     }
@@ -564,12 +565,14 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
-        let evaluated = self.kernel.evaluate(model, root)?;
-        if !self.kernel.summarize(&evaluated).is_single_solid() {
+        let seed = self.kernel.evaluate_seed(model, root)?;
+        if !self.kernel.summarize(seed.evaluated()).is_single_solid() {
             return Ok(false);
         }
-        Ok(self.matches_evaluated_boundary(&evaluated)?
-            && self.acceptance.is_none_or(|accept| accept(model, root)))
+        Ok(self.matches_evaluated_boundary(seed.evaluated())?
+            && self
+                .acceptance
+                .is_none_or(|accept| accept(model, root, Some(seed))))
     }
 
     /// Compare an already evaluated single-solid candidate without repeating
@@ -647,7 +650,7 @@ fn canonical_core_pair(core: &RecoveredSolidExtrusion) -> [u64; 2] {
 
 /// The source-derived union context is invariant for all core combinations.
 /// In particular, build and recognize terminal extensions only once.
-struct CoreUnionEvidence<'a, 's, K> {
+struct CoreUnionEvidence<'a, 's, K: CadKernel> {
     source: &'a SourceRecovery<'s, K>,
     face_ids: Vec<u64>,
     extensions: Vec<RuledEndExtension>,

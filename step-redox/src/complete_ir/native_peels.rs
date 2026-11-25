@@ -10,6 +10,7 @@ use crate::{
     SourceEntity,
     brep::face_loops,
     cad_ir::CadModel,
+    cad_kernel::EvaluationSeed,
     cad_recovery::SourceRecovery,
     kernel_source_load::{KernelTopologyId, KernelTopologyProvenance},
     kernel_topology::{KernelPatchEdgeRef, KernelPatchEdgeUse, SourceTopologyEditor},
@@ -37,7 +38,7 @@ pub(super) enum NextPeel {
 
 /// The original unpeeled source, not the intermediate host, is the
 /// final qualification boundary for a replayed constructive history.
-pub(super) struct ReplayTarget<'a, 's, K> {
+pub(super) struct ReplayTarget<'a, 's, K: CadKernel> {
     pub(super) source: SourceEntity,
     pub(super) proof: Option<&'a SourceRecovery<'s, K>>,
 }
@@ -106,9 +107,14 @@ impl Journal {
         kernel: &K,
         host: CadFragment,
         target: &ReplayTarget<'_, '_, K>,
+        seed: Option<EvaluationSeed<'_, K>>,
     ) -> Result<CadFragment> {
         let fragment = self.replay(host, target.source.id)?;
-        let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+        let evaluated = if let Some(seed) = seed {
+            kernel.evaluate_extended(&fragment.model, fragment.root, seed)?
+        } else {
+            kernel.evaluate(&fragment.model, fragment.root)?
+        };
         ensure!(
             kernel.summarize(&evaluated).is_single_solid(),
             "native feature replay did not produce one solid"
@@ -130,7 +136,7 @@ impl Journal {
     ) -> Result<Option<CadFragment>> {
         let mut native_error = None;
         if let Some(host) = recognize_native_edited_host(kernel, edited)? {
-            match self.evaluate_replay(kernel, host, target) {
+            match self.evaluate_replay(kernel, host, target, None) {
                 Ok(fragment) => return Ok(Some(fragment)),
                 Err(error) => native_error = Some(error),
             }
@@ -143,7 +149,7 @@ impl Journal {
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
         )?;
         let replay_error = RefCell::new(native_error);
-        let acceptance = |model: &CadModel, root| {
+        let acceptance = |model: &CadModel, root, seed: Option<EvaluationSeed<'_, K>>| {
             let host = CadFragment {
                 source: CadFragmentSource::SameDomainNormalized {
                     solid_id: target.source.id,
@@ -151,7 +157,7 @@ impl Journal {
                 model: model.clone(),
                 root,
             };
-            match self.evaluate_replay(kernel, host, target) {
+            match self.evaluate_replay(kernel, host, target, seed) {
                 Ok(_) => true,
                 Err(error) => {
                     replay_error.borrow_mut().get_or_insert(error);

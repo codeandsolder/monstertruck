@@ -1185,7 +1185,7 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
 fn recognize_single_healed_host<K: CadKernel>(
     healed: &Exchange,
     kernel: &K,
-    acceptance: Option<&CandidateAcceptance<'_>>,
+    acceptance: Option<&CandidateAcceptance<'_, K>>,
 ) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
@@ -1238,7 +1238,7 @@ fn recognize_single_healed_host<K: CadKernel>(
         .collect::<Result<Vec<_>>>()?;
     candidates.sort_by_key(|(cost, _)| *cost);
     for (_, fragment) in candidates {
-        if acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root)) {
+        if acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root, None)) {
             return Ok(Some(fragment));
         }
     }
