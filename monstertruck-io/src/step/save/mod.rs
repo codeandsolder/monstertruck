@@ -307,6 +307,42 @@ macro_rules! impl_const_step_length {
     };
 }
 
+/// An exact face-local STEP parameter curve. The support surface may be
+/// referenced instead of emitted again when its complete STEP encoding
+/// is identical to the adjacent face's carrier.
+pub trait StepPcurve: StepFormat + StepLength {
+    /// True only when the complete encoded support (including all dependent
+    /// entities and its parameterization) matches the supplied encoding.
+    fn matches_surface_encoding(&self, encoding: &str) -> bool;
+
+    /// Number of newly emitted entities when referencing an existing support.
+    fn step_length_referencing_surface(&self) -> usize;
+
+    /// Write this pcurve referencing an already emitted support entity.
+    ///
+    /// # Errors
+    /// Returns an error if writing the STEP representation fails.
+    fn fmt_referencing_surface(
+        &self,
+        idx: usize,
+        surface_idx: usize,
+        formatter: &mut Formatter<'_>,
+    ) -> Result;
+}
+
+// STEP encoders use consecutive indices relative to their root. Comparing
+// complete encodings at the same root proves emitted chart identity, not
+// merely spatial support equality or sampled geometric coincidence.
+fn canonical_step_encoding(entity: &impl StepFormat) -> Option<String> {
+    let mut encoding = String::new();
+    std::fmt::write(
+        &mut encoding,
+        format_args!("{}", StepDisplay::new(entity, 1)),
+    )
+    .ok()?;
+    Some(encoding)
+}
+
 /// Additional information for output to `edge_curve`.
 pub trait StepCurve {
     /// the parameter `same_sense`.

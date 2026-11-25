@@ -65,3 +65,47 @@ fn deduped_surface_curve_still_reloads() {
     let reloaded = table.to_compressed_shell(step_shell).unwrap();
     assert_eq!(reloaded.faces.len(), 6, "roundtrip preserves the six faces");
 }
+
+#[test]
+fn exact_pcurves_reference_their_existing_face_surfaces() {
+    let compressed = unit_cube().compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
+    let step =
+        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
+    assert_eq!(count(&step, "= PLANE("), 6);
+    assert_eq!(count(&step, "= PCURVE("), 24);
+    let table = Table::from_step(&step).expect("deduplicated STEP parses");
+    let shell = table.shell.values().next().expect("closed shell");
+    let restored = table
+        .to_compressed_trimmed_shell(shell)
+        .expect("exact trims restore");
+    assert_eq!(restored.faces.len(), 6);
+    assert_eq!(
+        restored
+            .faces
+            .iter()
+            .flat_map(|face| face.boundaries.iter().flatten())
+            .filter(|edge| edge.trim_curve.is_some())
+            .count(),
+        24
+    );
+}
+
+#[test]
+fn pcurve_reference_requires_the_same_emitted_chart() {
+    let face = Plane::xy();
+    let foreign = Plane::new(
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(2.0, 0.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+    );
+    let curve = Line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0));
+    let exact = ParameterCurve::new(curve, face);
+    let different = ParameterCurve::new(curve, foreign);
+    let encoding = StepDisplay::new(face, 1).to_string();
+    assert!(exact.matches_surface_encoding(&encoding));
+    assert!(!different.matches_surface_encoding(&encoding));
+    assert_eq!(
+        exact.step_length_referencing_surface() + face.step_length(),
+        exact.step_length()
+    );
+}
