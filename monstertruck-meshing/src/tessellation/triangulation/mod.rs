@@ -8,7 +8,7 @@ use super::{
     ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
     PreMeshableSurface, RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell,
     StandardAttributes, StandardVertex, TessellationPrimitiveMode, TessellationPrimitiveOptions,
-    Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire, Zero, algo, handles,
+    Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire, algo, handles,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{

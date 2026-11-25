@@ -132,7 +132,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
 /// Stitching must consume the native edge chain in both resolutions.
 #[test]
 fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Result<()> {
-    use monstertruck_geometry::prelude::BsplineSurface;
+    use monstertruck_geometry::prelude::{BsplineSurface, NurbsSurface};
     use monstertruck_modeling::{Face, Surface, Wire};
 
     let points = [
