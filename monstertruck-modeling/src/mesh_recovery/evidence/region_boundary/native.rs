@@ -5,8 +5,8 @@
 
 use super::super::super::sample_fit::normal_basis;
 use super::{
-    MeshEvidence, RegionBoundaryIndex, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
-    SurfaceCarrier, SurfaceRegionPartition,
+    ContactToroidalSectionEvidence, MeshEvidence, RegionBoundaryIndex, SharedAnalyticTrim,
+    SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition,
     reconcile::{ReconciliationOptions, reconcile_point},
 };
 use crate::{
@@ -14,7 +14,10 @@ use crate::{
     ParametricSurface3D, Plane, Point3, Processor, RevolutionSurface, Sphere, Surface,
     ToSameGeometry, Torus, TrimmedCurve, UnitCircle, Vector3, Vertex, Wire, builder,
 };
-use std::f64::consts::{PI, TAU};
+use std::{
+    collections::BTreeMap,
+    f64::consts::{PI, TAU},
+};
 
 mod band;
 
@@ -124,21 +127,17 @@ impl RegionBoundaryIndex<'_> {
             .iter()
             .map(|trim| trim_intervals(trim, positions))
             .collect::<Vec<_>>();
-        let (vertices, max_vertex_displacement) =
-            native_vertices(partition, graph, positions, &intervals, options)?;
-        let mut trims = graph
-            .trims
+        let NativeEdges {
+            vertices,
+            mut trims,
+        } = native_vertices_and_trims(partition, graph, positions, &intervals, options)?;
+        let max_vertex_displacement = vertices
             .iter()
-            .zip(&intervals)
-            .map(|(trim, intervals)| {
-                intervals
-                    .as_ref()
-                    .map_err(|&error| error)?
-                    .iter()
-                    .map(|&interval| native_edge(trim, interval, &vertices, options))
-                    .collect::<Result<Vec<_>, _>>()
+            .zip(positions)
+            .filter_map(|(vertex, &source)| {
+                vertex.as_ref().map(|v| (v.point() - source).magnitude())
             })
-            .collect::<Vec<_>>();
+            .fold(0.0_f64, f64::max);
         let mut groups = vec![Vec::new(); partition.carriers.len()];
         for (id, &region) in partition.region_by_support.iter().enumerate() {
             groups
@@ -456,14 +455,20 @@ fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
     }
 }
 
-fn native_vertices(
+struct NativeEdges {
+    vertices: Vec<Option<Vertex>>,
+    trims: Vec<Result<Vec<Edge>, NativeTrimError>>,
+}
+
+fn native_vertices_and_trims(
     partition: &SurfaceRegionPartition,
     graph: &SharedTrimGraph,
     positions: &[Point3],
     intervals: &[Result<Vec<TrimInterval>, NativeTrimError>],
     options: NativeTrimOptions,
-) -> Result<(Vec<Option<Vertex>>, f64), NativeTrimError> {
+) -> Result<NativeEdges, NativeTrimError> {
     let mut constraints = vec![Vec::new(); positions.len()];
+    let mut sections = BTreeMap::<usize, Vec<ContactToroidalSectionEvidence>>::new();
     for (trim, intervals) in graph.trims.iter().zip(intervals) {
         let Ok(intervals) = intervals else {
             continue;
@@ -488,31 +493,179 @@ fn native_vertices(
                 .get_mut(id)
                 .ok_or(NativeTrimError::InvalidSource)?
                 .extend(carriers.iter().copied());
+            if let SharedTrimGeometry::ToroidalSection(section) = trim.geometry {
+                sections.entry(id).or_default().push(section);
+            }
         }
     }
-    let mut maximum = 0.0_f64;
-    let vertices = positions
+    let mut alternatives = BTreeMap::new();
+    let mut vertices = positions
         .iter()
         .zip(constraints)
-        .map(|(&source, carriers)| {
+        .enumerate()
+        .map(|(id, (&source, carriers))| {
             if carriers.is_empty() {
                 return None;
             }
-            let point = reconcile_point(
+            let (initial, candidates) = junction_candidates(
                 source,
                 &carriers,
-                ReconciliationOptions {
-                    max_displacement: options.max_vertex_displacement,
-                    parallel_angle_tolerance: options.angular_resolution,
-                    intersection_tolerance: options.intersection_tolerance,
-                    max_normal_angle: options.angular_resolution * 2.0,
-                },
-            )?;
-            maximum = maximum.max((point - source).magnitude());
-            Some(builder::vertex(point))
+                sections.get(&id).map_or(&[], Vec::as_slice),
+                options,
+            );
+            if !candidates.is_empty() {
+                alternatives.insert(id, candidates);
+            }
+            initial.map(builder::vertex)
         })
-        .collect();
-    Ok((vertices, maximum))
+        .collect::<Vec<_>>();
+    let mut trims = graph
+        .trims
+        .iter()
+        .zip(intervals)
+        .map(|(trim, intervals)| build_trim(trim, intervals, &vertices, options))
+        .collect::<Vec<_>>();
+    refine_native_junctions(
+        graph,
+        intervals,
+        &mut vertices,
+        &mut trims,
+        alternatives,
+        options,
+    );
+    Ok(NativeEdges { vertices, trims })
+}
+
+fn build_trim(
+    trim: &SharedAnalyticTrim,
+    intervals: &Result<Vec<TrimInterval>, NativeTrimError>,
+    vertices: &[Option<Vertex>],
+    options: NativeTrimOptions,
+) -> Result<Vec<Edge>, NativeTrimError> {
+    intervals
+        .as_ref()
+        .map_err(|&error| error)?
+        .iter()
+        .map(|&interval| native_edge(trim, interval, vertices, options))
+        .collect()
+}
+
+// Test candidate vertex changes transactionally against every incident
+// trim. An improvement to one intersection must not invalidate a
+// previously constructed line, circular arc, conic or section.
+fn refine_native_junctions(
+    graph: &SharedTrimGraph,
+    intervals: &[Result<Vec<TrimInterval>, NativeTrimError>],
+    vertices: &mut [Option<Vertex>],
+    trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    alternatives: BTreeMap<usize, Vec<Point3>>,
+    options: NativeTrimOptions,
+) {
+    if alternatives.is_empty() {
+        return;
+    }
+    let mut incidence = alternatives
+        .keys()
+        .map(|&id| (id, Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    for (trim, intervals) in intervals.iter().enumerate() {
+        if let Ok(intervals) = intervals {
+            for id in intervals.iter().flat_map(|interval| interval.endpoints) {
+                if let Some(incident) = incidence.get_mut(&id)
+                    && incident.last() != Some(&trim)
+                {
+                    incident.push(trim);
+                }
+            }
+        }
+    }
+    for (id, candidates) in alternatives {
+        let original = vertices[id].take();
+        let incident = &incidence[&id];
+        for point in candidates {
+            vertices[id] = Some(builder::vertex(point));
+            let changed = incident
+                .iter()
+                .map(|&trim| {
+                    (
+                        trim,
+                        build_trim(&graph.trims[trim], &intervals[trim], vertices, options),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if changed
+                .iter()
+                .all(|(id, result)| trims[*id].is_err() || result.is_ok())
+            {
+                for (id, result) in changed {
+                    trims[id] = result;
+                }
+                break;
+            }
+            vertices[id] = None;
+        }
+        if vertices[id].is_none() {
+            vertices[id] = original;
+        }
+    }
+}
+
+// A carrier residual by itself does not imply proximity to an
+// intersection branch near parallel normals. Use the analytic sections
+// as additional point candidates, not as permission to move one side
+// independently. Keep the existing solution if no globally compatible
+// refinement improves it.
+fn junction_candidates(
+    source: Point3,
+    carriers: &[SurfaceCarrier],
+    sections: &[ContactToroidalSectionEvidence],
+    options: NativeTrimOptions,
+) -> (Option<Point3>, Vec<Point3>) {
+    let reconciliation = ReconciliationOptions {
+        max_displacement: options.max_vertex_displacement,
+        parallel_angle_tolerance: options.angular_resolution,
+        intersection_tolerance: options.intersection_tolerance,
+        max_normal_angle: options.angular_resolution * 2.0,
+    };
+    let initial = reconcile_point(source, carriers, reconciliation);
+    if sections.is_empty() {
+        return (initial, Vec::new());
+    }
+    let branch_error = |point: Point3| {
+        sections
+            .iter()
+            .map(|section| {
+                section
+                    .projected(point)
+                    .map_or(f64::INFINITY, |p| (p - point).magnitude())
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let seed = initial.unwrap_or(source);
+    let candidates = sections.iter().filter_map(|s| s.projected(seed));
+    // Do not perturb a junction whose branch constraints already agree.
+    if initial.is_some_and(|p| branch_error(p) <= options.intersection_tolerance) {
+        return (initial, Vec::new());
+    }
+    let mut candidates = candidates
+        .filter(|&point| {
+            (point - source).magnitude() <= options.max_vertex_displacement
+                && carriers.iter().all(|carrier| {
+                    carrier
+                        .signed_constraint(point)
+                        .is_some_and(|(_, error)| error.abs() <= options.intersection_tolerance)
+                })
+                && initial.is_none_or(|original| branch_error(point) < branch_error(original))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|&a, &b| {
+        branch_error(a).total_cmp(&branch_error(b)).then(
+            (a - source)
+                .magnitude2()
+                .total_cmp(&(b - source).magnitude2()),
+        )
+    });
+    (initial, candidates)
 }
 
 fn native_edge(
@@ -1237,6 +1390,64 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn junction_refinement_preserves_existing_native_trim() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let points = [Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
+        let circle = super::super::curve_evidence::measure_placed_circle(
+            &points,
+            &[0, 1],
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            1.0,
+            1.0,
+        )
+        .ok_or("circle")?;
+        let graph = SharedTrimGraph {
+            trims: vec![SharedAnalyticTrim {
+                contact_path: 0,
+                regions: (0, Some(1)),
+                source_edges: Vec::new(),
+                geometry: SharedTrimGeometry::Circle(circle),
+            }],
+            regions: Vec::new(),
+            ambiguous_edges: Vec::new(),
+            limited_paths: 0,
+        };
+        let intervals = [Ok(vec![TrimInterval {
+            endpoints: [0, 1],
+            sweep: PI * 0.5,
+        }])];
+        let mut vertices = points.map(|p| Some(builder::vertex(p)));
+        let mut trims = [build_trim(
+            &graph.trims[0],
+            &intervals[0],
+            &vertices,
+            native_options(),
+        )];
+        let original = vertices[0].clone().ok_or("vertex")?;
+        let (sin, cos) = 1.0e-9_f64.sin_cos();
+        let candidate = Point3::new(cos, sin, 0.0);
+        assert!(
+            (candidate - points[0]).magnitude() > native_options().intersection_tolerance * 4.0
+        );
+        refine_native_junctions(
+            &graph,
+            &intervals,
+            &mut vertices,
+            &mut trims,
+            BTreeMap::from([(0, vec![candidate])]),
+            native_options(),
+        );
+        assert_eq!(vertices[0].as_ref(), Some(&original));
+        assert!(trims[0].is_ok());
+        assert_eq!(
+            trims[0].as_ref().map_err(|error| *error)?[0].front(),
+            &original
+        );
+        Ok(())
+    }
+
     #[test]
     fn noncircular_torus_plane_section_is_shared_by_native_faces()
     -> Result<(), Box<dyn std::error::Error>> {

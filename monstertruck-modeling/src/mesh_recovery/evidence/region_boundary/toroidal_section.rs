@@ -409,6 +409,13 @@ impl ContactToroidalSectionEvidence {
         self.evaluated(self.frame.angle(self.chart, p)?)
     }
 
+    // The regular analytic branch supplies an independent candidate for
+    // a shared native junction. The caller must still check all incident
+    // constraints and the original source displacement budget.
+    pub(super) fn projected(self, point: Point3) -> Option<Point3> {
+        self.project(point).map(|(p, _)| p)
+    }
+
     fn measure(mut self, points: &[Point3], ids: &[usize], tolerance: f64) -> Option<Self> {
         for &id in ids {
             let point = *points.get(id)?;
@@ -570,7 +577,16 @@ pub(super) fn supplied_section(
                 if !candidate.same_branch(previous, points, ids, tolerance) {
                     return None;
                 }
-                if candidate.max_step_radians >= previous.max_step_radians {
+                if !candidate
+                    .max_vertex_residual
+                    .total_cmp(&previous.max_vertex_residual)
+                    .then(
+                        candidate
+                            .max_step_radians
+                            .total_cmp(&previous.max_step_radians),
+                    )
+                    .is_lt()
+                {
                     continue;
                 }
             }
