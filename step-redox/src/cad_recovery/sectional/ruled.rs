@@ -368,10 +368,10 @@ pub(super) fn models(solid: &ReducedSolid, frame: Frame) -> Result<Vec<(CadModel
     };
     let count = spans.len();
     let joined = chains::join(spans);
-    if joined.len() < count {
-        if let Some(model) = emit_model(joined, frame, &sweep.levels)? {
-            models.push(model);
-        }
+    if joined.len() < count
+        && let Some(model) = emit_model(joined, frame, &sweep.levels)?
+    {
+        models.push(model);
     }
     Ok(models)
 }

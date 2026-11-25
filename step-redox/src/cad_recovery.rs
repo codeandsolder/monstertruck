@@ -450,6 +450,8 @@ fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &Cad
 
 /// Immutable section-local evidence, shared by every material proposal. A
 /// complexity ceiling may only come from a previously certified candidate.
+pub(crate) type CandidateAcceptance<'a> = dyn Fn(&CadModel, NodeId) -> bool + 'a;
+
 pub(crate) struct SourceRecovery<'a, K> {
     solid_id: u64,
     entities: &'a [EntityInstance],
@@ -459,6 +461,7 @@ pub(crate) struct SourceRecovery<'a, K> {
     reconciled_entities: Option<Vec<EntityInstance>>,
     strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
+    acceptance: Option<&'a CandidateAcceptance<'a>>,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -524,7 +527,15 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             reconciled_entities,
             strip_face_sense_repairs,
             boundary_vertices,
+            acceptance: None,
         })
+    }
+
+    /// A peeled host must also support the remaining forward operations.
+    /// Apply the caller's acceptance only after independent host proof.
+    pub(crate) fn requiring(mut self, acceptance: &'a CandidateAcceptance<'a>) -> Self {
+        self.acceptance = Some(acceptance);
+        self
     }
 
     pub(crate) fn strip_face_sense_repairs(
@@ -556,7 +567,8 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !self.kernel.summarize(&evaluated).is_single_solid() {
             return Ok(false);
         }
-        self.matches_evaluated_boundary(&evaluated)
+        Ok(self.matches_evaluated_boundary(&evaluated)?
+            && self.acceptance.is_none_or(|accept| accept(model, root)))
     }
 
     /// Compare an already evaluated single-solid candidate without repeating

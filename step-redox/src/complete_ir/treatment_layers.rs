@@ -16,6 +16,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub(super) struct ReplayLayer {
     groups: Vec<TreatmentReplayGroup>,
 }

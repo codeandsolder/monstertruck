@@ -5,11 +5,12 @@ use crate::cad_ir::{
 };
 use crate::cad_kernel::CadKernel;
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, SourceRecovery, recover_open_rectangular_sweep_fragments,
-    recover_periodic_chain_fragments, recover_proven_material_fragment,
-    recover_radial_slot_revolution_fragments, recover_revolved_round_tail_fragments,
-    recover_round_sweep_fragments, recover_solid_extrusion_fragment,
-    recover_solid_extrusion_fragments, recover_solid_revolution_fragments,
+    CadFragment, CadFragmentSource, CandidateAcceptance, SourceRecovery,
+    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    recover_proven_material_fragment, recover_radial_slot_revolution_fragments,
+    recover_revolved_round_tail_fragments, recover_round_sweep_fragments,
+    recover_solid_extrusion_fragment, recover_solid_extrusion_fragments,
+    recover_solid_revolution_fragments,
 };
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 use crate::cad_recovery::{
@@ -786,13 +787,9 @@ pub fn recover_complete_ir_with_kernel_bytes<
         let Some(proof) = proof else {
             continue;
         };
-        let candidate =
-            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
-                |candidate| {
-                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
-                },
-            );
-        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        // A direct source feature is the canonical representation on an
+        // equal score. Prove it before searching alternative decompositions;
+        // strictly cheaper certified material candidates can still replace it.
         let candidate = recover_verified_direct_constructive_fragment(
             &proof,
             candidates,
@@ -801,6 +798,13 @@ pub fn recover_complete_ir_with_kernel_bytes<
         .map(|candidate| {
             candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
         });
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        let candidate =
+            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
+                |candidate| {
+                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+                },
+            );
         failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
@@ -1030,7 +1034,7 @@ fn finish_native_boundary_feature_replay<
 ) -> Result<Option<KernelRecoveryCandidate>> {
     let mut journal = native_peels::Journal::default();
     journal.boundary(replay);
-    let Some(fragment) = journal.finish(
+    let Some((fragment, evaluated)) = journal.finish(
         kernel,
         &mut edited,
         source,
@@ -1041,10 +1045,6 @@ fn finish_native_boundary_feature_replay<
     else {
         return Ok(None);
     };
-    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
-    if !kernel.summarize(&evaluated).is_single_solid() {
-        return Ok(None);
-    }
     // Certify the entire evaluated result against the original, unpeeled
     // source. Unsupported boundaries keep their existing structural status;
     // successful proof also supplies the safe candidate-complexity ceiling.
@@ -1120,7 +1120,7 @@ fn recover_kernel_topology_normalized_fragment<
     }
     let mut journal = native_peels::Journal::default();
     journal.treatment(layers);
-    let Some(mut fragment) = journal.finish(
+    let Some((mut fragment, evaluated)) = journal.finish(
         kernel,
         &mut edited,
         source,
@@ -1140,10 +1140,6 @@ fn recover_kernel_topology_normalized_fragment<
             solid_id: source.id,
         };
         return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
-    }
-    let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
-    if !kernel.summarize(&evaluated).is_single_solid() {
-        return Ok(None);
     }
     if !kernel.supports_step_export() {
         return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
@@ -1210,6 +1206,14 @@ fn recognize_single_healed_host<K: CadKernel>(
     healed: &Exchange,
     kernel: &K,
 ) -> Result<Option<CadFragment>> {
+    recognize_single_healed_host_matching(healed, kernel, None)
+}
+
+fn recognize_single_healed_host_matching<K: CadKernel>(
+    healed: &Exchange,
+    kernel: &K,
+    acceptance: Option<&CandidateAcceptance<'_>>,
+) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -1248,7 +1252,10 @@ fn recognize_single_healed_host<K: CadKernel>(
             )?);
         }
     }
-    let refs = candidates.iter().collect::<Vec<_>>();
+    let refs = candidates
+        .iter()
+        .filter(|fragment| acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root)))
+        .collect::<Vec<_>>();
     let selected = select_cheapest_whole_solid_fragments(&refs)?;
     if let Some(host) = selected
         .get(solid_id)
@@ -1260,6 +1267,11 @@ fn recognize_single_healed_host<K: CadKernel>(
     // immutable final native snapshot, not just the sectional family.
     let Some(proof) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
         return Ok(None);
+    };
+    let proof = if let Some(accept) = acceptance {
+        proof.requiring(accept)
+    } else {
+        proof
     };
     recover_proven_material_fragment(&proof, None)
 }
@@ -2183,6 +2195,7 @@ fn replay_edge_treatments(
 /// Owned forward operation. Geometry is captured in the inverse layer's
 /// current coordinate space, while provenance is independently mapped back
 /// to original STEP member identities.
+#[derive(Clone)]
 struct TreatmentReplayGroup {
     face_ids: Vec<u64>,
     profile: EdgeTreatmentProfile,
