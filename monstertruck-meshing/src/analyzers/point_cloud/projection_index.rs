@@ -7,14 +7,13 @@ use super::{
     EuclideanSpace, InnerSpace, Point3, PolygonMesh, Vector3, distance2_point_triangle, hash,
     nonpositive_tolerance,
 };
-use array_macro::array;
 
 #[derive(Clone, Copy, Debug)]
 struct Interval {
     low: f64,
     high: f64,
     subtree_high: f64,
-    triangle: [Point3; 3],
+    vertices: [usize; 3],
 }
 
 /// Immutable projection index for repeated point-cloud proximity queries
@@ -45,7 +44,8 @@ impl<'a> ProjectionNeighborhood<'a> {
             .filter(|unit| tolerance.is_finite() && (0..3).all(|axis| unit[axis].is_finite()));
         let projection = projection.filter(|&unit| {
             for face in polygon.faces().triangle_iter() {
-                let triangle = array![i => polygon.positions()[face[i].pos]; 3];
+                let vertices = face.map(|vertex| vertex.pos);
+                let triangle = vertices.map(|index| polygon.positions()[index]);
                 if !triangle
                     .iter()
                     .all(|p| (0..3).all(|axis| p[axis].is_finite()))
@@ -66,7 +66,7 @@ impl<'a> ProjectionNeighborhood<'a> {
                     low,
                     high,
                     subtree_high: high,
-                    triangle,
+                    vertices,
                 });
             }
             true
@@ -97,7 +97,13 @@ impl<'a> ProjectionNeighborhood<'a> {
         root.subtree_high
     }
 
-    fn contains(intervals: &[Interval], coordinate: f64, point: Point3, tolerance2: f64) -> bool {
+    fn contains(
+        intervals: &[Interval],
+        positions: &[Point3],
+        coordinate: f64,
+        point: Point3,
+        tolerance2: f64,
+    ) -> bool {
         let middle = intervals.len() / 2;
         let (left, tail) = intervals.split_at(middle);
         let Some((root, right)) = tail.split_first() else {
@@ -108,15 +114,16 @@ impl<'a> ProjectionNeighborhood<'a> {
         }
         if root.low <= coordinate {
             if coordinate <= root.high
-                && distance2_point_triangle(point, root.triangle) < tolerance2
+                && distance2_point_triangle(point, root.vertices.map(|index| positions[index]))
+                    < tolerance2
             {
                 return true;
             }
-            if Self::contains(right, coordinate, point, tolerance2) {
+            if Self::contains(right, positions, coordinate, point, tolerance2) {
                 return true;
             }
         }
-        Self::contains(left, coordinate, point, tolerance2)
+        Self::contains(left, positions, coordinate, point, tolerance2)
     }
 
     /// Whether every point is strictly within the requested distance of
@@ -144,7 +151,13 @@ impl<'a> ProjectionNeighborhood<'a> {
         }
         let tolerance2 = self.tolerance * self.tolerance;
         points.iter().all(|&point| {
-            Self::contains(&self.intervals, point.to_vec().dot(unit), point, tolerance2)
+            Self::contains(
+                &self.intervals,
+                self.polygon.positions(),
+                point.to_vec().dot(unit),
+                point,
+                tolerance2,
+            )
         })
     }
 }
