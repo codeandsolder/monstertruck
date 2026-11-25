@@ -161,6 +161,8 @@ pub(super) struct GeodesicFlux {
 }
 
 impl GeodesicFlux {
+    pub(super) const fn volumes(&self) -> &[f64; 4] { &self.volume }
+
     pub(super) fn set_references(&mut self, references: [Point; 4]) {
         self.volume = references.map(|r| {
             (self.radius * self.signed_area + dot(sub(self.center, r), self.vector_area)) / 3.0

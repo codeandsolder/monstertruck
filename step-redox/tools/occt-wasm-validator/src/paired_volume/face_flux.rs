@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod geodesic;
 mod rational_bezier;
+mod substitution;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -52,6 +53,8 @@ pub struct FaceFluxReport {
     a: Vec<FaceFlux>,
     b: Vec<FaceFlux>,
     surface_families: Vec<FamilyFlux>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analytic_substitution: Option<substitution::Substitution>,
 }
 
 fn array<const N: usize>(values: Vec<f64>, label: &str) -> Result<[f64; N]> {
@@ -251,12 +254,14 @@ impl FaceFluxAccumulator {
             }
         }
         let surface_families = families(&self.a, &self.b)?;
+        let analytic_substitution = substitution::summarize(&self.a, &self.b)?;
         Ok(FaceFluxReport {
             references,
             quadrature_eps: EPSILONS,
             a: self.a,
             b: self.b,
             surface_families,
+            analytic_substitution,
         })
     }
 }

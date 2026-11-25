@@ -141,3 +141,9 @@ using Bernstein coefficients. The bounds are computed in floating point,
 not interval arithmetic. Unsupported or ambiguous patches include an explicit
 reason. This result is diagnostic only and does not replace the quadrature
 volume or change the acceptance gate.
+
+When at least one spherical face can be independently evaluated, the report
+also includes `analytic_substitution`: the mixed analytic and quadrature
+volume at each reference, its direct signed-term difference, quadrature
+drift, reference spread and substituted/unsupported face counts. The
+original quadrature report and exit status remain unchanged.
