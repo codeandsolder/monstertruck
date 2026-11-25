@@ -1,5 +1,6 @@
 //! Immutable, dimension-independent bounding hierarchy. Build by partitioning
-//! compact indices, then gather the geometry once into contiguous leaf order.
+//! contiguous compact bounds/centroid records, then gather the geometry once
+//! into contiguous leaf order.
 //! Callers own all narrow-phase semantics and nonfinite-input handling.
 
 use std::ops::Range;
@@ -65,41 +66,51 @@ pub struct SpatialHierarchy<const N: usize> {
 
 const LEAF_SIZE: usize = 8;
 
-struct Builder<'a, const N: usize> {
-    bounds: &'a [Bounds<N>],
-    centers: Vec<[f64; N]>,
-    nodes: Vec<Node<N>>,
+/// Keep bounds, sort keys and source index adjacent during partitioning.
+/// Indirectly gathering bounds and centroids through a permuted index list
+/// causes random memory accesses at every recursive level.
+#[derive(Clone, Copy)]
+struct BuildRecord<const N: usize> {
+    bounds: Bounds<N>,
+    center: [f64; N],
+    index: usize,
 }
 
-impl<const N: usize> Builder<'_, N> {
-    fn build(&mut self, order: &mut [usize], offset: usize) -> usize {
-        let bounds = order[1..]
-            .iter()
-            .fold(self.bounds[order[0]], |bounds, &index| {
-                bounds.union(self.bounds[index])
-            });
-        let children = if order.len() <= LEAF_SIZE {
-            Children::Leaf(offset..offset + order.len())
-        } else {
-            let axis = bounds.longest_axis();
-            let middle = order.len() / 2;
-            order.select_nth_unstable_by(middle, |&a, &b| {
-                self.centers[a][axis]
-                    .total_cmp(&self.centers[b][axis])
-                    .then_with(|| a.cmp(&b))
-            });
-            let (left, right) = order.split_at_mut(middle);
-            Children::Branch([self.build(left, offset), self.build(right, offset + middle)])
-        };
-        let id = self.nodes.len();
-        self.nodes.push(Node { bounds, children });
-        id
-    }
+fn build<const N: usize>(
+    records: &mut [BuildRecord<N>],
+    offset: usize,
+    nodes: &mut Vec<Node<N>>,
+) -> usize {
+    let bounds = records[1..]
+        .iter()
+        .fold(records[0].bounds, |bounds, record| {
+            bounds.union(record.bounds)
+        });
+    let children = if records.len() <= LEAF_SIZE {
+        Children::Leaf(offset..offset + records.len())
+    } else {
+        let axis = bounds.longest_axis();
+        let middle = records.len() / 2;
+        records.select_nth_unstable_by(middle, |a, b| {
+            a.center[axis]
+                .total_cmp(&b.center[axis])
+                .then_with(|| a.index.cmp(&b.index))
+        });
+        let (left, right) = records.split_at_mut(middle);
+        Children::Branch([
+            build(left, offset, nodes),
+            build(right, offset + middle, nodes),
+        ])
+    };
+    let id = nodes.len();
+    nodes.push(Node { bounds, children });
+    id
 }
 
 impl<const N: usize> SpatialHierarchy<N> {
     /// Rearrange entries into contiguous leaves. No geometry is moved during
-    /// recursive median selection; sorting uses precomputed centroid keys.
+    /// recursive median selection; compact records retain bounds and
+    /// precomputed centroid keys in contiguous storage.
     pub(crate) fn new<T: Copy>(entries: &mut Vec<T>, bounds: impl Fn(T) -> Bounds<N>) -> Self {
         if entries.is_empty() {
             return Self { nodes: Vec::new() };
@@ -114,18 +125,26 @@ impl<const N: usize> SpatialHierarchy<N> {
             };
             return Self { nodes: vec![node] };
         }
-        let bounds = entries.iter().copied().map(bounds).collect::<Vec<_>>();
-        let mut builder = Builder {
-            centers: bounds.iter().copied().map(Bounds::center).collect(),
-            bounds: &bounds,
-            nodes: Vec::new(),
-        };
-        let mut order = (0..entries.len()).collect::<Vec<_>>();
-        builder.build(&mut order, 0);
-        *entries = order.into_iter().map(|index| entries[index]).collect();
-        Self {
-            nodes: builder.nodes,
-        }
+        let mut records = entries
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, entry)| {
+                let bounds = bounds(entry);
+                BuildRecord {
+                    bounds,
+                    center: bounds.center(),
+                    index,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut nodes = Vec::new();
+        build(&mut records, 0, &mut nodes);
+        *entries = records
+            .into_iter()
+            .map(|record| entries[record.index])
+            .collect();
+        Self { nodes }
     }
 
     fn visit(
