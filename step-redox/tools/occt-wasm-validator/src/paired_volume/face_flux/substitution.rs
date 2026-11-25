@@ -2,7 +2,7 @@
 //! the strict raw quadrature gate. Only independently recognized spherical
 //! faces are substituted; every unsupported face keeps its measured terms.
 
-use super::{AnalyticSphere, FaceFlux, accurate_sum, finite_difference};
+use super::{AnalyticSphere, FaceFlux, SpatialSphere, accurate_sum, finite_difference};
 use anyhow::Result;
 use serde::Serialize;
 
@@ -12,17 +12,43 @@ struct Coverage {
     unsupported_spherical_faces: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Method {
+    Geodesic,
+    Spatial,
+}
+
+impl Method {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Geodesic => {
+                "diagnostic analytic geodesic spherical flux plus original quadrature"
+            }
+            Self::Spatial => "diagnostic spatial spherical boundary flux plus original quadrature",
+        }
+    }
+
+    fn available(self, face: &FaceFlux) -> bool {
+        match self {
+            Self::Geodesic => {
+                matches!(face.analytic_sphere, Some(AnalyticSphere::Available { .. }))
+            }
+            Self::Spatial => matches!(face.spatial_sphere, Some(SpatialSphere::Available { .. })),
+        }
+    }
+}
+
 impl Coverage {
-    fn from_faces(faces: &[FaceFlux]) -> Self {
+    fn from_faces(faces: &[FaceFlux], method: Method) -> Self {
         let mut result = Self {
             substituted_faces: 0,
             unsupported_spherical_faces: 0,
         };
         for face in faces {
-            match face.analytic_sphere {
-                Some(AnalyticSphere::Available { .. }) => result.substituted_faces += 1,
-                Some(AnalyticSphere::Unsupported { .. }) => result.unsupported_spherical_faces += 1,
-                None => (),
+            if method.available(face) {
+                result.substituted_faces += 1;
+            } else if face.surface_kind == "sphere" {
+                result.unsupported_spherical_faces += 1;
             }
         }
         result
@@ -51,17 +77,31 @@ pub(super) struct Substitution {
     b_reference_spread: f64,
 }
 
-fn terms(face: &FaceFlux, index: usize) -> [f64; 2] {
-    if let Some(AnalyticSphere::Available { flux }) = &face.analytic_sphere {
-        [flux.volumes()[index]; 2]
-    } else {
-        [face.coarse_signed_volume[index], face.signed_volume[index]]
+fn terms(face: &FaceFlux, index: usize, method: Method) -> [f64; 2] {
+    match method {
+        Method::Geodesic => {
+            if let Some(AnalyticSphere::Available { flux }) = &face.analytic_sphere {
+                return [flux.volumes()[index]; 2];
+            }
+        }
+        Method::Spatial => {
+            if let Some(SpatialSphere::Available { flux }) = &face.spatial_sphere {
+                return flux.volumes(index);
+            }
+        }
     }
+    [face.coarse_signed_volume[index], face.signed_volume[index]]
 }
 
-fn sample(a: &[FaceFlux], b: &[FaceFlux], index: usize) -> Result<Sample> {
-    let selected_a = a.iter().map(|face| terms(face, index)).collect::<Vec<_>>();
-    let selected_b = b.iter().map(|face| terms(face, index)).collect::<Vec<_>>();
+fn sample(a: &[FaceFlux], b: &[FaceFlux], index: usize, method: Method) -> Result<Sample> {
+    let selected_a = a
+        .iter()
+        .map(|face| terms(face, index, method))
+        .collect::<Vec<_>>();
+    let selected_b = b
+        .iter()
+        .map(|face| terms(face, index, method))
+        .collect::<Vec<_>>();
     let paired = |rank| {
         // Sum the signed terms of both shapes directly. Subtracting two
         // rounded whole-solid volumes first would discard low-order bits.
@@ -90,20 +130,24 @@ fn spread(samples: &[Sample; 4], select: impl Fn(&Sample) -> f64) -> Result<f64>
     finite_difference(high, low)
 }
 
-pub(super) fn summarize(a: &[FaceFlux], b: &[FaceFlux]) -> Result<Option<Substitution>> {
-    let a_coverage = Coverage::from_faces(a);
-    let b_coverage = Coverage::from_faces(b);
+pub(super) fn summarize(
+    a: &[FaceFlux],
+    b: &[FaceFlux],
+    method: Method,
+) -> Result<Option<Substitution>> {
+    let a_coverage = Coverage::from_faces(a, method);
+    let b_coverage = Coverage::from_faces(b, method);
     if a_coverage.substituted_faces + b_coverage.substituted_faces == 0 {
         return Ok(None);
     }
     let samples = (0..4)
-        .map(|index| sample(a, b, index))
+        .map(|index| sample(a, b, index, method))
         .collect::<Result<Vec<_>>>()?;
     let samples: [Sample; 4] = samples
         .try_into()
         .map_err(|_| anyhow::anyhow!("invalid substitution sample count"))?;
     Ok(Some(Substitution {
-        method: "diagnostic analytic geodesic spherical flux plus original quadrature",
+        method: method.label(),
         a_coverage,
         b_coverage,
         max_absolute_delta: samples
@@ -138,6 +182,7 @@ mod tests {
             coarse_signed_volume: [value; 4],
             coarse_error_estimate: [0.0; 4],
             analytic_sphere: None,
+            spatial_sphere: None,
         }
     }
 
@@ -145,8 +190,8 @@ mod tests {
     fn direct_signed_difference_preserves_small_volume_changes() -> Result<()> {
         let a = [measured(1e16), measured(1.0)];
         let b = [measured(1e16)];
-        assert!(summarize(&a, &b)?.is_none());
-        let sample = sample(&a, &b, 0)?;
+        assert!(summarize(&a, &b, Method::Geodesic)?.is_none());
+        let sample = sample(&a, &b, 0, Method::Geodesic)?;
         assert_eq!(sample.a, sample.b);
         assert_eq!(sample.delta, 1.0);
         assert_eq!(sample.coarse_delta, 1.0);

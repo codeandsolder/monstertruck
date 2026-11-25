@@ -5,21 +5,19 @@
 
 use super::{
     array,
-    rational_bezier::{self, Homogeneous},
+    rational_bezier::{self, Homogeneous, spatial},
 };
 use anyhow::{Context, Result, bail, ensure};
-use occt_wasm::{CurveGeometry, OcctKernel, ShapeHandle, SurfaceData, Vec3};
+use occt_wasm::{CurveGeometry, OcctKernel, ShapeHandle, SurfaceData};
 use serde::Serialize;
 
-use crate::vector::{Point, cross, dot, norm, scale, sub};
+use crate::vector::{Point, cross, dot, norm, scale, sub, xyz};
 
 const RESIDUAL_LIMIT: f64 = 1.0e-11;
 
 fn unit(a: Point) -> Result<Point> {
     crate::vector::unit(a, RESIDUAL_LIMIT).context("degenerate direction")
 }
-fn xyz(v: Vec3) -> Point { [v.x, v.y, v.z] }
-fn spatial(h: Homogeneous) -> Point { [h[0], h[1], h[2]] }
 
 #[derive(Debug, Serialize)]
 struct Arc {
@@ -40,8 +38,7 @@ fn check_spline(
     let mut plane = 0.0_f64;
     let mut radial = 0.0_f64;
     for poles in spans {
-        let min_weight = poles.iter().map(|p| p[3]).fold(f64::INFINITY, f64::min);
-        ensure!(min_weight > 0.0, "nonpositive refined weight");
+        radial = radial.max(rational_bezier::normalized_squared_radius_bound(poles)?);
         for &pole in poles {
             let point = scale(spatial(pole), 1.0 / pole[3]);
             plane = plane.max(dot(point, normal).abs());
@@ -51,11 +48,6 @@ fn check_spline(
                 "spline control outside minor arc wedge"
             );
         }
-        let coefficients = rational_bezier::product(poles, poles, |a, b| {
-            dot(spatial(a), spatial(b)) - a[3] * b[3]
-        })?;
-        radial = radial
-            .max(coefficients.into_iter().map(f64::abs).fold(0.0, f64::max) / min_weight.powi(2));
         let differences = poles
             .windows(2)
             .map(|p| std::array::from_fn(|i| p[1][i] - p[0][i]))

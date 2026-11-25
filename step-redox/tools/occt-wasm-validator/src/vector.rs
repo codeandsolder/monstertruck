@@ -12,6 +12,7 @@ pub fn cross(a: Point, b: Point) -> Point {
     ]
 }
 
+pub fn add(a: Point, b: Point) -> Point { std::array::from_fn(|i| a[i] + b[i]) }
 pub fn sub(a: Point, b: Point) -> Point { std::array::from_fn(|i| a[i] - b[i]) }
 pub fn scale(a: Point, factor: f64) -> Point { a.map(|x| x * factor) }
 pub fn norm(a: Point) -> f64 { dot(a, a).sqrt() }
@@ -20,3 +21,5 @@ pub fn unit(a: Point, minimum_length: f64) -> Option<Point> {
     let length = norm(a);
     (length.is_finite() && length > minimum_length).then(|| a.map(|x| x / length))
 }
+
+pub const fn xyz(v: occt_wasm::Vec3) -> Point { [v.x, v.y, v.z] }
