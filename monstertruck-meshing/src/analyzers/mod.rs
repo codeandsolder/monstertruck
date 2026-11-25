@@ -64,7 +64,7 @@ mod volume;
 pub use collision::Collision;
 pub use in_out_judge::{IncludingPointInDomain, SignedRayIndex};
 pub use monstertruck_topology::shell::ShellCondition;
-pub use point_cloud::WithPointCloud;
+pub use point_cloud::{ProjectionNeighborhood, WithPointCloud};
 pub use splitting::ExperimentalSplitters;
 pub use splitting::Splitting;
 pub use topology::Topology;
