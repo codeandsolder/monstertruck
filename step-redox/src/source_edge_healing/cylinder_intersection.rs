@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use monstertruck_geometry::analytic_cylinder_intersection::{
     BoundedSourceIntersection, CylinderCarrier, CylinderIntersectionArc,
 };
-use monstertruck_geometry::prelude::{InnerSpace, Point3, Vector3};
+use monstertruck_geometry::prelude::{InnerSpace, NurbsCurve, Point3, Vector3, Vector4};
 use serde::Serialize;
 
 #[derive(Clone, Copy)]
@@ -54,7 +54,7 @@ pub struct CylinderHealingEvidence {
 pub struct CylinderHealingCandidate {
     pub evidence: CylinderHealingEvidence,
     /// Angular parameter zero to sweep follows the original basis curve,
-    /// independently of the EDGE_CURVE same-sense flag in the evidence.
+    /// independently of the `EDGE_CURVE` same-sense flag in the evidence.
     pub arc: CylinderIntersectionArc,
 }
 
@@ -144,7 +144,46 @@ fn directed_vertex_residuals(
     Ok(residual)
 }
 
+fn bounded_candidate(
+    first: IncidentCylinder,
+    second: IncidentCylinder,
+    curve: &NurbsCurve<Vector4>,
+    tolerance: f64,
+    target_gap: f64,
+) -> Result<(
+    BoundedSourceIntersection,
+    IncidentCylinder,
+    IncidentCylinder,
+)> {
+    let mut candidates =
+        [(first, second), (second, first)]
+            .into_iter()
+            .filter_map(|(primary, secondary)| {
+                BoundedSourceIntersection::from_spline(
+                    primary.carrier,
+                    secondary.carrier,
+                    curve,
+                    tolerance,
+                    target_gap,
+                )
+                .map(|bound| (bound, primary, secondary))
+            });
+    candidates
+        .next()
+        .map(|first| {
+            candidates.fold(first, |best, candidate| {
+                if candidate.0.separation_upper < best.0.separation_upper {
+                    candidate
+                } else {
+                    best
+                }
+            })
+        })
+        .context("no supported source-guided regular cylinder intersection")
+}
+
 /// Propose a new regular analytical edge only for a proven source defect.
+///
 /// Resolve source units, uncertainty and both carriers from the original
 /// solid. A full-domain source angular certificate chooses the branch; the
 /// two authored vertices must independently match the directed endpoints.
@@ -196,31 +235,8 @@ pub fn propose_cylinder_intersection_healing(
         tolerance,
     )?;
 
-    let mut candidates =
-        [(first, second), (second, first)]
-            .into_iter()
-            .filter_map(|(primary, secondary)| {
-                BoundedSourceIntersection::from_spline(
-                    primary.carrier,
-                    secondary.carrier,
-                    &curve,
-                    tolerance,
-                    request.target_gap_mm,
-                )
-                .map(|bound| (bound, primary, secondary))
-            });
-    let (bound, primary, secondary) = candidates
-        .next()
-        .map(|first| {
-            candidates.fold(first, |best, candidate| {
-                if candidate.0.separation_upper < best.0.separation_upper {
-                    candidate
-                } else {
-                    best
-                }
-            })
-        })
-        .context("no supported source-guided regular cylinder intersection")?;
+    let (bound, primary, secondary) =
+        bounded_candidate(first, second, &curve, tolerance, request.target_gap_mm)?;
     if bound.separation_lower <= uncertainty {
         bail!("source defect does not exceed the authored uncertainty");
     }

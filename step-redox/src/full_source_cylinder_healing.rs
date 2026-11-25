@@ -72,7 +72,7 @@ fn verify_scope(
     let mut parents = HashMap::<u64, Vec<u64>>::new();
     for entity in &source.entities {
         visit_entity_refs(entity, &mut |child| {
-            parents.entry(child).or_default().push(entity_id(entity))
+            parents.entry(child).or_default().push(entity_id(entity));
         });
     }
     let mut visited = HashSet::new();
@@ -197,7 +197,8 @@ fn serialized_control_error(
         ]
         .into_iter()
         .fold(1.0_f64, f64::max);
-        let deviation = (actual - expected).magnitude() + 64.0 * f64::EPSILON * coordinate_scale;
+        let deviation =
+            (64.0 * f64::EPSILON).mul_add(coordinate_scale, (actual - expected).magnitude());
         if !deviation.is_finite() {
             bail!("nonfinite serialized leader coordinates");
         }
@@ -318,7 +319,7 @@ fn apply(
 /// Construct a new source document from explicitly requested edge repairs.
 ///
 /// Every candidate is established from the unmodified source, and all
-/// existing entity records except the nominated EDGE_CURVE geometry
+/// existing entity records except the nominated `EDGE_CURVE` geometry
 /// references remain intact. No new body is automatically admitted.
 ///
 /// # Errors

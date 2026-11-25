@@ -37,7 +37,7 @@ pub fn named_entity_parameters<'a>(
 
 /// Mutably resolve the same checked, simple-entity positional parameter list.
 #[cfg(feature = "cad-kernel-monstertruck")]
-pub(crate) fn simple_parameters_mut<'a>(
+pub fn simple_parameters_mut<'a>(
     section: &'a mut DataSection,
     index: &HashMap<u64, usize>,
     id: u64,
