@@ -290,23 +290,7 @@ fn classic_boolean_tolerance(
     // as identical. Classic Boolean predicates and trim-edge reuse therefore
     // use numerical tolerance only; policy validation remains mandatory.
     standard_budget(policy, operation)?;
-    // EXPERIMENT ONLY: bypass the production default while measuring the
-    // actual classic Boolean numerical tolerance, independently of the
-    // caller's modeling-error budget and curve sampling density.
-    let override_length = std::env::var("MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH")
-        .ok()
-        .map(|value| {
-            let length: f64 = value.parse().unwrap_or_else(|error| {
-                eprintln!("invalid MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH={value:?}: {error}");
-                std::process::exit(2);
-            });
-            assert!(
-                length.is_finite() && length > 0.0,
-                "MT_EXPERIMENT_CLASSIC_NUMERIC_LENGTH must be finite and positive"
-            );
-            length
-        });
-    Ok(override_length.unwrap_or(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length))
+    Ok(DEFAULT_NUMERICAL_TOLERANCES.boolean_default_numeric_length)
 }
 
 const HALF_SPACE_CLIP_OPERATION: &str = "clip_half_space_z";
@@ -805,14 +789,19 @@ pub fn try_planar_contact_many<
     }
 }
 
-/// Union bounded coplanar material faces in one shared analytic plane.
+/// Evaluate a bounded Boolean expression in one shared analytic plane.
+///
+/// The predicate receives one occupancy flag per input face. It must be
+/// false outside every face; an empty selected region returns an empty
+/// shell rather than a refused arrangement.
 /// Disconnected regions remain separate faces, with their original line
 /// and curve edges. A refused arrangement returns `None`.
 ///
 /// # Errors
 /// Returns an error for an invalid or unsupported geometry policy.
-pub fn try_planar_profile_union<C, S>(
+pub fn try_planar_profile_boolean<C, S>(
     faces: &[Face<Point3, C, S>],
+    select: impl Fn(&[bool]) -> bool,
     policy: GeometryPolicy,
 ) -> ShapeOpsResult<Option<Shell<Point3, C, S>>>
 where
@@ -820,14 +809,14 @@ where
     S: ShapeOpsSurface,
     Plane: ToSameGeometry<S>,
 {
-    let tol = classic_boolean_tolerance(policy, "planar profile union")?;
+    let tol = classic_boolean_tolerance(policy, "planar profile Boolean")?;
     #[cfg(feature = "marching-ssi")]
     {
-        Ok(classic::planar_contact::profiles(faces, tol))
+        Ok(classic::planar_contact::profiles(faces, tol, select))
     }
     #[cfg(not(feature = "marching-ssi"))]
     {
-        let _ = (faces, tol);
+        let _ = (faces, tol, select);
         Ok(None)
     }
 }

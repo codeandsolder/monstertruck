@@ -30,7 +30,7 @@ pub struct CurveDerivatives<V> {
 impl<V> CurveDerivatives<V> {
     /// Constructs zeroed derivatives up to `max_order`, clamped to [`MAX_DER_ORDER`].
     #[inline]
-    #[must_use]
+    #[must_use = "retain the initialized curve derivative table"]
     pub fn new(max_order: usize) -> Self
     where V: Zero + Copy {
         Self {
@@ -66,7 +66,7 @@ impl<V> CurveDerivatives<V> {
     /// # }
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "use the next-order derivative table when evaluating a curve"]
     pub fn derivative(&self) -> Self
     where V: Zero + Copy {
         let mut array = [V::zero(); MAX_DER_ORDER + 1];
@@ -324,7 +324,7 @@ impl<V> CurveDerivatives<V> {
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
+    #[must_use = "handle missing derivative orders when converting the table to an array"]
     pub fn to_array<const LEN: usize>(self) -> Option<[V; LEN]>
     where V: Copy {
         if LEN > self.len() {
@@ -441,7 +441,7 @@ pub struct SurfaceDerivatives<V> {
 impl<V> SurfaceDerivatives<V> {
     /// Constructs zeroed derivatives up to `max_order`, clamped to [`MAX_DER_ORDER`].
     #[inline]
-    #[must_use]
+    #[must_use = "retain the initialized surface partial derivative table"]
     pub fn new(max_order: usize) -> Self
     where V: Zero + Copy {
         Self {
@@ -523,7 +523,7 @@ impl<V> SurfaceDerivatives<V> {
     /// # }
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "use the U-direction derivative table when evaluating surface partials"]
     pub fn derivative_u(&self) -> Self
     where V: Zero + Copy {
         let mut array = [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
@@ -560,7 +560,7 @@ impl<V> SurfaceDerivatives<V> {
     /// # }
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "use the V-direction derivative table when evaluating surface partials"]
     pub fn derivative_v(&self) -> Self
     where V: Zero + Copy {
         let mut array = [[V::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];

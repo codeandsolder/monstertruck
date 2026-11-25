@@ -15,19 +15,19 @@ use std::f64::consts::PI;
 impl Sphere {
     /// Creates a sphere
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(center: Point3, radius: f64) -> Self { Self { center, radius } }
     /// Returns the center
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the center."]
     pub const fn center(&self) -> Point3 { self.center }
     /// Returns the radius
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the radius."]
     pub const fn radius(&self) -> f64 { self.radius }
     /// Returns whether the point `pt` is on sphere
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the point `pt` is on sphere."]
     pub fn include(&self, pt: Point3) -> bool { self.center.distance(pt).near(&self.radius) }
 }
 

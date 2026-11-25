@@ -4,7 +4,7 @@
 use super::{
     AltCurve, AltRegion, Alternative, BooleanTolerance, Face, ShapeOpsCurve, ShapeOpsSurface,
     Shell, Solid,
-    planar_union::{overlay_one_source, overlay_planar_subtract},
+    planar_union::{overlay_planar_subtract, overlay_profile_selection},
     weld_and_convert,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -65,9 +65,9 @@ fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOps
         points.push(p);
         Some(())
     };
-    if surface.supports_exact_patch_domains() {
-        // Unlike an unbounded analytic surface's incidental profile range,
-        // a spline's intrinsic knot domain encloses the entire trimmed face.
+    if surface.homogeneous_net_covers_domain() {
+        // The complete geometric net encloses the entire trimmed face;
+        // its knot chart need not be the native surface chart.
         let net = surface.try_into_homogeneous_bspline_surface()?;
         for row in net.control_points() {
             for &control in row {
@@ -609,19 +609,23 @@ pub(in crate::transversal) fn difference_many<
     finish_union(&retained, tol)
 }
 
-/// Union co-oriented planar material regions, including overlapping profiles
-/// and disjoint islands. Every boundary's complete curve hull must lie on
+/// Select cells of co-oriented planar material regions, including overlapping
+/// profiles and disjoint islands. Every boundary's complete curve hull must lie on
 /// the common plane. Use a fresh plane chart rather than extending the
 /// finite patch of any one input face.
 pub(in crate::transversal) fn profiles<C, S>(
     faces: &[Face<Point3, C, S>],
     tol: f64,
+    select: impl Fn(&[bool]) -> bool,
 ) -> Option<Shell<Point3, C, S>>
 where
     C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve,
     S: ShapeOpsSurface,
     Plane: ToSameGeometry<S>,
 {
+    if select(&vec![false; faces.len()]) {
+        return None;
+    }
     let reference = Separator::from_face(faces.first()?)?;
     let surface = faces.first()?.oriented_surface();
     let AnalyticSurfaceKind::Plane(mut plane) = surface.try_into_analytic_surface_kind()? else {
@@ -656,11 +660,16 @@ where
             i,
         ));
     }
-    let union = overlay_one_source(&regions, tol)?;
+    let union = overlay_profile_selection(&regions, tol, select)?;
     if union.is_empty() {
-        return None;
+        return Some(Vec::new().into());
     }
-    weld_and_convert(&union, "planar profile union", BooleanTolerance::new(tol)).ok()
+    weld_and_convert(
+        &union,
+        "planar profile selection",
+        BooleanTolerance::new(tol),
+    )
+    .ok()
 }
 
 #[cfg(test)]
@@ -785,7 +794,10 @@ mod tests {
             profile::attach_plane_normalized(vec![circle(3.), circle(2.)]).unwrap();
         let disk: Face<Point3, Curve, Surface> =
             profile::attach_plane_normalized(vec![circle(1.)]).unwrap();
-        let regions = profiles(&[annulus, disk], 1e-6).expect("annulus and inner island");
+        let regions = profiles(&[annulus, disk], 1e-6, |inside| {
+            inside.iter().any(|&value| value)
+        })
+        .expect("annulus and inner island");
         assert_eq!(regions.len(), 2);
         let mut counts: Vec<_> = regions.iter().map(|face| face.boundaries().len()).collect();
         counts.sort_unstable();

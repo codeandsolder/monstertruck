@@ -318,7 +318,7 @@ pub trait ParameterTransform: BoundedCurve {
     /// let curve1 = curve0.parameter_transformed(1.0, 2.0);
     /// assert_eq!(curve1.evaluate(0.5), curve0.evaluate(2.5));
     /// ```
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     fn parameter_transformed(&self, scalar: f64, r#move: f64) -> Self {
         let mut curve = self.clone();
         curve.parameter_transform(scalar, r#move);
@@ -470,7 +470,7 @@ impl<C> From<CurveCollector<C>> for Option<C> {
 /// Cuts one curve into two curves.
 pub trait Cut: BoundedCurve {
     /// Cuts one curve into two curves. Assigns the former curve to `self` and returns the later curve.
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     fn cut(&mut self, t: f64) -> Self;
 }
 

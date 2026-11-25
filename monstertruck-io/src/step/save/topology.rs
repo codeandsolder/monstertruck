@@ -2,7 +2,8 @@ use super::{
     BooleanDisplay, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell,
     CompressedSolid, CompressedTrimmedShell, CompressedTrimmedSolid, Display, Formatter,
     IndexSliceDisplay, Result, StepCurve, StepDisplay, StepFormat, StepLength,
-    StepMeasurementContext, StepModel, StepModels, StepSurface,
+    StepMeasurementContext, StepModel, StepModelEntityIds, StepModels, StepShellEntityIds,
+    StepSurface,
 };
 trait StepAssociatedEntity {
     fn fmt(&self, idx: usize, formatter: &mut Formatter<'_>) -> Result;
@@ -787,7 +788,7 @@ where
     S: StepLength,
 {
     /// Creates a STEP model that exports only shared 3-dimensional edge curves.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_curve3d_only_shell(shell: &'a CompressedShell<P, C, S>) -> Self {
         Self(
             PreStepModel::Shell(StepShell::new_curve3d_only(shell, 17, true)),
@@ -796,7 +797,7 @@ where
     }
 
     /// Creates a STEP model that exports only shared 3-dimensional edge curves.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_curve3d_only_solid(solid: &'a CompressedSolid<P, C, S>) -> Self {
         Self(
             PreStepModel::Solid(StepSolid::new_curve3d_only(solid, 16)),
@@ -807,14 +808,14 @@ where
     /// Overrides the length unit and distance accuracy written into the
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
-    #[must_use]
+    #[must_use = "The returned writer carries the requested source measurement context; it must be retained."]
     pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.1 = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the length unit and distance accuracy written into the preamble."]
     pub const fn measurement_context(&self) -> StepMeasurementContext { self.1 }
 }
 
@@ -839,6 +840,30 @@ where
 {
     fn from(solid: &'a CompressedTrimmedSolid<P, C, S, T>) -> Self {
         Self(solid.into(), StepMeasurementContext::default())
+    }
+}
+
+impl<P, C, S> StepModel<'_, P, C, S> {
+    /// Obtain the same entity indices that the formatter will emit, rather
+    /// than reconstructing them from geometric equality or reimport order.
+    #[must_use = "The exact STEP entity identifiers to be emitted by the formatter are returned."]
+    pub fn topology_entity_ids(&self) -> StepModelEntityIds {
+        let (root, shells) = match &self.0 {
+            PreStepModel::Shell(shell) => (16, std::slice::from_ref(shell)),
+            PreStepModel::Solid(solid) => (solid.idx, solid.boundaries.as_slice()),
+        };
+        StepModelEntityIds {
+            root,
+            shells: shells
+                .iter()
+                .map(|shell| StepShellEntityIds {
+                    shell: shell.idx,
+                    vertices: shell.ep_vertices..shell.ep_vertices + shell.vertices.len(),
+                    edges: shell.ep_edges..shell.ep_edges + shell.edges.len(),
+                    faces: shell.face_indices.clone(),
+                })
+                .collect(),
+        }
     }
 }
 
@@ -894,20 +919,20 @@ where
     S: StepLength,
 {
     /// The next available entity index after all pushed models.
-    #[must_use]
+    #[must_use = "The computed next idx quantity is reported through this return value."]
     pub const fn next_idx(&self) -> usize { self.next_idx }
 
     /// Overrides the length unit and distance accuracy written into the
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
-    #[must_use]
+    #[must_use = "The returned writer carries the requested source measurement context; it must be retained."]
     pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.measurement_context = context;
         self
     }
 
     /// Returns the length unit and distance accuracy written into the preamble.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the length unit and distance accuracy written into the preamble."]
     pub const fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
     /// push a shell to step models
     pub fn push_shell(&mut self, shell: &'a CompressedShell<P, C, S>) {

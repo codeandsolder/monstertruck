@@ -758,6 +758,42 @@ fn periodic_cylinder_loop_spanning_two_laps_collapses_to_one_lap() {
 }
 
 #[test]
+fn winding_contains_thin_interior_without_admitting_boundary_or_hole() {
+    let surface = Plane::xy();
+    let boundary = PolyBoundary::new(
+        vec![
+            square_piece(&surface, 0.0, 1.0, true),
+            square_piece(&surface, 0.25, 0.75, false),
+        ],
+        &surface,
+        0.01,
+    );
+    for point in [
+        Point2::new(0.5, 1e-12),
+        Point2::new(0.5, 1.0 - 1e-12),
+        Point2::new(0.25 - 1e-12, 0.5),
+    ] {
+        assert!(boundary.include(point), "{point:?} is strictly interior");
+        assert!(
+            !boundary.include_grid_sample(point),
+            "{point:?} is too close to an existing trim for a generated grid vertex"
+        );
+    }
+    for point in [
+        Point2::new(0.5, 0.0),
+        Point2::new(1.0, 0.5),
+        Point2::new(0.25, 0.5),
+        Point2::new(0.25 + 1e-12, 0.5),
+        Point2::new(0.5, -1e-12),
+    ] {
+        assert!(
+            !boundary.include(point),
+            "{point:?} is on or outside the domain"
+        );
+    }
+}
+
+#[test]
 fn trimming_tessellation_is_invariant_to_annulus_loop_winding() {
     let surface = Plane::xy();
     let canonical = PolyBoundary::new(

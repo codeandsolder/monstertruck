@@ -2,9 +2,11 @@
 
 This directory is the regression suite for step-redox.
 
-Upstream CAD files are not stored in git. The fixture manifest records public
-download URLs, SHA-256 checksums, and source notes. CI downloads a fixture only
-when it is absent from its private cache and rejects it if the checksum changes.
+The fixture manifest records public download URLs, SHA-256 checksums, and source
+notes. Raw upstream STEP files are not committed; compressed fixture bundles
+provide reproducible offline acquisition. The Rust validator verifies cached
+files and bundled decompression results before accepting them, and uses the
+recorded download URLs only when the bundle and verified cache are unavailable.
 
 Each case runs step-redox or the semantic count-generator CLI and validates
 the result with several independent signals. The same manifest therefore covers
@@ -25,28 +27,47 @@ independently published sibling model.
 
 For mapped multi-solid assemblies, OpenCascade's one-shot compound volume can differ by several ppm even when every imported solid matches independently to numerical noise. The harness therefore keeps the compound integral visible but uses the summed per-solid volume as the stricter occupied-material invariant.
 
-OCCT performs tessellation, but rendering is done in software with Pillow.
-There is no OpenGL/GPU/display-server dependency, so CI images should be
-deterministic and easy to inspect as artifacts.
+The independent embedded OCCT-WASM kernel performs tessellation. A Rust
+software rasterizer generates the reference, candidate and difference images
+without GPU or display-server dependencies. See the
+[validator documentation](../tools/occt-wasm-validator/README.md).
 
 Thresholds are explicit per test case in fixtures.json. Exact topology can be
 required independently from geometric tolerances. A case comparing two
 independent vendor models may use bbox-center alignment to permit a known rigid
 translation without permitting scaling or shape changes.
 
-Local invocation:
+Local invocation from the workspace root:
 
-    uv sync --frozen
-    cargo build --release --bin step-redox --bin step-count-resize
-    uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
-      --manifest validation/fixtures.json \
-      --cache .cache/step-redox-validation \
-      --out validation/out \
+    cargo build --release -p step-redox --features cad-kernel-monstertruck \
+      --bin step-redox --bin step-count-resize --bin step-chain-resize --bin step-validate-semantics
+    cargo build --release --locked \
+      --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml
+    step-redox/tools/occt-wasm-validator/target/release/step-redox-occt-wasm-validator run \
+      --manifest step-redox/validation/fixtures.json \
+      --cache step-redox/.cache/step-redox-validation \
+      --out step-redox/validation/out \
       --step-redox target/release/step-redox \
-      --step-count-resize target/release/step-count-resize
+      --step-count-resize target/release/step-count-resize \
+      --step-chain-resize target/release/step-chain-resize
 
-CI uploads validation/out as an artifact, including report.json, summary.md, and
-the reference/candidate/difference image triplets for every camera.
+The executable paths are explicit: use your actual exported artifact paths
+when building with a managed Cargo wrapper. The runner skips disabled
+manifest cases; repeat `--case NAME` for a targeted subset.
+
+After fixture acquisition, run the independent semantic probe:
+
+    target/release/step-validate-semantics \
+      --manifest step-redox/validation/fixtures.json \
+      --cache step-redox/.cache/step-redox-validation \
+      --out step-redox/validation/out/semantic-probes \
+      --step-redox target/release/step-redox
+
+It checks the cached fixture hashes independently before testing periodic-chain
+topology, CAD proof provenance, instance patterns, and formed-sheet metadata.
+
+The release workflow retains the aggregate report.json, summary.md, per-case
+reports and reference/candidate/difference images as an artifact.
 
 Fixture policy:
 

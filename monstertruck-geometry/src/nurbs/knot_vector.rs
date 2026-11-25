@@ -14,7 +14,7 @@ fn inv_or_zero_strict(delta: f64) -> f64 { if delta.is_zero() { 0.0 } else { 1.0
 
 impl KnotVector {
     /// empty constructor
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self { Self(Vec::new()) }
 
     /// Returns the length of range.
@@ -25,7 +25,7 @@ impl KnotVector {
     /// assert_eq!(knot_vec.range_length(), 6.0);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the length of range."]
     pub fn range_length(&self) -> f64 {
         if self.is_empty() {
             0.0
@@ -48,7 +48,7 @@ impl KnotVector {
     /// assert!(!knot_vec1.same_range(&knot_vec3));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether two knot vectors have the same range."]
     pub fn same_range(&self, other: &Self) -> bool {
         match (self.is_empty(), other.is_empty()) {
             (false, false) => {
@@ -73,7 +73,7 @@ impl KnotVector {
     /// assert_eq!(idx, 2);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the maximum index `i` of `self[i] <= x` Return `None` if `x < self[0] or self.len() == 0`."]
     pub fn floor(&self, x: f64) -> Option<usize> { self.iter().rposition(|t| *t <= x) }
 
     /// Returns the multiplicity of the `i`th knot
@@ -84,7 +84,7 @@ impl KnotVector {
     /// assert_eq!(knot_vec.multiplicity(5), 3);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the multiplicity of the `i`th knot."]
     pub fn multiplicity(&self, i: usize) -> usize {
         self.iter().filter(|u| self[i].near(u)).count()
     }
@@ -477,7 +477,7 @@ impl KnotVector {
     /// assert!(!knot_vec.is_clamped(3));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vector is clamped."]
     pub fn is_clamped(&self, degree: usize) -> bool {
         if self.is_empty() || self.len() <= degree {
             return false;
@@ -542,7 +542,7 @@ impl KnotVector {
     /// assert_eq!(sub_vec, KnotVector::from(vec![1.0, 2.0]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards trimmed vector by the specified range."]
     pub fn sub_vec<I: SliceIndex<[f64], Output = [f64]>>(&self, range: I) -> Self {
         Self(Vec::from(&self.0[range]))
     }
@@ -557,7 +557,7 @@ impl KnotVector {
     /// assert_eq!(knots, vec![0.0, 1.0, 2.0, 3.0]);
     /// assert_eq!(mults, vec![3, 1, 4, 2]);
     /// ```
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_single_multi(&self) -> (Vec<f64>, Vec<usize>) {
         let mut knots = Vec::new();
         let mut mults = Vec::new();
@@ -632,7 +632,7 @@ impl KnotVector {
     ///     vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed knot vector for the bezier spline is returned rather than stored."]
     pub fn bezier_knot(degree: usize) -> Self {
         let mut vec = vec![0.0; degree + 1];
         vec.extend(std::iter::repeat_n(1.0, degree + 1));
@@ -648,7 +648,7 @@ impl KnotVector {
     ///     vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed uniform knot vector is returned rather than stored."]
     pub fn uniform_knot(degree: usize, division: usize) -> Self {
         let mut vec = vec![0.0; degree + 1];
         vec.extend((1..division).map(|i| crate::usize_to_f64(i) / crate::usize_to_f64(division)));

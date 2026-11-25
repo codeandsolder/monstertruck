@@ -1,13 +1,8 @@
-#![expect(
-    clippy::many_single_char_names,
-    reason = "triangulation formulas conventionally use compact geometric variable names"
-)]
-
 use super::{
     BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace,
     CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
     ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
-    ExactParameterBoundary2D, Face, Faces, HashGen, InnerFaceIterator, InnerSpace, Invertible,
+    ExactParameterBoundary2D, Face, Faces, InnerFaceIterator, InnerSpace, Invertible,
     IsoparametricCurveOptions, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace,
     Origin, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
     ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
@@ -20,6 +15,7 @@ use super::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use crate::Point2;
+use crate::common::point_segment_distance2;
 use crate::filters::StructuringFilter;
 use array_macro::array;
 use handles::FixedVertexHandle;
@@ -339,18 +335,6 @@ where
         points.reverse();
     }
     Some(monstertruck_mesh::PolylineCurve(points))
-}
-
-fn point_segment_distance2(point: Point3, front: Point3, back: Point3) -> f64 {
-    let segment = back - front;
-    let denom = segment.dot(segment);
-    if denom.so_small() {
-        point.distance2(front)
-    } else {
-        let t = ((point - front).dot(segment) / denom).clamp(0.0, 1.0);
-        let nearest = front + segment * t;
-        point.distance2(nearest)
-    }
 }
 
 fn simplify_parameter_boundary<S>(

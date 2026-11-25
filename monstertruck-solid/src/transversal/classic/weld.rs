@@ -60,8 +60,9 @@ type AltEdge<C, S> = Edge<Point3, AltCurve<C, S>>;
 type VertexKey = VertexId<Point3>;
 type SourceEdgeId<C, S> = EdgeId<AltCurve<C, S>>;
 type SourceVertexId = VertexId<Point3>;
-type SourceEdgeEvidence = (SourceVertexId, SourceVertexId, Point3);
-type RebuiltEdgeCache<C, S> = HashMap<(SourceEdgeId<C, S>, bool), Vec<AltEdge<C, S>>>;
+type SourceVertex = (SourceVertexId, Point3);
+type SourceEdgeEvidence = (SourceVertexId, Point3);
+type RebuiltEdgeCache<C, S> = HashMap<SourceEdgeId<C, S>, (bool, Vec<AltEdge<C, S>>)>;
 
 // Weld representatives are geometric, not HashMap/EdgeId insertion-order
 // choices. A full ordering is necessary near tolerance-cell boundaries.
@@ -101,12 +102,64 @@ fn curves_sampled_coincident<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             == CurveCoincidence::SampledValidation
 }
 
+/// Immutable source graph, with a separate ordered point index for each
+/// coordinate. A certified curve enclosure bounds the query on every axis;
+/// choose the smallest interval and retain the exact existing 3D filter.
+struct SourceIncidence {
+    vertices: [Vec<SourceVertex>; 3],
+    outgoing: HashMap<SourceVertexId, Vec<SourceEdgeEvidence>>,
+}
+
+impl SourceIncidence {
+    fn new(
+        vertices: HashMap<SourceVertexId, Point3>,
+        edges: impl IntoIterator<Item = (SourceVertexId, SourceVertexId, Point3)>,
+    ) -> Option<Self> {
+        if vertices.values().any(|&point| !finite_point(point)) {
+            return None;
+        }
+        let points = vertices.into_iter().collect::<Vec<_>>();
+        let vertices = std::array::from_fn(|axis| {
+            let mut sorted = points.clone();
+            sorted.sort_by(|a, b| {
+                a.1[axis]
+                    .total_cmp(&b.1[axis])
+                    .then_with(|| point_lex_cmp(&a.1, &b.1))
+            });
+            sorted
+        });
+        let mut outgoing = HashMap::<_, Vec<_>>::new();
+        for (front, back, midpoint) in edges {
+            outgoing.entry(front).or_default().push((back, midpoint));
+        }
+        Some(Self { vertices, outgoing })
+    }
+
+    fn candidate_vertices(&self, bounds: Option<BoundingBox<Point3>>, pad: f64) -> &[SourceVertex] {
+        let Some(bounds) = bounds else {
+            return &self.vertices[0];
+        };
+        let min = bounds.min();
+        let max = bounds.max();
+        (0..3)
+            .map(|axis| {
+                let sorted = &self.vertices[axis];
+                let lo = min[axis] - pad;
+                let hi = max[axis] + pad;
+                let start = sorted.partition_point(|(_, point)| point[axis] < lo);
+                let end = sorted.partition_point(|(_, point)| point[axis] <= hi);
+                &sorted[start..end.max(start)]
+            })
+            .min_by_key(|slice| slice.len())
+            .unwrap_or(&self.vertices[0])
+    }
+}
+
 struct WeldContext<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> {
     vertices_by_x: BTreeMap<SpatialX, Vec<Vertex<Point3>>>,
     tolerances: BooleanTolerance,
     edges: HashMap<(VertexKey, VertexKey), Vec<AltEdge<C, S>>>,
-    source_vertex_points: HashMap<SourceVertexId, Point3>,
-    source_edges: Vec<SourceEdgeEvidence>,
+    source: SourceIncidence,
     additional_nodes: Vec<Point3>,
     // An edge can occur in multiple selected face regions. Splitting it is
     // purely a function of the fixed input graph and canonical vertex set.
@@ -136,38 +189,25 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 .entry(absolute.id())
                 .or_insert_with(|| (front.id(), back.id(), absolute.oriented_curve()));
         }
-        let mut source_edges = source_edges_by_id
+        let source_edges = source_edges_by_id
             .into_values()
             .map(|(front, back, curve)| {
                 let (t0, t1) = curve.range_tuple();
                 (front, back, curve.evaluate(f64::midpoint(t0, t1)))
-            })
-            .collect::<Vec<_>>();
-        // When independently imported edges have endpoints within the weld
-        // tolerance, the first representative must not depend on randomized
-        // source IDs or the iteration order of the hash table.
-        source_edges.sort_by(|a, b| {
-            point_lex_cmp(&source_vertex_points[&a.0], &source_vertex_points[&b.0])
-                .then_with(|| {
-                    point_lex_cmp(&source_vertex_points[&a.1], &source_vertex_points[&b.1])
-                })
-                .then_with(|| point_lex_cmp(&a.2, &b.2))
-        });
+            });
+        let source = SourceIncidence::new(source_vertex_points, source_edges)?;
         let mut context = Self {
             vertices_by_x: BTreeMap::new(),
             tolerances,
             edges: HashMap::new(),
-            source_vertex_points,
-            source_edges,
+            source,
             additional_nodes: Vec::new(),
             rebuilt_edges: HashMap::default(),
         };
-        let mut source_points = context
-            .source_vertex_points
-            .values()
-            .copied()
+        let source_points = context.source.vertices[0]
+            .iter()
+            .map(|&(_, point)| point)
             .collect::<Vec<_>>();
-        source_points.sort_by(point_lex_cmp);
         for point in source_points {
             context.canonical_vertex(point)?;
         }
@@ -239,6 +279,7 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             curve
                 .search_parameter(point, None, 100)
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
+                .and_then(|seed| super::curve_refinement::point_parameter(curve, point, seed))
                 .filter(|&parameter| {
                     parameter.is_finite()
                         && curve.evaluate(parameter).distance(point) <= self.tolerances.length
@@ -247,11 +288,12 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
         let projection_pad =
             DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * self.tolerances.length;
         let projected_vertices = self
-            .source_vertex_points
+            .source
+            .candidate_vertices(curve_bounds, projection_pad)
             .iter()
             .filter(|(_, point)| {
                 curve_bounds
-                    .is_none_or(|bounds| point_inside_padded_box(bounds, **point, projection_pad))
+                    .is_none_or(|bounds| point_inside_padded_box(bounds, *point, projection_pad))
             })
             .filter_map(|(id, point)| {
                 parameter_on_curve(*point).map(|parameter| (*id, (*point, parameter)))
@@ -276,25 +318,34 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 }
             }
         }
-        for (candidate_front, candidate_back, candidate_midpoint) in &self.source_edges {
-            let Some(&(front_point, front_parameter)) = projected_vertices.get(candidate_front)
-            else {
-                continue;
-            };
-            let Some(&(back_point, back_parameter)) = projected_vertices.get(candidate_back) else {
-                continue;
-            };
-            if curve_bounds.is_some_and(|bounds| {
-                !point_inside_padded_box(bounds, *candidate_midpoint, projection_pad)
-            }) || parameter_on_curve(*candidate_midpoint).is_none()
+        // Only source edges whose two endpoints project to this curve can
+        // supply segment evidence. Follow the source adjacency instead of
+        // scanning unrelated edges on every noding operation.
+        for (candidate_front, &(front_point, front_parameter)) in &projected_vertices {
+            for (candidate_back, candidate_midpoint) in self
+                .source
+                .outgoing
+                .get(candidate_front)
+                .into_iter()
+                .flatten()
             {
-                continue;
-            }
-            for (point, parameter) in [(front_point, front_parameter), (back_point, back_parameter)]
-            {
-                let progress = (parameter - t0) / span;
-                if progress > 0.0 && progress < 1.0 {
-                    raw_splits.push((progress, parameter, point));
+                let Some(&(back_point, back_parameter)) = projected_vertices.get(candidate_back)
+                else {
+                    continue;
+                };
+                if curve_bounds.is_some_and(|bounds| {
+                    !point_inside_padded_box(bounds, *candidate_midpoint, projection_pad)
+                }) || parameter_on_curve(*candidate_midpoint).is_none()
+                {
+                    continue;
+                }
+                for (point, parameter) in
+                    [(front_point, front_parameter), (back_point, back_parameter)]
+                {
+                    let progress = (parameter - t0) / span;
+                    if progress > 0.0 && progress < 1.0 {
+                        raw_splits.push((progress, parameter, point));
+                    }
                 }
             }
         }
@@ -320,13 +371,20 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
     }
 
     fn rebuild_edge(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
-        let key = (edge.id(), edge.orientation());
-        if let Some(rebuilt) = self.rebuilt_edges.get(&key) {
-            return Some(rebuilt.clone());
+        let key = edge.id();
+        let orientation = edge.orientation();
+        if !self.rebuilt_edges.contains_key(&key) {
+            // Preserve the traversal in which the edge is first admitted to
+            // the weld. Subsequent uses must share the resulting topology.
+            let rebuilt = self.rebuild_edge_uncached(edge)?;
+            self.rebuilt_edges.insert(key, (orientation, rebuilt));
         }
-        let rebuilt = self.rebuild_edge_uncached(edge)?;
-        self.rebuilt_edges.insert(key, rebuilt.clone());
-        Some(rebuilt)
+        let (first_orientation, rebuilt) = self.rebuilt_edges.get(&key)?;
+        Some(if orientation == *first_orientation {
+            rebuilt.clone()
+        } else {
+            rebuilt.iter().rev().map(Edge::inverse).collect()
+        })
     }
 
     fn rebuild_edge_uncached(&mut self, edge: &AltEdge<C, S>) -> Option<Vec<AltEdge<C, S>>> {
@@ -361,6 +419,9 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                 remaining
                     .search_parameter(point, None, 100)
                     .or_else(|| remaining.search_nearest_parameter(point, None, 100))
+                    .and_then(|seed| {
+                        super::curve_refinement::point_parameter(&remaining, point, seed)
+                    })
                     .filter(|&t| on_remaining(t))?
             };
             let later = remaining.cut(parameter);
@@ -539,7 +600,59 @@ mod weld_tests {
     }
 
     #[test]
-    fn repeated_source_edge_reuses_exact_canonical_segments_per_orientation() {
+    fn indexed_source_vertices_match_full_enclosure_filter() {
+        let vertices = (-5..=5)
+            .flat_map(|x| {
+                (-4..=4).flat_map(move |y| {
+                    [-0.0, 0.0, 1.0]
+                        .into_iter()
+                        .map(move |z| Vertex::new(Point3::new(f64::from(x), f64::from(y), z)))
+                })
+            })
+            .collect::<Vec<_>>();
+        let points = vertices
+            .iter()
+            .map(|vertex| (vertex.id(), vertex.point()))
+            .collect::<HashMap<_, _>>();
+        let edges = vertices
+            .windows(2)
+            .map(|pair| (pair[0].id(), pair[1].id(), pair[0].point()));
+        let index = SourceIncidence::new(points.clone(), edges).expect("finite input graph");
+        assert_eq!(index.candidate_vertices(None, 0.).len(), points.len());
+        for (lo, hi, pad) in [
+            (Point3::new(-3., -0.5, -0.), Point3::new(3., 0.5, 0.), 0.),
+            (Point3::new(-0.25, -4., 0.), Point3::new(0.25, 4., 1.), 0.),
+            (Point3::new(-4., -4., 0.9), Point3::new(4., 4., 1.), 0.05),
+            (Point3::new(-1.5, -1.5, -1.), Point3::new(1.5, 1.5, 1.), 0.5),
+            (Point3::new(10., -4., 0.), Point3::new(11., 4., 1.), 0.),
+        ] {
+            let mut bounds = BoundingBox::new();
+            bounds.push(lo);
+            bounds.push(hi);
+            let actual = index
+                .candidate_vertices(Some(bounds), pad)
+                .iter()
+                .filter(|(_, point)| point_inside_padded_box(bounds, *point, pad))
+                .map(|(id, _)| *id)
+                .collect::<std::collections::HashSet<_>>();
+            let expected = points
+                .iter()
+                .filter(|(_, point)| point_inside_padded_box(bounds, **point, pad))
+                .map(|(id, _)| *id)
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(actual, expected);
+        }
+        // Preserve distinct source identities including coincident vertices.
+        for pair in vertices.windows(2) {
+            assert_eq!(
+                index.outgoing[&pair[0].id()],
+                vec![(pair[1].id(), pair[0].point())]
+            );
+        }
+    }
+
+    #[test]
+    fn source_edge_has_one_subdivision_for_both_orientations() {
         let endpoints =
             Vertex::from_points([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
         let original = Edge::new_unchecked(
@@ -551,19 +664,20 @@ mod weld_tests {
             WeldContext::new(&[], BooleanTolerance::new(1.0e-6))
                 .expect("empty input has a valid welding context");
         context.additional_nodes.push(Point3::new(0.5, 0.0, 0.0));
-        let first = context.rebuild_edge(&original).expect("exact split");
-        let second = context.rebuild_edge(&original).expect("cached split");
-        assert_eq!(first.len(), 2);
-        assert_eq!(
-            first.iter().map(Edge::id).collect::<Vec<_>>(),
-            second.iter().map(Edge::id).collect::<Vec<_>>()
-        );
-        assert_eq!(context.rebuilt_edges.len(), 1);
+        // Exercise reverse-first visitation too: both incident faces
+        // must share the same subdivision and edge identities.
         let reversed = context
             .rebuild_edge(&original.inverse())
             .expect("inverse split");
-        assert_eq!(reversed.len(), 2);
-        assert_eq!(context.rebuilt_edges.len(), 2);
+        let first = context.rebuild_edge(&original).expect("exact split");
+        let second = context.rebuild_edge(&original).expect("cached split");
+        assert_eq!(first.len(), 2);
+        assert_eq!(first, second);
+        assert_eq!(context.rebuilt_edges.len(), 1);
+        assert_eq!(
+            reversed,
+            first.iter().rev().map(Edge::inverse).collect::<Vec<_>>()
+        );
         assert_eq!(first[0].front().point(), reversed[1].back().point());
         assert_eq!(first[1].back().point(), reversed[0].front().point());
     }

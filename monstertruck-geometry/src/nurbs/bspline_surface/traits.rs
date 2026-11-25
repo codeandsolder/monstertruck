@@ -1,6 +1,6 @@
 use super::super::curve_inclusion;
 use super::{
-    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
+    Bounded, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
     EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KnotVector, Matrix2,
     Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION, ParameterDivision2D,
     ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
@@ -107,7 +107,9 @@ where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
         + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
-        + MetricSpace<Metric = f64>,
+        + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + 'static,
     <P as ControlPoint<f64>>::Diff: SearchNearestParameterVector<Point = P>,
 {
     type Point = P;
@@ -128,6 +130,8 @@ where
         + ControlPoint<f64>
         + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + 'static
         + Tolerance,
     <P as ControlPoint<f64>>::Diff: SearchParameterVector<Point = P>,
 {
@@ -148,11 +152,28 @@ impl<V: Clone> Invertible for BsplineSurface<V> {
     fn invert(&mut self) { self.swap_axes(); }
 }
 
+impl<P> BsplineSurface<P>
+where P: ControlPoint<f64> + Bounded<Scalar = f64> + 'static
+{
+    fn presearch_separable(&self, point: P, range: SurfaceParameterRange) -> (f64, f64) {
+        super::super::presearch_grid::presearch::<_, _, false>(
+            self,
+            self,
+            point,
+            range,
+            PRESEARCH_DIVISION,
+            std::convert::identity,
+        )
+    }
+}
+
 impl<P, V> SearchParameter<SurfaceParameter> for BsplineSurface<P>
 where
     P: ControlPoint<f64, Diff = V>
         + EuclideanSpace<Scalar = f64, Diff = V>
         + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + 'static
         + Tolerance,
     V: SearchParameterVector<Point = P>,
 {
@@ -163,15 +184,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                algo::surface::presearch(self, point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                algo::surface::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
+        let hint = super::super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range),
+        );
         algo::surface::search_parameter(self, point, hint, trials)
     }
 }
@@ -180,7 +197,9 @@ impl<P> SearchNearestParameter<SurfaceParameter> for BsplineSurface<P>
 where
     P: ControlPoint<f64>
         + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
-        + MetricSpace<Metric = f64>,
+        + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + 'static,
     <P as ControlPoint<f64>>::Diff: SearchNearestParameterVector<Point = P>,
 {
     type Point = P;
@@ -190,15 +209,11 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                algo::surface::presearch(self, point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                algo::surface::presearch(self, point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
+        let hint = super::super::presearch_grid::resolve_hint(
+            hint.into(),
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range),
+        );
         algo::surface::search_nearest_parameter(self, point, hint, trials)
     }
 }
@@ -216,6 +231,8 @@ where
     P: ControlPoint<f64>
         + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
+        + Bounded<Scalar = f64>
+        + 'static
         + Tolerance,
     <P as ControlPoint<f64>>::Diff: SearchParameterVector<Point = P>,
     C: ParametricCurve<Point = P>,
@@ -228,9 +245,8 @@ where
         (surface.knot_vector_u(), surface.knot_vector_v()),
         degree,
         |point, previous| {
-            let seed = previous.unwrap_or_else(|| {
-                algo::surface::presearch(surface, point, surface.range_tuple(), PRESEARCH_DIVISION)
-            });
+            let seed = previous
+                .unwrap_or_else(|| surface.presearch_separable(point, surface.range_tuple()));
             algo::surface::search_parameter(surface, point, seed, INCLUDE_CURVE_TRIALS)
         },
     )

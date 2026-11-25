@@ -20,10 +20,10 @@ impl GeometryPolicy {
     pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
         DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
 
-    #[must_use]
+    #[must_use = "The returned policy configures the requested millimeter tolerance."]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
 
-    #[must_use]
+    #[must_use = "The returned policy carries the project's standard geometry tolerances."]
     pub const fn project_standard() -> Self {
         Self::standard_mm(Self::PROJECT_STANDARD_TOLERANCE_MM)
     }
@@ -41,7 +41,7 @@ impl KernelSummary {
     ///
     /// The evaluated value already owns a single native Solid; re-exporting
     /// it to STEP and reparsing entities adds no geometric information.
-    #[must_use]
+    #[must_use = "The returned boolean identifies whether exactly one solid was recovered."]
     pub const fn is_single_solid(self) -> bool {
         self.geometrically_consistent && self.shells == 1 && self.faces != 0
     }
@@ -100,9 +100,10 @@ pub mod monstertruck {
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
         Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, primitive, profile,
     };
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     mod circular_selection;
+    mod parallel_prisms;
     mod planar_loft;
 
     #[derive(Debug, Clone, Copy)]
@@ -111,18 +112,18 @@ pub mod monstertruck {
     }
 
     impl MonstertruckKernel {
-        #[must_use]
+        #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
         pub const fn new(policy: GeometryPolicy) -> Self { Self { policy } }
 
-        #[must_use]
+        #[must_use = "The equivalence policy value is returned for subsequent geometric comparisons."]
         pub const fn equivalent() -> Self { Self::new(GeometryPolicy::Equivalent) }
 
-        #[must_use]
+        #[must_use = "The returned policy configures the requested millimeter tolerance."]
         pub const fn standard_mm(tolerance_mm: f64) -> Self {
             Self::new(GeometryPolicy::standard_mm(tolerance_mm))
         }
 
-        #[must_use]
+        #[must_use = "The returned policy carries the project's standard geometry tolerances."]
         pub const fn project_standard() -> Self { Self::new(GeometryPolicy::project_standard()) }
     }
 
@@ -396,7 +397,30 @@ pub mod monstertruck {
         if let Some(error) = first_error.into_inner() {
             return Err(error).context("STEP intersection geometry conversion failed");
         }
-        exported.context("STEP export could not reconstruct original solid topology")
+        let exported =
+            exported.context("STEP export could not reconstruct original solid topology")?;
+        // A spherical analytic carrier has a different chart from its
+        // rational meridian. Rechart only faces with independently certified
+        // spatial edges; projected/parameter curves retain their own carrier.
+        // try_mapped created detached face geometry, so this cannot modify
+        // the evaluated CAD solid or its original trim data.
+        let tolerance = tolerance.min(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM);
+        for face in exported.face_iter() {
+            let Surface::Revolution(revolution) = face.surface() else {
+                continue;
+            };
+            let Some(sphere) = revolution.try_certified_sphere(tolerance) else {
+                continue;
+            };
+            let surface = Surface::Sphere(sphere);
+            if face.edge_iter().all(|edge| {
+                certify_analytic_curve_on_surface(&edge.curve(), &surface, tolerance)
+                    == CurveIncidence::Proven
+            }) {
+                face.set_surface(surface);
+            }
+        }
+        Ok(exported)
     }
 
     /// Opaque wrapper: Monstertruck topology does not escape the backend module.
@@ -1162,99 +1186,6 @@ pub mod monstertruck {
         }
     }
 
-    /// Extract a prism's generating profile and exact placement, without
-    /// evaluating a solid. A union of coextensive prisms distributively
-    /// equals extrusion of the union of their planar profiles.
-    fn placed_prism(model: &CadModel, mut id: NodeId) -> Option<(&Profile2d, f64, Matrix4)> {
-        let mut transform = rigid_matrix(&RigidTransform::identity());
-        let node = loop {
-            match model.node(id).ok()? {
-                CadNode::Transform {
-                    child,
-                    transform: local,
-                } => {
-                    transform = transform * rigid_matrix(local);
-                    id = *child;
-                }
-                node => break node,
-            }
-        };
-        let CadNode::Extrude {
-            profile,
-            vector_mm: [x, y, z],
-        } = node
-        else {
-            return None;
-        };
-        (*x == 0.0 && *y == 0.0 && z.is_finite() && *z != 0.0).then_some((profile, *z, transform))
-    }
-
-    fn coextensive_prism_union(
-        model: &CadModel,
-        children: &[NodeId],
-        policy: GeometryPolicy,
-    ) -> Result<Option<Solid>> {
-        if children.len() < 2 {
-            return Ok(None);
-        }
-        let mut pending = children.to_vec();
-        let mut seen = HashSet::new();
-        let mut prisms = Vec::new();
-        while let Some(id) = pending.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            if let CadNode::Boolean {
-                op: BooleanOp::Union,
-                children,
-            } = model.node(id)?
-            {
-                pending.extend(children.iter().copied());
-            } else if let Some(prism) = placed_prism(model, id) {
-                prisms.push(prism);
-            } else {
-                return Ok(None);
-            }
-        }
-        let Some(&(_, length, transform)) = prisms.first() else {
-            return Ok(None);
-        };
-        if prisms
-            .iter()
-            .any(|(_, l, t)| l.to_bits() != length.to_bits() || *t != transform)
-        {
-            return Ok(None);
-        }
-        let mut faces = Vec::with_capacity(prisms.len());
-        for (profile, _, _) in prisms {
-            let face: monstertruck_modeling::Face =
-                profile::attach_plane_normalized(profile_wires(profile)?)?;
-            let mut face = face;
-            let Surface::Plane(plane) = face.oriented_surface() else {
-                return Ok(None);
-            };
-            // A shared plane chart must have an unambiguous common sense.
-            // The final extrusion uses the same local positive/negative Z
-            // orientation contract as an individual prism.
-            if plane.normal().z * length < 0.0 {
-                face.invert();
-            }
-            faces.push(face);
-        }
-        let Some(united) =
-            monstertruck_solid::try_planar_profile_union(&faces, monstertruck_policy(policy))?
-        else {
-            return Ok(None);
-        };
-        let mut boundaries = Vec::new();
-        for face in &united {
-            let solid: Solid = builder::extrude(face, Vector3::new(0.0, 0.0, length));
-            boundaries.extend(solid.into_boundaries());
-        }
-        let joined = Solid::new(boundaries)?;
-        Ok(Some(builder::transformed(&joined, transform)))
-    }
-
     fn evaluate_boolean(
         model: &CadModel,
         op: BooleanOp,
@@ -1262,9 +1193,7 @@ pub mod monstertruck {
         policy: GeometryPolicy,
         cache: &mut EvaluationCache,
     ) -> Result<Solid> {
-        if op == BooleanOp::Union
-            && let Some(result) = coextensive_prism_union(model, children, policy)?
-        {
+        if let Some(result) = parallel_prisms::evaluate(model, op, children, policy)? {
             return Ok(result);
         }
         if matches!(op, BooleanOp::Union | BooleanOp::Difference) && children.len() > 2 {
@@ -3246,6 +3175,60 @@ pub mod monstertruck {
                     .context("sectional reference must have certified planar contact")?,
             };
             assert_same_analytic_boundary(&kernel, &actual, &expected)
+        }
+
+        #[test]
+        fn bounded_revolution_bosses_use_certified_planar_contact() -> Result<()> {
+            use crate::cad_ir::ProfileLoop;
+            let profile = Profile2d {
+                loops: vec![ProfileLoop {
+                    curves: vec![
+                        Curve2d::Line {
+                            start_mm: [0.0, 0.0],
+                            end_mm: [0.0, -0.2],
+                        },
+                        Curve2d::CircleArc {
+                            center_mm: [0.0, -0.075],
+                            radius_mm: 0.125,
+                            start_angle_rad: -std::f64::consts::FRAC_PI_2,
+                            end_angle_rad: 0.75_f64.atan(),
+                        },
+                        Curve2d::Line {
+                            start_mm: [0.1, 0.0],
+                            end_mm: [0.0, 0.0],
+                        },
+                    ],
+                }],
+            };
+            let cap = revolve_profile(
+                &profile,
+                Axis3 {
+                    origin_mm: [0.; 3],
+                    direction: [0., 1., 0.],
+                },
+                std::f64::consts::TAU,
+            )?;
+            let host = primitive_solid(&Primitive::Box {
+                size_mm: [2., 1., 2.],
+            })?;
+            let first = builder::translated(&cap, Vector3::new(0.5, 0., 0.5));
+            let second = builder::translated(&cap, Vector3::new(1.5, 0., 1.5));
+            let policy = monstertruck_policy(GeometryPolicy::project_standard());
+            let joined = monstertruck_solid::try_planar_contact_many(
+                &host,
+                &[&first, &second],
+                monstertruck_solid::PlanarContactOp::Union,
+                policy,
+            )?
+            .context("bounded analytic revolutions must use planar contact")?;
+            assert_eq!(joined.boundaries().len(), 1);
+            assert!(joined.is_geometric_consistent());
+            let penetrating = builder::translated(&first, Vector3::new(0., 0.01, 0.));
+            assert!(
+                monstertruck_solid::try_planar_contact_union(&host, &penetrating, policy)?
+                    .is_none()
+            );
+            Ok(())
         }
 
         #[test]

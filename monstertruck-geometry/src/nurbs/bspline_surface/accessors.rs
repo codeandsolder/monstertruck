@@ -51,7 +51,7 @@ impl<P> BsplineSurface<P> {
     /// This method does NOT check the 3 rules for constructing B-spline surface.
     /// The programmer must guarantee these conditions before using this method.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new_unchecked(
         knot_vecs: (KnotVector, KnotVector),
         control_points: Vec<Vec<P>>,
@@ -64,35 +64,35 @@ impl<P> BsplineSurface<P> {
 
     /// Returns the reference of the knot vectors.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the knot vectors."]
     pub const fn knot_vectors(&self) -> &(KnotVector, KnotVector) { &self.knot_vecs }
 
     /// Returns the u knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the u knot vector."]
     pub const fn knot_vector_u(&self) -> &KnotVector { &self.knot_vecs.0 }
     /// Returns the v knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the v knot vector."]
     pub const fn knot_vector_v(&self) -> &KnotVector { &self.knot_vecs.1 }
 
     /// Returns the `idx`th u knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th u knot."]
     pub fn knot_u(&self, idx: usize) -> f64 { self.knot_vecs.0[idx] }
     /// returns the `idx`th v knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th v knot."]
     pub fn knot_v(&self, idx: usize) -> f64 { self.knot_vecs.1[idx] }
 
     /// Returns the reference of the vector of the control points
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the vector of the control points."]
     pub const fn control_points(&self) -> &Vec<Vec<P>> { &self.control_points }
 
     /// Returns the reference of the control point corresponding to the index `(idx0, idx1)`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control point corresponding to the index `(idx0, idx1)`."]
     pub fn control_point(&self, idx0: usize, idx1: usize) -> &P { &self.control_points[idx0][idx1] }
     /// Apply the given transformation to all control points.
     #[inline]
@@ -174,7 +174,7 @@ impl<P> BsplineSurface<P> {
     /// assert_eq!(bspsurface.udegree(), 1);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn udegree(&self) -> usize { self.knot_vecs.0.len() - self.control_points.len() - 1 }
 
     /// Returns the degrees of B-spline surface
@@ -192,7 +192,7 @@ impl<P> BsplineSurface<P> {
     /// assert_eq!(bspsurface.vdegree(), 2);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn vdegree(&self) -> usize { self.knot_vecs.1.len() - self.control_points[0].len() - 1 }
 
     /// Returns the degrees of B-spline surface
@@ -210,11 +210,11 @@ impl<P> BsplineSurface<P> {
     /// assert_eq!(bspsurface.degrees(), (1, 2));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn degrees(&self) -> (usize, usize) { (self.udegree(), self.vdegree()) }
     /// Returns whether the knot vectors are clamped or not.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vectors are clamped or not."]
     pub fn is_clamped(&self) -> bool {
         self.knot_vecs.0.is_clamped(self.udegree()) && self.knot_vecs.1.is_clamped(self.vdegree())
     }
@@ -268,7 +268,7 @@ impl<P> BsplineSurface<P> {
 
     /// The range of the parameter of the surface.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned parameter bounds define the surface domain and must be observed."]
     pub fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
         // For B-splines, this is [knot[degree], knot[n_cv]] in each direction,
         // which is the valid evaluation domain.
@@ -305,7 +305,7 @@ impl<P> BsplineSurface<P> {
     ///     &vec![Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 1.0, 1.0), Vector3::new(2.0, 1.0, 2.0)],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed curve whose control points are the `idx`th column control points of `self` is returned rather than stored."]
     pub fn curve_v(&self, index_u: usize) -> BsplineCurve<P>
     where P: Clone {
         let knot_vec = self.knot_vector_v().clone();
@@ -332,7 +332,7 @@ impl<P> BsplineSurface<P> {
     ///     &vec![Vector3::new(1.0, 0.0, 1.0), Vector3::new(1.0, 1.0, 1.0)],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed sectional curve along u, at the given v control-point index is returned rather than stored."]
     pub fn curve_u(&self, index_v: usize) -> BsplineCurve<P>
     where P: Clone {
         let knot_vec = self.knot_vector_u().clone();
@@ -343,7 +343,7 @@ impl<P> BsplineSurface<P> {
 
 impl<V: Homogeneous> BsplineSurface<V> {
     /// lift up control points to homogeneous coordinate.
-    #[must_use]
+    #[must_use = "The elevated spline surface is returned; the source surface remains unchanged."]
     pub fn lift_up(surface: BsplineSurface<V::Point>) -> Self {
         let control_points = surface
             .control_points
@@ -395,7 +395,7 @@ impl<V: Tolerance> BsplineSurface<V> {
     /// assert!(bspsurface.is_const());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether all control points are same or not."]
     pub fn is_const(&self) -> bool {
         for vec in self.control_points.iter().flat_map(|pts| pts.iter()) {
             if !vec.near(&self.control_points[0][0]) {
@@ -409,7 +409,7 @@ impl<V: Tolerance> BsplineSurface<V> {
 impl<V: Bounded> BsplineSurface<V> {
     /// Returns the bounding box including all control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bounding box including all control points."]
     pub fn roughly_bounding_box(&self) -> BoundingBox<V> {
         self.control_points.iter().flatten().collect()
     }

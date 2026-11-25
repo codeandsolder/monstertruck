@@ -146,7 +146,7 @@ pub struct SolidLoopSignature {
 }
 
 impl RecoveredSolidRevolution {
-    #[must_use]
+    #[must_use = "The optional polygon points outcome must be inspected to distinguish a value from absence."]
     pub fn polygon_points(&self) -> Option<Vec<[f64; 2]>> {
         if self.profile_curves.len() < 3 {
             return None;
@@ -276,9 +276,30 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
+/// Effective recovery tolerance: an authored uncertainty smaller than the
+/// kernel's geometric proof quantum does not tighten the existing source
+/// construction path. Do not use this floored value as a claim about what
+/// the file itself declares.
 pub(crate) fn source_tolerance_by_representation_item(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+) -> HashMap<u64, f64> {
+    source_uncertainty_by_representation_item(entities, index, GEOM_TOL_MM)
+}
+
+/// Literal author-declared length uncertainty (including unit conversion),
+/// without any fallback to the kernel's own recovery geometry tolerance.
+pub(crate) fn declared_source_uncertainty_by_representation_item(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> HashMap<u64, f64> {
+    source_uncertainty_by_representation_item(entities, index, 0.0)
+}
+
+fn source_uncertainty_by_representation_item(
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    floor_mm: f64,
 ) -> HashMap<u64, f64> {
     let mut context_cache = HashMap::<u64, Option<f64>>::new();
     let mut out = HashMap::<u64, f64>::new();
@@ -299,6 +320,7 @@ pub(crate) fn source_tolerance_by_representation_item(
         let Some(tolerance) = tolerance else {
             continue;
         };
+        let tolerance = tolerance.max(floor_mm);
 
         for item in items {
             out.entry(item)
@@ -332,7 +354,7 @@ fn representation_context_length_uncertainty_mm(
     if !value.is_finite() || value <= 0.0 || value > MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM {
         return None;
     }
-    Some(value.max(GEOM_TOL_MM))
+    Some(value)
 }
 
 fn uncertainty_measure_mm(
@@ -354,7 +376,7 @@ fn uncertainty_measure_mm(
     else {
         return None;
     };
-    if keyword != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
+    if keyword.as_ref() != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
         return None;
     }
     let value = parameter_number(parameter)?;
@@ -374,7 +396,7 @@ fn entity_record_named<'a>(entity: &'a EntityInstance, name: &str) -> Option<&'a
     }
 }
 
-#[must_use]
+#[must_use = "The computed detect solid surface signatures collection is returned and must be retained or inspected."]
 pub fn detect_solid_surface_signatures(entities: &[EntityInstance]) -> Vec<SolidSurfaceSignature> {
     let index = build_index(entities);
     detect_solid_surface_signatures_with_index(entities, &index)
@@ -450,7 +472,7 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
     out
 }
 
-#[must_use]
+#[must_use = "The computed detect solid revolutions collection is returned and must be retained or inspected."]
 pub fn detect_solid_revolutions(entities: &[EntityInstance]) -> Vec<RecoveredSolidRevolution> {
     let index = build_index(entities);
     detect_solid_revolutions_with_index(entities, &index)
@@ -461,7 +483,12 @@ pub(crate) fn detect_solid_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
-    detect_solid_revolutions_with_tolerances(entities, index, &source_tolerances)
+    detect_solid_revolutions_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &brep::manifold_solid_ids(entities),
+    )
 }
 
 /// Preserve source uncertainty semantics while allowing compound analyses to
@@ -470,16 +497,10 @@ pub(crate) fn detect_solid_revolutions_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredSolidRevolution> {
     let mut out = Vec::new();
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let source_tolerance_mm = source_tolerances
             .get(&solid_id)
             .copied()
@@ -492,7 +513,7 @@ pub(crate) fn detect_solid_revolutions_with_tolerances(
     out
 }
 
-#[must_use]
+#[must_use = "The computed detect radial slot revolutions collection is returned and must be retained or inspected."]
 pub fn detect_radial_slot_revolutions(
     entities: &[EntityInstance],
 ) -> Vec<RecoveredRadialSlotRevolution> {
@@ -505,23 +526,22 @@ pub(crate) fn detect_radial_slot_revolutions_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredRadialSlotRevolution> {
     let source_tolerances = source_tolerance_by_representation_item(entities, index);
-    detect_radial_slot_revolutions_with_tolerances(entities, index, &source_tolerances)
+    detect_radial_slot_revolutions_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &brep::manifold_solid_ids(entities),
+    )
 }
 
 pub(crate) fn detect_radial_slot_revolutions_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Vec<RecoveredRadialSlotRevolution> {
     let mut out = Vec::new();
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let source_tolerance_mm = source_tolerances
             .get(&solid_id)
             .copied()

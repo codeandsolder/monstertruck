@@ -10,33 +10,33 @@ use super::{
 impl<V> NurbsCurve<V> {
     /// Constructs the rationalized B-spline curve.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(curve: BsplineCurve<V>) -> Self { Self(curve) }
 
     /// Returns the Bspline curve before rationalized.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the Bspline curve before rationalized."]
     pub const fn non_rationalized(&self) -> &BsplineCurve<V> { &self.0 }
 
     /// Returns the reference of the knot vector. cf.[`BsplineCurve::knot_vector`]
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the knot vector. cf.[`BsplineCurve::knot_vector`]."]
     pub const fn knot_vector(&self) -> &KnotVector { &self.0.knot_vec }
 
     /// Returns the `idx`th knot. cf.[`BsplineCurve::knot`]
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th knot. cf.[`BsplineCurve::knot`]."]
     pub fn knot(&self, idx: usize) -> f64 { self.0.knot_vec[idx] }
 
     /// Returns the reference of the control points. cf.[`BsplineCurve::control_points`]
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control points. cf.[`BsplineCurve::control_points`]."]
     pub const fn control_points(&self) -> &Vec<V> { &self.0.control_points }
 
     /// Returns the reference of the control point corresponding to the index `idx`.
     /// cf.[`BsplineCurve::control_point`]
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control point corresponding to the index `idx`."]
     pub fn control_point(&self, idx: usize) -> &V { &self.0.control_points[idx] }
 
     /// Returns the mutable reference of the control point corresponding to index `idx`.
@@ -67,12 +67,12 @@ impl<V> NurbsCurve<V> {
 
     /// Returns the degree of NURBS curve. cf.[`BsplineCurve::degree`]
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degree of NURBS curve. cf.[`BsplineCurve::degree`]."]
     pub fn degree(&self) -> usize { self.0.degree() }
 
     /// Returns whether the knot vector is clamped or not. cf.[`BsplineCurve::is_clamped`]
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vector is clamped or not. cf.[`BsplineCurve::is_clamped`]."]
     pub fn is_clamped(&self) -> bool { self.0.knot_vec.is_clamped(self.0.degree()) }
 
     /// Normalizes the knot vector. cf.[`BsplineCurve::knot_normalize`]
@@ -159,7 +159,7 @@ where V::Point: Tolerance
     /// // bspcurve.is_const() is true
     /// assert!(bspcurve.is_const());
     /// ```
-    #[must_use]
+    #[must_use = "The returned boolean reports whether all control points are the same or not."]
     pub fn is_const(&self) -> bool {
         let pt = self.0.control_points[0].to_point();
         self.0
@@ -192,7 +192,7 @@ where V::Point: Tolerance
     /// assert!(!curve0.near_as_curve(&curve1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near_as_curve` must be observed to use the predicate."]
     pub fn near_as_curve(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_curve(&other.0, 2, move |x, y| x.to_point().near(&y.to_point()))
@@ -223,7 +223,7 @@ where V::Point: Tolerance
     /// assert!(!curve0.near2_as_curve(&curve1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near2_as_curve` must be observed to use the predicate."]
     pub fn near2_as_curve(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_curve(&other.0, 2, move |x, y| x.to_point().near2(&y.to_point()))
@@ -538,7 +538,7 @@ where V::Point: Bounded<Scalar = f64>
 {
     /// Returns the bounding box including all control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bounding box including all control points."]
     pub fn roughly_bounding_box(&self) -> BoundingBox<V::Point> {
         self.0.control_points.iter().map(|p| p.to_point()).collect()
     }

@@ -274,7 +274,7 @@ fn iso_quad_full_cells(udiv: &[f64], vdiv: &[f64], polyboundary: &PolyBoundary) 
         .iter()
         .flat_map(|u| {
             vdiv.iter()
-                .map(move |v| polyboundary.include(Point2::new(*u, *v)))
+                .map(move |v| polyboundary.include_grid_sample(Point2::new(*u, *v)))
         })
         .collect::<Vec<_>>();
     (0..nu - 1)
@@ -294,10 +294,10 @@ fn iso_quad_full_cells(udiv: &[f64], vdiv: &[f64], polyboundary: &PolyBoundary) 
                     Point2::new(f64::midpoint(u0, u1), v1),
                     Point2::new(u0, f64::midpoint(v0, v1)),
                 ];
-                polyboundary.include(center)
+                polyboundary.include_grid_sample(center)
                     && edge_midpoints
                         .into_iter()
-                        .all(|midpoint| polyboundary.include(midpoint))
+                        .all(|midpoint| polyboundary.include_grid_sample(midpoint))
             })
         })
         .collect()
@@ -892,7 +892,7 @@ fn insert_surface_grid(
             vdiv.iter()
                 .map(|v| {
                     let uv = Point2::new(u, *v);
-                    if polyline.include(uv) {
+                    if polyline.include_grid_sample(uv) {
                         triangulation
                             .insert(SPoint2::new(u, *v))
                             .ok()

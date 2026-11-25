@@ -25,6 +25,16 @@ pub struct KernelEditedSourceEvidence {
     pub retained_source_topology: KernelTopologyProvenance,
 }
 
+/// Disposable STEP-form analytic view of the current native topology.
+///
+/// The mapping addresses this exact exchange, including vertices and edges
+/// allocated by earlier inverse operations. It is not original provenance.
+pub struct KernelEditedSourceProjection {
+    pub exchange: step_p21::ast::Exchange,
+    pub source: SourceEntity,
+    pub topology: KernelTopologyProvenance,
+}
+
 /// Apply normalized topology edits to a backend-owned native solid.
 ///
 /// The returned edited value retains exact geometry and kernel Stable Ids.
@@ -95,6 +105,17 @@ pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspect
         &self,
         edited: &Self::EditedSource,
     ) -> Result<KernelEditedSourceEvidence>;
+
+    /// Project the current native geometry and its exact identity correspondence
+    /// into STEP records for analytic recognizers that still consume them.
+    /// No topology is imported or replaced.
+    ///
+    /// # Errors
+    /// Returns an error if the projection or identity journal is incomplete.
+    fn edited_source_step_projection(
+        &self,
+        edited: &Self::EditedSource,
+    ) -> Result<KernelEditedSourceProjection>;
 
     /// Export the edited native solid only when a STEP-form semantic view or
     /// an external STEP artifact is actually needed.

@@ -55,10 +55,10 @@ pub trait App: Sized + 'static {
     async fn init(window: Arc<Window>) -> AppResult<Self>;
     /// By overriding this function, you can change the display of the title bar.
     /// It is not possible to change the window while it is running.
-    #[must_use]
+    #[must_use = "The returned title configures the window; ignoring it discards this override."]
     fn app_title<'a>() -> Option<&'a str> { None }
     /// Default is `ControlFlow::WaitUntil(1 / 60 seconds)`.
-    #[must_use]
+    #[must_use = "The returned event-loop control flow determines how frame updates are scheduled."]
     fn default_control_flow() -> ControlFlow {
         /*
         let next_frame_time = Instant::now() + Duration::from_nanos(16_666_667);

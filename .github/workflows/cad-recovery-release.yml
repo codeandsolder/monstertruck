@@ -12,47 +12,49 @@ jobs:
   jlc-cad-validation:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      CARGO_TERM_COLOR: always
-      RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          submodules: false
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
-        with:
-          version: "0.13.9"
-          enable-cache: true
+          persist-credentials: false
+      - name: Resolve repository compiler
+        run: rustup show active-toolchain
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
-          rust-toolchain: "1.99.1"
+          cache-scope: step-recovery-release
           rustflags: "-D warnings"
       - name: STEP recovery unit tests
-        run: cargo +1.99.1 test -p step-redox --lib --features cad-kernel-monstertruck
-      - name: Prepare STEP validation executables
+        run: cargo --config 'build.rustflags=["-D","warnings"]' test --release -p step-redox --lib --bin step-validate-semantics --features cad-kernel-monstertruck --target-dir "$RUNNER_TEMP/step-recovery"
+      - name: Prepare STEP recovery executables
+        run: cargo --config 'build.rustflags=["-D","warnings"]' build --release -p step-redox --features cad-kernel-monstertruck --bin step-redox --bin step-count-resize --bin step-chain-resize --bin step-validate-semantics --target-dir "$RUNNER_TEMP/step-recovery"
+      - name: Check independent OCCT kernel and validation invariants
+        run: cargo --config 'build.rustflags=["-D","warnings"]' test --release --locked --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator"
+      - name: Prepare independent OCCT validator
+        run: cargo --config 'build.rustflags=["-D","warnings"]' build --release --locked --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator"
+      - name: Check real-model geometry and renderings
         run: |
-          cargo +1.99.1 run -p step-redox --bin step-redox -- --help >/dev/null
-          cargo +1.99.1 run -p step-redox --bin step-count-resize -- --help >/dev/null
-          cargo +1.99.1 run -p step-redox --bin step-chain-resize -- --help >/dev/null
-      - name: Resolve OCCT validation dependencies
-        run: uv sync --frozen --project .github/ci/step-redox
-      - name: Check real-model geometry and semantics
-        working-directory: step-redox
+          "$RUNNER_TEMP/occt-validator/release/step-redox-occt-wasm-validator" run \
+            --manifest step-redox/validation/fixtures.json \
+            --cache "$RUNNER_TEMP/step-fixtures" \
+            --out "$RUNNER_TEMP/step-validation" \
+            --step-redox "$RUNNER_TEMP/step-recovery/release/step-redox" \
+            --step-count-resize "$RUNNER_TEMP/step-recovery/release/step-count-resize" \
+            --step-chain-resize "$RUNNER_TEMP/step-recovery/release/step-chain-resize"
+      - name: Check independently specified recovery semantics
         run: |
-          uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
-            --manifest validation/fixtures.json \
-            --cache .cache/step-redox-validation \
-            --out validation/out \
-            --step-redox ../target/debug/step-redox \
-            --step-count-resize ../target/debug/step-count-resize \
-            --step-chain-resize ../target/debug/step-chain-resize
-          uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/semantic_probe.py \
-            --manifest validation/fixtures.json \
-            --cache .cache/step-redox-validation \
-            --out validation/out/semantic-probes \
-            --step-redox ../target/debug/step-redox
+          "$RUNNER_TEMP/step-recovery/release/step-validate-semantics" \
+            --manifest step-redox/validation/fixtures.json \
+            --cache "$RUNNER_TEMP/step-fixtures" \
+            --out "$RUNNER_TEMP/step-validation/semantic-probes" \
+            --step-redox "$RUNNER_TEMP/step-recovery/release/step-redox"
+      - name: Preserve CAD validation reports and renders
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: step-validation
+          path: ${{ runner.temp }}/step-validation
+          retention-days: 7
+          if-no-files-found: warn
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@23b86d2eeed31f7893c34e942c32cf6555299dbb
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main

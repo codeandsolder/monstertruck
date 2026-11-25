@@ -4,7 +4,10 @@
 //! promote an off-carrier curve into geometric equality.
 
 mod circular;
-pub use circular::{CircularArcCoverage, CircularArcFrame, certify_circular_arc_coverage};
+pub use circular::{
+    CircularArcCoverage, CircularArcFrame, certify_circular_arc_coverage,
+    certify_cylindrical_arc_coverage,
+};
 
 use crate::analytic_bezier_partition::proof_bezier_spans;
 use crate::analytic_carrier::AnalyticSupport;
@@ -372,7 +375,7 @@ fn prove_span(points: &[[f64; 4]], support: AnalyticSupport, tolerance: f64) -> 
 /// The curve and analytic support must be independently validated. A global
 /// proof is sufficient for a trimmed edge, but not necessary: trimming a
 /// partially off-carrier parent must instead use a separate range restriction.
-#[must_use]
+#[must_use = "The returned incidence certificate records complete-domain NURBS support agreement."]
 pub fn certify_nurbs_curve_on_support(
     curve: &NurbsCurve<Vector4>,
     support: AnalyticSupport,
@@ -394,7 +397,7 @@ pub fn certify_nurbs_curve_on_support(
 }
 
 /// Weight-one embedding of a polynomial B-spline; same complete-domain proof.
-#[must_use]
+#[must_use = "The returned incidence certificate records complete-domain B-spline support agreement."]
 pub fn certify_bspline_curve_on_support(
     curve: &BsplineCurve<Point3>,
     support: AnalyticSupport,

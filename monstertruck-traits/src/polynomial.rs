@@ -238,7 +238,7 @@ where
     P::Diff: ElementWise,
 {
     /// create polysurface by tensor product e.g. (u^2 + 2u + 2) * (v^2 + 3v - 2)
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn by_tensor(curve0: PolynomialCurve<P>, curve1: PolynomialCurve<P>) -> Self {
         let PolynomialCurve(curve0) = curve0;
         let PolynomialCurve(curve1) = curve1;
@@ -250,7 +250,7 @@ where
     }
 
     /// composite `curve` and `self`.
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     pub fn composite(&self, curve: &PolynomialCurve<Point2>) -> PolynomialCurve<P> {
         let ucurve = PolynomialCurve::<Point1>(curve.0.iter().map(|p| Vector1::new(p.x)).collect());
         let vcurve = PolynomialCurve::<Point1>(curve.0.iter().map(|p| Vector1::new(p.y)).collect());

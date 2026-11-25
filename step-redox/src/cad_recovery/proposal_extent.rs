@@ -4,7 +4,7 @@
 use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, Curve2d, NodeId, Primitive, Profile2d, RigidTransform,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug)]
 struct Extent {
@@ -113,17 +113,116 @@ fn profile_extent(profile: &Profile2d) -> Option<Extent> {
     )
 }
 
-fn compute_extent(
-    model: &CadModel,
-    id: NodeId,
-    cache: &mut HashMap<NodeId, Option<Extent>>,
-) -> Option<Extent> {
-    if let Some(value) = cache.get(&id) {
-        return *value;
+/// A necessary occupancy expression, not a geometric classification.
+/// Union preserves the separate operand envelopes; intersection requires
+/// every known envelope; subtraction can only occupy its positive operand.
+enum BoundTest {
+    Unknown,
+    Extent(Extent),
+    Any(Vec<usize>),
+    All(Vec<usize>),
+}
+
+#[derive(Default)]
+struct WitnessProgram {
+    tests: Vec<BoundTest>,
+    memo: HashMap<(NodeId, Vec<NodeId>), usize>,
+    visiting: HashSet<NodeId>,
+}
+
+impl WitnessProgram {
+    fn push(&mut self, test: BoundTest) -> usize {
+        let id = self.tests.len();
+        self.tests.push(test);
+        id
     }
-    // A defensive unknown entry also terminates a malformed cycle.
-    cache.insert(id, None);
-    let extent = match model.node(id).ok()? {
+
+    fn compile(&mut self, model: &CadModel, id: NodeId, transforms: &mut Vec<NodeId>) -> usize {
+        let key = (id, transforms.clone());
+        if let Some(&test) = self.memo.get(&key) {
+            return test;
+        }
+        if !self.visiting.insert(id) {
+            // Invalid cyclic model: no geometric rejection is justified.
+            return self.push(BoundTest::Unknown);
+        }
+        let index = match model.node(id) {
+            Ok(CadNode::Transform { child, .. }) => {
+                transforms.push(id);
+                let child = self.compile(model, *child, transforms);
+                transforms.pop();
+                child
+            }
+            Ok(CadNode::Boolean {
+                op: BooleanOp::Difference,
+                children,
+            }) => match children.first() {
+                Some(&child) => self.compile(model, child, transforms),
+                None => self.push(BoundTest::Unknown),
+            },
+            Ok(
+                CadNode::Boolean {
+                    op: BooleanOp::Union,
+                    children,
+                }
+                | CadNode::Assembly { children },
+            ) => {
+                let operands = children
+                    .iter()
+                    .map(|&child| self.compile(model, child, transforms))
+                    .collect();
+                self.push(BoundTest::Any(operands))
+            }
+            Ok(CadNode::Boolean {
+                op: BooleanOp::Intersection,
+                children,
+            }) => {
+                let operands = children
+                    .iter()
+                    .map(|&child| self.compile(model, child, transforms))
+                    .collect();
+                self.push(BoundTest::All(operands))
+            }
+            Ok(node) => {
+                let extent = leaf_extent(node).and_then(|mut extent| {
+                    // Apply each original affine map with outward rounding;
+                    // matrix composition would lose that enclosure guarantee.
+                    for &transform in transforms.iter().rev() {
+                        let CadNode::Transform { transform, .. } = model.node(transform).ok()?
+                        else {
+                            return None;
+                        };
+                        extent = extent.transformed(transform)?;
+                    }
+                    Some(extent)
+                });
+                self.push(extent.map_or(BoundTest::Unknown, BoundTest::Extent))
+            }
+            Err(_) => self.push(BoundTest::Unknown),
+        };
+        self.visiting.remove(&id);
+        self.memo.insert(key, index);
+        index
+    }
+
+    fn covers(&self, root: usize, point: [f64; 3], pad: f64, values: &mut Vec<bool>) -> bool {
+        values.clear();
+        for test in &self.tests {
+            values.push(match test {
+                BoundTest::Unknown => true,
+                BoundTest::Extent(extent) => extent.contains(point, pad),
+                BoundTest::Any(operands) => {
+                    operands.is_empty() || operands.iter().any(|&id| values[id])
+                }
+                BoundTest::All(operands) => operands.iter().all(|&id| values[id]),
+            });
+        }
+        values[root]
+    }
+}
+
+fn leaf_extent(node: &CadNode) -> Option<Extent> {
+    match node {
         CadNode::Primitive(Primitive::Box { size_mm }) => Extent::new([0.; 3], *size_mm),
         CadNode::Extrude { profile, vector_mm } => {
             let base = profile_extent(profile)?;
@@ -131,33 +230,16 @@ fn compute_extent(
             Some(base.union(tip))
         }
         CadNode::Loft { sections } => {
-            // The IR loft is a ruled interpolation of the placed sections.
+            // Ruled interpolation remains within the hull of placed sections.
             hull(
                 sections
                     .iter()
                     .map(|s| profile_extent(&s.profile)?.transformed(&s.transform)),
             )
         }
-        CadNode::Transform { child, transform } => {
-            compute_extent(model, *child, cache)?.transformed(transform)
-        }
-        CadNode::Boolean {
-            op: BooleanOp::Union,
-            children,
-        }
-        | CadNode::Assembly { children } => {
-            hull(children.iter().map(|id| compute_extent(model, *id, cache)))
-        }
-        CadNode::Boolean {
-            op: BooleanOp::Difference | BooleanOp::Intersection,
-            children,
-        } => compute_extent(model, *children.first()?, cache),
-        // Unsupported nodes and explicit solver overrides do not imply any
-        // enclosure. Never substitute a sample-based approximation here.
+        // Unknown geometry and tolerance overrides never reject a proposal.
         _ => None,
-    };
-    cache.insert(id, extent);
-    extent
+    }
 }
 
 /// False proves an original boundary witness lies outside the material
@@ -171,10 +253,11 @@ pub(super) fn covers_witnesses(
     if witnesses.is_empty() || !pad.is_finite() || pad < 0. {
         return true;
     }
-    compute_extent(model, root, &mut HashMap::new()).is_none_or(|extent| {
-        witnesses
-            .iter()
-            .all(|&p| p.iter().any(|x| !x.is_finite()) || extent.contains(p, pad))
+    let mut program = WitnessProgram::default();
+    let root = program.compile(model, root, &mut Vec::new());
+    let mut values = Vec::with_capacity(program.tests.len());
+    witnesses.iter().all(|&point| {
+        point.iter().any(|x| !x.is_finite()) || program.covers(root, point, pad, &mut values)
     })
 }
 
@@ -215,6 +298,60 @@ mod tests {
             0.
         ));
         assert!(!covers_witnesses(&m, root, &[[10.1, 3., 0.]], 0.));
+    }
+
+    #[test]
+    fn disjoint_union_preserves_gaps_through_outer_transforms() {
+        let mut m = CadModel::new();
+        let b = m.add_node(CadNode::Primitive(Primitive::Box { size_mm: [1.; 3] }));
+        let shifted = m.add_node(CadNode::Transform {
+            child: b,
+            transform: RigidTransform::translation_mm([4., 0., 0.]),
+        });
+        let union = m.add_node(CadNode::Boolean {
+            op: BooleanOp::Union,
+            children: vec![b, shifted],
+        });
+        let moved = m.add_node(CadNode::Transform {
+            child: union,
+            transform: RigidTransform {
+                matrix: [
+                    [0., -1., 0., 2.],
+                    [1., 0., 0., 3.],
+                    [0., 0., 1., 4.],
+                    [0., 0., 0., 1.],
+                ],
+            },
+        });
+        assert!(covers_witnesses(
+            &m,
+            moved,
+            &[[1.5, 3.5, 4.5], [1.5, 7.5, 4.5]],
+            0.
+        ));
+        assert!(!covers_witnesses(&m, moved, &[[1.5, 5.5, 4.5]], 0.));
+        assert!(covers_witnesses(&m, moved, &[[1.5, 4.0001, 4.5]], 0.001));
+    }
+
+    #[test]
+    fn intersections_require_known_operands_and_differences_only_positive() {
+        let mut m = CadModel::new();
+        let a = m.add_node(CadNode::Primitive(Primitive::Box { size_mm: [4.; 3] }));
+        let b = m.add_node(CadNode::Primitive(Primitive::Box { size_mm: [1.; 3] }));
+        let unknown = m.add_node(CadNode::Primitive(Primitive::Sphere { radius_mm: 10. }));
+        let intersect = m.add_node(CadNode::Boolean {
+            op: BooleanOp::Intersection,
+            children: vec![unknown, a, b],
+        });
+        assert!(covers_witnesses(&m, intersect, &[[0.5; 3]], 0.));
+        assert!(!covers_witnesses(&m, intersect, &[[2.; 3]], 0.));
+        let diff = m.add_node(CadNode::Boolean {
+            op: BooleanOp::Difference,
+            children: vec![a, b],
+        });
+        assert!(covers_witnesses(&m, diff, &[[0.5; 3]], 0.));
+        assert!(covers_witnesses(&m, diff, &[[2.; 3]], 0.));
+        assert!(!covers_witnesses(&m, diff, &[[5.; 3]], 0.));
     }
 
     #[test]

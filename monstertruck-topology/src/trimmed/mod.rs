@@ -57,29 +57,29 @@ impl<P, C, S, T> TrimmedFace<P, C, S, T> {
     ///
     /// The caller must guarantee that `trims` matches [`Face::absolute_boundaries`].
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new_unchecked(face: Face<P, C, S>, trims: Vec<Vec<Option<T>>>) -> Self {
         Self { face, trims }
     }
 
     /// Returns the wrapped face.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the wrapped face."]
     pub const fn face(&self) -> &Face<P, C, S> { &self.face }
 
     /// Returns the face-local trims matching [`Face::absolute_boundaries`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the face-local trims matching [`Face::absolute_boundaries`]."]
     pub const fn trims(&self) -> &Vec<Vec<Option<T>>> { &self.trims }
 
     /// Consumes `self` and drops trim storage.
     #[inline]
-    #[must_use]
+    #[must_use = "The topology without trims is returned; ignoring it loses the transformed topology."]
     pub fn erase_trims(self) -> Face<P, C, S> { self.face }
 
     /// Destructures into the face and trim storage.
     #[inline]
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn into_parts(self) -> TrimmedFaceParts<P, C, S, T> { (self.face, self.trims) }
 }
 
@@ -109,7 +109,7 @@ impl<P, C, S, T> FromIterator<TrimmedFace<P, C, S, T>> for TrimmedShell<P, C, S,
 impl<P, C, S, T> TrimmedShell<P, C, S, T> {
     /// Returns the faces.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the faces."]
     pub const fn faces(&self) -> &Vec<TrimmedFace<P, C, S, T>> { &self.face_list }
 
     /// Consumes `self` and drops trim storage.
@@ -167,7 +167,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
     /// Use this only when the caller has already established the same boundary
     /// invariants enforced by [`Self::new`].
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new_unchecked(boundaries: Vec<TrimmedShell<P, C, S, T>>) -> Self {
         Self {
             boundaries,
@@ -187,7 +187,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns this solid's stable-ID allocator.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards this solid's stable-ID allocator."]
     pub const fn id_allocator(&self) -> &StableIdAllocator { &self.id_allocator }
 
     /// Returns this solid's stable-ID allocator mutably.
@@ -196,7 +196,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns this solid's element attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards this solid's element attributes."]
     pub const fn attributes(&self) -> &SolidAttributes { &self.attributes }
 
     /// Returns this solid's element attributes mutably.
@@ -205,7 +205,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns the face attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the face attributes."]
     pub const fn face_attributes(&self) -> &ElementAttributes { &self.attributes.faces }
 
     /// Returns the face attributes mutably.
@@ -216,7 +216,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns the edge attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the edge attributes."]
     pub const fn edge_attributes(&self) -> &ElementAttributes { &self.attributes.edges }
 
     /// Returns the edge attributes mutably.
@@ -227,7 +227,7 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns the vertex attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vertex attributes."]
     pub const fn vertex_attributes(&self) -> &ElementAttributes { &self.attributes.vertices }
 
     /// Returns the vertex attributes mutably.
@@ -238,12 +238,12 @@ impl<P, C, S, T> TrimmedSolid<P, C, S, T> {
 
     /// Returns the boundary shells.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the boundary shells."]
     pub const fn boundaries(&self) -> &Vec<TrimmedShell<P, C, S, T>> { &self.boundaries }
 
     /// Consumes `self` and returns the boundary shells.
     #[inline]
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn into_boundaries(self) -> Vec<TrimmedShell<P, C, S, T>> { self.boundaries }
 
     /// Assigns stable IDs to every currently-unassigned topology element without
@@ -375,7 +375,7 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     }
 
     /// Creates a runtime trimmed shell from exact trims carried by the edge curves.
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_trimmed_with_exact_face_trims(
         &self,
     ) -> TrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -402,7 +402,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     }
 
     /// Creates a runtime trimmed solid from exact trims carried by the edge curves.
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_trimmed_with_exact_face_trims(
         &self,
     ) -> TrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>

@@ -36,14 +36,12 @@ jobs:
           # not recurse. Jobs that compile or run code fetch the public
           # `resources` submodule explicitly below.
           submodules: false
-      # `rustfmt.toml` opts into unstable options (`fn_single_line`,
-      # `where_single_line`, `brace_style = "PreferSameLine"`); stable
-      # rustfmt silently ignores those, so the fmt check has to run on
-      # nightly to actually apply them.
+      # Use the exact pinned nightly so unstable rustfmt options are enforced.
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
+          toolchain: nightly-2026-11-19
           components: rustfmt
-      - run: cargo +nightly fmt --all -- --check
+      - run: cargo fmt --all -- --check
 
   clippy:
     name: cargo clippy
@@ -57,18 +55,19 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
+          toolchain: nightly-2026-11-19
           components: clippy
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
-          rust-toolchain: "1.99.1"
+          rust-toolchain: "nightly-2026-11-19"
           rustflags: "-D warnings"
       - run: cargo clippy --all-targets -- -D warnings
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
 
 
   test:
@@ -84,27 +83,29 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          rust-toolchain: "1.99.1"
+          toolchain: nightly-2026-11-19
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        with:
+          rust-toolchain: "nightly-2026-11-19"
           rustflags: "-D warnings"
-      - uses: taiki-e/install-action@11535f61e49cc8fdbdbb5aacee608b494b699f42 # nextest
+      - uses: taiki-e/install-action@2b545d4fd42fdd72ed2a44eab8fedd1850e8f731 # nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
       # unpinned `@latest` would fail `readme-check` the day it majors.
-      - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
         with:
           tool: cargo-rdme@2.1.0
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just readme-check
       - run: just test-cpu
       - name: Constructive STEP recovery library (current Linux Rust)
-        run: cargo +1.99.1 test -p step-redox --lib --features cad-kernel-monstertruck
+        run: cargo test -p step-redox --lib --bin step-validate-semantics --features cad-kernel-monstertruck
       - run: just test-doc
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
 
 
   shared-sccache:
@@ -113,12 +114,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@73448b1d381ada61a26dc3483d10342a7a41246c # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
     with:
       command: |
         git submodule update --init resources
-        cargo +1.99.1 test --workspace --lib
-      rust-toolchain: "1.99.1"
+        cargo test --workspace --lib
+      rust-toolchain: "nightly-2026-11-19"
       rustflags: "-D warnings -C target-cpu=x86-64-v2"
 
   meshing-features:
@@ -133,17 +134,19 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          rust-toolchain: "1.99.1"
+          toolchain: nightly-2026-11-19
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        with:
+          rust-toolchain: "nightly-2026-11-19"
           rustflags: "-D warnings"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just meshing-features
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
 
 
   wasm-build:
@@ -161,16 +164,17 @@ jobs:
           # `resources` submodule explicitly below.
           submodules: false
       - run: git submodule update --init resources
-      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
+          toolchain: nightly-2026-11-19
           targets: wasm32-unknown-unknown
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
         with:
-          rust-toolchain: "1.99.1"
+          rust-toolchain: "nightly-2026-11-19"
           rustflags: "-D warnings"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just wasm-build
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@73448b1d381ada61a26dc3483d10342a7a41246c # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main

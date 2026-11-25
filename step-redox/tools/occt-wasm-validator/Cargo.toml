@@ -5,8 +5,20 @@ edition = "2024"
 publish = false
 
 [dependencies]
-occt-wasm = "=7.2.2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+num-traits = "0.2"
+rand_chacha = { version = "0.10", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "13c96a30781a4cc03d00b2e8742b044ddefc4e31" }
 sha2 = "0.11"
+tempfile = "3"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Dedicated nightly / external-OCCT toolchain outside production workspace.
 [workspace]

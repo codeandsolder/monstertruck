@@ -58,7 +58,6 @@ pub mod solid_revolutions;
 pub mod solid_sweeps;
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod source_edge_healing;
-#[cfg(feature = "cad-kernel-monstertruck")]
 pub mod source_edge_locus;
 mod spherical_caps;
 mod step_document;
@@ -71,6 +70,11 @@ use monstertruck_io::step::load::ParsedStepSource;
 use normalization::{dense_renumber, intern_section};
 pub use step_io::write_exchange;
 mod surface_recovery;
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub use surface_recovery::{
+    SourceCapPrecisionPatch, SourceCapRechartManifest, SourceCapRechartProposal,
+    propose_source_cap_rechart,
+};
 mod surface_replicas;
 mod units;
 
@@ -130,7 +134,7 @@ impl Default for Options {
 }
 
 impl Options {
-    #[must_use]
+    #[must_use = "The configured output profile is returned; ignoring it loses the profile selection."]
     pub fn for_profile(profile: OutputProfile) -> Self {
         let mut options = Self {
             experimental_recover_straight_bspline_lines: true,
@@ -745,7 +749,11 @@ pub fn detect_round_sweeps_bytes(input: &[u8]) -> Result<Vec<solid_sweeps::Recov
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::detect_round_sweeps(&section.entities, &index)
+            solid_sweeps::detect_round_sweeps(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }
@@ -768,7 +776,11 @@ pub fn detect_revolved_round_tails_bytes(
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::detect_revolved_round_tails(&section.entities, &index)
+            solid_sweeps::detect_revolved_round_tails(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }
@@ -791,7 +803,11 @@ pub fn detect_open_rectangular_sweeps_bytes(
         .iter()
         .flat_map(|section| {
             let index = step_graph::build_index(&section.entities);
-            solid_sweeps::sheet::detect_open_rectangular_sweeps(&section.entities, &index)
+            solid_sweeps::sheet::detect_open_rectangular_sweeps(
+                &section.entities,
+                &index,
+                &brep::manifold_solid_ids(&section.entities),
+            )
         })
         .collect())
 }

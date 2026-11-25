@@ -71,7 +71,7 @@ pub enum Surface {
 /// Spline, T-spline and non-linear revolution carriers are not promoted by
 /// numerical sampling. A spline may be provably coplanar yet lack a proven
 /// globally consistent chart Jacobian, so it is likewise refused here.
-#[must_use]
+#[must_use = "check whether an exact analytic carrier was certified before using it"]
 pub fn analytic_carrier(surface: &Surface) -> Option<AnalyticCarrier> {
     match surface {
         Surface::Plane(plane) => AnalyticCarrier::plane(plane),
@@ -99,7 +99,7 @@ pub fn analytic_carrier(surface: &Surface) -> Option<AnalyticCarrier> {
 /// A successful result certifies *only* untrimmed carrier identity. Topology
 /// proof must additionally establish valid bounded face loops, complete edge
 /// incidence and curve/surface intersection loci.
-#[must_use]
+#[must_use = "check untrimmed support identity before claiming matched analytic surfaces"]
 pub fn same_analytic_surface_domain(
     first: &Surface,
     second: &Surface,
@@ -511,6 +511,18 @@ impl TryIntoBsplineSurface for Surface {
 }
 
 impl TryIntoHomogeneousBsplineSurface for Surface {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Plane(surface) => surface.homogeneous_net_covers_domain(),
+            Self::BsplineSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::NurbsSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Revolution(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Sphere(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Torus(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Tspline(_) => false,
+        }
+    }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
             Self::Plane(p) => p.try_into_homogeneous_bspline_surface(),
