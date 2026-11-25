@@ -104,6 +104,7 @@ pub mod monstertruck {
 
     mod circular_selection;
     mod parallel_prisms;
+    mod planar_boundary_export;
     mod planar_loft;
 
     #[derive(Debug, Clone, Copy)]
@@ -200,6 +201,19 @@ pub mod monstertruck {
         })
     }
 
+    fn step_polylines_match(a: &[Point3], b: &[Point3], tolerance: f64) -> bool {
+        [(a, b), (b, a)].into_iter().all(|(source, target)| {
+            source.len() >= 2
+                && source.iter().all(|point| {
+                    point.x.is_finite()
+                        && point.y.is_finite()
+                        && point.z.is_finite()
+                        && polyline_closest_distance(*point, target)
+                            .is_some_and(|distance| distance <= tolerance)
+                })
+        })
+    }
+
     /// A STEP PCURVE has its *own* chart and parameter range, unrelated to
     /// the 3-D curve parameter values. Validate the geometric locus in both
     /// directions; never compare equal normalized t-values.
@@ -213,17 +227,7 @@ pub mod monstertruck {
     ) -> bool {
         let (_, points) =
             algo::curve::parameter_division(boundary, boundary.range_tuple(), tolerance);
-        !points.is_empty()
-            && points.iter().all(|point| {
-                point.x.is_finite()
-                    && point.y.is_finite()
-                    && point.z.is_finite()
-                    && polyline_closest_distance(*point, intersection_points)
-                        .is_some_and(|dist| dist <= tolerance)
-            })
-            && intersection_points.iter().all(|point| {
-                polyline_closest_distance(*point, &points).is_some_and(|dist| dist <= tolerance)
-            })
+        step_polylines_match(&points, intersection_points, tolerance)
     }
 
     /// A degree-one two-control-point rational spline has an exact straight
@@ -343,6 +347,11 @@ pub mod monstertruck {
             .all(|boundary| validated_step_parameter_curve(boundary, &guide_points, tolerance))
         {
             return Ok(curve.clone());
+        }
+        if let Some(exact) =
+            planar_boundary_export::certified_planar_boundary_step_guide(curve, &points, tolerance)
+        {
+            return Ok(exact);
         }
         // Preserve each native parameter, including nonuniform adaptive
         // subdivisions and shifted input domains. A uniform 0..N knot
