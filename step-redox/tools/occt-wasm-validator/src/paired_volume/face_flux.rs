@@ -7,6 +7,17 @@ use occt_wasm::{OcctKernel, ShapeHandle};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod geodesic;
+mod rational_bezier;
+mod substitution;
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum AnalyticSphere {
+    Available { flux: geodesic::GeodesicFlux },
+    Unsupported { reason: String },
+}
+
 #[derive(Debug, Serialize)]
 struct FaceFlux {
     shell_occurrence: usize,
@@ -20,6 +31,8 @@ struct FaceFlux {
     error_estimate: [f64; 4],
     coarse_signed_volume: [f64; 4],
     coarse_error_estimate: [f64; 4],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analytic_sphere: Option<AnalyticSphere>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,6 +53,8 @@ pub struct FaceFluxReport {
     a: Vec<FaceFlux>,
     b: Vec<FaceFlux>,
     surface_families: Vec<FamilyFlux>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analytic_substitution: Option<substitution::Substitution>,
 }
 
 fn array<const N: usize>(values: Vec<f64>, label: &str) -> Result<[f64; N]> {
@@ -72,11 +87,19 @@ fn face_metadata(
     );
     let area = kernel.get_surface_area(face)?;
     ensure!(area.is_finite() && area >= 0.0, "invalid face area");
+    let surface_kind = kernel.surface_type(face)?;
+    let analytic_sphere =
+        (surface_kind == "sphere").then(|| match geodesic::evaluate(kernel, face, &orientation) {
+            Ok(flux) => AnalyticSphere::Available { flux },
+            Err(error) => AnalyticSphere::Unsupported {
+                reason: format!("{error:#}"),
+            },
+        });
     Ok(FaceFlux {
         shell_occurrence,
         face_occurrence,
         orientation,
-        surface_kind: kernel.surface_type(face)?,
+        surface_kind,
         area,
         bounds,
         uv_bounds: array(kernel.uv_bounds(face)?, "face UV bounds")?,
@@ -84,6 +107,7 @@ fn face_metadata(
         error_estimate: [0.0; 4],
         coarse_signed_volume: [0.0; 4],
         coarse_error_estimate: [0.0; 4],
+        analytic_sphere,
     })
 }
 
@@ -223,14 +247,21 @@ impl FaceFluxAccumulator {
         record_terms(&mut self.b, index, coarse[1], fine[1])
     }
 
-    pub(super) fn finish(self, references: [[f64; 3]; 4]) -> Result<FaceFluxReport> {
+    pub(super) fn finish(mut self, references: [[f64; 3]; 4]) -> Result<FaceFluxReport> {
+        for face in self.a.iter_mut().chain(&mut self.b) {
+            if let Some(AnalyticSphere::Available { flux }) = &mut face.analytic_sphere {
+                flux.set_references(references);
+            }
+        }
         let surface_families = families(&self.a, &self.b)?;
+        let analytic_substitution = substitution::summarize(&self.a, &self.b)?;
         Ok(FaceFluxReport {
             references,
             quadrature_eps: EPSILONS,
             a: self.a,
             b: self.b,
             surface_families,
+            analytic_substitution,
         })
     }
 }

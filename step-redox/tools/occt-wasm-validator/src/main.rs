@@ -3,6 +3,7 @@ mod geometry;
 mod manifest;
 mod occupancy;
 mod paired_volume;
+mod vector;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};

@@ -131,3 +131,19 @@ also sums the signed contributions by carrier type using the same accurate
 summation as paired volume. Carrier families can change under exact
 reconstruction, so a family difference alone is not a geometric error or a
 face correspondence. The optional report does not change acceptance policy.
+
+For spherical faces, the optional geodesic diagnostic reports an independent
+analytic signed area and volume flux for a convex single-wire polygon with
+minor great-circle edges. Native circles are checked analytically; finite
+nonperiodic rational B-spline trims are refined into homogeneous Bézier spans,
+then the full span's plane, squared radius and angular progression are checked
+using Bernstein coefficients. The bounds are computed in floating point,
+not interval arithmetic. Unsupported or ambiguous patches include an explicit
+reason. This result is diagnostic only and does not replace the quadrature
+volume or change the acceptance gate.
+
+When at least one spherical face can be independently evaluated, the report
+also includes `analytic_substitution`: the mixed analytic and quadrature
+volume at each reference, its direct signed-term difference, quadrature
+drift, reference spread and substituted/unsupported face counts. The
+original quadrature report and exit status remain unchanged.
