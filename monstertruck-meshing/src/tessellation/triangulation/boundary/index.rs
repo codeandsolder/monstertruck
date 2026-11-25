@@ -2,41 +2,22 @@
 //! queries. Broad-phase rejection never changes the narrow-phase predicate.
 
 use super::{InnerSpace, Itertools, Point2, SurfacePoint};
+use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 
-#[derive(Clone, Copy, Debug)]
-struct Bounds {
-    min: Point2,
-    max: Point2,
-}
+type UvBounds = Bounds<2>;
 
-impl Bounds {
-    const fn segment(front: Point2, back: Point2) -> Self {
-        Self {
-            min: Point2::new(front.x.min(back.x), front.y.min(back.y)),
-            max: Point2::new(front.x.max(back.x), front.y.max(back.y)),
-        }
-    }
-
-    const fn union(self, other: Self) -> Self {
-        Self {
-            min: Point2::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y)),
-            max: Point2::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y)),
-        }
-    }
-
-    fn center(self, axis: usize) -> f64 { self.min[axis].midpoint(self.max[axis]) }
-
+impl UvBounds {
     fn crossing(self, point: Point2) -> bool {
         // A horizontal ray to +U cannot cross a segment strictly left of
         // the query. Keep equality for exact on-edge rejection.
-        self.min.y <= point.y && point.y <= self.max.y && point.x <= self.max.x
+        self.low[1] <= point.y && point.y <= self.high[1] && point.x <= self.high[0]
     }
 
     fn near(self, point: Point2, slack: Point2) -> bool {
         let intervals: [(f64, f64); 2] = std::array::from_fn(|axis| {
             (
-                (self.min[axis] - point[axis]) / slack[axis],
-                (self.max[axis] - point[axis]) / slack[axis],
+                (self.low[axis] - point[axis]) / slack[axis],
+                (self.high[axis] - point[axis]) / slack[axis],
             )
         });
         // If the narrow-phase squared norm or dot product could overflow,
@@ -66,15 +47,15 @@ impl Bounds {
 struct Segment {
     front: Point2,
     back: Point2,
-    bounds: Bounds,
+    bounds: UvBounds,
 }
 
 impl Segment {
-    const fn new(front: Point2, back: Point2) -> Self {
+    fn new(front: Point2, back: Point2) -> Self {
         Self {
             front,
             back,
-            bounds: Bounds::segment(front, back),
+            bounds: UvBounds::from_points([[front.x, front.y], [back.x, back.y]]),
         }
     }
 
@@ -83,7 +64,7 @@ impl Segment {
     fn winding(self, point: Point2) -> Option<i64> {
         let coord = |p: Point2| robust::Coord { x: p.x, y: p.y };
         let determinant = robust::orient2d(coord(self.front), coord(self.back), coord(point));
-        if determinant == 0.0 && point.x >= self.bounds.min.x && point.x <= self.bounds.max.x {
+        if determinant == 0.0 && point.x >= self.bounds.low[0] && point.x <= self.bounds.high[0] {
             return None;
         }
         Some(
@@ -116,57 +97,9 @@ impl Segment {
 }
 
 #[derive(Clone, Debug)]
-enum Children {
-    Leaf(std::ops::Range<usize>),
-    Branch([usize; 2]),
-}
-
-#[derive(Clone, Debug)]
-struct Node {
-    bounds: Bounds,
-    children: Children,
-}
-
-#[derive(Clone, Debug)]
 pub(super) struct BoundaryIndex {
     segments: Vec<Segment>,
-    nodes: Vec<Node>,
-}
-
-// Small leaves amortize hierarchy traversal while retaining contiguous
-// segment storage. This is a performance parameter, not a geometric tolerance.
-const LEAF_SEGMENTS: usize = 8;
-
-fn build(segments: &mut [Segment], offset: usize, nodes: &mut Vec<Node>) -> usize {
-    let bounds = segments[1..]
-        .iter()
-        .fold(segments[0].bounds, |bounds, segment| {
-            bounds.union(segment.bounds)
-        });
-    let children = if segments.len() <= LEAF_SEGMENTS {
-        Children::Leaf(offset..offset + segments.len())
-    } else {
-        let axis = usize::from(bounds.max.y - bounds.min.y > bounds.max.x - bounds.min.x);
-        let middle = segments.len() / 2;
-        segments.select_nth_unstable_by(middle, |a, b| {
-            a.bounds
-                .center(axis)
-                .total_cmp(&b.bounds.center(axis))
-                .then_with(|| {
-                    a.bounds
-                        .center(1 - axis)
-                        .total_cmp(&b.bounds.center(1 - axis))
-                })
-        });
-        let (left, right) = segments.split_at_mut(middle);
-        Children::Branch([
-            build(left, offset, nodes),
-            build(right, offset + middle, nodes),
-        ])
-    };
-    let index = nodes.len();
-    nodes.push(Node { bounds, children });
-    index
+    hierarchy: SpatialHierarchy<2>,
 }
 
 impl BoundaryIndex {
@@ -186,44 +119,25 @@ impl BoundaryIndex {
                     .map(|(front, back)| Segment::new(front.uv, back.uv))
             })
             .collect::<Vec<_>>();
-        let mut nodes = Vec::new();
-        if !segments.is_empty() {
-            build(&mut segments, 0, &mut nodes);
-        }
-        Some(Self { segments, nodes })
-    }
-
-    fn visit(
-        &self,
-        index: usize,
-        overlaps: &impl Fn(Bounds) -> bool,
-        predicate: &mut impl FnMut(Segment) -> bool,
-    ) -> bool {
-        let node = &self.nodes[index];
-        if !overlaps(node.bounds) {
-            return true;
-        }
-        match &node.children {
-            Children::Leaf(range) => self.segments[range.clone()]
-                .iter()
-                .copied()
-                .filter(|segment| overlaps(segment.bounds))
-                .all(predicate),
-            Children::Branch(children) => children
-                .iter()
-                .all(|&child| self.visit(child, overlaps, predicate)),
-        }
+        let hierarchy = SpatialHierarchy::new(&mut segments, |segment| segment.bounds);
+        Some(Self {
+            segments,
+            hierarchy,
+        })
     }
 
     fn all_matching(
         &self,
-        overlaps: impl Fn(Bounds) -> bool,
+        overlaps: impl Fn(UvBounds) -> bool,
         mut predicate: impl FnMut(Segment) -> bool,
     ) -> bool {
-        self.nodes
-            .len()
-            .checked_sub(1)
-            .is_none_or(|root| self.visit(root, &overlaps, &mut predicate))
+        self.hierarchy.all_matching(&overlaps, |range| {
+            self.segments[range]
+                .iter()
+                .copied()
+                .filter(|segment| overlaps(segment.bounds))
+                .all(&mut predicate)
+        })
     }
 
     pub(super) fn contains(&self, point: Point2) -> bool {
@@ -275,7 +189,7 @@ mod tests {
     fn linear_contains(index: &BoundaryIndex, point: Point2) -> bool {
         let mut winding = 0_i64;
         for &segment in &index.segments {
-            if point.y < segment.bounds.min.y || point.y > segment.bounds.max.y {
+            if point.y < segment.bounds.low[1] || point.y > segment.bounds.high[1] {
                 continue;
             }
             let Some(crossings) = segment.winding(point) else {
