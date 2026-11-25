@@ -67,7 +67,7 @@ impl EndPoint {
         }
     }
     #[inline]
-    fn from_seg(seg: (f64, f64), segnum: usize, index: usize) -> [Self; 2] {
+    const fn from_seg(seg: (f64, f64), segnum: usize, index: usize) -> [Self; 2] {
         [
             Self::new(seg.0, EndPointType::Front, segnum, index),
             Self::new(seg.1, EndPointType::Back, segnum, index),
