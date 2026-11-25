@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Bounds<const N: usize> {
+pub struct Bounds<const N: usize> {
     pub(crate) low: [f64; N],
     pub(crate) high: [f64; N],
 }
@@ -59,7 +59,7 @@ struct Node<const N: usize> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SpatialHierarchy<const N: usize> {
+pub struct SpatialHierarchy<const N: usize> {
     nodes: Vec<Node<N>>,
 }
 
