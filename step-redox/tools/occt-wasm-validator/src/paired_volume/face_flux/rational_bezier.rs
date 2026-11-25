@@ -1,10 +1,32 @@
 //! Local homogeneous knot refinement and Bernstein product coefficients.
 //! Independent of the reconstruction kernel.
 
+use crate::vector::{Point, dot};
 use anyhow::{Result, ensure};
 use occt_wasm::NurbsCurveData;
 
 pub(super) type Homogeneous = [f64; 4];
+pub(super) const fn spatial(h: Homogeneous) -> Point { [h[0], h[1], h[2]] }
+
+/// Bound Q·Q/W²−1 over an entire positive-weight homogeneous Bézier span.
+/// The bound uses floating-point Bernstein coefficients, not interval arithmetic.
+pub(super) fn normalized_squared_radius_bound(span: &[Homogeneous]) -> Result<f64> {
+    ensure!(
+        span.len() >= 2
+            && span
+                .iter()
+                .all(|h| h[3] > 0.0 && h.iter().all(|v| v.is_finite())),
+        "invalid rational edge span"
+    );
+    let min_weight = span.iter().map(|p| p[3]).fold(f64::INFINITY, f64::min);
+    let residual = product(span, span, |a, b| dot(spatial(a), spatial(b)) - a[3] * b[3])?
+        .into_iter()
+        .map(f64::abs)
+        .fold(0.0, f64::max)
+        / min_weight.powi(2);
+    ensure!(residual.is_finite(), "nonfinite squared radius bound");
+    Ok(residual)
+}
 
 struct Curve {
     degree: usize,

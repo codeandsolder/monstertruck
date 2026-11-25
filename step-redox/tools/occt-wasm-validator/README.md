@@ -147,3 +147,24 @@ also includes `analytic_substitution`: the mixed analytic and quadrature
 volume at each reference, its direct signed-term difference, quadrature
 drift, reference spread and substituted/unsupported face counts. The
 original quadrature report and exit status remain unchanged.
+
+The spatial spherical boundary diagnostic additionally integrates the actual
+3-D trim rather than the imported UV pcurve. Native circle trims are
+represented as exact rational quadratic spans; finite clamped rational
+B-splines retain their homogeneous Bézier spans. Full-domain Bernstein
+squared-radius bounds, directed wire closure by native vertex identity, and
+two independent certified nonsingular gauges are required. Tiny gaps between
+trim endpoints and successive spans are closed by explicit radially projected
+short chords; their total normalized length is reported separately. Solid angle is recovered modulo the full
+sphere using the actual face orientation, and vector area follows from
+Stokes' boundary integral. Two quadrature tolerances, their estimated errors
+and gauge disagreement are reported separately. Multiple wires, small-circle
+trims and complementary spherical regions are supported; ambiguous empty/full
+regions and unsupported curves remain explicit rejections. The
+`spatial_substitution` diagnostic combines these fluxes with the original
+quadrature for other faces, without changing the raw gate or its exit status.
+Its separate `observed_within_tolerance` diagnostic requires every spherical
+face to be covered and the measured paired difference, coarse/fine drift,
+and shared-reference spread (plus the summed estimated spatial quadrature
+error) to fit the requested absolute tolerance. This is not a rigorous
+interval enclosure or an alternative process exit criterion.
