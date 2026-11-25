@@ -47,6 +47,8 @@ pub struct HybridPatchEvidence {
     pub vertex_displacement: f64,
     /// Maximum continuous two-sided facet deviation.
     pub deviation_upper_bound: f64,
+    /// Maximum bounded radial seam discrepancy within the patch.
+    pub seam_deviation_upper_bound: f64,
 }
 
 /// One global hybrid reconstruction. The input strict result is unchanged.
@@ -709,6 +711,7 @@ impl HybridInput<'_> {
             polygons: provenance,
             vertex_displacement: approximation.vertex_displacement,
             deviation_upper_bound: approximation.deviation_upper_bound,
+            seam_deviation_upper_bound: approximation.seam_deviation_upper_bound,
         })
     }
 }

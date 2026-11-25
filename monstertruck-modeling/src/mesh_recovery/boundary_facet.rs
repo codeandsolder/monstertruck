@@ -24,6 +24,9 @@ pub struct BoundaryFacetApproximation {
     /// Continuous two-sided distance bound to the source polygon's
     /// centroid fan, in source coordinate units.
     pub deviation_upper_bound: f64,
+    /// Maximum bounded discrepancy between a radial seam and the exact
+    /// curve endpoint fan, including the numerical certificate margin.
+    pub seam_deviation_upper_bound: f64,
 }
 
 /// Why a boundary-constrained facet cannot be certified.
@@ -105,6 +108,22 @@ struct Wedge {
     budget: f64,
 }
 
+// The native topology uses shared vertex rays. A fitted analytic curve
+// can have a distinct endpoint within the kernel's incidence tolerance
+// (e.g. independently fitted near-tangent carriers). Prove injectivity in
+// the actual curve's angular wedge AND confinement to the shared wedge
+// up to an explicitly measured endpoint discrepancy.
+struct AngularWedge {
+    half_plane: Vector3,
+    shared_rays: [Vector3; 2],
+    seam_gaps: [f64; 2],
+}
+
+struct FacetCurveCertificate {
+    deviation: f64,
+    seam_deviation: f64,
+}
+
 impl Wedge {
     // All projected control points must remain in the wedge bounded by
     // the two endpoint rays. The rational angular derivative has the
@@ -112,7 +131,7 @@ impl Wedge {
     // relative to the apex. The derivative of the denominator cancels.
     // A positive bound on every control/derivative pair certifies the
     // entire span by the Bernstein convex-hull property.
-    fn monotone(&self, controls: &[Vector4], allowance: f64) -> bool {
+    fn monotone(&self, controls: &[Vector4], allowance: f64, angular: &AngularWedge) -> bool {
         let max_weight = controls.iter().map(|p| p.w).fold(0.0_f64, f64::max);
         let local = controls
             .iter()
@@ -124,10 +143,17 @@ impl Wedge {
                 ) / max_weight
             })
             .collect::<Vec<_>>();
-        let in_wedge = local.iter().all(|&p| {
-            let roundoff = (64.0 * f64::EPSILON).mul_add(p.magnitude(), allowance);
-            cross(self.normal, self.rays[0], p) >= -roundoff * self.rays[0].magnitude()
-                && cross(self.normal, p, self.rays[1]) >= -roundoff * self.rays[1].magnitude()
+        let in_wedge = controls.iter().all(|&control| {
+            // Euclidean control hulls certify actual distances. In
+            // particular, never apply an unweighted homogeneous error
+            // margin as if it were a spatial seam-distance bound.
+            let p = rational_point(control) - self.apex;
+            let roundoff = 2.0 * allowance;
+            let [a, b] = angular.shared_rays;
+            let [gap_a, gap_b] = angular.seam_gaps;
+            p.dot(angular.half_plane) > roundoff
+                && cross(self.normal, a, p) >= -(gap_a + roundoff) * a.magnitude()
+                && cross(self.normal, p, b) >= -(gap_b + roundoff) * b.magnitude()
         });
         in_wedge
             && local.windows(2).all(|pair| {
@@ -150,6 +176,7 @@ impl Wedge {
         allowance: f64,
         depth: usize,
         remaining: &mut usize,
+        angular: &AngularWedge,
     ) -> Option<f64> {
         *remaining = remaining.checked_sub(1)?;
         let controls_vec = controls
@@ -173,7 +200,7 @@ impl Wedge {
         {
             return None;
         }
-        if bound <= self.budget && self.monotone(&controls_vec, allowance) {
+        if bound <= self.budget && self.monotone(&controls_vec, allowance, angular) {
             return Some(bound);
         }
         if depth == 0 {
@@ -181,12 +208,12 @@ impl Wedge {
         }
         let (left, right) = subdivide_homogeneous_bezier(controls)?;
         Some(
-            self.certify(&left, allowance, depth - 1, remaining)?
-                .max(self.certify(&right, allowance, depth - 1, remaining)?),
+            self.certify(&left, allowance, depth - 1, remaining, angular)?
+                .max(self.certify(&right, allowance, depth - 1, remaining, angular)?),
         )
     }
 
-    fn certify_curve(&self, curve: &BsplineCurve<Vector4>) -> Option<f64> {
+    fn certify_curve(&self, curve: &BsplineCurve<Vector4>) -> Option<FacetCurveCertificate> {
         let controls = curve.control_points();
         let min_weight = controls.iter().map(|p| p.w).fold(f64::INFINITY, f64::min);
         let max_weight = controls.iter().map(|p| p.w).fold(0.0_f64, f64::max);
@@ -208,6 +235,38 @@ impl Wedge {
         let point = |p: [f64; 4]| rational_point(Vector4::new(p[0], p[1], p[2], p[3]));
         let front = point(*spans.first()?.controls.first()?);
         let back = point(*spans.last()?.controls.last()?);
+        let actual_rays = [front - self.apex, back - self.apex];
+        let seam_gaps = std::array::from_fn(|i| (actual_rays[i] - self.rays[i]).magnitude());
+        let project = |ray: Vector3| ray - self.normal * self.normal.dot(ray);
+        let [a, b] = actual_rays.map(project);
+        let angular_error = (64.0 * f64::EPSILON * a.magnitude()).mul_add(
+            b.magnitude(),
+            allowance * (a.magnitude() + b.magnitude() + allowance),
+        );
+        if cross(self.normal, a, b) <= angular_error {
+            return None;
+        }
+        let shared_rays = self.rays.map(project);
+        if shared_rays.iter().any(|ray| ray.magnitude() <= allowance) {
+            return None;
+        }
+        // A positive half-plane, plus strict angular progress, prevents
+        // the curve from wrapping through the apex or leaving its actual
+        // endpoint wedge. It does not depend on nearly equal seam rays.
+        let half_plane = a.normalize() + b.normalize();
+        if half_plane.magnitude() <= 64.0 * f64::EPSILON {
+            return None;
+        }
+        let seam_deviation =
+            2.0_f64.mul_add(allowance, seam_gaps.into_iter().fold(0.0_f64, f64::max));
+        if !seam_deviation.is_finite() || seam_deviation > crate::KERNEL_EPSILON.min(self.budget) {
+            return None;
+        }
+        let angular = AngularWedge {
+            half_plane: half_plane.normalize(),
+            shared_rays,
+            seam_gaps,
+        };
         let endpoint_bound = (front - self.source[0])
             .magnitude()
             .max((back - self.source[1]).magnitude())
@@ -227,12 +286,21 @@ impl Wedge {
         }
         let mut remaining = 32768;
         let hull = spans.iter().try_fold(0.0_f64, |bound, span| {
-            Some(bound.max(self.certify(&span.controls, allowance, 16, &mut remaining)?))
+            Some(bound.max(self.certify(
+                &span.controls,
+                allowance,
+                16,
+                &mut remaining,
+                &angular,
+            )?))
         })?;
         // Include the maximum numerically unresolved join gap for the
         // reverse (chord-to-curve) inclusion.
         let bound = hull.max(endpoint_bound) + allowance;
-        (bound <= self.budget).then_some(bound)
+        (bound <= self.budget).then_some(FacetCurveCertificate {
+            deviation: bound,
+            seam_deviation,
+        })
     }
 
     fn surface(&self, curve: &BsplineCurve<Vector4>) -> Option<Surface> {
@@ -262,7 +330,10 @@ impl Wedge {
 /// the curve's projection onto the chord, together with the endpoint
 /// displacement bound, proves the reverse distance bound as well; convex
 /// interpolation from the apex transfers both bounds to the whole fan.
-/// The projected angular derivative prevents folds within each wedge.
+/// The projected angular derivative prevents folds in each actual curve
+/// wedge. The shared native wedge is additionally bounded by the measured
+/// endpoint discrepancies, at most the kernel incidence tolerance; this
+/// reports a seam uncertainty rather than claiming exact nonoverlap.
 ///
 /// # Errors
 /// Rejects invalid winding, degenerate or nonconvex projected facets,
@@ -314,6 +385,7 @@ pub fn approximate_boundary_facet(
         .collect::<Vec<_>>();
     let mut faces = Vec::with_capacity(edges.len());
     let mut upper = 0.0_f64;
+    let mut seam_upper = 0.0_f64;
     for (i, edge) in edges.iter().enumerate() {
         let next = (i + 1) % edges.len();
         if !edge.is_geometric_consistent() {
@@ -333,8 +405,11 @@ pub fn approximate_boundary_facet(
             rays: [native[i] - apex, native[next] - apex],
             budget,
         };
-        let bound = wedge.certify_curve(&curve).ok_or(Uncertified)?;
-        upper = upper.max(bound).max((native[i] - source[i]).magnitude());
+        let certificate = wedge.certify_curve(&curve).ok_or(Uncertified)?;
+        upper = upper
+            .max(certificate.deviation)
+            .max((native[i] - source[i]).magnitude());
+        seam_upper = seam_upper.max(certificate.seam_deviation);
         let surface = wedge.surface(&curve).ok_or(NativeFace)?;
         let face = Face::new(
             vec![Wire::from(vec![
@@ -353,6 +428,7 @@ pub fn approximate_boundary_facet(
     Ok(BoundaryFacetApproximation {
         faces,
         deviation_upper_bound: upper,
+        seam_deviation_upper_bound: seam_upper,
     })
 }
 
@@ -384,6 +460,42 @@ mod tests {
             builder::line(&b, &c),
             builder::line(&c, &a),
         ])
+    }
+
+    #[test]
+    fn near_tangent_endpoint_discrepancy_is_bounded_not_snapped()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let [a, b, c] = source().map(builder::vertex);
+        let offset = 5.0e-8;
+        let curve = Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                Vector4::new(-offset, 0.0, 0.0, 1.0),
+                Vector4::new(1.0, 0.0, 0.05, 1.0),
+                b.point().to_vec().extend(1.0),
+            ],
+        )?));
+        let edges = [
+            Edge::new(&a, &b, curve)?,
+            builder::line(&b, &c),
+            builder::line(&c, &a),
+        ];
+        let approximation = approximate_boundary_facet(&source(), &edges, 0.1)?;
+        assert!(approximation.seam_deviation_upper_bound >= offset);
+        assert!(approximation.seam_deviation_upper_bound < 1.0e-7);
+        let wire = approximation.faces[0]
+            .boundaries()
+            .into_iter()
+            .next()
+            .ok_or("boundary")?;
+        assert_eq!(wire[0], edges[0]);
+        assert!(
+            approximation
+                .faces
+                .iter()
+                .all(Face::is_geometric_consistent)
+        );
+        Ok(())
     }
 
     #[test]

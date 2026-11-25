@@ -1,5 +1,5 @@
 //! Label-blind feasibility census of bounded hybrid region replacements.
-//! This does not modify the strict recovery or claim complete shell repair.
+//! Strict recovery remains unchanged; the global trial can export a complete hybrid shell.
 //! Each attempted patch retains all other regions as analytic constraints.
 
 use anyhow::{Context, Result};
@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
-    io::BufReader,
-    path::PathBuf,
+    io::{BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -156,7 +156,8 @@ impl PatchAttempt<'_> {
                 json!({"regions":group,"source_polygons":polygons,"required_polygons":required,
                     "native_faces":patch.approximation.shell.len(),"boundary_edges":patch.boundary_edges.len(),
                     "vertex_displacement":patch.approximation.vertex_displacement,
-                    "deviation_bound":patch.approximation.deviation_upper_bound})
+                    "deviation_bound":patch.approximation.deviation_upper_bound,
+                    "seam_deviation_bound":patch.approximation.seam_deviation_upper_bound})
             }
             Err(error) => {
                 *census.failures.entry(failure_class(error)).or_default() += 1;
@@ -181,9 +182,10 @@ fn global_trial(
     recovery: &RecoveredAnalyticMesh,
     options: RegionPatchOptions,
     selected: &BTreeSet<usize>,
-) -> Value {
+    shell_output: Option<&Path>,
+) -> Result<Value> {
     if selected.is_empty() {
-        return json!({"status":"no_candidates"});
+        return Ok(json!({"status":"no_candidates"}));
     }
     let start = Instant::now();
     let analytic = AnalyticRecoveryOptions::default();
@@ -192,43 +194,61 @@ fn global_trial(
         intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
         angular_resolution: analytic.axis_relative_resolution,
     };
-    match recovery.construct_hybrid(
-        &selected.iter().copied().collect::<Vec<_>>(),
-        options,
-        strict,
-    ) {
-        Ok(result) => {
-            let before = recovery
-                .native
-                .regions
-                .iter()
-                .filter(|r| r.faces.is_err())
-                .count();
-            let after = result
-                .native
-                .regions
-                .iter()
-                .filter(|r| r.faces.is_err())
-                .count();
-            let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
-            let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
-            let shell = result.complete_shell();
-            json!({"status":"ok","selected_regions":selected.len(),
+    Ok(
+        match recovery.construct_hybrid(
+            &selected.iter().copied().collect::<Vec<_>>(),
+            options,
+            strict,
+        ) {
+            Ok(result) => {
+                let before = recovery
+                    .native
+                    .regions
+                    .iter()
+                    .filter(|r| r.faces.is_err())
+                    .count();
+                let after = result
+                    .native
+                    .regions
+                    .iter()
+                    .filter(|r| r.faces.is_err())
+                    .count();
+                let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
+                let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
+                let shell = result.complete_shell();
+                let mut shell_exported = false;
+                if let (Some(path), Some(shell)) = (shell_output, &shell) {
+                    let mut writer = BufWriter::new(
+                        File::create_new(path)
+                            .with_context(|| format!("creating {}", path.display()))?,
+                    );
+                    serde_json::to_writer(&mut writer, &shell.compress())?;
+                    writer.flush()?;
+                    shell_exported = true;
+                }
+                json!({"status":"ok","selected_regions":selected.len(),
                 "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
                 "before_failed_regions":before,"failed_regions":after,
                 "before_failed_trims":old_trims,"failed_trims":new_trims,
                 "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
                 "approximate_polygons":result.patches.iter().map(|p|p.polygons.len()).sum::<usize>(),
                 "max_deviation":result.patches.iter().map(|p|p.deviation_upper_bound).fold(0.0_f64,f64::max),
+                "max_seam_deviation":result.patches.iter().map(|p|p.seam_deviation_upper_bound).fold(0.0_f64,f64::max),
                 "shell_condition":shell.as_ref().map(|s|format!("{:?}",s.shell_condition())),
+                "native_faces":shell.as_ref().map(|s|s.len()),"shell_exported":shell_exported,
                 "seconds":start.elapsed().as_secs_f64()})
-        }
-        Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
+            }
+            Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
             "error":error.to_string(),"seconds":start.elapsed().as_secs_f64()}),
-    }
+        },
+    )
 }
 
-fn census(recovery: &RecoveredAnalyticMesh, budget: SurfaceRegionBudget) -> Result<Value> {
+fn census(
+    recovery: &RecoveredAnalyticMesh,
+    budget: SurfaceRegionBudget,
+    shell_output: Option<&Path>,
+) -> Result<Value> {
     let index = RegionBoundaryIndex::new(&recovery.evidence)?;
     let partition = &recovery.reconciled.partition;
     let options = RegionPatchOptions {
@@ -291,7 +311,7 @@ fn census(recovery: &RecoveredAnalyticMesh, budget: SurfaceRegionBudget) -> Resu
         ),
         (
             "global_hybrid".to_string(),
-            global_trial(recovery, options, &selected),
+            global_trial(recovery, options, &selected, shell_output)?,
         ),
     ]);
     Ok(report)
@@ -309,19 +329,24 @@ fn main() -> Result<()> {
     };
     let vertex = read_budget(args.next())?;
     let chord = read_budget(args.next())?;
+    let shell_output = args.next().map(PathBuf::from);
     anyhow::ensure!(
         args.next().is_none()
             && vertex.is_finite()
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET"
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON]"
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
     let recovery = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
     let recovery_seconds = start.elapsed().as_secs_f64();
-    let report = census(&recovery, SurfaceRegionBudget { vertex, chord })?;
+    let report = census(
+        &recovery,
+        SurfaceRegionBudget { vertex, chord },
+        shell_output.as_deref(),
+    )?;
     println!(
         "{}",
         json!({"source":path,"recovery_seconds":recovery_seconds,"hybrid":report})

@@ -34,6 +34,8 @@ pub struct BoundaryPatchApproximation {
     /// Maximum continuous two-sided deviation of a reconstructed facet
     /// from its source centroid fan.
     pub deviation_upper_bound: f64,
+    /// Maximum bounded radial seam discrepancy over all reconstructed facets.
+    pub seam_deviation_upper_bound: f64,
 }
 
 /// The patch could not be constructed with the requested topology and budgets.
@@ -126,7 +128,7 @@ pub fn approximate_boundary_patch(
     prescribed: &[PrescribedSourceEdge],
     budget: SurfaceRegionBudget,
 ) -> Result<BoundaryPatchApproximation, BoundaryPatchError> {
-    use BoundaryPatchError::{InvalidIncidence, InvalidJunction, InvalidShell};
+    use BoundaryPatchError::{InvalidIncidence, InvalidJunction};
     if !budget.vertex.is_finite()
         || budget.vertex < 0.0
         || !budget.chord.is_finite()
@@ -182,9 +184,31 @@ pub fn approximate_boundary_patch(
             .entry(key)
             .or_insert_with(|| builder::line(&vertices[&key[0]], &vertices[&key[1]]));
     }
+    assemble_patch_faces(
+        source,
+        polygons,
+        &edges,
+        budget,
+        vertex_displacement,
+        expected_closed,
+    )
+}
+
+// The topology stage above owns all shared source edges and vertices.
+// This stage owns per-polygon face construction and shell validation.
+fn assemble_patch_faces(
+    source: &[Point3],
+    polygons: &[&[usize]],
+    edges: &BTreeMap<[usize; 2], Edge>,
+    budget: SurfaceRegionBudget,
+    vertex_displacement: f64,
+    expected_closed: bool,
+) -> Result<BoundaryPatchApproximation, BoundaryPatchError> {
+    use BoundaryPatchError::InvalidShell;
     let mut faces = Vec::new();
     let mut source_face_ranges = Vec::with_capacity(polygons.len());
     let mut deviation_upper_bound = 0.0_f64;
+    let mut seam_deviation_upper_bound = 0.0_f64;
     for (polygon, indices) in polygons.iter().enumerate() {
         let points = indices.iter().map(|&i| source[i]).collect::<Vec<_>>();
         let boundary = indices
@@ -203,6 +227,8 @@ pub fn approximate_boundary_patch(
         let approximation = approximate_boundary_facet(&points, &boundary, budget.chord)
             .map_err(|error| BoundaryPatchError::Facet { polygon, error })?;
         deviation_upper_bound = deviation_upper_bound.max(approximation.deviation_upper_bound);
+        seam_deviation_upper_bound =
+            seam_deviation_upper_bound.max(approximation.seam_deviation_upper_bound);
         let first = faces.len();
         faces.extend(approximation.faces);
         source_face_ranges.push(first..faces.len());
@@ -225,6 +251,7 @@ pub fn approximate_boundary_patch(
         source_face_ranges,
         vertex_displacement,
         deviation_upper_bound,
+        seam_deviation_upper_bound,
     })
 }
 
