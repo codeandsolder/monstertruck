@@ -4,7 +4,7 @@
 //! or interpolation is used: every claimed loft wall is a matching source
 //! planar quadrilateral with identical topology and geometric vertices.
 
-use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
+use crate::brep::{CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
@@ -352,10 +352,11 @@ pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtensio
 /// Discover source-witnessed ruled end sections, including multi-stage
 /// planar strips and analytic walls continuing into an earlier core.
 pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    let planes = incident_planar_supports(solid);
     solid
         .faces()
         .filter_map(|cap| {
-            terminal_sectioned_ruled_extension(solid, cap)
+            terminal_sectioned_ruled_extension(solid, cap, &planes)
                 .or_else(|| terminal_ruled_extension(solid, cap))
                 .or_else(|| terminal_extended_planar_ruled_extension(solid, cap))
         })
@@ -624,8 +625,61 @@ fn next_quad_wall_ring(
     Some((next, walls))
 }
 
+/// Index the actual analytic plane equations incident to each source vertex.
+fn incident_planar_supports(solid: &ReducedSolid) -> BTreeMap<u64, Vec<PlaneSupport>> {
+    let mut result = BTreeMap::<u64, Vec<PlaneSupport>>::new();
+    for face in solid.faces() {
+        let SurfaceSupport::Plane(plane) = face.surface else {
+            continue;
+        };
+        let vertices = face
+            .loop_edges()
+            .flat_map(|edge| [edge.start_vertex, edge.end_vertex])
+            .collect::<BTreeSet<_>>();
+        for vertex in vertices {
+            result.entry(vertex).or_default().push(plane);
+        }
+    }
+    result
+}
+
+/// When three independent source planes determine a corner, intersect their
+/// authored equations instead of amplifying rounded STEP vertex errors into
+/// the normals of short loft walls. Solve in coordinates local to the witness.
+fn planar_corner(planes: &[PlaneSupport], witness: [f64; 3]) -> Option<[f64; 3]> {
+    let mut best = None;
+    let mut best_det = DIR_TOL;
+    for (i, first) in planes.iter().enumerate() {
+        for (j, second) in planes.iter().enumerate().skip(i + 1) {
+            for third in planes.iter().skip(j + 1) {
+                let determinant = dot(first.normal, cross(second.normal, third.normal)).abs();
+                if determinant > best_det {
+                    best_det = determinant;
+                    best = Some([first, second, third]);
+                }
+            }
+        }
+    }
+    // Rank-deficient incidences do not determine a replacement point.
+    let point = if let Some([first, second, third]) = best {
+        let local = |plane: &PlaneSupport| (plane.normal, sub(plane.origin_mm, witness));
+        crate::math3::add(
+            witness,
+            intersect_three_planes(local(first), local(second), local(third))?,
+        )
+    } else {
+        witness
+    };
+    (distance(point, witness) <= TOL_MM
+        && planes
+            .iter()
+            .all(|plane| dot(sub(point, plane.origin_mm), plane.normal).abs() <= TOL_MM))
+    .then_some(point)
+}
+
 fn section_from_wall_ring(
     ring: &[OrientedEdgeUse],
+    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
     origin: [f64; 3],
     axis: [f64; 3],
     x: [f64; 3],
@@ -647,8 +701,11 @@ fn section_from_wall_ring(
     }
     let vertices = seen
         .into_iter()
-        .map(|(id, point)| Vertex { id, point })
-        .collect::<Vec<_>>();
+        .map(|(id, witness)| {
+            let point = planar_corner(planes.get(&id)?.as_slice(), witness)?;
+            Some(Vertex { id, point })
+        })
+        .collect::<Option<Vec<_>>>()?;
     let level = dot(sub(vertices.first()?.point, origin), axis);
     if vertices
         .iter()
@@ -665,6 +722,7 @@ fn section_from_wall_ring(
 fn terminal_sectioned_ruled_extension(
     solid: &ReducedSolid,
     cap: &ReducedFace,
+    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
 ) -> Option<RuledEndExtension> {
     if !plane_quad(cap) {
         return None;
@@ -672,21 +730,32 @@ fn terminal_sectioned_ruled_extension(
     let SurfaceSupport::Plane(plane) = cap.surface else {
         return None;
     };
-    let origin = cap.loops.first()?.edges.first()?.start_mm;
-    let axis = normalize(plane.normal, DIR_TOL)?;
     let first_edge = cap.loops.first()?.edges.first()?;
-    let x = normalize(sub(first_edge.end_mm, first_edge.start_mm), DIR_TOL)?;
-    if dot(x, axis).abs() > DIR_TOL {
+    let origin = planar_corner(planes.get(&first_edge.start_vertex)?, first_edge.start_mm)?;
+    let axis = normalize(plane.normal, DIR_TOL)?;
+    let CurveSupport::Line(line) = first_edge.support else {
+        return None;
+    };
+    let direction = normalize(line.direction, DIR_TOL)?;
+    if dot(direction, axis).abs() > DIR_TOL {
         return None;
     }
-    let y = normalize(cross(axis, x), DIR_TOL)?;
+    let direction = if dot(direction, sub(first_edge.end_mm, first_edge.start_mm)) < 0.0 {
+        crate::math3::mul(direction, -1.0)
+    } else {
+        direction
+    };
+    let y = normalize(cross(axis, direction), DIR_TOL)?;
+    let x = normalize(cross(y, axis), DIR_TOL)?;
     let mut current = cap.loops.first()?.edges.clone();
-    let mut sections = vec![section_from_wall_ring(&current, origin, axis, x, y)?];
+    let mut sections = vec![section_from_wall_ring(
+        &current, planes, origin, axis, x, y,
+    )?];
     let mut consumed = BTreeSet::from([cap.id]);
     let mut wall_ids = Vec::new();
     let mut direction = 0.0_f64;
     while let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) {
-        let Some(stage) = section_from_wall_ring(&next, origin, axis, x, y) else {
+        let Some(stage) = section_from_wall_ring(&next, planes, origin, axis, x, y) else {
             break;
         };
         let previous = sections.last()?.level;
