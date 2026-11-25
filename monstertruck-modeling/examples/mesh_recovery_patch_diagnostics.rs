@@ -216,16 +216,17 @@ fn global_trial(
                 let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
                 let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
                 let shell = result.complete_shell();
-                let mut shell_exported = false;
-                if let (Some(path), Some(shell)) = (shell_output, &shell) {
+                let shell_exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
                     let mut writer = BufWriter::new(
                         File::create_new(path)
                             .with_context(|| format!("creating {}", path.display()))?,
                     );
                     serde_json::to_writer(&mut writer, &shell.compress())?;
                     writer.flush()?;
-                    shell_exported = true;
-                }
+                    true
+                } else {
+                    false
+                };
                 json!({"status":"ok","selected_regions":selected.len(),
                 "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
                 "before_failed_regions":before,"failed_regions":after,
