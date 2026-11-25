@@ -113,10 +113,10 @@ fn add_constraint_through_existing_vertices(
 }
 
 fn surface_is_nearly_planar(surface: &impl PreMeshableSurface, boundary: &PolyBoundary) -> bool {
-    let u0 = boundary.uv_min.x;
-    let u1 = boundary.uv_max.x;
-    let v0 = boundary.uv_min.y;
-    let v1 = boundary.uv_max.y;
+    let u0 = boundary.uv_min().x;
+    let u1 = boundary.uv_max().x;
+    let v0 = boundary.uv_min().y;
+    let v1 = boundary.uv_max().y;
     if [u0, u1, v0, v1].into_iter().all(f64::is_finite) {
         let center = (f64::midpoint(u0, u1), f64::midpoint(v0, v1));
         let normal = surface.normal(center.0, center.1);
@@ -240,7 +240,7 @@ where
         "cdt_boundary",
         format!(
             "loops={} boundary_vertices={boundary_vertices} constraints={added_constraints} skipped_constraints={skipped_constraints}",
-            polyboundary.loops.len(),
+            polyboundary.loops().len(),
         ),
         insert_boundary_start,
     );
@@ -394,8 +394,8 @@ where
     S: PreMeshableSurface,
 {
     let range = (
-        (polyboundary.uv_min.x, polyboundary.uv_max.x),
-        (polyboundary.uv_min.y, polyboundary.uv_max.y),
+        (polyboundary.uv_min().x, polyboundary.uv_max().x),
+        (polyboundary.uv_min().y, polyboundary.uv_max().y),
     );
     let division_start = Instant::now();
     let (udiv, vdiv) = densify_surface_divisions(
@@ -946,8 +946,8 @@ fn insert_surface(
     face_idx: usize,
 ) {
     let range = (
-        (polyline.uv_min.x, polyline.uv_max.x),
-        (polyline.uv_min.y, polyline.uv_max.y),
+        (polyline.uv_min().x, polyline.uv_max().x),
+        (polyline.uv_min().y, polyline.uv_max().y),
     );
     if surface_is_nearly_planar(&surface, polyline) {
         log_mesh_trace(

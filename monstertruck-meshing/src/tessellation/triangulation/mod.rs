@@ -640,11 +640,11 @@ fn tessellate_preboundary<S: PreMeshableSurface>(
         "polyboundary",
         format!(
             "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-            boundary.loops.len(),
-            boundary.uv_min.x,
-            boundary.uv_min.y,
-            boundary.uv_max.x,
-            boundary.uv_max.y,
+            boundary.loops().len(),
+            boundary.uv_min().x,
+            boundary.uv_min().y,
+            boundary.uv_max().x,
+            boundary.uv_max().y,
         ),
         close_start,
     );
@@ -1181,11 +1181,11 @@ fn tessellate_trimmed_preboundary<S: PreMeshableSurface>(
         "polyboundary",
         format!(
             "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-            boundary.loops.len(),
-            boundary.uv_min.x,
-            boundary.uv_min.y,
-            boundary.uv_max.x,
-            boundary.uv_max.y,
+            boundary.loops().len(),
+            boundary.uv_min().x,
+            boundary.uv_min().y,
+            boundary.uv_max().x,
+            boundary.uv_max().y,
         ),
         close_start,
     );
