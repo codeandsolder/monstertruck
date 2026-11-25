@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod geodesic;
 mod rational_bezier;
+mod spatial_sphere;
 mod substitution;
 
 #[derive(Debug, Serialize)]
@@ -16,6 +17,17 @@ mod substitution;
 enum AnalyticSphere {
     Available { flux: geodesic::GeodesicFlux },
     Unsupported { reason: String },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum SpatialSphere {
+    Available {
+        flux: Box<spatial_sphere::SpatialFlux>,
+    },
+    Unsupported {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -33,6 +45,8 @@ struct FaceFlux {
     coarse_error_estimate: [f64; 4],
     #[serde(skip_serializing_if = "Option::is_none")]
     analytic_sphere: Option<AnalyticSphere>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spatial_sphere: Option<SpatialSphere>,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +69,8 @@ pub struct FaceFluxReport {
     surface_families: Vec<FamilyFlux>,
     #[serde(skip_serializing_if = "Option::is_none")]
     analytic_substitution: Option<substitution::Substitution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spatial_substitution: Option<substitution::Substitution>,
 }
 
 fn array<const N: usize>(values: Vec<f64>, label: &str) -> Result<[f64; N]> {
@@ -95,6 +111,16 @@ fn face_metadata(
                 reason: format!("{error:#}"),
             },
         });
+    let spatial_sphere = (surface_kind == "sphere").then(|| {
+        match spatial_sphere::evaluate(kernel, face, &orientation) {
+            Ok(flux) => SpatialSphere::Available {
+                flux: Box::new(flux),
+            },
+            Err(error) => SpatialSphere::Unsupported {
+                reason: format!("{error:#}"),
+            },
+        }
+    });
     Ok(FaceFlux {
         shell_occurrence,
         face_occurrence,
@@ -108,6 +134,7 @@ fn face_metadata(
         coarse_signed_volume: [0.0; 4],
         coarse_error_estimate: [0.0; 4],
         analytic_sphere,
+        spatial_sphere,
     })
 }
 
@@ -247,14 +274,24 @@ impl FaceFluxAccumulator {
         record_terms(&mut self.b, index, coarse[1], fine[1])
     }
 
-    pub(super) fn finish(mut self, references: [[f64; 3]; 4]) -> Result<FaceFluxReport> {
+    pub(super) fn finish(
+        mut self,
+        references: [[f64; 3]; 4],
+        tolerance: f64,
+    ) -> Result<FaceFluxReport> {
         for face in self.a.iter_mut().chain(&mut self.b) {
             if let Some(AnalyticSphere::Available { flux }) = &mut face.analytic_sphere {
                 flux.set_references(references);
             }
+            if let Some(SpatialSphere::Available { flux }) = &mut face.spatial_sphere {
+                flux.set_references(references);
+            }
         }
         let surface_families = families(&self.a, &self.b)?;
-        let analytic_substitution = substitution::summarize(&self.a, &self.b)?;
+        let analytic_substitution =
+            substitution::summarize(&self.a, &self.b, substitution::Method::Geodesic, tolerance)?;
+        let spatial_substitution =
+            substitution::summarize(&self.a, &self.b, substitution::Method::Spatial, tolerance)?;
         Ok(FaceFluxReport {
             references,
             quadrature_eps: EPSILONS,
@@ -262,6 +299,7 @@ impl FaceFluxAccumulator {
             b: self.b,
             surface_families,
             analytic_substitution,
+            spatial_substitution,
         })
     }
 }
