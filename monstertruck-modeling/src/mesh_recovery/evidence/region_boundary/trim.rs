@@ -28,7 +28,7 @@ pub enum SharedTrimGeometry {
     Line(ContactLineEvidence),
     /// Monotone circular arc or full ring with independent sample evidence.
     Circle(ContactCircleEvidence),
-    /// Finite exact rational plane/linear-revolution conic branch.
+    /// Finite rational conic branch with independently certified carrier containment.
     Conic(ContactConicEvidence),
     /// No accepted analytic hypothesis for these original edges.
     Unresolved,

@@ -433,9 +433,10 @@ fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
                 profile_radius: circle.radius,
             },
         ],
-        // The conic is exactly the intersection of the two already
-        // supplied incident carriers. No redundant fitted constraint.
-        SharedTrimGeometry::Conic(_) | SharedTrimGeometry::Unresolved => Vec::new(),
+        // A derived bisector plane resolves the branch where the two
+        // cylinder gradients become parallel at their intersection.
+        SharedTrimGeometry::Conic(conic) => conic.auxiliary_plane().into_iter().collect(),
+        SharedTrimGeometry::Unresolved => Vec::new(),
     }
 }
 
