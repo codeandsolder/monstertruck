@@ -44,6 +44,97 @@ impl SphereSeed {
     }
 }
 
+// Fit the center in a source-local frame by solving the centered
+// squared-distance equations directly with pivoted, reorthogonalized QR.
+// Centering eliminates the constant coefficient without forming the
+// normal equations (which would square the condition number).
+fn fit_sphere(points: &[Point3], ids: &[usize]) -> Option<SphereSeed> {
+    if ids.len() < 5 {
+        return None;
+    }
+    let first = *points.get(*ids.first()?)?;
+    let count = crate::usize_to_f64(ids.len());
+    let mean = ids
+        .iter()
+        .map(|&id| points[id] - first)
+        .fold(Vector3::new(0.0, 0.0, 0.0), |sum, p| sum + p)
+        / count;
+    let origin = first + mean;
+    let local = ids
+        .iter()
+        .map(|&id| points[id] - origin)
+        .collect::<Vec<_>>();
+    let scale = local.iter().map(|p| p.magnitude()).fold(0.0_f64, f64::max);
+    if scale <= 0.0 || !scale.is_finite() {
+        return None;
+    }
+    let local = local.into_iter().map(|p| p / scale).collect::<Vec<_>>();
+    let mean_squared = local.iter().map(|p| p.magnitude2()).sum::<f64>() / count;
+    let rhs = local
+        .iter()
+        .map(|p| 0.5 * (p.magnitude2() - mean_squared))
+        .collect::<Vec<_>>();
+    let mut columns = [0, 1, 2].map(|axis| local.iter().map(|p| p[axis]).collect::<Vec<_>>());
+    let dot = |a: &[f64], b: &[f64]| {
+        a.iter()
+            .zip(b)
+            .fold(0.0_f64, |sum, (&a, &b)| a.mul_add(b, sum))
+    };
+    let mut permutation = [0, 1, 2];
+    let mut upper = [[0.0_f64; 3]; 3];
+    let mut projected = [0.0_f64; 3];
+    let initial_norm = columns
+        .iter()
+        .map(|c| dot(c, c))
+        .fold(0.0_f64, f64::max)
+        .sqrt();
+    for i in 0..3 {
+        let pivot = (i..3).max_by(|&a, &b| {
+            dot(&columns[a], &columns[a]).total_cmp(&dot(&columns[b], &columns[b]))
+        })?;
+        columns.swap(i, pivot);
+        permutation.swap(i, pivot);
+        for row in upper.iter_mut().take(i) {
+            row.swap(i, pivot);
+        }
+        let norm = dot(&columns[i], &columns[i]).sqrt();
+        if norm <= initial_norm * 128.0 * f64::EPSILON || !norm.is_finite() {
+            return None;
+        }
+        upper[i][i] = norm;
+        for v in &mut columns[i] {
+            *v /= norm;
+        }
+        projected[i] = dot(&columns[i], &rhs);
+        for j in i + 1..3 {
+            for _ in 0..2 {
+                let projection = dot(&columns[i], &columns[j]);
+                upper[i][j] += projection;
+                for k in 0..ids.len() {
+                    columns[j][k] = (-projection).mul_add(columns[i][k], columns[j][k]);
+                }
+            }
+        }
+    }
+    let mut solution = [0.0_f64; 3];
+    for i in (0..3).rev() {
+        solution[i] = ((i + 1..3).fold(projected[i], |sum, j| {
+            (-upper[i][j]).mul_add(solution[j], sum)
+        })) / upper[i][i];
+    }
+    let mut offset = Vector3::new(0.0, 0.0, 0.0);
+    for (i, axis) in permutation.into_iter().enumerate() {
+        offset[axis] = solution[i] * scale;
+    }
+    let center = origin + offset;
+    let radius = ids
+        .iter()
+        .map(|&id| (points[id] - center).magnitude())
+        .sum::<f64>()
+        / count;
+    (radius > 0.0 && radius.is_finite()).then_some(SphereSeed { center, radius })
+}
+
 // Bound the residual of every point of an original polygon, not merely
 // its vertices or perimeter. A planar disk with a co-spherical rim is not
 // necessarily a good spherical approximation. Orthogonal projection onto
@@ -266,6 +357,67 @@ impl SphereDiscovery<'_> {
         accepted.sort_unstable();
         accepted
     }
+    // An initial local fit may have used perturbed trim samples.
+    // The expanded candidate supplies interior vertices independently
+    // of its boundary. Refit only those vertices, then independently
+    // recover a precise connected core and revalidate the entire union.
+    fn refit_interior(
+        &self,
+        index: &RegionBoundaryIndex<'_>,
+        expanded: &[usize],
+        seed: SphereSeed,
+        outward: bool,
+    ) -> Option<(SphereSeed, Vec<usize>, Vec<usize>)> {
+        let boundary = index.boundary(expanded).ok()?;
+        let boundary_vertices = boundary
+            .loops
+            .iter()
+            .flatten()
+            .flat_map(|edge| edge.vertices)
+            .collect::<BTreeSet<_>>();
+        let interior = expanded
+            .iter()
+            .flat_map(|&id| self.samples[id].vertices.iter().copied())
+            .filter(|id| !boundary_vertices.contains(id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let fitted = fit_sphere(&self.evidence.positions, &interior)?;
+        let error = |sphere: SphereSeed| {
+            interior
+                .iter()
+                .map(|&id| {
+                    ((self.evidence.positions[id] - sphere.center).magnitude() - sphere.radius)
+                        .abs()
+                })
+                .fold(0.0_f64, f64::max)
+        };
+        let tolerance = self.strict_tolerance(fitted);
+        // A new carrier must be better supported on the interior, not
+        // merely interpolate a different subset of seam samples.
+        if error(fitted) > tolerance || error(fitted) >= error(seed) {
+            return None;
+        }
+        let mut checked = BTreeSet::new();
+        let mut best = Vec::new();
+        for &id in expanded {
+            if checked.contains(&id) {
+                continue;
+            }
+            let core = self.grow(id, fitted, outward, tolerance);
+            checked.insert(id);
+            checked.extend(core.iter().copied());
+            if core.len() > best.len() && independently_tested(self.evidence, &core, tolerance) {
+                best = core;
+            }
+        }
+        let &start = best.first()?;
+        let grown = self.grow(start, fitted, outward, self.surface_tolerance(fitted));
+        if !expanded.iter().all(|id| grown.binary_search(id).is_ok()) {
+            return None;
+        }
+        Some((fitted, best, grown))
+    }
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
@@ -330,19 +482,20 @@ impl<'a> RegionBoundaryIndex<'a> {
             for &support in &supports {
                 discovery.seen[support].push(id);
             }
+            let expanded = discovery.grow(a, sphere, outward, discovery.surface_tolerance(sphere));
+            let (sphere, supports, expanded) = discovery
+                .refit_interior(self, &expanded, sphere, outward)
+                .unwrap_or((sphere, supports, expanded));
+            let tolerance = discovery.strict_tolerance(sphere);
             let carrier = SurfaceCarrier::CircularRevolution {
                 axial_center: sphere.center,
                 axis: Vector3::unit_z(),
                 radial_center: 0.0,
                 profile_radius: sphere.radius,
             };
-            // Certify an independently constrained, precise interior core
-            // before admitting less accurate adjacent source samples.
-            // Neither rank nor seed fitting uses the relaxed seam budget.
             if !independently_tested(self.evidence, &supports, tolerance) {
                 continue;
             }
-            let expanded = discovery.grow(a, sphere, outward, discovery.surface_tolerance(sphere));
             if expanded != supports
                 && let Some(proposal) = self.measure_surface_region(
                     &expanded,
@@ -535,6 +688,60 @@ mod tests {
         let strict = index.discover_spherical_regions(1.0e-6, 1.0e-8, 0.3);
         assert!(strict.iter().all(|p| p.source_polygons() < steps * steps));
         Ok(())
+    }
+
+    #[test]
+    fn interior_refit_removes_boundary_induced_carrier_bias()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let center = Point3::new(17.0, -3.0, 5.0);
+        let radius = 0.04;
+        let steps = 12;
+        let mesh = octant_mesh(steps, center, radius, 2.0e-6)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let samples = (0..evidence.planar_supports.len())
+            .map(|id| SupportSamples {
+                vertices: support_vertices(&evidence, id).unwrap_or_default(),
+                circle: None,
+            })
+            .collect::<Vec<_>>();
+        let discovery = SphereDiscovery {
+            evidence: &evidence,
+            seen: vec![Vec::new(); samples.len()],
+            samples,
+            seeds: Vec::new(),
+            relative_tolerance: 1.0e-4,
+            absolute_tolerance: 1.0e-8,
+            chord_fraction: 0.3,
+        };
+        let biased = SphereSeed {
+            center: center + Vector3::new(1.0e-6, -0.5e-6, 0.7e-6),
+            radius: radius + 0.5e-6,
+        };
+        let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        let outward = (evidence.planar_supports[0].origin - center)
+            .dot(evidence.planar_supports[0].normal)
+            > 0.0;
+        let (fitted, core, expanded) = discovery
+            .refit_interior(&index, &supports, biased, outward)
+            .ok_or("refit")?;
+        assert!((fitted.center - center).magnitude() < 1.0e-12);
+        assert!((fitted.radius - radius).abs() < 1.0e-12);
+        assert_eq!(expanded, supports);
+        assert!(core.len() < expanded.len());
+        assert!(independently_tested(&evidence, &core, 1.0e-8));
+        Ok(())
+    }
+
+    #[test]
+    fn spherical_refit_rejects_coplanar_samples() {
+        let points = (0..12)
+            .map(|i| {
+                let (s, c) = (TAU * f64::from(i) / 12.0).sin_cos();
+                Point3::new(c, s, 2.0)
+            })
+            .collect::<Vec<_>>();
+        assert!(fit_sphere(&points, &(0..points.len()).collect::<Vec<_>>()).is_none());
     }
 
     #[test]
