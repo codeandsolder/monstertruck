@@ -219,6 +219,7 @@ pub mod monstertruck {
     mod circular_selection;
     mod cylinder_boundary_export;
     mod parallel_prisms;
+    mod plane_cylinder_export;
     mod planar_boundary_export;
     mod planar_loft;
 
@@ -465,6 +466,11 @@ pub mod monstertruck {
         }
         if let Some(exact) =
             planar_boundary_export::certified_planar_boundary_step_guide(curve, &points, tolerance)
+        {
+            return Ok(exact);
+        }
+        if let Some(exact) =
+            plane_cylinder_export::exact_plane_cylinder_step_guide(curve, &points, tolerance)
         {
             return Ok(exact);
         }
