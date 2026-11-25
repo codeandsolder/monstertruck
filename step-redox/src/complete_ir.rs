@@ -1037,7 +1037,7 @@ fn finish_native_boundary_feature_replay<
     let Some(fragment) = journal.finish(
         kernel,
         &mut edited,
-        native_peels::ReplayTarget { source, proof },
+        &native_peels::ReplayTarget { source, proof },
         provenance,
         native_peels::NextPeel::Treatment,
         None,
@@ -1116,7 +1116,7 @@ fn recover_kernel_topology_normalized_fragment<
     let Some(mut fragment) = journal.finish(
         kernel,
         &mut edited,
-        native_peels::ReplayTarget { source, proof },
+        &native_peels::ReplayTarget { source, proof },
         &provenance,
         native_peels::NextPeel::Boundary,
         stop,

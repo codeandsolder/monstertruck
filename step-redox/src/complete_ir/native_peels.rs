@@ -178,7 +178,7 @@ impl Journal {
         mut self,
         kernel: &K,
         edited: &mut K::EditedSource,
-        target: ReplayTarget<'_, '_, K>,
+        target: &ReplayTarget<'_, '_, K>,
         provenance: &KernelTopologyProvenance,
         mut next: NextPeel,
         mut stop: Option<String>,
@@ -187,7 +187,7 @@ impl Journal {
         loop {
             // Each successful inverse transaction strictly decreases native
             // face count. Try complete forward replay before peeling further.
-            match self.recognize_replay(kernel, edited, &target) {
+            match self.recognize_replay(kernel, edited, target) {
                 Ok(Some(fragment)) => return Ok(Some(fragment)),
                 Ok(None) => (),
                 Err(error) => replay_error = Some(error),
