@@ -258,6 +258,70 @@ impl<'a> LocalGrowth<'a> {
         result
     }
 
+    // A source sliver whose entire filled polygon lies within numerical
+    // resolution of a single generator has no resolved lateral normal.
+    // The placed profile is fixed independently; its affine generator
+    // bounds every convex combination of the original vertices.
+    fn unresolved_ruling(&self, profile: Profile, support: usize, tolerance: f64) -> bool {
+        let ids = &self.support_vertices[support];
+        let tolerance = tolerance.min(crate::KERNEL_EPSILON);
+        let Some((_, radial)) = ids
+            .iter()
+            .map(|&id| profile.sample(self.evidence.positions[id]))
+            .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))
+        else {
+            return false;
+        };
+        if radial.magnitude() <= tolerance {
+            return false;
+        }
+        let direction = radial.normalize();
+        ids.iter().all(|&id| {
+            let (z, radial) = profile.sample(self.evidence.positions[id]);
+            let radius = profile.expected(z);
+            radius >= -tolerance && (radial - direction * radius).magnitude() <= tolerance
+        })
+    }
+
+    // Complete only bounded original fans of unresolved generator slivers.
+    // They are not independent orientation witnesses and may not become
+    // exterior trims. All original supports and polygon IDs remain owned.
+    fn complete_ruling_gaps(
+        &self,
+        index: &RegionBoundaryIndex<'a>,
+        profile: Profile,
+        mut supports: Vec<usize>,
+        tolerance: f64,
+    ) -> Option<Vec<usize>> {
+        let mut added = BTreeSet::new();
+        loop {
+            let boundary = index.boundary(&supports).ok()?;
+            if boundary.pinched_vertices.is_empty() {
+                return (!added.is_empty()
+                    && boundary.loops.iter().flatten().all(|edge| {
+                        !added.contains(&self.evidence.source_planar_support[edge.interior_polygon])
+                    }))
+                .then_some(supports);
+            }
+            let previous = added.len();
+            for gap in index.pinch_gaps(&boundary) {
+                if gap
+                    .added_support_indices
+                    .iter()
+                    .all(|&id| self.unresolved_ruling(profile, id, tolerance))
+                {
+                    added.extend(gap.added_support_indices);
+                }
+            }
+            if added.len() == previous {
+                return None;
+            }
+            supports.extend(added.iter().copied());
+            supports.sort_unstable();
+            supports.dedup();
+        }
+    }
+
     // Four connected original samples test a circle beyond interpolation.
     // Follow only edges actually owned by this proposal. An observed
     // interior section is just as valid as an exterior trim.
@@ -374,12 +438,6 @@ impl<'a> LocalGrowth<'a> {
             axial.push(z);
         }
         let tolerance = tolerance.min(self.options.relative_tolerance * (high - low));
-        let proposal = index.measure_rim_linear_region(
-            &supports,
-            profile.carrier(),
-            tolerance,
-            self.options.chord_fraction,
-        )?;
         // The rim fixes the axis and radius; one off-rim point fixes the
         // slope. Do not equate exact interpolation with independent
         // identification. Arbitrary triangulations need not expose a
@@ -404,6 +462,22 @@ impl<'a> LocalGrowth<'a> {
         {
             return None;
         }
+        let proposal = index
+            .measure_rim_linear_region(
+                &supports,
+                profile.carrier(),
+                tolerance,
+                self.options.chord_fraction,
+            )
+            .or_else(|| {
+                let completed = self.complete_ruling_gaps(index, profile, supports, tolerance)?;
+                index.measure_rim_linear_region(
+                    &completed,
+                    profile.carrier(),
+                    tolerance,
+                    self.options.chord_fraction,
+                )
+            })?;
         // Two axial samples interpolate a slope. A third resolved sample
         // tests it independently, even if the off-rim samples are irregular.
         let independently_tested = axial
@@ -659,6 +733,69 @@ mod tests {
         assert!((radius_at_origin - 1.0).abs() < 1.0e-9);
         assert!(axis.cross(Vector3::unit_z()).magnitude() < 1.0e-9);
         assert!(slope.abs() < 1.0e-9);
+        Ok(())
+    }
+
+    // A source triangle on an otherwise common generator can have
+    // arbitrary normal after rounding. Its original fan is still known.
+    fn cone_with_ruling_sliver(offset: f64) -> Result<PolygonMesh, Box<dyn std::error::Error>> {
+        let n = 16;
+        let mut positions = vec![Point3::new(0.0, 0.0, 0.0)];
+        for i in 0..n {
+            let angle = std::f64::consts::TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+            let (sin, cos) = angle.sin_cos();
+            positions.push(Point3::new(cos, sin, 1.0));
+        }
+        let mid = positions.len();
+        positions.push(Point3::new(0.5 + offset, 0.0, 0.5));
+        let mut faces = vec![[0, 1, mid], [0, mid, 2], [mid, 1, 2]];
+        faces.extend((1..n).map(|i| [0, i + 1, (i + 1) % n + 1]));
+        Ok(PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?)
+    }
+
+    #[test]
+    fn bounded_ruling_gap_preserves_original_facet_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for offset in [1.0e-10, 1.0e-3] {
+            let mesh = cone_with_ruling_sliver(offset)?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let growth = LocalGrowth::new(&index, options()).ok_or("local growth")?;
+            let profile = Profile {
+                origin: Point3::new(0.0, 0.0, 0.0),
+                axis: Vector3::new(0.0, 0.0, 1.0),
+                radius: 0.0,
+                slope: 1.0,
+            };
+            let missing = evidence.source_planar_support[0];
+            let supports = (0..evidence.planar_supports.len())
+                .filter(|&id| id != missing)
+                .collect::<Vec<_>>();
+            assert!(!index.boundary(&supports)?.pinched_vertices.is_empty());
+            let completed = growth.complete_ruling_gaps(&index, profile, supports, 1.0e-8);
+            if offset < 1.0e-8 {
+                let completed = completed.ok_or("missing completed fan")?;
+                let boundary = index.boundary(&completed)?;
+                assert!(boundary.pinched_vertices.is_empty());
+                assert_eq!(
+                    boundary.source_polygon_count,
+                    evidence.source_planar_support.len()
+                );
+                assert!(
+                    index
+                        .measure_rim_linear_region(&completed, profile.carrier(), 1.0e-8, 0.25)
+                        .is_some()
+                );
+            } else {
+                assert!(completed.is_none());
+            }
+        }
         Ok(())
     }
 
