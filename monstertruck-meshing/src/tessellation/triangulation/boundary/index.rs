@@ -10,14 +10,14 @@ struct Bounds {
 }
 
 impl Bounds {
-    fn segment(front: Point2, back: Point2) -> Self {
+    const fn segment(front: Point2, back: Point2) -> Self {
         Self {
             min: Point2::new(front.x.min(back.x), front.y.min(back.y)),
             max: Point2::new(front.x.max(back.x), front.y.max(back.y)),
         }
     }
 
-    fn union(self, other: Self) -> Self {
+    const fn union(self, other: Self) -> Self {
         Self {
             min: Point2::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y)),
             max: Point2::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y)),
@@ -70,7 +70,7 @@ struct Segment {
 }
 
 impl Segment {
-    fn new(front: Point2, back: Point2) -> Self {
+    const fn new(front: Point2, back: Point2) -> Self {
         Self {
             front,
             back,
@@ -231,12 +231,10 @@ impl BoundaryIndex {
         let interior = self.all_matching(
             |bounds| bounds.crossing(point),
             |segment| {
-                if let Some(crossings) = segment.winding(point) {
+                segment.winding(point).is_some_and(|crossings| {
                     winding += crossings;
                     true
-                } else {
-                    false
-                }
+                })
             },
         );
         interior && winding > 0
