@@ -26,7 +26,13 @@ where P: ControlPoint<f64>
     }
 }
 
-impl ParametricSurface3D for BsplineSurface<Point3> {}
+impl ParametricSurface3D for BsplineSurface<Point3> {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        super::super::iso_boundary::closed_chart_periods(self, |p| {
+            [p.x, p.y, p.z].into_iter().all(f64::is_finite)
+        })
+    }
+}
 
 impl<V> BoundedSurface for BsplineSurface<V>
 where Self: ParametricSurface

@@ -827,6 +827,8 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 variants,
                 trait_name1,
                 fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3,
+                fn closed_chart_periods(&self,) -> (Option<f64>, Option<f64>),
+                fn collapsed_boundary_parameter(&self, point: monstertruck_traits::__private::Point3, hint: monstertruck_traits::__private::Point2, tolerance: f64) -> Option<monstertruck_traits::__private::Point2>,
             );
             quote! {
                 #[automatically_derived]
@@ -889,6 +891,8 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                     #(#where_predicates,)*
                     #field_type: #trait_name0, {
                     fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3 { self.0.normal(u, v) }
+                    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) { self.0.closed_chart_periods() }
+                    fn collapsed_boundary_parameter(&self, point: monstertruck_traits::__private::Point3, hint: monstertruck_traits::__private::Point2, tolerance: f64) -> Option<monstertruck_traits::__private::Point2> { self.0.collapsed_boundary_parameter(point, hint, tolerance) }
                 }
             }
         }

@@ -725,6 +725,12 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
 }
 
 impl ParametricSurface3D for NurbsSurface<Vector4> {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        super::iso_boundary::closed_chart_periods(&self.0, |p| {
+            p.w > 0.0 && [p.x, p.y, p.z, p.w].into_iter().all(f64::is_finite)
+        })
+    }
+
     fn collapsed_boundary_parameter(
         &self,
         point: Point3,

@@ -120,3 +120,104 @@ fn refuses_extrapolated_trim_projection() {
     assert!((0.0..=1.0).contains(&t));
     assert!(uv.near(&Point2::new(0.5, 0.0)));
 }
+
+#[test]
+fn seam_crossing_rational_face_consumes_every_shared_boundary_sample() {
+    use monstertruck_modeling::{Curve, Curve2D, Surface};
+    use monstertruck_topology::{
+        compress::{
+            CompressedEdge, CompressedEdgeUse, CompressedTrimmedFace, CompressedTrimmedShell,
+        },
+        shell::ShellCondition,
+    };
+    // The parameter curve has no supplied UV trim. Its rational spatial
+    // arc crosses the endpoint of the finite clamped circle chart.
+    let theta = 0.35_f64;
+    let c = theta.cos();
+    let s = theta.sin();
+    let vertices = vec![
+        Point3::new(c, -s, 0.0),
+        Point3::new(c, s, 0.0),
+        Point3::new(c, s, 1.0),
+        Point3::new(c, -s, 1.0),
+    ];
+    let arc = |z: f64| {
+        Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Vector4::new(c, -s, z, 1.0),
+                Vector4::new(1.0, 0.0, z * c, c),
+                Vector4::new(c, s, z, 1.0),
+            ],
+        )))
+    };
+    let edges = vec![
+        CompressedEdge {
+            vertices: (0, 1),
+            curve: arc(0.0),
+        },
+        CompressedEdge {
+            vertices: (1, 2),
+            curve: Curve::Line(Line(vertices[1], vertices[2])),
+        },
+        CompressedEdge {
+            vertices: (3, 2),
+            curve: arc(1.0),
+        },
+        CompressedEdge {
+            vertices: (3, 0),
+            curve: Curve::Line(Line(vertices[3], vertices[0])),
+        },
+    ];
+    type Trim = ParameterCurve<Curve2D, Box<Surface>>;
+    let shell = CompressedTrimmedShell::<Point3, Curve, Surface, Trim> {
+        vertices,
+        edges,
+        faces: vec![CompressedTrimmedFace {
+            boundaries: vec![
+                [(0, true), (1, true), (2, false), (3, true)]
+                    .into_iter()
+                    .map(|(index, orientation)| CompressedEdgeUse {
+                        index,
+                        orientation,
+                        trim_curve: None,
+                    })
+                    .collect(),
+            ],
+            orientation: true,
+            surface: Surface::NurbsSurface(cylinder()),
+        }],
+        vertex_stable_ids: None,
+        edge_stable_ids: None,
+        face_stable_ids: None,
+    };
+    let tolerance = 0.001;
+    let meshed = shell.triangulation(tolerance);
+    let mesh = stitch_compressed_shell(&meshed, KERNEL_EPSILON)
+        .expect("consume exact native sample chains");
+    assert_eq!(mesh.shell_condition(), ShellCondition::Oriented);
+    let area = mesh
+        .face_iter()
+        .map(|polygon| {
+            let origin = mesh.positions()[polygon[0].pos];
+            polygon[1..]
+                .windows(2)
+                .map(|pair| {
+                    let a = mesh.positions()[pair[0].pos] - origin;
+                    let b = mesh.positions()[pair[1].pos] - origin;
+                    a.cross(b).magnitude() * 0.5
+                })
+                .sum::<f64>()
+        })
+        .sum::<f64>();
+    assert!(
+        (area - 2.0 * theta).abs() < 0.005,
+        "area {area} instead of {}",
+        2.0 * theta
+    );
+    assert!(
+        mesh.positions()
+            .iter()
+            .all(|p| (p.x.hypot(p.y) - 1.0).abs() < KERNEL_EPSILON)
+    );
+}

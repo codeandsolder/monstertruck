@@ -3,11 +3,13 @@
 //! Split out of the module file so the source stays readable; the module
 //! path is unchanged.
 
+use super::super::charted::TrimChart;
 use super::*;
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::{
-    Invertible, Line, Matrix4, ParameterCurve, ParametricSurface, Plane, Point2, Point3, Processor,
-    RevolutionSurface, SearchParameter, Vector3,
+    Invertible, Line, Matrix4, ParameterCurve, ParameterDivision2D, ParametricSurface,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface, SearchParameter,
+    Vector3,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -339,13 +341,20 @@ fn approximate_trim_inverse_is_refined_on_the_actual_carrier() {
     let wrong = Point2::new(-0.004554913501238, -0.019176750771346);
     let point = plane.evaluate(actual.x, actual.y);
     let search = |surface: &Plane, point: Point3, _| surface.search_parameter(point, None, 100);
-    let refined = PolyBoundaryPiece::refine_trim_sample(&plane, &search, point, wrong, None, 0.005)
-        .expect("plane inverse should recover the actual spatial sample");
+    let refined = PolyBoundaryPiece::refine_trim_sample(
+        &TrimChart::new(&plane),
+        &search,
+        point,
+        wrong,
+        None,
+        0.005,
+    )
+    .expect("plane inverse should recover the actual spatial sample");
     assert!(Point2::new(refined.0, refined.1).near(&actual));
 }
 
 #[test]
-fn closed_rational_chart_rejects_extrapolation_and_aligns_seam() {
+fn closed_rational_chart_wraps_evaluation_instead_of_extrapolating() {
     use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, NurbsSurface, Vector4};
     // Full circle in a finite clamped rational chart, not a periodic
     // extension of its endpoint polynomial. The last quadrant is
@@ -380,12 +389,16 @@ fn closed_rational_chart_rejects_extrapolation_and_aligns_seam() {
     let search = |surface: &NurbsSurface<Vector4>, point: Point3, hint: Option<(f64, f64)>| {
         surface.search_parameter(point, hint, 100)
     };
+    assert_eq!(surface.closed_chart_periods(), (None, Some(1.0)));
+    let chart = TrimChart::new(&surface);
+    assert!(chart.is_wrapped());
     let target = surface.evaluate(0.0, 0.9);
-    let uv = PolyBoundaryPiece::search_trim_sample(&surface, &search, target, Some((0., 0.)), 1e-6)
-        .expect("in-domain inverse");
-    assert!((uv.1 - 0.9).abs() < 1e-6);
-    let mut boundary = [(0., 0.), (0., 0.75), (1., 0.75), (1., 0.), (0., 0.)]
-        .map(|(u, v)| SurfacePoint::from((Point2::new(u, v), surface.evaluate(u, v))));
-    PolyBoundaryPiece::align_closed_chart_seams(&surface, &mut boundary, 1e-6);
-    assert_eq!(boundary.map(|p| p.y), [1., 0.75, 0.75, 1., 1.]);
+    let uv = PolyBoundaryPiece::search_trim_sample(&chart, &search, target, Some((0., 0.)), 1e-6)
+        .expect("in-domain inverse through wrapped chart");
+    assert!((uv.1 + 0.1).abs() < 1e-6);
+    assert!(chart.evaluate(uv.0, uv.1).near(&target));
+    assert!(chart.evaluate(0.5, 1.1).near(&surface.evaluate(0.5, 0.1)));
+    assert!(chart.evaluate(0.5, -0.1).near(&surface.evaluate(0.5, 0.9)));
+    let (_, vs) = chart.parameter_division(((0.0, 1.0), (0.9, 1.1)), 0.001);
+    assert!(vs.contains(&1.0));
 }

@@ -142,6 +142,10 @@ macro_rules! derive_surface_self_method {
 }
 
 impl ParametricSurface3D for Surface {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        derive_surface_method!(self, ParametricSurface3D::closed_chart_periods,)
+    }
+
     fn collapsed_boundary_parameter(
         &self,
         point: Point3,

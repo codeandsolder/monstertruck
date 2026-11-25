@@ -41,6 +41,41 @@ fn clamped_ends(knots: &KnotVector, count: usize) -> Option<(f64, f64, bool, boo
     Some((lo, hi, front, back))
 }
 
+// The same complete clamped control row/column and the same transverse
+// basis prove pointwise equality along the entire seam. Exact equality is
+// required; a near-coincident boundary is not a periodic chart.
+pub(super) fn closed_chart_periods<P: PartialEq>(
+    surface: &BsplineSurface<P>,
+    valid: impl Fn(&P) -> bool,
+) -> (Option<f64>, Option<f64>) {
+    let net = surface.control_points();
+    let Some(first) = net.first() else {
+        return (None, None);
+    };
+    let rows = net.len();
+    let columns = first.len();
+    if rows < 2
+        || columns < 2
+        || net.iter().any(|row| row.len() != columns)
+        || !net.iter().flatten().all(valid)
+    {
+        return (None, None);
+    }
+    let Some((u0, u1, uf, ub)) = clamped_ends(surface.knot_vector_u(), rows) else {
+        return (None, None);
+    };
+    let Some((v0, v1, vf, vb)) = clamped_ends(surface.knot_vector_v(), columns) else {
+        return (None, None);
+    };
+    let u = u1 - u0;
+    let v = v1 - v0;
+    (
+        (uf && ub && u.is_finite() && net[0] == net[rows - 1]).then_some(u),
+        (vf && vb && v.is_finite() && net.iter().all(|row| row[0] == row[columns - 1]))
+            .then_some(v),
+    )
+}
+
 fn boundaries(surface: &NurbsSurface<Vector4>) -> Option<Vec<IsoBoundary>> {
     let net = surface.control_points();
     let rows = net.len();

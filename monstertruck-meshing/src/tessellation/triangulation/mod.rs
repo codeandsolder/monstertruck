@@ -19,7 +19,7 @@ use crate::filters::StructuringFilter;
 use array_macro::array;
 use handles::FixedVertexHandle;
 use itertools::{Either, Itertools};
-use monstertruck_geometry::prelude::ParameterCurve;
+use monstertruck_geometry::prelude::{ParameterCurve, ParametricSurface};
 use rustc_hash::FxHashMap as HashMap;
 use std::{collections::hash_map::Entry, env, iter};
 // `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
@@ -28,10 +28,12 @@ use std::{collections::hash_map::Entry, env, iter};
 use web_time::Instant;
 
 mod boundary;
+mod charted;
 mod diagnostics;
 mod mesh;
 
 use boundary::{PolyBoundary, PolyBoundaryPiece};
+use charted::TrimChart;
 use diagnostics::observe_face_drop;
 pub use diagnostics::{FaceDropReason, face_drop_count, reset_face_drop_count};
 use mesh::{trimming_tessellation, untrimmed_tessellation};
@@ -1205,7 +1207,7 @@ where
             tolerance,
         )
     };
-    let mut piece = if has_shared_edge_polyline {
+    let mut piece = if has_shared_edge_polyline || TrimChart::new(surface).is_wrapped() {
         aligned_trim_piece()
             .filter(PolyBoundaryPiece::is_cdt_compatible)
             .or_else(direct_trim_piece)
@@ -1358,14 +1360,35 @@ where
     }
     let preboundary = collect_trimmed_preboundary(face_idx, face, context);
     let (polygon, isoparams) = preboundary.map_or_default(|preboundary| {
-        tessellate_trimmed_preboundary(
-            face_idx,
-            preboundary,
-            surface,
-            tolerance,
-            primitive_config,
-            isoparametric_options,
-        )
+        let chart = TrimChart::new(surface);
+        if chart.is_wrapped() {
+            // In particular, refuse independently generated extrapolated
+            // pcurve samples that do not belong to the actual tiled chart.
+            if !preboundary
+                .iter()
+                .flat_map(|piece| &piece.0)
+                .all(|p| chart.evaluate(p.x, p.y).distance(p.point) <= tolerance)
+            {
+                return (None, Vec::new());
+            }
+            tessellate_trimmed_preboundary(
+                face_idx,
+                preboundary,
+                &chart,
+                tolerance,
+                primitive_config,
+                isoparametric_options,
+            )
+        } else {
+            tessellate_trimmed_preboundary(
+                face_idx,
+                preboundary,
+                surface,
+                tolerance,
+                primitive_config,
+                isoparametric_options,
+            )
+        }
     });
     log_mesh_trace(
         face_idx,

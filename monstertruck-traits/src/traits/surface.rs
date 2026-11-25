@@ -225,6 +225,14 @@ impl<S: ParametricSurface<Point = Point2, Vector = Vector2>> ParametricSurface2D
 
 /// 3D parametric surface
 pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector3> {
+    /// Exact closed parameter-chart spans, when opposite intrinsic boundary
+    /// curves agree pointwise at the same transverse parameter.
+    ///
+    /// This is a C0 seam certificate, not a claim that the native
+    /// evaluation or its derivatives are periodic outside the knot domain.
+    /// A caller may tile the chart by wrapping evaluations into its domain.
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) { (None, None) }
+
     /// A certified collapsed intrinsic boundary containing this point.
     ///
     /// Returns a UV representative preserving the free coordinate of the
@@ -276,6 +284,8 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
 }
 
 impl<S: ParametricSurface3D> ParametricSurface3D for &S {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) { (*self).closed_chart_periods() }
+
     fn collapsed_boundary_parameter(
         &self,
         point: Point3,
@@ -290,6 +300,8 @@ impl<S: ParametricSurface3D> ParametricSurface3D for &S {
 }
 
 impl<S: ParametricSurface3D> ParametricSurface3D for Box<S> {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) { (**self).closed_chart_periods() }
+
     fn collapsed_boundary_parameter(
         &self,
         point: Point3,
