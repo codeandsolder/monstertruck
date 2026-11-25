@@ -223,52 +223,55 @@ fn global_trial(
         angular_resolution: analytic.axis_relative_resolution,
     };
     let required = selected.iter().copied().collect::<Vec<_>>();
-    let attempt = if let Some(limit) = crossing_limit {
-        let partition = &recovery.reconciled.partition;
-        let mut counts = BTreeMap::<usize, usize>::new();
-        for &region in &partition.region_by_polygon {
-            *counts.entry(region).or_default() += 1;
-        }
-        let allowed = counts
-            .iter()
-            .filter_map(|(&region, &count)| {
-                (count == 1
-                    && matches!(
-                        partition.carriers[region],
-                        Some(SurfaceCarrier::Plane { .. })
-                    ))
-                .then_some(region)
-            })
-            .collect::<Vec<_>>();
-        recovery
-            .construct_hybrid_with_connectors(
-                &required,
-                &allowed,
-                HybridConnectorOptions {
-                    patch: options,
-                    strict,
-                    max_added_polygons: limit,
-                    max_trials: limit.saturating_mul(4).max(1),
-                },
-            )
-            .map(|result| {
-                (
-                    result.recovery,
-                    result.selected_regions.len(),
-                    result.added_polygons,
-                    result.trials,
-                    result
-                        .releases
-                        .iter()
-                        .map(|r| json!({"region":r.region,"triggering_trim":r.triggering_trim}))
-                        .collect::<Vec<_>>(),
+    let attempt = crossing_limit.map_or_else(
+        || {
+            recovery
+                .construct_hybrid(&required, options, strict)
+                .map(|result| (result, required.len(), 0, 1, Vec::new()))
+        },
+        |limit| {
+            let partition = &recovery.reconciled.partition;
+            let mut counts = BTreeMap::<usize, usize>::new();
+            for &region in &partition.region_by_polygon {
+                *counts.entry(region).or_default() += 1;
+            }
+            let allowed = counts
+                .iter()
+                .filter_map(|(&region, &count)| {
+                    (count == 1
+                        && matches!(
+                            partition.carriers[region],
+                            Some(SurfaceCarrier::Plane { .. })
+                        ))
+                    .then_some(region)
+                })
+                .collect::<Vec<_>>();
+            recovery
+                .construct_hybrid_with_connectors(
+                    &required,
+                    &allowed,
+                    HybridConnectorOptions {
+                        patch: options,
+                        strict,
+                        max_added_polygons: limit,
+                        max_trials: limit.saturating_mul(4).max(1),
+                    },
                 )
-            })
-    } else {
-        recovery
-            .construct_hybrid(&required, options, strict)
-            .map(|result| (result, required.len(), 0, 1, Vec::new()))
-    };
+                .map(|result| {
+                    (
+                        result.recovery,
+                        result.selected_regions.len(),
+                        result.added_polygons,
+                        result.trials,
+                        result
+                            .releases
+                            .iter()
+                            .map(|r| json!({"region":r.region,"triggering_trim":r.triggering_trim}))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+        },
+    );
     Ok(match attempt {
         Ok((result, selected_count, added_polygons, trials, releases)) => {
             let before = recovery
