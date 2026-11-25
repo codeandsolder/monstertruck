@@ -34,8 +34,8 @@ pub struct BoundaryPatchApproximation {
     pub coalesced_cells: usize,
     /// Largest displacement of an original source vertex.
     pub vertex_displacement: f64,
-    /// Maximum continuous two-sided deviation of a reconstructed facet
-    /// from its source centroid fan.
+    /// Maximum continuous two-sided deviation of a reconstructed cell
+    /// from the union of its original source centroid fans.
     pub deviation_upper_bound: f64,
     /// Maximum bounded radial seam discrepancy over all reconstructed facets.
     pub seam_deviation_upper_bound: f64,
@@ -324,6 +324,57 @@ mod tests {
             approximate_boundary_patch(&points, &polygons, &[prescribed, diagonal], options),
             Err(BoundaryPatchError::Facet { polygon: 0, .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn coalescence_can_cross_more_than_one_internal_diagonal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.005, 0.0, 0.0),
+            Point3::new(1.327, 0.00024, 0.0),
+            Point3::new(1.328, 0.001, 0.0),
+            Point3::new(1.327, 0.1, 0.0001),
+        ];
+        let vertices = points.map(builder::vertex);
+        let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+            KnotVector::bezier_knot(2),
+            vec![
+                Vector4::new(0.0, 0.0, 0.0, 1.0),
+                Vector4::new(0.0025, 0.0001, 0.0, 1.0),
+                Vector4::new(0.005, 0.0, 0.0, 1.0),
+            ],
+        )?));
+        let prescribed = [PrescribedSourceEdge {
+            vertices: [0, 1],
+            edge: Edge::new(&vertices[0], &vertices[1], curve)?,
+        }];
+        let polygons: [&[usize]; 3] = [&[0, 1, 2], &[0, 2, 3], &[0, 3, 4]];
+        let options = BoundaryPatchOptions::new(SurfaceRegionBudget {
+            vertex: 0.0,
+            chord: 0.001,
+        });
+        assert!(matches!(
+            approximate_boundary_patch(
+                &points,
+                &polygons,
+                &prescribed,
+                BoundaryPatchOptions {
+                    max_coalescence_trials: 1,
+                    ..options
+                }
+            ),
+            Err(BoundaryPatchError::Facet { polygon: 0, .. })
+        ));
+        let merged = approximate_boundary_patch(&points, &polygons, &prescribed, options)?;
+        assert_eq!(merged.coalesced_cells, 1);
+        assert_eq!(merged.source_face_ranges, vec![0..5; 3]);
+        assert!(merged.deviation_upper_bound <= options.budget.chord);
+        // Warping the distant source corner incurs a nonzero geometric
+        // penalty even though the curved source edge itself is unchanged.
+        assert!(merged.deviation_upper_bound > 0.00005);
+        assert!(merged.shell.is_geometric_consistent());
         Ok(())
     }
 

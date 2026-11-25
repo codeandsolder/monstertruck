@@ -104,7 +104,7 @@ impl Projection {
         })
     }
 
-    fn project(&self, p: Point3) -> Coord<f64> {
+    const fn project(&self, p: Point3) -> Coord<f64> {
         let coords = [p.x, p.y, p.z];
         let mut x = coords[(self.axis + 1) % 3];
         let mut y = coords[(self.axis + 2) % 3];
@@ -299,7 +299,7 @@ impl AssemblyInput<'_> {
     ) -> Option<Repair> {
         let seed_count = cells[seed].as_ref()?.geometry.members().len();
         let limit = remaining.saturating_add(1);
-        let mut seen = BTreeSet::from([vec![seed]]);
+        let mut visited = BTreeSet::from([vec![seed]]);
         let mut frontier = BTreeSet::from([(seed_count, vec![seed])]);
         while let Some((count, group)) = frontier.pop_first() {
             if group.len() > 1 {
@@ -323,13 +323,13 @@ impl AssemblyInput<'_> {
                 break;
             }
             for other in self.neighbors(&group, cells, membership) {
-                if seen.len() >= limit {
+                if visited.len() >= limit {
                     break;
                 }
                 let mut next = group.clone();
                 let index = next.binary_search(&other).err()?;
                 next.insert(index, other);
-                if seen.insert(next.clone()) {
+                if visited.insert(next.clone()) {
                     let count = count + cells[other].as_ref()?.geometry.members().len();
                     frontier.insert((count, next));
                 }
