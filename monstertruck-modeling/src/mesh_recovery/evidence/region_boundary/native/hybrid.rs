@@ -25,6 +25,8 @@ use std::{
     ops::Range,
 };
 
+mod connectors;
+pub use connectors::{HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease};
 mod refinement;
 pub use refinement::{HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery};
 
@@ -132,9 +134,22 @@ pub enum HybridRecoveryError {
         /// Authorized maximum.
         limit: usize,
     },
+    /// No admissible transaction within the connector search budgets.
+    #[error("hybrid connector search exhausted after {trials} trials: {last}")]
+    ConnectorSearch {
+        /// Number of attempted native transactions.
+        trials: usize,
+        /// Most recent geometric rejection.
+        last: Box<HybridRecoveryError>,
+    },
     /// A previously valid retained analytic trim would fail.
-    #[error("hybrid recovery would invalidate retained trim {0}")]
-    RetainedTrim(usize),
+    #[error("hybrid recovery would invalidate retained trim {trim}: {error}")]
+    RetainedTrim {
+        /// Source graph trim ID.
+        trim: usize,
+        /// Construction or continuous-domain rejection.
+        error: NativeTrimError,
+    },
     /// A previously valid retained analytic region would fail or require
     /// a previously unnecessary chart decomposition.
     #[error("hybrid recovery would invalidate retained region {0}")]
@@ -372,8 +387,14 @@ impl HybridInput<'_> {
         regions: &[NativeRegionFace],
     ) -> Result<(), HybridRecoveryError> {
         for (id, (old, new)) in self.baseline.trims.iter().zip(trims).enumerate() {
-            if matches!(plan.policy[id], TrimPolicy::Retained) && old.is_ok() && new.is_err() {
-                return Err(HybridRecoveryError::RetainedTrim(id));
+            if matches!(plan.policy[id], TrimPolicy::Retained)
+                && old.is_ok()
+                && let Err(error) = new
+            {
+                return Err(HybridRecoveryError::RetainedTrim {
+                    trim: id,
+                    error: *error,
+                });
             }
         }
         let old = self

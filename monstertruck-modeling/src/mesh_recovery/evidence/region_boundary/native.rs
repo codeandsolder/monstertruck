@@ -23,8 +23,9 @@ mod band;
 mod hybrid;
 mod planar_domain;
 pub use hybrid::{
-    HybridPatchEvidence, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery,
+    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
+    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, HybridRefinementOptions,
+    PatchSupportConflict, RefinedHybridRecovery,
 };
 
 /// Numerical and displacement policies for native trim vertex reconciliation.

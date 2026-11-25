@@ -33,9 +33,10 @@ pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 pub use native::{
-    HybridPatchEvidence, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
-    PatchSupportConflict, RefinedHybridRecovery,
+    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
+    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, HybridRefinementOptions,
+    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, PatchSupportConflict,
+    RefinedHybridRecovery,
 };
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
 pub use patch_lift::{LiftedRegionPatch, RegionPatchError, RegionPatchOptions};

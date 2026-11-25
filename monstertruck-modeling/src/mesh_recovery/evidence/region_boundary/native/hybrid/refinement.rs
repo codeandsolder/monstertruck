@@ -8,7 +8,7 @@
 use super::{HybridInput, HybridRecovery, HybridRecoveryError};
 use crate::mesh_recovery::{
     MeshEvidence, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryError,
-    RegionBoundaryIndex, RegionPatchOptions, SharedTrimOptions, SurfaceCarrier,
+    RegionBoundaryIndex, RegionPatchOptions, SharedTrimGraph, SharedTrimOptions, SurfaceCarrier,
     SurfaceRegionPartition,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -55,6 +55,10 @@ pub struct RefinedHybridRecovery {
     pub conflicts: Vec<PatchSupportConflict>,
     /// Number of extra original source polygons replaced.
     pub added_polygons: usize,
+    /// Refined analytic graph and complete original source-edge provenance.
+    /// Native lifted trims in the result replace the corresponding graph
+    /// geometry; their IDs remain aligned with this graph.
+    pub trims: SharedTrimGraph,
     /// Globally shared native result in refined region/trim order.
     pub recovery: HybridRecovery,
 }
@@ -294,7 +298,10 @@ fn check_original_retention(
                 continue;
             }
             if !valid.contains(&key(edge.vertices)) {
-                return Err(HybridRecoveryError::RetainedTrim(id));
+                return Err(HybridRecoveryError::RetainedTrim {
+                    trim: id,
+                    error: crate::mesh_recovery::NativeTrimError::InvalidSource,
+                });
             }
         }
     }
@@ -330,6 +337,32 @@ impl RecoveredAnalyticMesh {
             permitted_supports,
             options,
         )?;
+        if selection.added_polygons == 0 {
+            // No support ownership changed. Keep the exact existing
+            // recognition/trim graph and native baseline; there is no
+            // reason to fit all unchanged contacts again.
+            let recovery =
+                self.construct_hybrid(required_regions, options.patch, options.strict)?;
+            return Ok(RefinedHybridRecovery {
+                partition: original.clone(),
+                parent_by_region: original
+                    .carriers
+                    .iter()
+                    .enumerate()
+                    .map(|(id, c)| c.as_ref().map(|_| id))
+                    .collect(),
+                selected_regions: required_regions
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+                conflicts: selection.conflicts,
+                added_polygons: 0,
+                trims: self.trims.clone(),
+                recovery,
+            });
+        }
         let refined = split_partition(&index, &self.evidence, original, &selection.selected)?;
         let graph = index.assemble_shared_trims(
             &refined.partition,
@@ -360,6 +393,7 @@ impl RecoveredAnalyticMesh {
             selected_regions: refined.selected_regions,
             conflicts: selection.conflicts,
             added_polygons: selection.added_polygons,
+            trims: graph,
             recovery,
         })
     }

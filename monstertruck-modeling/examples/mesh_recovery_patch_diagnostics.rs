@@ -5,9 +5,10 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, HybridRefinementOptions, NativeTrimOptions, RecoveredAnalyticMesh,
-    RegionBoundaryIndex, RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
-    SurfaceRegionPartition, recover_analytic_mesh,
+    AnalyticRecoveryOptions, HybridConnectorOptions, HybridRecoveryError, HybridRefinementOptions,
+    NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryIndex, RegionPatchError,
+    RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionPartition,
+    recover_analytic_mesh,
 };
 use serde_json::{Value, json};
 use std::{
@@ -178,11 +179,38 @@ impl Census {
     }
 }
 
+fn retained_trim_diagnostic(
+    recovery: &RecoveredAnalyticMesh,
+    error: &HybridRecoveryError,
+) -> Value {
+    if let HybridRecoveryError::ConnectorSearch { last, .. } = error {
+        return retained_trim_diagnostic(recovery, last);
+    }
+    let HybridRecoveryError::RetainedTrim { trim: id, .. } = error else {
+        return Value::Null;
+    };
+    let Some(trim) = recovery.trims.trims.get(*id) else {
+        return Value::Null;
+    };
+    let endpoints = trim
+        .source_edges
+        .iter()
+        .flat_map(|edge| edge.vertices)
+        .collect::<BTreeSet<_>>();
+    let partition = &recovery.reconciled.partition;
+    json!({"id":id,"regions":[Some(trim.regions.0),trim.regions.1],
+      "geometry":format!("{:?}",trim.geometry),
+      "carriers":std::iter::once(trim.regions.0).chain(trim.regions.1).map(|r|format!("{:?}",partition.carriers[r])).collect::<Vec<_>>(),
+      "edges":trim.source_edges.iter().map(|e|json!({"vertices":e.vertices,"polygons":[Some(e.interior_polygon),e.exterior_polygon]})).collect::<Vec<_>>(),
+      "vertices":endpoints.into_iter().map(|id|json!({"id":id,"source":recovery.evidence.positions[id],"reconciled":recovery.reconciled.positions[id],"native":recovery.native.vertices[id].as_ref().map(monstertruck_modeling::Vertex::point)})).collect::<Vec<_>>()})
+}
+
 fn global_trial(
     recovery: &RecoveredAnalyticMesh,
     options: RegionPatchOptions,
     selected: &BTreeSet<usize>,
     shell_output: Option<&Path>,
+    crossing_limit: Option<usize>,
 ) -> Result<Value> {
     if selected.is_empty() {
         return Ok(json!({"status":"no_candidates"}));
@@ -194,40 +222,82 @@ fn global_trial(
         intersection_tolerance: monstertruck_modeling::KERNEL_EPSILON * 0.1,
         angular_resolution: analytic.axis_relative_resolution,
     };
-    Ok(
-        match recovery.construct_hybrid(
-            &selected.iter().copied().collect::<Vec<_>>(),
-            options,
-            strict,
-        ) {
-            Ok(result) => {
-                let before = recovery
-                    .native
-                    .regions
-                    .iter()
-                    .filter(|r| r.faces.is_err())
-                    .count();
-                let after = result
-                    .native
-                    .regions
-                    .iter()
-                    .filter(|r| r.faces.is_err())
-                    .count();
-                let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
-                let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
-                let shell = result.complete_shell();
-                let shell_exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
-                    let mut writer = BufWriter::new(
-                        File::create_new(path)
-                            .with_context(|| format!("creating {}", path.display()))?,
-                    );
-                    serde_json::to_writer(&mut writer, &shell.compress())?;
-                    writer.flush()?;
-                    true
-                } else {
-                    false
-                };
-                json!({"status":"ok","selected_regions":selected.len(),
+    let required = selected.iter().copied().collect::<Vec<_>>();
+    let attempt = if let Some(limit) = crossing_limit {
+        let partition = &recovery.reconciled.partition;
+        let mut counts = BTreeMap::<usize, usize>::new();
+        for &region in &partition.region_by_polygon {
+            *counts.entry(region).or_default() += 1;
+        }
+        let allowed = counts
+            .iter()
+            .filter_map(|(&region, &count)| {
+                (count == 1
+                    && matches!(
+                        partition.carriers[region],
+                        Some(SurfaceCarrier::Plane { .. })
+                    ))
+                .then_some(region)
+            })
+            .collect::<Vec<_>>();
+        recovery
+            .construct_hybrid_with_connectors(
+                &required,
+                &allowed,
+                HybridConnectorOptions {
+                    patch: options,
+                    strict,
+                    max_added_polygons: limit,
+                    max_trials: limit.saturating_mul(4).max(1),
+                },
+            )
+            .map(|result| {
+                (
+                    result.recovery,
+                    result.selected_regions.len(),
+                    result.added_polygons,
+                    result.trials,
+                    result
+                        .releases
+                        .iter()
+                        .map(|r| json!({"region":r.region,"triggering_trim":r.triggering_trim}))
+                        .collect::<Vec<_>>(),
+                )
+            })
+    } else {
+        recovery
+            .construct_hybrid(&required, options, strict)
+            .map(|result| (result, required.len(), 0, 1, Vec::new()))
+    };
+    Ok(match attempt {
+        Ok((result, selected_count, added_polygons, trials, releases)) => {
+            let before = recovery
+                .native
+                .regions
+                .iter()
+                .filter(|r| r.faces.is_err())
+                .count();
+            let after = result
+                .native
+                .regions
+                .iter()
+                .filter(|r| r.faces.is_err())
+                .count();
+            let old_trims = recovery.native.trims.iter().filter(|r| r.is_err()).count();
+            let new_trims = result.native.trims.iter().filter(|r| r.is_err()).count();
+            let shell = result.complete_shell();
+            let shell_exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
+                let mut writer = BufWriter::new(
+                    File::create_new(path)
+                        .with_context(|| format!("creating {}", path.display()))?,
+                );
+                serde_json::to_writer(&mut writer, &shell.compress())?;
+                writer.flush()?;
+                true
+            } else {
+                false
+            };
+            json!({"status":"ok","selected_regions":selected_count,"connector_added_polygons":added_polygons,"connector_trials":trials,"connector_releases":releases,
                 "patches":result.patches.len(),"lifted_trims":result.lifted_trims.len(),
                 "before_failed_regions":before,"failed_regions":after,
                 "before_failed_trims":old_trims,"failed_trims":new_trims,
@@ -238,17 +308,17 @@ fn global_trial(
                 "shell_condition":shell.as_ref().map(|s|format!("{:?}",s.shell_condition())),
                 "native_faces":shell.as_ref().map(|s|s.len()),"shell_exported":shell_exported,
                 "seconds":start.elapsed().as_secs_f64()})
-            }
-            Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
-            "error":error.to_string(),"seconds":start.elapsed().as_secs_f64()}),
-        },
-    )
+        }
+        Err(error) => json!({"status":"rejected","selected_regions":selected.len(),
+            "error":error.to_string(),"retained_trim":retained_trim_diagnostic(recovery,&error),"seconds":start.elapsed().as_secs_f64()}),
+    })
 }
 
 fn census(
     recovery: &RecoveredAnalyticMesh,
     budget: SurfaceRegionBudget,
     shell_output: Option<&Path>,
+    crossing_limit: Option<usize>,
 ) -> Result<Value> {
     let index = RegionBoundaryIndex::new(&recovery.evidence)?;
     let partition = &recovery.reconciled.partition;
@@ -312,7 +382,7 @@ fn census(
         ),
         (
             "global_hybrid".to_string(),
-            global_trial(recovery, options, &selected, shell_output)?,
+            global_trial(recovery, options, &selected, shell_output, crossing_limit)?,
         ),
     ]);
     Ok(report)
@@ -417,39 +487,45 @@ fn main() -> Result<()> {
     let mut args = args.peekable();
     let shell_output = args
         .peek()
-        .is_some_and(|arg| arg != "--release-conflicts")
+        .is_some_and(|arg| arg != "--release-conflicts" && arg != "--resolve-crossings")
         .then(|| args.next().map(PathBuf::from))
         .flatten();
-    let release_limit = if args.peek().is_some_and(|arg| arg == "--release-conflicts") {
-        args.next();
-        Some(
-            args.next()
+    let mode = args
+        .next()
+        .map(|flag| -> Result<_> {
+            anyhow::ensure!(
+                flag == "--release-conflicts" || flag == "--resolve-crossings",
+                "unknown trial mode"
+            );
+            let limit = args
+                .next()
                 .context("expected additional polygon limit")?
                 .to_str()
                 .context("non-UTF8 limit")?
                 .parse::<usize>()
-                .context("numeric polygon limit")?,
-        )
-    } else {
-        None
-    };
+                .context("numeric polygon limit")?;
+            Ok((flag, limit))
+        })
+        .transpose()?;
     anyhow::ensure!(
         args.next().is_none()
             && vertex.is_finite()
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts MAX_ADDED_POLYGONS]"
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings MAX_ADDED_POLYGONS]"
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
     let recovery = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
     let recovery_seconds = start.elapsed().as_secs_f64();
     let budget = SurfaceRegionBudget { vertex, chord };
-    let report = if let Some(limit) = release_limit {
-        refined_trial(&recovery, budget, limit, shell_output.as_deref())?
-    } else {
-        census(&recovery, budget, shell_output.as_deref())?
+    let report = match mode {
+        Some((flag, limit)) if flag == "--release-conflicts" => {
+            refined_trial(&recovery, budget, limit, shell_output.as_deref())?
+        }
+        Some((_, limit)) => census(&recovery, budget, shell_output.as_deref(), Some(limit))?,
+        None => census(&recovery, budget, shell_output.as_deref(), None)?,
     };
     println!(
         "{}",
