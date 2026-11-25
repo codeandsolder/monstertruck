@@ -1430,9 +1430,23 @@ where
         && point.distance(pt0) <= seed_tolerance
         && point.distance(pt1) <= seed_tolerance
     {
-        // Keep the point exactly on the boundary curve. Independent carrier
-        // evaluations agreed to the operation's numerical length, and `t`
-        // remains the exact split parameter of this trim edge.
+        // The acceptance budget is not a stopping criterion. Refine a
+        // transverse crossing in the original charts before pinning the
+        // shared topological vertex. Do not move it to another branch or
+        // change the existing tangency acceptance semantics.
+        if let Some([refined_t, refined_u, refined_v]) =
+            super::curve_refinement::curve_surface_parameters(curve, surface, [t, u, v])
+        {
+            let refined_curve = curve.evaluate(refined_t);
+            let refined_surface = surface.evaluate(refined_u, refined_v);
+            if refined_curve.distance(refined_surface) < pt0.distance(pt1)
+                && refined_curve.distance(point) <= seed_tolerance
+                && refined_surface.distance(point) <= seed_tolerance
+                && refined_curve.distance(pt0) <= tolerances.boundary_residual()
+            {
+                return Some((refined_curve, refined_t, Point2::new(refined_u, refined_v)));
+            }
+        }
         return Some((pt0, t, Point2::new(u, v)));
     }
 
@@ -3648,6 +3662,24 @@ mod projection_tests {
             .is_some(),
             "the same projected pair may pass a deliberately wider budget"
         );
+    }
+
+    #[test]
+    fn transverse_boundary_projection_refines_a_weldable_seed() {
+        let line = Line(Point3::new(0.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0));
+        let seed = line.evaluate(0.5 + 2e-7);
+        let (point, parameter, _) = curve_surface_projection(
+            &line,
+            None,
+            &Plane::xy(),
+            None,
+            seed,
+            BooleanTolerance::new(1e-6),
+            100,
+        )
+        .expect("transverse intersection");
+        assert!(point.z.abs() < 1e-14);
+        assert!((parameter - 0.5).abs() < 1e-14);
     }
 
     #[test]
