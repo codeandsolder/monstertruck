@@ -63,7 +63,7 @@ fn assert_projects_to_start(trim: &ParameterCurve<BsplineCurve<Point2>, NurbsSur
         trim.evaluate(start).near(&trim.evaluate(end)),
         "the fixture must be closed in space"
     );
-    [start, end].into_iter().for_each(|at| {
+    for at in [start, end] {
         let (parameter, uv) = trim
             .project_boundary_point(trim.evaluate(at), None, KERNEL_EPSILON)
             .expect("the start of the trim projects onto it");
@@ -72,7 +72,7 @@ fn assert_projects_to_start(trim: &ParameterCurve<BsplineCurve<Point2>, NurbsSur
             "the point at {at} projected to {parameter} (uv {uv:?}), \
              the far end of [{start}, {end}]"
         );
-    });
+    }
 }
 
 /// A circle's trim, from `(from, v)` to `(to, v)`.
@@ -130,6 +130,7 @@ fn seam_crossing_rational_face_consumes_every_shared_boundary_sample() {
         },
         shell::ShellCondition,
     };
+    type Trim = ParameterCurve<Curve2D, Box<Surface>>;
     // The parameter curve has no supplied UV trim. Its rational spatial
     // arc crosses the endpoint of the finite clamped circle chart.
     let theta = 0.35_f64;
@@ -169,7 +170,6 @@ fn seam_crossing_rational_face_consumes_every_shared_boundary_sample() {
             curve: Curve::Line(Line(vertices[3], vertices[0])),
         },
     ];
-    type Trim = ParameterCurve<Curve2D, Box<Surface>>;
     let shell = CompressedTrimmedShell::<Point3, Curve, Surface, Trim> {
         vertices,
         edges,
@@ -211,7 +211,7 @@ fn seam_crossing_rational_face_consumes_every_shared_boundary_sample() {
         })
         .sum::<f64>();
     assert!(
-        (area - 2.0 * theta).abs() < 0.005,
+        2.0_f64.mul_add(-theta, area).abs() < 0.005,
         "area {area} instead of {}",
         2.0 * theta
     );
