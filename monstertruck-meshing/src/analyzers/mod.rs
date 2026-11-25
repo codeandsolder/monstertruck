@@ -7,9 +7,14 @@ use crate::{
 use std::cmp::Ordering;
 
 // Preserve signed-zero equality while making NaN comparisons deterministic.
+fn sweep_coordinate_key(value: f64) -> u64 {
+    const SIGN: u64 = 1 << 63;
+    let bits = if value == 0.0 { 0 } else { value.to_bits() };
+    if bits & SIGN == 0 { bits ^ SIGN } else { !bits }
+}
+
 fn compare_sweep_coordinate(left: f64, right: f64) -> Ordering {
-    left.partial_cmp(&right)
-        .unwrap_or_else(|| left.total_cmp(&right))
+    sweep_coordinate_key(left).cmp(&sweep_coordinate_key(right))
 }
 
 // Shared triangle sweep bounds keep collision and point-cloud broad phases aligned.
@@ -38,6 +43,10 @@ fn sweep_coordinate_order_is_total_and_preserves_signed_zero() {
     assert_eq!(compare_sweep_coordinate(-0.0, 0.0), Ordering::Equal);
     for &a in &values {
         for &b in &values {
+            assert_eq!(
+                compare_sweep_coordinate(a, b),
+                a.partial_cmp(&b).unwrap_or_else(|| a.total_cmp(&b))
+            );
             assert_eq!(
                 compare_sweep_coordinate(a, b),
                 compare_sweep_coordinate(b, a).reverse()
