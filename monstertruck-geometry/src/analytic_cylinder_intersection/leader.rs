@@ -29,7 +29,7 @@ impl CylinderIntersectionArc {
         let root = self.min_root;
         let denominator = 2.0 * root;
         let first = distance * radius / root;
-        let second = (distance.mul_add(radius, radius.powi(2)) + first.powi(2)) / root;
+        let second = first.mul_add(first, distance.mul_add(radius, radius.powi(2))) / root;
         let third = (6.0_f64.mul_add(
             first * second,
             (2.0 * distance).mul_add(radius, 6.0 * radius.powi(2)),

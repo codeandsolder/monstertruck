@@ -42,13 +42,15 @@ type GroupedSplineSegments = BTreeMap<
     Vec<[spline_strip::ProfilePosition; 2]>,
 >;
 
+type GroupedCylinderIntersections =
+    BTreeMap<([OrientedSupportKey; 2], bounded::CylinderIntersectionKey), Vec<bounded::Arc>>;
+
 #[derive(Default)]
 struct PhysicalBoundaryGroups {
     linear: GroupedBoundarySegments,
     circular: GroupedCircularSegments,
     cylinder_sections: BTreeMap<[OrientedSupportKey; 2], Vec<bounded::Arc>>,
-    cylinder_intersections:
-        BTreeMap<([OrientedSupportKey; 2], bounded::CylinderIntersectionKey), Vec<bounded::Arc>>,
+    cylinder_intersections: GroupedCylinderIntersections,
     splines: GroupedSplineSegments,
 }
 

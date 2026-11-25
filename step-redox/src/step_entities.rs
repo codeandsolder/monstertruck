@@ -1,7 +1,10 @@
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut, visit_entity_refs};
+#[cfg(feature = "cad-kernel-monstertruck")]
 use anyhow::{Result, anyhow, bail};
 use std::collections::{HashMap, HashSet};
-use step_p21::ast::{DataSection, EntityInstance, Name, Parameter, Record};
+#[cfg(feature = "cad-kernel-monstertruck")]
+use step_p21::ast::DataSection;
+use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
 /// Resolve a STEP reference only when the index still names the requested entity.
 /// An in-bounds but stale index must not silently substitute another entity.
@@ -33,6 +36,7 @@ pub fn named_entity_parameters<'a>(
 }
 
 /// Mutably resolve the same checked, simple-entity positional parameter list.
+#[cfg(feature = "cad-kernel-monstertruck")]
 pub(crate) fn simple_parameters_mut<'a>(
     section: &'a mut DataSection,
     index: &HashMap<u64, usize>,

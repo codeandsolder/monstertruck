@@ -22,10 +22,10 @@ struct Cli {
     /// Must not exist. The original source is never overwritten.
     output: PathBuf,
     /// Maximum source-vertex to analytical edge error in mm.
-    #[arg(long, global = true)]
+    #[arg(long)]
     endpoint_tolerance_mm: f64,
     /// Desired global source spline-carrier proof gap in mm.
-    #[arg(long, global = true)]
+    #[arg(long)]
     target_gap_mm: f64,
     #[command(subcommand)]
     healing: Healing,

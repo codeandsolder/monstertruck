@@ -353,8 +353,8 @@ pub fn heal_cylinder_step_document(
     }
     let step = write_exchange(&revised)?;
     let roundtrip = ParsedStepSource::parse(step.as_bytes())?.exchange;
-    if roundtrip.data.len() != original.data.len() {
-        bail!("serialized repaired source changed DATA section count");
+    if roundtrip.data != revised.data {
+        bail!("serialized repaired source changed DATA entity values");
     }
     Ok(FullSourceCylinderHealing {
         step,
