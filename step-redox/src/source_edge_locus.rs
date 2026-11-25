@@ -37,6 +37,139 @@ fn point_distance(point: Point3, vertex: [f64; 3]) -> f64 {
         .hypot(point.z - vertex[2])
 }
 
+/// Domain structure shared by both endpoint certificates. A full internal
+/// multiplicity could introduce a discontinuity and is never accepted.
+fn clamped_continuous_knots(degree: usize, knots: &[f64], weights: &[f64]) -> bool {
+    if degree == 0 || degree > 64 {
+        return false;
+    }
+    let count = weights.len();
+    let order = degree + 1;
+    if count < order || knots.len() != count + order {
+        return false;
+    }
+    if !knots.iter().all(|knot| knot.is_finite()) || knots.windows(2).any(|w| w[0] > w[1]) {
+        return false;
+    }
+    // Requiring clamped end knots makes both full-domain endpoints identical
+    // to the first/last Euclidean controls, rather than merely close to them.
+    if knots[..order]
+        .iter()
+        .any(|knot| knot.total_cmp(&knots[0]).is_ne())
+        || knots[knots.len() - order..]
+            .iter()
+            .any(|knot| knot.total_cmp(&knots[knots.len() - 1]).is_ne())
+    {
+        return false;
+    }
+    // A full internal multiplicity of degree + 1 can conceal a geometric
+    // discontinuity. Endpoint matching must not authorize that union of loci.
+    let domain_start = knots[degree];
+    let domain_end = knots[count];
+    if domain_start >= domain_end || knots[order] <= domain_start || knots[count - 1] >= domain_end
+    {
+        return false;
+    }
+    if knots.windows(degree + 1).any(|window| {
+        window[0].total_cmp(&window[degree]).is_eq()
+            && window[0] > domain_start
+            && window[0] < domain_end
+    }) {
+        return false;
+    }
+    true
+}
+
+/// Show that the endpoint is strictly outside the convex hull of all
+/// supplied non-endpoint controls. Any separating direction suffices;
+/// candidate directions are not themselves the certificate.
+fn endpoint_separated(endpoint: [f64; 3], controls: &[[f64; 3]], floor: f64) -> bool {
+    use crate::math3::{add, dot, mul, norm, sub};
+    let offsets = controls
+        .iter()
+        .map(|&point| sub(point, endpoint))
+        .collect::<Vec<_>>();
+    let Some(mut closest) = offsets
+        .iter()
+        .copied()
+        .min_by(|&a, &b| norm(a).total_cmp(&norm(b)))
+    else {
+        return false;
+    };
+    // Frank-Wolfe minimum-norm point iterations only propose a direction.
+    // A direct all-controls separating-plane inequality is the actual proof;
+    // nonconvergence or near-zero separation refuses the trim.
+    for _ in 0..128 {
+        let length = norm(closest);
+        if !length.is_finite() || length <= floor {
+            return false;
+        }
+        let direction = mul(closest, length.recip());
+        let Some(witness) = offsets
+            .iter()
+            .copied()
+            .min_by(|&a, &b| dot(a, direction).total_cmp(&dot(b, direction)))
+        else {
+            return false;
+        };
+        if dot(witness, direction) > floor {
+            return true;
+        }
+        let step = sub(witness, closest);
+        let denominator = dot(step, step);
+        if !denominator.is_finite() || denominator <= 0.0 {
+            return false;
+        }
+        let fraction = (-dot(closest, step) / denominator).clamp(0.0, 1.0);
+        if !fraction.is_finite() || fraction <= 0.0 {
+            return false;
+        }
+        closest = add(closest, mul(step, fraction));
+    }
+    false
+}
+
+/// A nonmonotone curve may still have an unambiguous complete open trim.
+/// Each genuinely positive knot span lies inside the convex hull of its
+/// active controls. Exclude the opposite endpoint from every such hull;
+/// exclude the matching endpoint from every hull except the endpoint span,
+/// where its one clamped control has strictly less than unit basis weight
+/// in the interior. This permits turning tangents without permitting an
+/// additional visit to either endpoint. No sampled curve points are used.
+fn unique_endpoint_visits(spline: &BSplineSupport, weights: &[f64]) -> bool {
+    let points = &spline.control_points_mm;
+    let degree = spline.degree;
+    let knots = &spline.knots;
+    if points.len() != weights.len()
+        || !clamped_continuous_knots(degree, knots, weights)
+        || points.iter().flatten().any(|v| !v.is_finite())
+        || weights.iter().any(|&w| !w.is_finite() || w <= 0.)
+    {
+        return false;
+    }
+    let scale = points
+        .iter()
+        .flatten()
+        .map(|v| v.abs())
+        .fold(1.0_f64, f64::max);
+    let floor = 256. * f64::EPSILON * scale;
+    let Some(&first) = points.first() else {
+        return false;
+    };
+    let Some(&last) = points.last() else {
+        return false;
+    };
+    (degree..points.len())
+        .filter(|&i| knots[i] < knots[i + 1])
+        .all(|i| {
+            let start = i - degree;
+            let first_control = usize::from(start == 0);
+            let last_control = usize::from(i == points.len() - 1);
+            endpoint_separated(first, &points[start + first_control..=i], floor)
+                && endpoint_separated(last, &points[start..=i - last_control], floor)
+        })
+}
+
 /// Sufficient global proof that the edge cannot revisit an endpoint.
 ///
 /// A nondecreasing control polygon projection gives a nondecreasing rational
@@ -53,38 +186,12 @@ fn has_strict_chord_progress(
     first: Point3,
     last: Point3,
 ) -> bool {
-    let count = control_points.len();
-    let Some(order) = degree.checked_add(1) else {
-        return false;
-    };
-    if count < order || weights.len() != count || knots.len() != count + order {
-        return false;
-    }
-    // Requiring clamped end knots makes both full-domain endpoints identical
-    // to the first/last Euclidean controls, rather than merely close to them.
-    if knots[..order]
-        .iter()
-        .any(|knot| knot.total_cmp(&knots[0]).is_ne())
-        || knots[knots.len() - order..]
-            .iter()
-            .any(|knot| knot.total_cmp(&knots[knots.len() - 1]).is_ne())
-    {
+    if control_points.len() != weights.len() || !clamped_continuous_knots(degree, knots, weights) {
         return false;
     }
     let chord = [last.x - first.x, last.y - first.y, last.z - first.z];
     let len2 = chord[0].mul_add(chord[0], chord[1].mul_add(chord[1], chord[2] * chord[2]));
     if !len2.is_finite() || len2 <= 0.0 {
-        return false;
-    }
-    // A full internal multiplicity of degree + 1 can conceal a geometric
-    // discontinuity. Endpoint matching must not authorize that union of loci.
-    let domain_start = knots[degree];
-    let domain_end = knots[count];
-    if knots.windows(degree + 1).any(|window| {
-        window[0].total_cmp(&window[degree]).is_eq()
-            && window[0] > domain_start
-            && window[0] < domain_end
-    }) {
         return false;
     }
     let scale = control_points
@@ -176,13 +283,25 @@ pub(crate) fn complete_bspline_edge(
     endpoint_tolerance_mm: f64,
 ) -> Result<NurbsCurve<Vector4>> {
     let index = build_index(step.entities);
-    complete_bspline_edge_with_index(step, &index, endpoint_tolerance_mm)
+    complete_bspline_edge_with_index(
+        step,
+        &index,
+        endpoint_tolerance_mm,
+        EndpointProof::StrictChordProgress,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum EndpointProof {
+    StrictChordProgress,
+    UniqueVisits,
 }
 
 fn complete_bspline_edge_with_index(
     step: StepEdge<'_>,
     index: &std::collections::HashMap<u64, usize>,
     endpoint_tolerance_mm: f64,
+    proof: EndpointProof,
 ) -> Result<NurbsCurve<Vector4>> {
     if !endpoint_tolerance_mm.is_finite() || endpoint_tolerance_mm <= 0.0 {
         bail!("edge endpoint tolerance must be positive and finite");
@@ -209,7 +328,13 @@ fn complete_bspline_edge_with_index(
         bail!("edge #{} has no supported full B-spline geometry", step.id);
     };
     let count = spline.control_points_mm.len();
-    let weights = spline.weights.unwrap_or_else(|| vec![1.0; count]);
+    let unit_weights;
+    let weights = if let Some(weights) = &spline.weights {
+        weights.as_slice()
+    } else {
+        unit_weights = vec![1.0; count];
+        &unit_weights
+    };
     let first_control = spline
         .control_points_mm
         .first()
@@ -220,23 +345,26 @@ fn complete_bspline_edge_with_index(
         .last()
         .copied()
         .ok_or_else(|| anyhow!("edge #{} has no B-spline controls", step.id))?;
-    if !has_strict_chord_progress(
+    let monotone = has_strict_chord_progress(
         &spline.control_points_mm,
-        &weights,
+        weights,
         spline.degree,
         &spline.knots,
         Point3::new(first_control[0], first_control[1], first_control[2]),
         Point3::new(last_control[0], last_control[1], last_control[2]),
-    ) {
+    );
+    if !(monotone
+        || matches!(proof, EndpointProof::UniqueVisits) && unique_endpoint_visits(&spline, weights))
+    {
         bail!(
-            "edge #{} lacks an unambiguous full-domain monotone trim certificate",
+            "edge #{} lacks an unambiguous full-domain trim certificate",
             step.id
         );
     }
     let controls = spline
         .control_points_mm
         .into_iter()
-        .zip(weights)
+        .zip(weights.iter().copied())
         .map(|(point, weight)| {
             Vector4::new(
                 point[0] * weight,
@@ -525,33 +653,99 @@ pub fn source_solid_length_scale_mm(solid_id: u64, entities: &[EntityInstance]) 
     scale.ok_or_else(|| anyhow!("solid #{solid_id} has no B-rep shape representation"))
 }
 
-/// A whole-domain maximum-distance bracket for a B-spline on an incident plane.
+/// A whole-domain maximum shortest-distance bracket for a B-spline on
+/// its literal incident carrier, not an estimate of whole-body equivalence.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
-pub struct SourcePlaneDeviation {
+pub struct SourceCarrierDeviation {
     pub lower_mm: f64,
     pub upper_mm: f64,
     pub arithmetic_margin_mm: f64,
     pub subdivisions: usize,
 }
 
-impl From<monstertruck_geometry::analytic_plane_deviation::PlaneDeviationBounds>
-    for SourcePlaneDeviation
-{
-    fn from(value: monstertruck_geometry::analytic_plane_deviation::PlaneDeviationBounds) -> Self {
-        Self {
-            lower_mm: value.lower,
-            upper_mm: value.upper,
-            arithmetic_margin_mm: value.arithmetic_margin,
-            subdivisions: value.subdivisions,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceCarrierKind {
+    Plane,
+    Cylinder,
+    Cone,
+}
+
+#[derive(Clone, Copy)]
+enum AuditedCarrier {
+    Plane(brep::PlaneSupport),
+    Cylinder(brep::CylinderSupport),
+    Cone(brep::ConeSupport),
+}
+
+impl AuditedCarrier {
+    const fn kind(self) -> SourceCarrierKind {
+        match self {
+            Self::Plane(_) => SourceCarrierKind::Plane,
+            Self::Cylinder(_) => SourceCarrierKind::Cylinder,
+            Self::Cone(_) => SourceCarrierKind::Cone,
+        }
+    }
+
+    fn bound(self, curve: &NurbsCurve<Vector4>, gap: f64) -> Option<SourceCarrierDeviation> {
+        use monstertruck_geometry::{
+            analytic_plane_deviation::bound_nurbs_plane_deviation,
+            analytic_radial_deviation::bound_nurbs_radial_deviation,
+        };
+        let point = |p: [f64; 3]| Point3::new(p[0], p[1], p[2]);
+        let vector = |v: [f64; 3]| Vector3::new(v[0], v[1], v[2]);
+        let radial = |origin, axis, radius, slope| {
+            let bounds = bound_nurbs_radial_deviation(
+                curve,
+                point(origin),
+                vector(axis),
+                radius,
+                slope,
+                gap,
+            )?;
+            Some(SourceCarrierDeviation {
+                lower_mm: bounds.lower,
+                upper_mm: bounds.upper,
+                arithmetic_margin_mm: bounds.arithmetic_margin,
+                subdivisions: bounds.subdivisions,
+            })
+        };
+        match self {
+            Self::Plane(plane) => {
+                let bounds = bound_nurbs_plane_deviation(
+                    curve,
+                    point(plane.origin_mm),
+                    vector(plane.normal),
+                    gap,
+                )?;
+                Some(SourceCarrierDeviation {
+                    lower_mm: bounds.lower,
+                    upper_mm: bounds.upper,
+                    arithmetic_margin_mm: bounds.arithmetic_margin,
+                    subdivisions: bounds.subdivisions,
+                })
+            }
+            Self::Cylinder(cylinder) => radial(
+                cylinder.axis_origin_mm,
+                cylinder.axis,
+                cylinder.radius_mm,
+                0.0,
+            ),
+            Self::Cone(cone) => radial(
+                cone.reference_origin_mm,
+                cone.axis,
+                cone.reference_radius_mm,
+                cone.semi_angle_rad.tan(),
+            ),
         }
     }
 }
 
-/// Undetermined is neither a clean source plane nor a certified defect.
+/// Undetermined is neither a conforming source incidence nor a certified defect.
 /// Unsupported indicates a failure of the full-edge curve/domain proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SourcePlaneIncidenceStatus {
+pub enum SourceCarrierIncidenceStatus {
     WithinTolerance,
     ExceedsTolerance,
     Undetermined,
@@ -560,33 +754,38 @@ pub enum SourcePlaneIncidenceStatus {
 
 /// A real STEP edge/face incidence, not a geometric-proximity guess.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct SourcePlaneIncidence {
+pub struct SourceCarrierIncidence {
     pub face_id: u64,
     pub edge_id: u64,
-    pub status: SourcePlaneIncidenceStatus,
+    pub carrier: SourceCarrierKind,
+    pub status: SourceCarrierIncidenceStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bound: Option<SourcePlaneDeviation>,
+    pub bound: Option<SourceCarrierDeviation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-/// Audit source B-spline edges on authored planar faces.
+/// Audit source B-spline edges on authored planes, cylinders and cones.
 ///
-/// Inspects complete B-spline incidences on literal STEP `PLANE` faces.
+/// Inspects complete B-spline incidences on supported literal STEP carriers.
 /// Other edge carriers are counted, not declared conformant. This does not
 /// establish or admit an editable CAD reconstruction.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct SourcePlanarEdgeAudit {
+pub struct SourceSplineEdgeAudit {
     pub solid_id: u64,
     pub tolerance_mm: f64,
     pub coordinate_scale_mm: f64,
     pub planar_faces: usize,
+    pub cylindrical_faces: usize,
+    pub conical_faces: usize,
+    pub unexamined_faces: usize,
+    pub declared_uncertainty_mm: Option<f64>,
     pub non_bspline_edge_incidences: usize,
     pub unresolved_curve_edge_incidences: usize,
-    pub incidences: Vec<SourcePlaneIncidence>,
+    pub incidences: Vec<SourceCarrierIncidence>,
 }
 
-impl SourcePlanarEdgeAudit {
+impl SourceSplineEdgeAudit {
     /// Applies only to examined B-spline incidence loci, never whole solids.
     #[must_use = "The boolean result of `checked_bspline_incidences_are_within_tolerance` must be observed to use the predicate."]
     pub fn checked_bspline_incidences_are_within_tolerance(&self) -> bool {
@@ -595,104 +794,129 @@ impl SourcePlanarEdgeAudit {
             && self
                 .incidences
                 .iter()
-                .all(|item| item.status == SourcePlaneIncidenceStatus::WithinTolerance)
+                .all(|item| item.status == SourceCarrierIncidenceStatus::WithinTolerance)
     }
 }
 
 #[derive(Clone, Copy)]
-struct PlaneIncidenceSettings {
+struct CarrierIncidenceSettings {
     endpoint_tolerance: f64,
     source_target_gap: f64,
     coordinate_scale_mm: f64,
     tolerance_mm: f64,
 }
 
-fn check_bspline_planar_incidence(
+fn check_bspline_carrier_incidence(
     edge: StepEdge<'_>,
     index: &std::collections::HashMap<u64, usize>,
     face_id: u64,
-    plane: brep::PlaneSupport,
-    settings: PlaneIncidenceSettings,
-) -> SourcePlaneIncidence {
-    let (status, bound, reason) =
-        match complete_bspline_edge_with_index(edge, index, settings.endpoint_tolerance) {
-            Err(error) => (
-                SourcePlaneIncidenceStatus::Unsupported,
-                None,
-                Some(error.to_string()),
+    carrier: AuditedCarrier,
+    settings: CarrierIncidenceSettings,
+) -> SourceCarrierIncidence {
+    let (status, bound, reason) = match complete_bspline_edge_with_index(
+        edge,
+        index,
+        settings.endpoint_tolerance,
+        EndpointProof::UniqueVisits,
+    ) {
+        Err(error) => (
+            SourceCarrierIncidenceStatus::Unsupported,
+            None,
+            Some(error.to_string()),
+        ),
+        Ok(curve) => carrier
+            .bound(&curve, settings.source_target_gap)
+            .and_then(|bounds| {
+                let mut deviation = bounds;
+                deviation.lower_mm *= settings.coordinate_scale_mm;
+                deviation.upper_mm *= settings.coordinate_scale_mm;
+                deviation.arithmetic_margin_mm *= settings.coordinate_scale_mm;
+                (deviation.lower_mm.is_finite()
+                    && deviation.upper_mm.is_finite()
+                    && deviation.arithmetic_margin_mm.is_finite())
+                .then_some(deviation)
+            })
+            .map_or_else(
+                || {
+                    (
+                        SourceCarrierIncidenceStatus::Unsupported,
+                        None,
+                        Some("numerically unsupported whole-curve carrier deviation".to_owned()),
+                    )
+                },
+                |deviation| {
+                    let status = if deviation.lower_mm > settings.tolerance_mm {
+                        SourceCarrierIncidenceStatus::ExceedsTolerance
+                    } else if deviation.upper_mm <= settings.tolerance_mm {
+                        SourceCarrierIncidenceStatus::WithinTolerance
+                    } else {
+                        SourceCarrierIncidenceStatus::Undetermined
+                    };
+                    (status, Some(deviation), None)
+                },
             ),
-            Ok(curve) => {
-                let origin =
-                    Point3::new(plane.origin_mm[0], plane.origin_mm[1], plane.origin_mm[2]);
-                let normal = Vector3::new(plane.normal[0], plane.normal[1], plane.normal[2]);
-                monstertruck_geometry::analytic_plane_deviation::bound_nurbs_plane_deviation(
-                    &curve,
-                    origin,
-                    normal,
-                    settings.source_target_gap,
-                )
-                .and_then(|bounds| {
-                    let mut deviation: SourcePlaneDeviation = bounds.into();
-                    deviation.lower_mm *= settings.coordinate_scale_mm;
-                    deviation.upper_mm *= settings.coordinate_scale_mm;
-                    deviation.arithmetic_margin_mm *= settings.coordinate_scale_mm;
-                    (deviation.lower_mm.is_finite()
-                        && deviation.upper_mm.is_finite()
-                        && deviation.arithmetic_margin_mm.is_finite())
-                    .then_some(deviation)
-                })
-                .map_or_else(
-                    || {
-                        (
-                            SourcePlaneIncidenceStatus::Unsupported,
-                            None,
-                            Some("numerically unsupported whole-curve plane deviation".to_owned()),
-                        )
-                    },
-                    |deviation| {
-                        let status = if deviation.lower_mm > settings.tolerance_mm {
-                            SourcePlaneIncidenceStatus::ExceedsTolerance
-                        } else if deviation.upper_mm <= settings.tolerance_mm {
-                            SourcePlaneIncidenceStatus::WithinTolerance
-                        } else {
-                            SourcePlaneIncidenceStatus::Undetermined
-                        };
-                        (status, Some(deviation), None)
-                    },
-                )
-            }
-        };
-    SourcePlaneIncidence {
+    };
+    SourceCarrierIncidence {
         face_id,
         edge_id: edge.id,
+        carrier: carrier.kind(),
         status,
         bound,
         reason,
     }
 }
 
-/// Analyze every literal analytic planar face and its incident source B-spline
+/// Resolve literal source carriers, not analytic fits of authored splines.
+fn audited_carrier(
+    surface_id: u64,
+    entities: &[EntityInstance],
+    index: &std::collections::HashMap<u64, usize>,
+) -> Result<Option<AuditedCarrier>> {
+    let name = index
+        .get(&surface_id)
+        .and_then(|&i| entities.get(i))
+        .and_then(crate::step_graph::simple_record)
+        .map(|record| record.name.as_str());
+    let carrier = match name {
+        Some("PLANE" | "CYLINDRICAL_SURFACE" | "CONICAL_SURFACE") => {
+            match (name, brep::surface_support(surface_id, entities, index)) {
+                (Some("PLANE"), brep::SurfaceSupport::Plane(plane)) => AuditedCarrier::Plane(plane),
+                (Some("CYLINDRICAL_SURFACE"), brep::SurfaceSupport::Cylinder(cylinder)) => {
+                    AuditedCarrier::Cylinder(cylinder)
+                }
+                (Some("CONICAL_SURFACE"), brep::SurfaceSupport::Cone(cone)) => {
+                    AuditedCarrier::Cone(cone)
+                }
+                _ => bail!("surface #{surface_id} contains a malformed analytic carrier"),
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(carrier))
+}
+
+/// Analyze every supported literal planar, cylindrical or conical face and its incident source B-spline
 /// edge loci, without an external CAD kernel or a reconstructed candidate.
 ///
-/// All plane faces must have resolvable topology. Ambiguous B-spline geometry
+/// All examined faces must have resolvable topology. Ambiguous B-spline geometry
 /// is reported as `Unsupported`, not silently dropped. `ExceedsTolerance` proves
 /// an internal source inconsistency independently of later projection/export.
 ///
 /// # Errors
-/// Returns an error for missing or malformed source solid/plane topology,
-/// non-finite/negative tolerances, or unsupported source plane coordinates.
-pub fn audit_source_solid_planar_bspline_incidences(
+/// Returns an error for missing or malformed source solid/carrier topology,
+/// non-finite/negative tolerances, or unsupported source carrier coordinates.
+pub fn audit_source_solid_bspline_incidences(
     solid_id: u64,
     entities: &[EntityInstance],
     tolerance_mm: f64,
     target_gap_mm: f64,
     coordinate_scale_mm: f64,
-) -> Result<SourcePlanarEdgeAudit> {
+) -> Result<SourceSplineEdgeAudit> {
     if !tolerance_mm.is_finite() || tolerance_mm < 0.0 {
-        bail!("source plane incidence tolerance must be nonnegative and finite");
+        bail!("source carrier incidence tolerance must be nonnegative and finite");
     }
     if !target_gap_mm.is_finite() || target_gap_mm <= 0.0 {
-        bail!("source plane incidence target gap must be positive and finite");
+        bail!("source carrier incidence target gap must be positive and finite");
     }
     if !coordinate_scale_mm.is_finite() || coordinate_scale_mm <= 0.0 {
         bail!("source coordinate millimetre scale must be positive and finite");
@@ -706,7 +930,7 @@ pub fn audit_source_solid_planar_bspline_incidences(
     {
         bail!("source unit scale cannot represent required precision");
     }
-    let settings = PlaneIncidenceSettings {
+    let settings = CarrierIncidenceSettings {
         endpoint_tolerance,
         source_target_gap,
         coordinate_scale_mm,
@@ -715,11 +939,20 @@ pub fn audit_source_solid_planar_bspline_incidences(
     let index = build_index(entities);
     let face_ids = brep::solid_face_ids(solid_id, entities, &index)
         .with_context(|| format!("solid #{solid_id} has unsupported face topology"))?;
-    let mut result = SourcePlanarEdgeAudit {
+    let mut result = SourceSplineEdgeAudit {
         solid_id,
         tolerance_mm,
         coordinate_scale_mm,
         planar_faces: 0,
+        cylindrical_faces: 0,
+        conical_faces: 0,
+        unexamined_faces: 0,
+        declared_uncertainty_mm:
+            crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+                entities, &index,
+            )
+            .get(&solid_id)
+            .copied(),
         non_bspline_edge_incidences: 0,
         unresolved_curve_edge_incidences: 0,
         incidences: Vec::new(),
@@ -727,21 +960,15 @@ pub fn audit_source_solid_planar_bspline_incidences(
     for face_id in face_ids {
         let surface_id = brep::face_surface(face_id, entities, &index)
             .with_context(|| format!("face #{face_id} has no surface"))?;
-        // A spline approximated as planar is not an authored STEP PLANE.
-        // A malformed literal PLANE, however, is a hard failure, not a skip.
-        let literal_plane = index
-            .get(&surface_id)
-            .and_then(|&ordinal| entities.get(ordinal))
-            .and_then(crate::step_graph::simple_record)
-            .is_some_and(|record| record.name == "PLANE");
-        if !literal_plane {
+        let Some(carrier) = audited_carrier(surface_id, entities, &index)? else {
+            result.unexamined_faces += 1;
             continue;
-        }
-        let brep::SurfaceSupport::Plane(plane) =
-            brep::surface_support(surface_id, entities, &index)
-        else {
-            bail!("face #{face_id} contains a malformed analytic plane");
         };
+        match carrier.kind() {
+            SourceCarrierKind::Plane => result.planar_faces += 1,
+            SourceCarrierKind::Cylinder => result.cylindrical_faces += 1,
+            SourceCarrierKind::Cone => result.conical_faces += 1,
+        }
         let loops = brep::face_loops(face_id, entities, &index)
             .with_context(|| format!("face #{face_id} has unsupported edge loops"))?;
         let mut edges = std::collections::BTreeMap::new();
@@ -750,7 +977,6 @@ pub fn audit_source_solid_planar_bspline_incidences(
                 edges.entry(edge.edge_id).or_insert(edge);
             }
         }
-        result.planar_faces += 1;
         for (edge_id, edge) in edges {
             match edge.support {
                 CurveSupport::BSpline(_) => {}
@@ -763,14 +989,14 @@ pub fn audit_source_solid_planar_bspline_incidences(
                     continue;
                 }
             }
-            result.incidences.push(check_bspline_planar_incidence(
+            result.incidences.push(check_bspline_carrier_incidence(
                 StepEdge {
                     id: edge_id,
                     entities,
                 },
                 &index,
                 face_id,
-                plane,
+                carrier,
                 settings,
             ));
         }
@@ -782,7 +1008,7 @@ pub fn audit_source_solid_planar_bspline_incidences(
 }
 
 #[cfg(test)]
-mod source_planar_audit_tests {
+mod source_carrier_audit_tests {
     use super::*;
 
     fn simple_source(interior_z: f64) -> String {
@@ -818,12 +1044,60 @@ END-ISO-10303-21;"
         )
     }
 
-    fn inspect(data: &str) -> Result<SourcePlanarEdgeAudit> {
+    fn inspect(data: &str) -> Result<SourceSplineEdgeAudit> {
         let exchange = step_p21::parser::parse(data)?;
         let [section] = exchange.data.as_slice() else {
             bail!("expected a single DATA section");
         };
-        audit_source_solid_planar_bspline_incidences(1, &section.entities, 1.0e-5, 1.0e-10, 1.0)
+        audit_source_solid_bspline_incidences(1, &section.entities, 1.0e-5, 1.0e-10, 1.0)
+    }
+
+    #[test]
+    fn crossing_cylinder_source_splines_exceed_declared_uncertainty() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_mixed_treatment_4a6356.step");
+        let exchange = step_p21::parser::parse(std::str::from_utf8(bytes)?)?;
+        let entities = &exchange.data[0].entities;
+        let scale = source_solid_length_scale_mm(171, entities)?;
+        let audit = audit_source_solid_bspline_incidences(171, entities, 1e-5, 1e-9, scale)?;
+        assert_eq!(audit.declared_uncertainty_mm, Some(1e-5));
+        for edge_id in [1049, 1063] {
+            let incidences = audit
+                .incidences
+                .iter()
+                .filter(|i| i.edge_id == edge_id)
+                .collect::<Vec<_>>();
+            assert_eq!(incidences.len(), 2);
+            for incidence in incidences {
+                assert_eq!(incidence.carrier, SourceCarrierKind::Cylinder);
+                assert_eq!(
+                    incidence.status,
+                    SourceCarrierIncidenceStatus::ExceedsTolerance,
+                    "{incidence:?}"
+                );
+                assert!(
+                    incidence
+                        .bound
+                        .is_some_and(|bound| bound.lower_mm > 1e-4 && bound.upper_mm < 2e-4),
+                    "{incidence:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nonmonotone_trim_is_audited_when_endpoint_hulls_are_separated() -> Result<()> {
+        let bowed = simple_source(0.0).replace(
+            "#14=CARTESIAN_POINT('',(0.25,0.2,0));",
+            "#14=CARTESIAN_POINT('',(-0.25,0.2,0.));",
+        );
+        assert_ne!(bowed, simple_source(0.0));
+        let audit = inspect(&bowed)?;
+        assert_eq!(
+            audit.incidences[0].status,
+            SourceCarrierIncidenceStatus::WithinTolerance
+        );
+        Ok(())
     }
 
     #[test]
@@ -835,7 +1109,7 @@ END-ISO-10303-21;"
         assert_eq!(exact.incidences[0].edge_id, 8);
         assert_eq!(
             exact.incidences[0].status,
-            SourcePlaneIncidenceStatus::WithinTolerance
+            SourceCarrierIncidenceStatus::WithinTolerance
         );
         assert!(exact.checked_bspline_incidences_are_within_tolerance());
 
@@ -843,7 +1117,7 @@ END-ISO-10303-21;"
         assert_eq!(off_plane.incidences.len(), 1);
         assert_eq!(
             off_plane.incidences[0].status,
-            SourcePlaneIncidenceStatus::ExceedsTolerance
+            SourceCarrierIncidenceStatus::ExceedsTolerance
         );
         assert!(
             off_plane.incidences[0]
@@ -858,17 +1132,12 @@ END-ISO-10303-21;"
         let [section] = exchange.data.as_slice() else {
             bail!("expected one DATA section");
         };
-        let scaled = audit_source_solid_planar_bspline_incidences(
-            1,
-            &section.entities,
-            1.0e-5,
-            1.0e-10,
-            0.001,
-        )?;
+        let scaled =
+            audit_source_solid_bspline_incidences(1, &section.entities, 1.0e-5, 1.0e-10, 0.001)?;
         assert_eq!(scaled.coordinate_scale_mm, 0.001);
         assert_eq!(
             scaled.incidences[0].status,
-            SourcePlaneIncidenceStatus::WithinTolerance
+            SourceCarrierIncidenceStatus::WithinTolerance
         );
         assert!(scaled.checked_bspline_incidences_are_within_tolerance());
         Ok(())
@@ -876,24 +1145,20 @@ END-ISO-10303-21;"
 
     #[test]
     fn ambiguous_edges_and_unsupported_carriers_are_not_assumed_conformant() -> Result<()> {
-        let invalid = simple_source(0.0).replace(
-            "#15=CARTESIAN_POINT('',(0.75,0.2,0));",
-            "#15=CARTESIAN_POINT('',(-0.75,0.2,0));",
-        );
-        // The exact numeric representation in the synthetic fixture is
-        // generated by Display, so use a geometric control edit.
-        let invalid = if invalid == simple_source(0.0) {
-            simple_source(0.0).replace(
-                "#15=CARTESIAN_POINT('',(0.75,0.2,0.0));",
-                "#15=CARTESIAN_POINT('',(-0.75,0.2,0.0));",
+        let invalid = simple_source(0.0)
+            .replace(
+                "#14=CARTESIAN_POINT('',(0.25,0.2,0));",
+                "#14=CARTESIAN_POINT('',(-0.25,0.,0.));",
             )
-        } else {
-            invalid
-        };
+            .replace(
+                "#15=CARTESIAN_POINT('',(0.75,0.2,0));",
+                "#15=CARTESIAN_POINT('',(-0.75,0.,0.));",
+            );
+        assert_ne!(invalid, simple_source(0.0));
         let refused = inspect(&invalid)?;
         assert_eq!(
             refused.incidences[0].status,
-            SourcePlaneIncidenceStatus::Unsupported
+            SourceCarrierIncidenceStatus::Unsupported
         );
         assert!(refused.incidences[0].reason.is_some());
 
@@ -942,19 +1207,14 @@ END-ISO-10303-21;"
             10.0,
         );
 
-        let audit = audit_source_solid_planar_bspline_incidences(
-            15385,
-            &section.entities,
-            1.0e-5,
-            1.0e-10,
-            1.0,
-        )?;
+        let audit =
+            audit_source_solid_bspline_incidences(15385, &section.entities, 1.0e-5, 1.0e-10, 1.0)?;
         let edge = audit
             .incidences
             .iter()
             .find(|edge| edge.edge_id == 93481 && edge.face_id == 125603)
             .ok_or_else(|| anyhow!("radial source edge was not audited"))?;
-        assert_eq!(edge.status, SourcePlaneIncidenceStatus::ExceedsTolerance);
+        assert_eq!(edge.status, SourceCarrierIncidenceStatus::ExceedsTolerance);
         assert!(
             edge.bound
                 .is_some_and(|bounds| bounds.lower_mm > 0.00015706)
