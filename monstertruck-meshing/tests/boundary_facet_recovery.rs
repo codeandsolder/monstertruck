@@ -125,3 +125,55 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     assert!((polygon.volume() - expected).abs() < expected * 0.03);
     Ok(())
 }
+
+/// A curved base chord may lie on the opposite side of its apex from the
+/// true curve. A coarse triangle then has a spatial normal opposite the
+/// differential normal, without reversing the oriented parameter chart.
+/// Stitching must consume the native edge chain in both resolutions.
+#[test]
+fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Result<()> {
+    use monstertruck_geometry::prelude::BsplineSurface;
+    use monstertruck_modeling::{Face, Surface, Wire};
+
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.1, 0.0, 0.0),
+        Point3::new(0.05, 0.0002, 0.0),
+    ];
+    let [a, b, apex] = points.map(builder::vertex);
+    let controls = vec![
+        Vector4::new(0.0, 0.0, 0.0, 1.0),
+        Vector4::new(0.05, 0.003, 0.0, 1.0),
+        Vector4::new(0.1, 0.0, 0.0, 1.0),
+    ];
+    let knots = KnotVector::bezier_knot(2);
+    let curve = NurbsCurve::new(BsplineCurve::new(knots.clone(), controls.clone())?);
+    let surface = NurbsSurface::new(BsplineSurface::new(
+        (knots, KnotVector::bezier_knot(1)),
+        controls
+            .into_iter()
+            .map(|control| vec![control, Vector4::new(0.05, 0.0002, 0.0, 1.0)])
+            .collect(),
+    )?);
+    let wire = [
+        Edge::new(&a, &b, Curve::NurbsCurve(curve))?,
+        builder::line(&b, &apex),
+        builder::line(&apex, &a),
+    ]
+    .into_iter()
+    .collect::<Wire>();
+    let face = Face::new(vec![wire], Surface::NurbsSurface(surface))?;
+    let shell = [face].into_iter().collect::<Shell>().compress();
+    for tolerance in [0.005, 0.0005] {
+        let mesh = shell.triangulation(tolerance);
+        if tolerance == 0.005 {
+            assert_eq!(mesh.edges[0].curve.0.len(), 2);
+        }
+        let stitched = stitch_compressed_shell(&mesh, monstertruck_modeling::KERNEL_EPSILON)?;
+        assert_eq!(
+            stitched.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Oriented
+        );
+    }
+    Ok(())
+}
