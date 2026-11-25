@@ -18,6 +18,7 @@ pub use conic::ContactConicEvidence;
 mod curve_evidence;
 mod native;
 mod partition;
+mod patch_fans;
 mod patch_lift;
 mod reconcile;
 mod rim_linear;
