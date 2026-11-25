@@ -337,6 +337,42 @@ impl SurfaceCarrier {
         })
     }
 
+    /// Finite observed circle arc on the selected radial sheet.
+    /// Keep whole-circle carrier comparisons separate from this trim proof.
+    pub(super) fn measure_circle_arc(
+        self,
+        circle: &ContactCircleEvidence,
+        first: Point3,
+    ) -> Option<CarrierResidual> {
+        let Self::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        } = self
+        else {
+            return self.circle_residual(circle);
+        };
+        if !unit(circle.normal) || !circle.radius.is_finite() || circle.radius <= 0.0 {
+            return None;
+        }
+        let relative = first - circle.center;
+        let radial = relative - circle.normal * relative.dot(circle.normal);
+        let length = radial.magnitude();
+        if length <= 0.0 || !length.is_finite() {
+            return None;
+        }
+        let u = radial * (circle.radius / length);
+        let v = circle.normal.cross(u);
+        CircularProfile::new(axial_center, axis, radial_center, profile_radius)?.circle_over(
+            circle.center,
+            u,
+            v,
+            circle.radius,
+            circle.signed_sweep_radians,
+        )
+    }
+
     fn circle_residual(self, circle: &ContactCircleEvidence) -> Option<CarrierResidual> {
         if !unit(circle.normal) || !circle.radius.is_finite() || circle.radius <= 0.0 {
             return None;

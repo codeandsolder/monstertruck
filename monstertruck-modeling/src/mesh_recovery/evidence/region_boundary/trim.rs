@@ -158,6 +158,7 @@ fn accepted(
             carriers,
             tolerance.min(options.relative_tolerance * circle.radius),
             span,
+            first,
             false,
         )
     {
@@ -175,6 +176,7 @@ fn accepted(
             carriers,
             tolerance.min(options.relative_tolerance * circle.radius),
             span,
+            first,
             true,
         ) {
             continue;
@@ -252,10 +254,11 @@ fn endpoint_circle(
 
 fn accepts_circle(
     circle: ContactCircleEvidence,
-    mut fit: super::ContactCurveEvidence,
+    fit: super::ContactCurveEvidence,
     carriers: &[SurfaceCarrier],
     tolerance: f64,
     span: f64,
+    first: Point3,
     supplied: bool,
 ) -> bool {
     let angular = tolerance / circle.radius;
@@ -276,7 +279,6 @@ fn accepts_circle(
     } else {
         std::f64::consts::FRAC_PI_3
     };
-    fit.circle = Some(circle);
     if supplied && !corroborated {
         return false;
     }
@@ -293,8 +295,7 @@ fn accepts_circle(
     }
     carriers.iter().all(|carrier| {
         carrier
-            .measure(&fit)
-            .circle
+            .measure_circle_arc(&circle, first)
             .is_some_and(|r| r.upper_bound <= tolerance)
     })
 }
@@ -636,6 +637,75 @@ mod tests {
         };
         assert!((circle.center - Point3::new(0.5, 0.0, 0.0)).magnitude() < 1.0e-10);
         assert!((circle.radius - radius).abs() < 1.0e-10);
+        Ok(())
+    }
+
+    #[test]
+    fn spindle_meridian_trim_certifies_only_the_observed_radial_sheet()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let torus = SurfaceCarrier::CircularRevolution {
+            axial_center: center,
+            axis: Vector3::unit_z(),
+            radial_center: 0.1,
+            profile_radius: 1.0,
+        };
+        let cylinder = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.1, 0.0, 0.0),
+            axis: Vector3::unit_y(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let point = |angle: f64| {
+            let (sin, cos) = angle.sin_cos();
+            Point3::new(0.1 + cos, 0.0, sin)
+        };
+        // The circle has a negative-radial portion outside this observed
+        // arc. The full supporting-circle proof must still reject it.
+        let points = [point(0.0), point(0.4), point(0.8), point(1.2), point(1.5)];
+        for ids in [vec![0, 1, 2, 3, 4], vec![4, 3, 2, 1, 0], vec![0, 1]] {
+            let Some(SharedTrimGeometry::Circle(circle)) =
+                accepted(&points, &ids, &[torus, cylinder], options())
+            else {
+                return Err("missing spindle meridian arc".into());
+            };
+            let fit = measure_path_curves(&points, &ids).ok_or("curve fit")?;
+            let full = torus
+                .measure(&crate::mesh_recovery::ContactCurveEvidence {
+                    circle: Some(circle),
+                    ..fit
+                })
+                .circle
+                .ok_or("full circle")?;
+            assert!(full.upper_bound > 0.1);
+            assert!(
+                torus
+                    .measure_circle_arc(&circle, points[ids[0]])
+                    .ok_or("finite arc")?
+                    .upper_bound
+                    < 1.0e-8
+            );
+        }
+        // The same placed circle continued onto the opposite radial
+        // sheet is not contained by the selected unsigned meridian.
+        let crossing = [point(1.3), point(1.6), point(1.9), point(2.2)];
+        let circle = super::super::curve_evidence::measure_placed_circle(
+            &crossing,
+            &[0, 1, 2, 3],
+            Point3::new(0.1, 0.0, 0.0),
+            Vector3::unit_y(),
+            1.0,
+            1.0,
+        )
+        .ok_or("crossing circle")?;
+        assert!(
+            torus
+                .measure_circle_arc(&circle, crossing[0])
+                .ok_or("crossing arc")?
+                .witnessed_max
+                > 0.1
+        );
+        assert!(accepted(&crossing, &[0, 1, 2, 3], &[torus, cylinder], options()).is_none());
         Ok(())
     }
 

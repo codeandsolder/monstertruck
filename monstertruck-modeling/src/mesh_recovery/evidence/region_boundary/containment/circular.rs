@@ -5,7 +5,7 @@
 
 use super::{CarrierResidual, residual, unit};
 use crate::{InnerSpace, Point3, Vector3};
-use std::f64::consts::FRAC_PI_4;
+use std::f64::consts::{PI, TAU};
 
 #[derive(Clone, Copy)]
 pub(super) struct CircularProfile {
@@ -258,13 +258,30 @@ impl CircularProfile {
         basis_v: Vector3,
         radius: f64,
     ) -> Option<CarrierResidual> {
+        self.circle_over(center, basis_u, basis_v, radius, std::f64::consts::TAU)
+    }
+
+    // A spindle meridian's supporting circle crosses both signed
+    // radial sheets. Only the observed finite arc needs to lie on
+    // the selected sheet. Restrict the unsquared branch test and
+    // both harmonic ranges to the actual signed angular interval.
+    pub(super) fn circle_over(
+        self,
+        center: Point3,
+        basis_u: Vector3,
+        basis_v: Vector3,
+        radius: f64,
+        sweep: f64,
+    ) -> Option<CarrierResidual> {
+        if !sweep.is_finite() || sweep == 0.0 {
+            return None;
+        }
         let origin = center - self.center;
         // For orthogonal equal-length circle basis vectors, |delta|² has
         // only constant and first harmonics, even on a tilted circle.
         let constant = radius.mul_add(radius, origin.magnitude2()) + self.offset();
         let cosine = 2.0 * origin.dot(basis_u);
         let sine = 2.0 * origin.dot(basis_v);
-        let amplitude = cosine.hypot(sine);
         let a_squared = Harmonics::square_first(constant, cosine, sine);
         let radial_squared = Harmonics::norm_squared(
             self.transverse(origin),
@@ -272,15 +289,16 @@ impl CircularProfile {
             self.transverse(basis_v),
         );
         let polynomial = a_squared.add_scaled(radial_squared, -4.0 * self.radial_center.powi(2));
-        let witness = (0..8)
+        let witness = (0..=8)
             .map(|i| {
-                let (sin, cos) = (f64::from(i) * FRAC_PI_4).sin_cos();
+                let (sin, cos) = (f64::from(i) * 0.125 * sweep).sin_cos();
                 self.error(origin + basis_u * cos + basis_v * sin)
             })
             .fold(0.0_f64, f64::max);
+        let [lo, hi] = harmonic_range(cosine, sine, sweep);
         self.bound(
-            [constant - amplitude, constant + amplitude],
-            polynomial.abs_bound(),
+            [constant + lo, constant + hi],
+            polynomial.arc_bound(sweep),
             witness,
         )
     }
@@ -336,6 +354,30 @@ fn bernstein_quartic_bound(power: [f64; 5]) -> Option<f64> {
     )
 }
 
+// Exact extrema of c*cos(t)+s*sin(t) on the unwrapped interval
+// between zero and sweep, including stationary points in its interior.
+fn harmonic_range(cosine: f64, sine: f64, sweep: f64) -> [f64; 2] {
+    let amplitude = cosine.hypot(sine);
+    if sweep.abs() >= TAU {
+        return [-amplitude, amplitude];
+    }
+    let (lo, hi) = (sweep.min(0.0), sweep.max(0.0));
+    let phase = sine.atan2(cosine);
+    let (sin, cos) = sweep.sin_cos();
+    let end = cosine.mul_add(cos, sine * sin);
+    let mut lower = cosine.min(end);
+    let mut upper = cosine.max(end);
+    let allowance = 32.0 * f64::EPSILON;
+    if (phase - lo).rem_euclid(TAU) <= hi - lo + allowance {
+        upper = amplitude;
+    }
+    if (phase + PI - lo).rem_euclid(TAU) <= hi - lo + allowance {
+        lower = -amplitude;
+    }
+    let roundoff = allowance * amplitude;
+    [lower - roundoff, upper + roundoff]
+}
+
 #[derive(Clone, Copy)]
 struct Harmonics([f64; 5]);
 
@@ -368,9 +410,11 @@ impl Harmonics {
         }))
     }
 
-    fn abs_bound(self) -> f64 {
+    fn arc_bound(self, sweep: f64) -> f64 {
         let [constant, cosine, sine, double_cosine, double_sine] = self.0;
-        constant.abs() + cosine.hypot(sine) + double_cosine.hypot(double_sine)
+        let [lo, hi] = harmonic_range(cosine, sine, sweep);
+        let [lo2, hi2] = harmonic_range(double_cosine, double_sine, 2.0 * sweep);
+        (constant + lo + lo2).abs().max((constant + hi + hi2).abs())
     }
 }
 
