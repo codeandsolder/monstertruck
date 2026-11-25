@@ -111,7 +111,7 @@ fn source_vertices(
 /// all unspecified straight edges, including interior edges. A source
 /// vertex must have one native identity throughout the whole patch.
 ///
-/// The input facets must admit the certified projected convex centroid
+/// The input facets must admit the certified projected convex
 /// fan used by [`approximate_boundary_facet`]. This does not infer the
 /// original CAD control net; its deviation is measured against the
 /// polygonal source. Each prescribed edge must correspond to one actual

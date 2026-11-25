@@ -5,6 +5,8 @@
 //! boundary edges, construct an explicitly bounded replacement for a
 //! convex source facet. The shared edge itself is never approximated again.
 
+mod apex;
+
 use crate::{
     BsplineCurve, BsplineSurface, Edge, EuclideanSpace, Face, InnerSpace, KnotVector, NurbsSurface,
     Point3, Surface, Vector3, Vector4, Wire, builder,
@@ -22,7 +24,7 @@ pub struct BoundaryFacetApproximation {
     /// Oriented native fan faces, in source boundary order.
     pub faces: Vec<Face>,
     /// Continuous two-sided distance bound to the source polygon's
-    /// centroid fan, in source coordinate units.
+    /// reference centroid fan, in source coordinate units.
     pub deviation_upper_bound: f64,
     /// Maximum bounded discrepancy between a radial seam and the exact
     /// curve endpoint fan, including the numerical certificate margin.
@@ -326,7 +328,9 @@ impl Wedge {
 /// source facet, from one oriented exact native edge per source side.
 ///
 /// Each edge is certified against its source chord and its angular wedge.
-/// The source and reconstructed fans have a common apex. Continuity of
+/// The source and reconstructed fans have a common apex, initially the
+/// source centroid. If a different interior apex is required, its
+/// deviation from the reference source fan is charged to the budget. Continuity of
 /// the curve's projection onto the chord, together with the endpoint
 /// displacement bound, proves the reverse distance bound as well; convex
 /// interpolation from the apex transfers both bounds to the whole fan.
@@ -345,7 +349,7 @@ pub fn approximate_boundary_facet(
     edges: &[Edge],
     budget: f64,
 ) -> Result<BoundaryFacetApproximation, BoundaryFacetError> {
-    use BoundaryFacetError::{InvalidBoundary, NativeFace, Uncertified, UnsupportedCurve};
+    use BoundaryFacetError::{InvalidBoundary, Uncertified, UnsupportedCurve};
     if source.len() < 3
         || source.len() != edges.len()
         || !budget.is_finite()
@@ -370,7 +374,6 @@ pub fn approximate_boundary_facet(
     }
     let native = edges.iter().map(|e| e.front().point()).collect::<Vec<_>>();
     if !native.iter().copied().all(finite)
-        || !convex_fan(&native, apex, normal)
         || !source
             .iter()
             .zip(&native)
@@ -378,58 +381,108 @@ pub fn approximate_boundary_facet(
     {
         return Err(InvalidBoundary);
     }
-    let apex_vertex = builder::vertex(apex);
-    let radial = edges
+    let curves = edges
         .iter()
-        .map(|edge| builder::line(edge.front(), &apex_vertex))
-        .collect::<Vec<_>>();
-    let mut faces = Vec::with_capacity(edges.len());
-    let mut upper = 0.0_f64;
-    let mut seam_upper = 0.0_f64;
-    for (i, edge) in edges.iter().enumerate() {
-        let next = (i + 1) % edges.len();
-        if !edge.is_geometric_consistent() {
+        .map(|edge| {
+            if !edge.is_geometric_consistent() {
+                return Err(InvalidBoundary);
+            }
+            let curve = edge
+                .oriented_curve()
+                .try_into_homogeneous_bspline_curve()
+                .ok_or(UnsupportedCurve)?;
+            if !positive_weights(curve.control_points()) {
+                return Err(UnsupportedCurve);
+            }
+            Ok(curve)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fan = FacetFan {
+        source,
+        edges,
+        native: &native,
+        curves: &curves,
+        normal,
+        budget,
+    };
+    match fan.construct(apex, 0.0) {
+        Ok(result) => Ok(result),
+        Err(error @ (InvalidBoundary | Uncertified)) => fan.recover(apex, error),
+        Err(error) => Err(error),
+    }
+}
+
+struct FacetFan<'a> {
+    source: &'a [Point3],
+    edges: &'a [Edge],
+    native: &'a [Point3],
+    curves: &'a [BsplineCurve<Vector4>],
+    normal: Vector3,
+    budget: f64,
+}
+
+impl FacetFan<'_> {
+    fn construct(
+        &self,
+        apex: Point3,
+        source_penalty: f64,
+    ) -> Result<BoundaryFacetApproximation, BoundaryFacetError> {
+        use BoundaryFacetError::{InvalidBoundary, NativeFace, Uncertified};
+        if !source_penalty.is_finite()
+            || source_penalty >= self.budget
+            || !convex_fan(self.source, apex, self.normal)
+            || !convex_fan(self.native, apex, self.normal)
+        {
             return Err(InvalidBoundary);
         }
-        let curve = edge
-            .oriented_curve()
-            .try_into_homogeneous_bspline_curve()
-            .ok_or(UnsupportedCurve)?;
-        if !positive_weights(curve.control_points()) {
-            return Err(UnsupportedCurve);
+        let apex_vertex = builder::vertex(apex);
+        let radial = self
+            .edges
+            .iter()
+            .map(|edge| builder::line(edge.front(), &apex_vertex))
+            .collect::<Vec<_>>();
+        let mut faces = Vec::with_capacity(self.edges.len());
+        let mut upper = 0.0_f64;
+        let mut seam_upper = 0.0_f64;
+        for (i, edge) in self.edges.iter().enumerate() {
+            let next = (i + 1) % self.edges.len();
+            let curve = &self.curves[i];
+            let wedge = Wedge {
+                apex,
+                normal: self.normal,
+                source: [self.source[i], self.source[next]],
+                rays: [self.native[i] - apex, self.native[next] - apex],
+                budget: self.budget - source_penalty,
+            };
+            let certificate = wedge.certify_curve(curve).ok_or(Uncertified)?;
+            upper = upper
+                .max(certificate.deviation)
+                .max((self.native[i] - self.source[i]).magnitude());
+            seam_upper = seam_upper.max(certificate.seam_deviation);
+            let surface = wedge.surface(curve).ok_or(NativeFace)?;
+            let face = Face::new(
+                vec![Wire::from(vec![
+                    edge.clone(),
+                    radial[next].clone(),
+                    radial[i].inverse(),
+                ])],
+                surface,
+            )
+            .map_err(|_| NativeFace)?;
+            if !face.is_geometric_consistent() {
+                return Err(NativeFace);
+            }
+            faces.push(face);
         }
-        let wedge = Wedge {
-            apex,
-            normal,
-            source: [source[i], source[next]],
-            rays: [native[i] - apex, native[next] - apex],
-            budget,
-        };
-        let certificate = wedge.certify_curve(&curve).ok_or(Uncertified)?;
-        upper = upper
-            .max(certificate.deviation)
-            .max((native[i] - source[i]).magnitude());
-        seam_upper = seam_upper.max(certificate.seam_deviation);
-        let surface = wedge.surface(&curve).ok_or(NativeFace)?;
-        let face = Face::new(
-            vec![Wire::from(vec![
-                edge.clone(),
-                radial[next].clone(),
-                radial[i].inverse(),
-            ])],
-            surface,
-        )
-        .map_err(|_| NativeFace)?;
-        if !face.is_geometric_consistent() {
-            return Err(NativeFace);
+        if upper + source_penalty > self.budget {
+            return Err(Uncertified);
         }
-        faces.push(face);
+        Ok(BoundaryFacetApproximation {
+            faces,
+            deviation_upper_bound: upper + source_penalty,
+            seam_deviation_upper_bound: seam_upper,
+        })
     }
-    Ok(BoundaryFacetApproximation {
-        faces,
-        deviation_upper_bound: upper,
-        seam_deviation_upper_bound: seam_upper,
-    })
 }
 
 #[cfg(test)]
@@ -460,6 +513,56 @@ mod tests {
             builder::line(&b, &c),
             builder::line(&c, &a),
         ])
+    }
+
+    #[test]
+    fn curved_boundary_can_require_a_noncentroid_apex() -> Result<(), Box<dyn std::error::Error>> {
+        let points = source();
+        let [a, b, c] = points.map(builder::vertex);
+        let edge = Edge::new(
+            &a,
+            &b,
+            Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
+                KnotVector::bezier_knot(2),
+                vec![
+                    a.point().to_vec().extend(1.0),
+                    Vector4::new(0.2, 0.5, 0.0, 1.0),
+                    b.point().to_vec().extend(1.0),
+                ],
+            )?)),
+        )?;
+        let edges = [edge, builder::line(&b, &c), builder::line(&c, &a)];
+        let curves = edges
+            .iter()
+            .map(|edge| {
+                edge.oriented_curve()
+                    .try_into_homogeneous_bspline_curve()
+                    .ok_or("curve")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fan = FacetFan {
+            source: &points,
+            edges: &edges,
+            native: &points,
+            curves: &curves,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            budget: 0.3,
+        };
+        assert!(matches!(
+            fan.construct(centroid(&points), 0.0),
+            Err(BoundaryFacetError::Uncertified)
+        ));
+        let approximation = approximate_boundary_facet(&points, &edges, 0.3)?;
+        assert!(approximation.deviation_upper_bound <= 0.3);
+        assert!(
+            approximation
+                .faces
+                .iter()
+                .all(Face::is_geometric_consistent)
+        );
+        assert_eq!(approximation.faces[0].boundaries()[0][0], edges[0]);
+        assert!(approximate_boundary_facet(&points, &edges, 0.1).is_err());
+        Ok(())
     }
 
     #[test]
