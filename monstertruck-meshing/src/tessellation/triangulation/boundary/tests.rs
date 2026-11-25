@@ -7,7 +7,7 @@ use super::*;
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::{
     Invertible, Line, Matrix4, ParameterCurve, ParametricSurface, Plane, Point2, Point3, Processor,
-    RevolutionSurface, Vector3,
+    RevolutionSurface, SearchParameter, Vector3,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -328,4 +328,18 @@ fn unwrap_distant_periodic_branches_without_moving_local_samples() {
                 .expect("finite periodic coordinate");
         assert!((normalized - actual).abs() < 1e-8);
     }
+}
+
+#[test]
+fn approximate_trim_inverse_is_refined_on_the_actual_carrier() {
+    let plane = Plane::xy();
+    let actual = Point2::new(-0.001535883247325, -0.018752671581139);
+    // Another nearby section of the same narrow bow is within the
+    // coarse chord tolerance but makes its projected loop cross itself.
+    let wrong = Point2::new(-0.004554913501238, -0.019176750771346);
+    let point = plane.evaluate(actual.x, actual.y);
+    let search = |surface: &Plane, point: Point3, _| surface.search_parameter(point, None, 100);
+    let refined = PolyBoundaryPiece::refine_trim_sample(&plane, &search, point, wrong, None, 0.005)
+        .expect("plane inverse should recover the actual spatial sample");
+    assert!(Point2::new(refined.0, refined.1).near(&actual));
 }

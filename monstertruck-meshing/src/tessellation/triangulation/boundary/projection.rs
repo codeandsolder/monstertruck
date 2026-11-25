@@ -287,6 +287,47 @@ impl PolyBoundaryPiece {
         })
     }
 
+    // A face-local pcurve may be a bounded approximation, and a Newton
+    // inverse may converge to another nearby portion of that curve. The
+    // spatial chord tolerance alone cannot identify the UV of a shared
+    // sample. Refine on the actual carrier, using the pcurve as a chart
+    // hint (important on periodic and multiply parameterized surfaces).
+    pub(super) fn refine_trim_sample<S: PreMeshableSurface>(
+        surface: &S,
+        sp: &impl SP<S>,
+        point: Point3,
+        uv: Point2,
+        previous: Option<(f64, f64)>,
+        tolerance: f64,
+    ) -> Option<(f64, f64)> {
+        let seed = Self::normalize_uv(surface, (uv.x, uv.y), previous)?;
+        let residual = |(u, v)| surface.evaluate(u, v).distance(point);
+        let error = residual(seed);
+        let exact = monstertruck_geometry::prelude::KERNEL_EPSILON.min(tolerance);
+        if error <= exact {
+            return Some(seed);
+        }
+        let refine = |candidate| {
+            let normalized = Self::normalize_uv(surface, candidate, Some(seed))?;
+            let deviation = residual(normalized);
+            deviation.is_finite().then_some((normalized, deviation))
+        };
+        let direct = sp(surface, point, Some(seed)).and_then(refine);
+        if let Some((candidate, deviation)) = direct
+            && deviation <= exact
+        {
+            return Some(candidate);
+        }
+        let footpoint = verified_footpoint(surface, point, seed, tolerance).and_then(refine);
+        direct
+            .into_iter()
+            .chain(footpoint)
+            .chain([(seed, error)])
+            .filter(|(_, deviation)| deviation.is_finite() && *deviation <= tolerance)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(uv, _)| uv)
+    }
+
     pub(in crate::tessellation::triangulation) fn try_new_from_aligned_trimmed<'a, S, T, C>(
         surface: &S,
         wire: impl Iterator<Item = (Option<&'a T>, &'a C, PolylineCurve)>,
@@ -312,10 +353,14 @@ impl PolyBoundaryPiece {
                         .map(|point| {
                             let (t, uv) =
                                 trim_curve.project_boundary_point(point, previous_t, tolerance)?;
-                            let (u, v) = Self::normalize_uv(surface, (uv.x, uv.y), previous_uv)?;
-                            if surface.evaluate(u, v).distance(point) > tolerance {
-                                return None;
-                            }
+                            let (u, v) = Self::refine_trim_sample(
+                                surface,
+                                sp,
+                                point,
+                                uv,
+                                previous_uv,
+                                tolerance,
+                            )?;
                             previous_t = Some(t);
                             previous_uv = Some((u, v));
                             Some(SurfacePoint::from((Point2::new(u, v), point)))
