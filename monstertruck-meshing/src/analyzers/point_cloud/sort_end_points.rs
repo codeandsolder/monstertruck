@@ -4,7 +4,9 @@ use super::{
 };
 use array_macro::array;
 
-use super::super::{compare_sweep_coordinate, triangle_projection_interval};
+use super::super::{
+    active_sweep::ActiveSweep, compare_sweep_coordinate, triangle_projection_interval,
+};
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,8 +33,8 @@ impl EndPoint {
         }
     }
     #[inline]
-    fn from_seg(seg: (f64, f64), index: usize) -> Vec<Self> {
-        vec![
+    fn from_seg(seg: (f64, f64), index: usize) -> [Self; 2] {
+        [
             Self::new(seg.0, EndPointType::Front, index),
             Self::new(seg.1, EndPointType::Back, index),
         ]
@@ -55,7 +57,7 @@ where
                 .map(|(i, point)| EndPoint::new(point.to_vec().dot(unit), EndPointType::Middle, i)),
         )
         .collect();
-    res.sort_by(|a, b| {
+    res.sort_unstable_by(|a, b| {
         compare_sweep_coordinate(a.entity, b.entity)
             .then_with(|| a.r#type.cmp(&b.r#type))
             .then_with(|| a.index.cmp(&b.index))
@@ -92,23 +94,14 @@ pub fn pointcloud_in_polygon_neighborhood(
     tol: f64,
 ) -> bool {
     nonpositive_tolerance!(tol, 0.0);
-    let mut current = Vec::new();
     let triangles = polygon.faces().triangle_iter().collect::<Vec<_>>();
+    let mut current = ActiveSweep::new(triangles.len());
     sorted_endpoints_by_polymesh_points(polygon, points, tol)
         .into_iter()
         .all(move |EndPoint { r#type, index, .. }| match r#type {
-            EndPointType::Front => {
-                current.push(index);
-                true
-            }
-            EndPointType::Back => {
-                let Some(i) = current.iter().position(|idx| *idx == index) else {
-                    return false;
-                };
-                current.swap_remove(i);
-                true
-            }
-            EndPointType::Middle => current.iter().any(|i| {
+            EndPointType::Front => current.insert(index),
+            EndPointType::Back => current.remove(index),
+            EndPointType::Middle => current.indices().iter().any(|i| {
                 let tri = triangles[*i];
                 let tri = array![i => polygon.positions()[tri[i].pos]; 3];
                 distance2_point_triangle(points[index], tri) < tol * tol
