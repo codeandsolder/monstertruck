@@ -287,6 +287,146 @@ impl PolyBoundaryPiece {
         })
     }
 
+    // Unlike analytic periodic carriers, a closed clamped spline can
+    // represent the same point by extrapolating its endpoint polynomial.
+    // That is not a valid inverse on the intrinsic parameter rectangle.
+    fn intrinsic_nonperiodic_ranges<S: PreMeshableSurface>(surface: &S) -> [Option<(f64, f64)>; 2] {
+        let (u, v) = surface.try_range_tuple();
+        let (real_u, real_v) = surface.parameter_bounds_are_intrinsic();
+        [
+            u.filter(|_| real_u && surface.period_u().is_none()),
+            v.filter(|_| real_v && surface.period_v().is_none()),
+        ]
+    }
+
+    fn normalize_trim_uv<S: PreMeshableSurface>(
+        surface: &S,
+        uv: (f64, f64),
+        previous: Option<(f64, f64)>,
+    ) -> Option<(f64, f64)> {
+        let uv = Self::normalize_uv(surface, uv, previous)?;
+        Self::intrinsic_nonperiodic_ranges(surface)
+            .into_iter()
+            .zip(<[f64; 2]>::from(uv))
+            .all(|(range, value)| range.is_none_or(|(a, b)| (a..=b).contains(&value)))
+            .then_some(uv)
+    }
+
+    pub(super) fn search_trim_sample<S: PreMeshableSurface>(
+        surface: &S,
+        sp: &impl SP<S>,
+        point: Point3,
+        previous: Option<(f64, f64)>,
+        tolerance: f64,
+    ) -> Option<(f64, f64)> {
+        let verify = |uv| {
+            let (u, v) = Self::normalize_trim_uv(surface, uv, previous)?;
+            (surface.evaluate(u, v).distance(point) <= tolerance).then_some((u, v))
+        };
+        // A previous point at the wrong spelling of a closed spline
+        // seam may seed Newton on the extrapolated branch. Restart the
+        // inverse without that seed before considering a bounded grid.
+        sp(surface, point, previous)
+            .and_then(verify)
+            .or_else(|| sp(surface, point, None).and_then(verify))
+            .or_else(|| {
+                let (u, v) = surface.try_range_tuple();
+                let seed = algo::surface::presearch(surface, point, (u?, v?), 16);
+                algo::surface::search_parameter(surface, point, seed, 100)
+                    .and_then(verify)
+                    .or_else(|| {
+                        verified_footpoint(surface, point, seed, tolerance).and_then(verify)
+                    })
+            })
+    }
+
+    // A closed, nonperiodic chart may have two valid endpoint
+    // representatives. If a contiguous run of seam samples is approached
+    // from the same side at both ends, use that endpoint throughout.
+    // Never extrapolate, translate interior coordinates, or move the
+    // authoritative spatial samples. If both sides are needed, a chart
+    // cut is a separate problem rather than a guessed seam rewrite.
+    pub(super) fn align_closed_chart_seams<S: PreMeshableSurface>(
+        surface: &S,
+        points: &mut [SurfacePoint],
+        tolerance: f64,
+    ) {
+        let Some((first, last)) = points.first().zip(points.last()) else {
+            return;
+        };
+        let duplicate = first.point.near(&last.point);
+        let len = points.len() - usize::from(duplicate);
+        if len < 3 {
+            return;
+        }
+        let tolerance = tolerance.min(monstertruck_geometry::prelude::KERNEL_EPSILON);
+        for (axis, range) in Self::intrinsic_nonperiodic_ranges(surface)
+            .into_iter()
+            .enumerate()
+        {
+            let Some((lo, hi)) = range else {
+                continue;
+            };
+            if lo >= hi {
+                continue;
+            }
+            let slack = native_boundary_slack(
+                (lo, hi),
+                DEFAULT_NUMERICAL_TOLERANCES.mesh_projection_parameter_relative,
+            )
+            .unwrap_or_default();
+            let ambiguous = points[..len]
+                .iter()
+                .map(|p| {
+                    if (p[axis] - lo).abs().min((p[axis] - hi).abs()) > slack {
+                        return false;
+                    }
+                    let mut a = p.uv;
+                    let mut b = p.uv;
+                    a[axis] = lo;
+                    b[axis] = hi;
+                    let qa = surface.evaluate(a.x, a.y);
+                    let qb = surface.evaluate(b.x, b.y);
+                    qa.distance(p.point) <= tolerance
+                        && qb.distance(p.point) <= tolerance
+                        && qa.distance(qb) <= tolerance
+                })
+                .collect::<Vec<_>>();
+            let Some(start) = ambiguous.iter().position(|&a| !a) else {
+                continue;
+            };
+            let middle = lo.midpoint(hi);
+            let mut offset = 1;
+            while offset < len {
+                let index = (start + offset) % len;
+                if !ambiguous[index] {
+                    offset += 1;
+                    continue;
+                }
+                let begin = offset;
+                while offset < len && ambiguous[(start + offset) % len] {
+                    offset += 1;
+                }
+                let before = points[(start + begin - 1) % len][axis];
+                let after = points[(start + offset) % len][axis];
+                let endpoint = if before > middle && after > middle {
+                    hi
+                } else if before < middle && after < middle {
+                    lo
+                } else {
+                    continue;
+                };
+                for i in begin..offset {
+                    let index = (start + i) % len;
+                    points[index][axis] = endpoint;
+                    if duplicate && index == 0 {
+                        points[len][axis] = endpoint;
+                    }
+                }
+            }
+        }
+    }
+
     // A face-local pcurve may be a bounded approximation, and a Newton
     // inverse may converge to another nearby portion of that curve. The
     // spatial chord tolerance alone cannot identify the UV of a shared
@@ -300,7 +440,9 @@ impl PolyBoundaryPiece {
         previous: Option<(f64, f64)>,
         tolerance: f64,
     ) -> Option<(f64, f64)> {
-        let seed = Self::normalize_uv(surface, (uv.x, uv.y), previous)?;
+        let Some(seed) = Self::normalize_trim_uv(surface, (uv.x, uv.y), previous) else {
+            return Self::search_trim_sample(surface, sp, point, previous, tolerance);
+        };
         let residual = |(u, v)| surface.evaluate(u, v).distance(point);
         let error = residual(seed);
         let exact = monstertruck_geometry::prelude::KERNEL_EPSILON.min(tolerance);
@@ -308,7 +450,7 @@ impl PolyBoundaryPiece {
             return Some(seed);
         }
         let refine = |candidate| {
-            let normalized = Self::normalize_uv(surface, candidate, Some(seed))?;
+            let normalized = Self::normalize_trim_uv(surface, candidate, Some(seed))?;
             let deviation = residual(normalized);
             deviation.is_finite().then_some((normalized, deviation))
         };
@@ -326,6 +468,7 @@ impl PolyBoundaryPiece {
             .filter(|(_, deviation)| deviation.is_finite() && *deviation <= tolerance)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(uv, _)| uv)
+            .or_else(|| Self::search_trim_sample(surface, sp, point, previous, tolerance))
     }
 
     pub(in crate::tessellation::triangulation) fn try_new_from_aligned_trimmed<'a, S, T, C>(
@@ -368,20 +511,29 @@ impl PolyBoundaryPiece {
                         .collect::<Option<Vec<_>>>()
                 })
                 .or_else(|| {
-                    Self::projected_polyline_piece(surface, &polyline, sp, previous)
-                        .map(|(piece, _)| piece)
-                        .filter(|piece| {
-                            piece
-                                .iter()
-                                .all(|p| surface.evaluate(p.x, p.y).distance(p.point) <= tolerance)
+                    let mut previous_uv = seed_uv;
+                    polyline
+                        .iter()
+                        .copied()
+                        .map(|point| {
+                            let (u, v) = Self::search_trim_sample(
+                                surface,
+                                sp,
+                                point,
+                                previous_uv,
+                                tolerance,
+                            )?;
+                            previous_uv = Some((u, v));
+                            Some(SurfacePoint::from((Point2::new(u, v), point)))
                         })
+                        .collect::<Option<Vec<_>>>()
                 })?;
             previous = projected.last().copied();
             Some(projected)
         })
         .collect::<Option<Vec<Vec<SurfacePoint>>>>()
         .and_then(|pieces| {
-            let concatenated =
+            let mut concatenated =
                 pieces
                     .into_iter()
                     .fold(Vec::<SurfacePoint>::new(), |mut acc, mut piece| {
@@ -391,6 +543,7 @@ impl PolyBoundaryPiece {
                         acc.extend(piece);
                         acc
                     });
+            Self::align_closed_chart_seams(surface, &mut concatenated, tolerance);
             Self::from_surface_points(concatenated)
         })
     }

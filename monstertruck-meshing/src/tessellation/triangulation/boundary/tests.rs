@@ -343,3 +343,49 @@ fn approximate_trim_inverse_is_refined_on_the_actual_carrier() {
         .expect("plane inverse should recover the actual spatial sample");
     assert!(Point2::new(refined.0, refined.1).near(&actual));
 }
+
+#[test]
+fn closed_rational_chart_rejects_extrapolation_and_aligns_seam() {
+    use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, NurbsSurface, Vector4};
+    // Full circle in a finite clamped rational chart, not a periodic
+    // extension of its endpoint polynomial. The last quadrant is
+    // geometrically reachable by extrapolating the first knot span.
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let circle = [
+        (1., 0., 1.),
+        (1., 1., w),
+        (0., 1., 1.),
+        (-1., 1., w),
+        (-1., 0., 1.),
+        (-1., -1., w),
+        (0., -1., 1.),
+        (1., -1., w),
+        (1., 0., 1.),
+    ];
+    let knots = KnotVector::from(vec![
+        0., 0., 0., 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1., 1., 1.,
+    ]);
+    let net = [0., 1.]
+        .map(|z| {
+            circle
+                .iter()
+                .map(|&(x, y, w)| Vector4::new(x * w, y * w, z * w, w))
+                .collect::<Vec<_>>()
+        })
+        .to_vec();
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
+        (KnotVector::bezier_knot(1), knots),
+        net,
+    ));
+    let search = |surface: &NurbsSurface<Vector4>, point: Point3, hint: Option<(f64, f64)>| {
+        surface.search_parameter(point, hint, 100)
+    };
+    let target = surface.evaluate(0.0, 0.9);
+    let uv = PolyBoundaryPiece::search_trim_sample(&surface, &search, target, Some((0., 0.)), 1e-6)
+        .expect("in-domain inverse");
+    assert!((uv.1 - 0.9).abs() < 1e-6);
+    let mut boundary = [(0., 0.), (0., 0.75), (1., 0.75), (1., 0.), (0., 0.)]
+        .map(|(u, v)| SurfacePoint::from((Point2::new(u, v), surface.evaluate(u, v))));
+    PolyBoundaryPiece::align_closed_chart_seams(&surface, &mut boundary, 1e-6);
+    assert_eq!(boundary.map(|p| p.y), [1., 0.75, 0.75, 1., 1.]);
+}

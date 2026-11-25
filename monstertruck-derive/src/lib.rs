@@ -771,12 +771,24 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface3D` for Enums or single field tuple structs.
+///
+/// `#[surface_intrinsic_bounds(path)]` delegates intrinsic parameter-domain
+/// classification to a function of the complete wrapper. This is useful
+/// when interchange-specific semantics differ from the underlying carrier.
 #[proc_macro_error]
-#[proc_macro_derive(ParametricSurface3D)]
+#[proc_macro_derive(ParametricSurface3D, attributes(surface_intrinsic_bounds))]
 pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let trait_name0 = quote! { monstertruck_traits::ParametricSurface };
     let trait_name1 = quote! { monstertruck_traits::ParametricSurface3D };
+    let bounds_override = derive_try!(
+        input
+            .attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("surface_intrinsic_bounds"))
+            .map(syn::Attribute::parse_args::<syn::Path>)
+            .transpose()
+    );
     let ty = input.ident;
     let generics_params = input.generics;
     let where_predicates = generics_params
@@ -787,7 +799,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
             let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let methods0 = methods!(
+            let mut methods0 = methods!(
                 variants,
                 trait_name0,
                 fn evaluate(&self, s: f64, t: f64) -> Self::Point,
@@ -799,10 +811,18 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                 fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
                 fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
                 fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
-                fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
                 fn period_u(&self,) -> Option<f64>,
                 fn period_v(&self,) -> Option<f64>,
             );
+            if let Some(bounds) = &bounds_override {
+                methods0.push(quote! {
+                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { #bounds(self) }
+                });
+            } else {
+                methods0.extend(methods!(variants, trait_name0,
+                    fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
+                ));
+            }
             let methods1 = methods!(
                 variants,
                 trait_name1,
@@ -832,6 +852,10 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
         }
         Data::Struct(DataStruct { ref fields, .. }) => {
             let field_type = derive_try!(tuple_struct_field(fields));
+            let bounds = bounds_override.as_ref().map_or_else(
+                || quote! { self.0.parameter_bounds_are_intrinsic() },
+                |path| quote! { #path(self) },
+            );
             quote! {
                 #[automatically_derived]
                 impl #generics_params #trait_name0 for #ty #generics_params
@@ -854,7 +878,7 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
                         self.0.parameter_range()
                     }
                     fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) {
-                        self.0.parameter_bounds_are_intrinsic()
+                        #bounds
                     }
                     fn period_u(&self) -> Option<f64> { self.0.period_u() }
                     fn period_v(&self) -> Option<f64> { self.0.period_v() }
