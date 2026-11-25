@@ -49,7 +49,7 @@ pub use region_boundary::{
 pub use source_collapse::CollapsedSourceFacet;
 pub use source_sectors::SourceSectorPair;
 pub use source_sheet::CanceledSourceSheet;
-pub use source_topology::SeparatedSourceVertex;
+pub use source_topology::{SeparatedSourceVertex, SourceForcedPair};
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
     measure_spatial_support_set,
@@ -274,6 +274,8 @@ pub struct SourceProvenance {
     pub separated_vertices: Vec<SeparatedSourceVertex>,
     /// Exact angular sector pairings accepted by closed component proofs.
     pub sector_pairs: Vec<SourceSectorPair>,
+    /// Necessary component joins certified by incidence and matching.
+    pub forced_pairs: Vec<SourceForcedPair>,
     /// Opt-in canceled opposite source sheets, using original polygon IDs.
     pub canceled_sheets: Vec<CanceledSourceSheet>,
 }
@@ -973,6 +975,7 @@ pub fn analyze_mesh_evidence(
         collapsed_facets: Vec::new(),
         separated_vertices: Vec::new(),
         sector_pairs: Vec::new(),
+        forced_pairs: Vec::new(),
         canceled_sheets: Vec::new(),
     };
     let mut polygons = Vec::with_capacity(source.len());

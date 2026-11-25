@@ -11,6 +11,9 @@ use crate::Point3;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
+mod forced;
+pub use forced::SourceForcedPair;
+
 /// A distinct topological copy of an exactly coincident source position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SeparatedSourceVertex {
@@ -137,7 +140,7 @@ fn closed_components(
     positions: &[Point3],
     polygons: &[InputPolygon],
     incidence: &EdgeIncidence,
-    sectors: &[SourceSectorPair],
+    pairs: impl IntoIterator<Item = [usize; 2]>,
     positive: Option<bool>,
 ) -> Vec<Option<usize>> {
     let mut neighbors = vec![Vec::new(); polygons.len()];
@@ -149,8 +152,7 @@ fn closed_components(
             neighbors[b.0].push(a.0);
         }
     }
-    for sector in sectors {
-        let [a, b] = sector.polygons;
+    for [a, b] in pairs {
         neighbors[a].push(b);
         neighbors[b].push(a);
     }
@@ -220,7 +222,7 @@ pub(super) fn separate_closed_components(
     provenance: &mut SourceProvenance,
 ) -> Vec<bool> {
     let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
-    let components = closed_components(positions, polygons, &incidence, &[], None);
+    let components = closed_components(positions, polygons, &incidence, [], None);
     separate_components(
         positions,
         polygons,
@@ -240,6 +242,40 @@ pub(super) fn separate_closed_components(
         );
         for (flag, component) in closed.iter_mut().zip(selected) {
             *flag |= component.is_some();
+        }
+    }
+    if closed.contains(&false) {
+        let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+        let pairs = forced::necessary_joins(polygons.len(), &incidence);
+        if !pairs.is_empty() {
+            let mut selected = closed_components(
+                positions,
+                polygons,
+                &incidence,
+                pairs.iter().map(|pair| pair.polygons),
+                None,
+            );
+            for (component, &already_closed) in selected.iter_mut().zip(&closed) {
+                if already_closed {
+                    *component = None;
+                }
+            }
+            for mut pair in pairs {
+                let [a, b] = pair.polygons;
+                if selected[a].is_some() && selected[a] == selected[b] {
+                    pair.polygons = pair.polygons.map(|id| provenance.original_polygon_ids[id]);
+                    provenance.forced_pairs.push(pair);
+                }
+            }
+            separate_components(
+                positions,
+                polygons,
+                &selected,
+                &mut provenance.separated_vertices,
+            );
+            for (flag, component) in closed.iter_mut().zip(selected) {
+                *flag |= component.is_some();
+            }
         }
     }
     closed
@@ -286,7 +322,7 @@ fn select_sector_components(
             positions,
             polygons,
             incidence,
-            &pairs[index],
+            pairs[index].iter().map(|pair| pair.polygons),
             Some(index == 0),
         )
     });

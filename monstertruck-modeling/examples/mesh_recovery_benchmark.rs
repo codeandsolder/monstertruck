@@ -4,8 +4,9 @@
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
-    AnalyticRecoveryOptions, RecoveredAnalyticMesh, SharedAnalyticTrim, SharedTrimGeometry,
-    SurfaceCarrier, analyze_mesh_evidence, recover_analytic_evidence,
+    AnalyticRecoveryOptions, FeatureEdgeKind, MeshEvidence, RecoveredAnalyticMesh,
+    SharedAnalyticTrim, SharedTrimGeometry, SurfaceCarrier, analyze_mesh_evidence,
+    recover_analytic_evidence,
 };
 use serde_json::{Value, json};
 use std::{
@@ -134,6 +135,62 @@ fn trim_diagnostics(recovery: &RecoveredAnalyticMesh) -> (Vec<Value>, Vec<Value>
     (unresolved, failed)
 }
 
+// Preserve the complete post-welding incidence of unresolved source
+// edges; these defects precede analytical carrier and trim selection.
+fn ambiguous_source_incidence(evidence: &MeshEvidence) -> Vec<Value> {
+    if evidence.non_manifold_edge_count == 0 && evidence.inconsistent_winding_edge_count == 0 {
+        return Vec::new();
+    }
+    let mut components = vec![usize::MAX; evidence.planar_supports.len()];
+    for seed in 0..components.len() {
+        if components[seed] != usize::MAX {
+            continue;
+        }
+        components[seed] = seed;
+        let mut stack = vec![seed];
+        while let Some(support) = stack.pop() {
+            for &interface in &evidence.support_interface_indices[support] {
+                for &other in &evidence.support_interfaces[interface].supports {
+                    if components[other] == usize::MAX {
+                        components[other] = seed;
+                        stack.push(other);
+                    }
+                }
+            }
+        }
+    }
+    let point = |id: usize| {
+        let p = evidence.positions[id];
+        [p.x, p.y, p.z]
+    };
+    evidence
+        .edges
+        .iter()
+        .filter(|edge| {
+            matches!(
+                edge.kind,
+                FeatureEdgeKind::NonManifoldJunction | FeatureEdgeKind::WindingConflict
+            )
+        })
+        .map(|edge| {
+            let uses = edge
+                .source_face_indices
+                .iter()
+                .zip(&edge.source_forward_winding)
+                .map(|(&polygon, &forward)| {
+                    let vertices = evidence
+                        .source_polygon_vertices(polygon)
+                        .unwrap_or_default();
+                    json!({"polygon":evidence.provenance.original_polygon_ids[polygon],
+                "forward":forward,"regular_component":components[evidence.source_planar_support[polygon]],"vertices":vertices,
+                "points":vertices.iter().copied().map(point).collect::<Vec<_>>()})
+                })
+                .collect::<Vec<_>>();
+            json!({"vertices":edge.vertices,"points":edge.vertices.map(point),"uses":uses})
+        })
+        .collect()
+}
+
 fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value> {
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
@@ -153,7 +210,9 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
             "original_polygon_ids":evidence.provenance.original_polygon_ids,
             "separated_source_vertices":evidence.provenance.separated_vertices.len(),
             "source_sector_pairs":evidence.provenance.sector_pairs.len(),
+            "source_forced_pairs":evidence.provenance.forced_pairs.len(),
             "source_nonmanifold_edges":evidence.non_manifold_edge_count,
+            "ambiguous_source_incidence":ambiguous_source_incidence(&evidence),
             "source_winding_conflicts":evidence.inconsistent_winding_edge_count,
             "source_signed_volume":evidence.closed_source_volume(),
         }));
@@ -211,6 +270,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "original_polygon_ids":recovery.evidence.provenance.original_polygon_ids,
         "collapsed_source_facets":recovery.evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
         "separated_source_vertices":recovery.evidence.provenance.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),
+        "source_forced_pairs":recovery.evidence.provenance.forced_pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons})).collect::<Vec<_>>(),
         "source_sector_pairs":recovery.evidence.provenance.sector_pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons,"positive_volume":p.positive_volume})).collect::<Vec<_>>(),
         "canceled_sheets":canceled_sheets,
         "normalize_coincident_sheets":normalize,
@@ -219,6 +279,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "native_trim_errors":recovery.native.trims.iter().filter(|trim|trim.is_err()).count(),
         "ambiguous_source_edges":recovery.trims.ambiguous_edges.len(),
         "source_nonmanifold_edges":recovery.evidence.non_manifold_edge_count,
+        "ambiguous_source_incidence":ambiguous_source_incidence(&recovery.evidence),
         "source_winding_conflicts":recovery.evidence.inconsistent_winding_edge_count,
         "source_signed_volume":recovery.evidence.closed_source_volume(),
         "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],
