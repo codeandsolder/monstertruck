@@ -127,6 +127,19 @@ fn integrate(terms: &[f64]) -> Result<Integral> {
     })
 }
 
+/// Difference the signed face terms before rounding either whole-solid
+/// volume. Independently rounded volumes can compare equal even when the
+/// represented geometry differs by more than the requested tolerance.
+fn signed_volume_difference(a: &[f64], b: &[f64]) -> Result<f64> {
+    accurate_sum(
+        a.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| pair[0])
+            .chain(b.as_chunks::<2>().0.iter().map(|pair| -pair[0])),
+    )
+}
+
 fn references(a: BoundingBox, b: BoundingBox) -> Result<[[f64; 3]; 4]> {
     let lo_a = [a.min.x, a.min.y, a.min.z];
     let hi_a = [a.max.x, a.max.y, a.max.z];
@@ -197,14 +210,12 @@ pub fn paired_volume(
         if let Some(flux) = &mut flux {
             flux.record(index, [&coarse_a, &coarse_b], [&fine_a, &fine_b])?;
         }
-        let coarse_a = integrate(&coarse_a)?;
-        let coarse_b = integrate(&coarse_b)?;
+        let delta = signed_volume_difference(&fine_a, &fine_b)?;
+        let coarse_delta = signed_volume_difference(&coarse_a, &coarse_b)?;
+        let a_quadrature_drift = signed_volume_difference(&fine_a, &coarse_a)?.abs();
+        let b_quadrature_drift = signed_volume_difference(&fine_b, &coarse_b)?.abs();
         let fine_a = integrate(&fine_a)?;
         let fine_b = integrate(&fine_b)?;
-        let delta = finite_difference(fine_a.volume, fine_b.volume)?;
-        let coarse_delta = finite_difference(coarse_a.volume, coarse_b.volume)?;
-        let a_quadrature_drift = finite_difference(fine_a.volume, coarse_a.volume)?.abs();
-        let b_quadrature_drift = finite_difference(fine_b.volume, coarse_b.volume)?.abs();
         max_absolute_delta = max_absolute_delta.max(delta.abs()).max(coarse_delta.abs());
         max_quadrature_drift = max_quadrature_drift
             .max(a_quadrature_drift)
@@ -239,6 +250,23 @@ pub fn paired_volume(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paired_difference_retains_sub_ulp_volume_changes() -> Result<()> {
+        // Two valid finite signed face buffers whose whole-solid volumes
+        // round to the same representable f64.
+        let a = [1e16, 0.0, 1.0, 0.0];
+        let b = [1e16, 0.0];
+        assert!(
+            integrate(&a)?
+                .volume
+                .total_cmp(&integrate(&b)?.volume)
+                .is_eq()
+        );
+        assert!(signed_volume_difference(&a, &b)?.total_cmp(&1.0).is_eq());
+        assert!(signed_volume_difference(&b, &a)?.total_cmp(&-1.0).is_eq());
+        Ok(())
+    }
 
     #[test]
     fn sum_retains_small_terms_and_rounds_ties() -> Result<()> {
