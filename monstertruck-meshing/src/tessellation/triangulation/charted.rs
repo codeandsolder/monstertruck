@@ -198,13 +198,16 @@ impl<S: PreMeshableSurface> ParameterDivision2D for TrimChart<'_, S> {
         let grid = Self::seeds(range.0, self.wrap[0])
             .zip(Self::seeds(range.1, self.wrap[1]))
             .filter(|(u, v)| ((u.len() - 1) as u64).saturating_mul((v.len() - 1) as u64) <= budget);
-        if let Some(grid) = grid {
-            algo::surface::parameter_division_from_grid_with_budget(self, grid, tol, budget)
-                .division
-        } else {
-            // Report exhaustion through the existing division accounting
-            // without attempting to allocate an unbounded seed grid.
-            algo::surface::parameter_division_with_budget(self, range, tol, 0).division
-        }
+        grid.map_or_else(
+            || {
+                // Report exhaustion through the existing division accounting
+                // without attempting to allocate an unbounded seed grid.
+                algo::surface::parameter_division_with_budget(self, range, tol, 0).division
+            },
+            |grid| {
+                algo::surface::parameter_division_from_grid_with_budget(self, grid, tol, budget)
+                    .division
+            },
+        )
     }
 }
