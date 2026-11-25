@@ -1926,7 +1926,7 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
 #[cfg(feature = "cad-kernel-monstertruck")]
 #[test]
 fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> anyhow::Result<()> {
-    use monstertruck_geometry::analytic_cone_deviation::bound_nurbs_cone_deviation;
+    use monstertruck_geometry::analytic_radial_deviation::bound_nurbs_radial_deviation;
     use monstertruck_geometry::prelude::{Point3, Vector3};
 
     let source = include_bytes!("../../validation/fixtures/production_radial_slot.step");
@@ -1970,7 +1970,7 @@ fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> a
             cone.reference_origin_mm[2],
         );
         let axis = Vector3::new(cone.axis[0], cone.axis[1], cone.axis[2]);
-        let bounds = bound_nurbs_cone_deviation(
+        let bounds = bound_nurbs_radial_deviation(
             &curve,
             origin,
             axis,

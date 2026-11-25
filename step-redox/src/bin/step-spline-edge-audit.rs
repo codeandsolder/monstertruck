@@ -1,4 +1,4 @@
-//! Check source STEP B-spline loci against their own incident planar carriers.
+//! Check source STEP B-spline loci against their own incident analytic carriers.
 #[cfg(feature = "cad-kernel-monstertruck")]
 use anyhow::Context;
 use anyhow::{Result, bail};
@@ -10,8 +10,8 @@ use std::path::PathBuf;
 #[cfg(feature = "cad-kernel-monstertruck")]
 #[derive(Parser)]
 #[command(
-    name = "step-plane-edge-audit",
-    about = "Audit full source B-spline loci against their own literal STEP PLANE carriers"
+    name = "step-spline-edge-audit",
+    about = "Audit full source B-spline loci against their own literal STEP plane, cylinder and cone carriers"
 )]
 struct Cli {
     input: PathBuf,
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
         cli.solid_id,
         &section.entities,
     )?;
-    let audit = step_redox::source_edge_locus::audit_source_solid_planar_bspline_incidences(
+    let audit = step_redox::source_edge_locus::audit_source_solid_bspline_incidences(
         cli.solid_id,
         &section.entities,
         cli.tolerance_mm,
@@ -51,7 +51,7 @@ fn main() -> Result<()> {
 
 #[cfg(not(feature = "cad-kernel-monstertruck"))]
 fn main() -> Result<()> {
-    bail!("step-plane-edge-audit requires --features cad-kernel-monstertruck")
+    bail!("step-spline-edge-audit requires --features cad-kernel-monstertruck")
 }
 
 #[cfg(all(test, feature = "cad-kernel-monstertruck"))]
@@ -61,11 +61,11 @@ mod tests {
     #[test]
     fn caller_must_choose_an_explicit_source_tolerance() -> Result<()> {
         assert!(
-            Cli::try_parse_from(["step-plane-edge-audit", "fixture.step", "15"]).is_err(),
+            Cli::try_parse_from(["step-spline-edge-audit", "fixture.step", "15"]).is_err(),
             "undocumented default units would silently misclassify source geometry"
         );
         let cli = Cli::try_parse_from([
-            "step-plane-edge-audit",
+            "step-spline-edge-audit",
             "fixture.step",
             "15",
             "--tolerance-mm",

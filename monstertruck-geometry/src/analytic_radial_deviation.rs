@@ -1,5 +1,5 @@
 //! Global bracket on the radial deviation of a complete rational spline from
-//! a single-nappe conical surface.
+//! a cylindrical or single-nappe conical surface.
 //!
 //! Every genuinely positive knot span is decomposed into homogeneous Bezier
 //! pieces. The degree-d radial-square residual is bounded by a degree-2d
@@ -13,9 +13,9 @@ use crate::analytic_curve_incidence::{reference_cone_polynomial, valid};
 use crate::prelude::*;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
-/// Bracket on maximum shortest Euclidean distance to a single-nappe cone.
+/// Bracket on maximum shortest Euclidean distance to a cylinder or single-nappe cone.
 ///
-/// At every supported curve point the cone radius is positive. The closest
+/// At every supported curve point the expected radius is positive. The closest
 /// point on the physical nappe is therefore at a positive generatrix height,
 /// and distance = `|rho - (reference_radius + slope*axial)| / hypot(1,slope)`.
 /// Radial bounds are exposed separately for physical source diagnostics.
@@ -23,7 +23,7 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 /// The interval includes a conservative f64 conditioning allowance but does
 /// not claim formally outward-rounded IEEE interval arithmetic.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ConeDeviationBounds {
+pub struct RadialDeviationBounds {
     /// Maximum 3-D shortest-distance lower witness across the complete curve.
     pub lower: f64,
     /// Complete-curve 3-D shortest-distance upper bound.
@@ -37,7 +37,7 @@ pub struct ConeDeviationBounds {
     pub subdivisions: usize,
 }
 
-impl ConeDeviationBounds {
+impl RadialDeviationBounds {
     #[must_use = "The boolean result of `within` must be observed to use the predicate."]
     pub fn within(self, tolerance: f64) -> bool {
         tolerance.is_finite() && tolerance >= 0.0 && self.upper <= tolerance
@@ -165,9 +165,9 @@ fn arithmetic_margin(
 }
 
 /// Bound maximum shortest Euclidean distance of a complete rational B-spline
-/// to the cone `rho = reference_radius + slope * axial`.
+/// to the radial carrier `rho = reference_radius + slope * axial`.
 ///
-/// The axis must be unit length, slope strictly positive and the expected
+/// The axis must be unit length, slope nonnegative (zero is a cylinder), and the expected
 /// radius positive at all dehomogenized Bezier controls, keeping the entire
 /// curve on a single nappe. The reference plane need not pass through the
 /// apex; this avoids cancellation from constructing a distant cone apex.
@@ -181,15 +181,15 @@ fn arithmetic_margin(
 ///
 /// The tolerance itself is NOT an input: callers apply independently sourced
 /// geometric uncertainty to these bounds rather than altering tolerances.
-#[must_use = "The optional bound nurbs cone deviation outcome must be inspected to distinguish a value from absence."]
-pub fn bound_nurbs_cone_deviation(
+#[must_use = "The optional bound nurbs radial deviation outcome must be inspected to distinguish a value from absence."]
+pub fn bound_nurbs_radial_deviation(
     curve: &NurbsCurve<Vector4>,
     reference_origin: Point3,
     axis: Vector3,
     reference_radius: f64,
     slope: f64,
     target_gap: f64,
-) -> Option<ConeDeviationBounds> {
+) -> Option<RadialDeviationBounds> {
     if ![reference_origin.x, reference_origin.y, reference_origin.z]
         .iter()
         .all(|v| v.is_finite())
@@ -198,7 +198,7 @@ pub fn bound_nurbs_cone_deviation(
         || !reference_radius.is_finite()
         || reference_radius <= 0.0
         || !slope.is_finite()
-        || slope <= 0.0
+        || slope < 0.0
         || !valid(curve.non_rationalized())
     {
         return None;
@@ -244,7 +244,7 @@ pub fn bound_nurbs_cone_deviation(
     if !upper.is_finite() || !lower.is_finite() || lower > upper {
         return None;
     }
-    Some(ConeDeviationBounds {
+    Some(RadialDeviationBounds {
         lower,
         upper,
         radial_lower,
@@ -269,8 +269,44 @@ mod tests {
     }
 
     #[test]
+    fn cylindrical_distance_bounds_include_interior_departure() {
+        let curve = NurbsCurve::new(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(2),
+            vec![
+                Vector4::new(1.0, 0.0, 0.0, 1.0),
+                Vector4::new(1.25, 0.0, 1.0, 1.0),
+                Vector4::new(1.0, 0.0, 2.0, 1.0),
+            ],
+        ));
+        let bound = bound_nurbs_radial_deviation(
+            &curve,
+            Point3::origin(),
+            Vector3::unit_z(),
+            1.0,
+            0.0,
+            1e-10,
+        )
+        .expect("valid cylinder");
+        assert!(bound.lower <= 0.125 && bound.upper >= 0.125, "{bound:?}");
+        assert!(bound.upper - bound.lower < 1e-8, "{bound:?}");
+        assert_eq!(bound.radial_lower, bound.lower);
+        assert_eq!(bound.radial_upper, bound.upper);
+        assert!(
+            bound_nurbs_radial_deviation(
+                &curve,
+                Point3::origin(),
+                Vector3::unit_z(),
+                1.0,
+                -0.1,
+                1e-10
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn entire_rational_generator_is_on_cone_and_wrong_axis_is_rejected() {
-        let cone = bound_nurbs_cone_deviation(
+        let cone = bound_nurbs_radial_deviation(
             &linear_cone_generator(),
             Point3::new(0.0, 0.0, 1.0),
             Vector3::unit_z(),
@@ -283,7 +319,7 @@ mod tests {
         assert!(!cone.exceeds(1.0e-8));
         assert_eq!(cone.subdivisions, 0);
         assert!(
-            bound_nurbs_cone_deviation(
+            bound_nurbs_radial_deviation(
                 &linear_cone_generator(),
                 Point3::new(0.0, 0.0, 1.0),
                 Vector3::new(0.0, 0.0, 2.0),
@@ -306,7 +342,7 @@ mod tests {
                 Vector4::new(2.0, 0.0, 2.0, 1.0),
             ],
         ));
-        let cone = bound_nurbs_cone_deviation(
+        let cone = bound_nurbs_radial_deviation(
             &bumped,
             Point3::new(0.0, 0.0, 1.0),
             Vector3::unit_z(),
@@ -337,7 +373,7 @@ mod tests {
             KnotVector::from(vec![0.0, 0.0, 0.0, 0.3, 0.6, 1.0, 1.0, 1.0]),
             controls,
         ));
-        let bounds = bound_nurbs_cone_deviation(
+        let bounds = bound_nurbs_radial_deviation(
             &curve,
             Point3::new(0.0, 0.0, 1.0),
             Vector3::unit_z(),
@@ -372,7 +408,7 @@ mod tests {
             ],
         ));
         assert!(
-            bound_nurbs_cone_deviation(
+            bound_nurbs_radial_deviation(
                 &crossing,
                 Point3::new(0.0, 0.0, 0.0),
                 Vector3::unit_z(),

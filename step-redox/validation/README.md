@@ -118,3 +118,21 @@ journal record is discarded; complete corrupt records fail closed. A file lock
 prevents concurrent writers to the same journal. The aggregate report is
 published atomically without replacing an existing file after every input has
 a completed result. The journal format is identified by the v2 schema header.
+
+## Source spline-to-carrier incidence audit
+
+For source documents that fail independent boundary qualification, inspect the
+actual authored spline edges against their own literal plane, cylinder and
+cone carriers:
+
+    cargo run --release -p step-redox --features cad-kernel-monstertruck \
+      --bin step-spline-edge-audit -- input.step SOLID_ID --tolerance-mm 1e-5
+
+The report resolves the solid's authored length unit, includes its declared
+representation uncertainty when available, and brackets the maximum
+whole-edge distance using positive-weight Bernstein control bounds. Complete
+open edge coverage requires clamped continuous knots and unique endpoint
+visits; a valid curved edge need not have a globally monotone chord projection.
+Unsupported trim domains and unexamined face/curve families remain explicit.
+The caller's tolerance classifies the reported bounds only: it does not
+change the constructive recovery gate, source geometry or source uncertainty.
