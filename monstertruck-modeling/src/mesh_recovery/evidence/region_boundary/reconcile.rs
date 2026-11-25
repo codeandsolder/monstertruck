@@ -509,7 +509,7 @@ fn preserves_polygon_orientation(
 #[derive(Default)]
 struct ContactQuality {
     unresolved: BTreeSet<[usize; 2]>,
-    conics: BTreeSet<[usize; 2]>,
+    noncircular: BTreeSet<[usize; 2]>,
 }
 
 fn contact_quality(
@@ -538,7 +538,9 @@ fn contact_quality(
             for piece in fit.pieces {
                 let target = match piece.geometry {
                     SharedTrimGeometry::Unresolved => &mut quality.unresolved,
-                    SharedTrimGeometry::Conic(_) => &mut quality.conics,
+                    SharedTrimGeometry::Conic(_) | SharedTrimGeometry::ToroidalSection(_) => {
+                        &mut quality.noncircular
+                    }
                     _ => continue,
                 };
                 for offset in 0..piece.edge_count {
@@ -580,13 +582,14 @@ fn preserves_contact_geometry(
         trim,
     );
     // Independently circle-anchored, displacement-bounded planar repair
-    // may replace an already valid noncircular conic by a simpler circular
+    // may replace an already valid noncircular trim by a simpler circular
     // ring (needed by periodic charts). Never introduce unresolved edges.
     // When unresolved coverage is unchanged, require a strict reduction
-    // of conic edges without introducing new conic seams.
+    // of noncircular edges without introducing new noncircular seams.
     new.unresolved.is_subset(&old.unresolved)
         && (new.unresolved.len() < old.unresolved.len()
-            || (new.conics.is_subset(&old.conics) && new.conics.len() < old.conics.len()))
+            || (new.noncircular.is_subset(&old.noncircular)
+                && new.noncircular.len() < old.noncircular.len()))
 }
 
 struct VertexConstraints {

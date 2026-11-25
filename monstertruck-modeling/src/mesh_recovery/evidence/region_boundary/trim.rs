@@ -3,8 +3,8 @@
 
 use super::curve_evidence::{measure_path_curves, measure_placed_circle};
 use super::{
-    ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence, RegionContactPath,
-    SurfaceCarrier,
+    ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence,
+    ContactToroidalSectionEvidence, RegionContactPath, SurfaceCarrier,
 };
 use crate::{InnerSpace, Point3};
 use std::f64::consts::TAU;
@@ -30,6 +30,8 @@ pub enum SharedTrimGeometry {
     Circle(ContactCircleEvidence),
     /// Finite rational conic branch with independently certified carrier containment.
     Conic(ContactConicEvidence),
+    /// Regular plane/ring-torus section with continuously certified native approximation.
+    ToroidalSection(ContactToroidalSectionEvidence),
     /// No accepted analytic hypothesis for these original edges.
     Unresolved,
 }
@@ -185,10 +187,16 @@ fn accepted(
             selected = Some(circle);
         }
     }
-    selected.map(SharedTrimGeometry::Circle).or_else(|| {
-        super::conic::supplied_conic(points, ids, carriers, tolerance)
-            .map(SharedTrimGeometry::Conic)
-    })
+    selected
+        .map(SharedTrimGeometry::Circle)
+        .or_else(|| {
+            super::conic::supplied_conic(points, ids, carriers, tolerance)
+                .map(SharedTrimGeometry::Conic)
+        })
+        .or_else(|| {
+            super::toroidal_section::supplied_section(points, ids, carriers, tolerance)
+                .map(SharedTrimGeometry::ToroidalSection)
+        })
 }
 
 // Algebraic least squares in the one-dimensional family of circles

@@ -47,14 +47,15 @@ fn carrier_summary(carrier: SurfaceCarrier) -> Value {
 fn trim_summary(
     trims: &[monstertruck_modeling::mesh_recovery::SharedAnalyticTrim],
     carriers: &[Option<SurfaceCarrier>],
-) -> ([usize; 4], BTreeMap<String, usize>) {
-    let mut trim_edges = [0_usize; 4];
+) -> ([usize; 5], BTreeMap<String, usize>) {
+    let mut trim_edges = [0_usize; 5];
     let mut unresolved_contact_pairs = BTreeMap::new();
     for trim in trims {
         let kind = match trim.geometry {
             SharedTrimGeometry::Line(_) => 0,
             SharedTrimGeometry::Circle(_) => 1,
             SharedTrimGeometry::Conic(_) => 3,
+            SharedTrimGeometry::ToroidalSection(_) => 4,
             SharedTrimGeometry::Unresolved => 2,
         };
         trim_edges[kind] += trim.source_edges.len();
@@ -262,7 +263,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         trim_summary(&recovery.trims.trims, &partition.carriers);
     let complete = recovery.complete_shell();
     let (unresolved_trims, failed_native_trims) = trim_diagnostics(&recovery);
-    Ok(json!({
+    let mut result = json!({
         "status":"ok","source":path,"source_polygons":mesh.face_iter().count(),
         "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
         "total_seconds":start.elapsed().as_secs_f64(),
@@ -282,7 +283,9 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "ambiguous_source_incidence":ambiguous_source_incidence(&recovery.evidence),
         "source_winding_conflicts":recovery.evidence.inconsistent_winding_edge_count,
         "source_signed_volume":recovery.evidence.closed_source_volume(),
-        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],
+    });
+    let trim_summary = json!({
+        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],"toroidal_section_source_edges":trim_edges[4],
         "unresolved_source_edges":trim_edges[2],
         "unresolved_contact_pairs":unresolved_contact_pairs,
         "unresolved_trims":unresolved_trims,
@@ -296,7 +299,18 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "expanded_native_neighborhoods":recovery.discovery.expanded_native_neighborhoods,
         "shell_condition":complete.as_ref().map(|shell|format!("{:?}",shell.shell_condition())),
         "shell_components":complete.as_ref().map(|shell|shell.connected_components().len()),
-    }))
+    });
+    result
+        .as_object_mut()
+        .context("benchmark result is not an object")?
+        .extend(
+            trim_summary
+                .as_object()
+                .context("trim summary is not an object")?
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    Ok(result)
 }
 
 fn main() -> Result<()> {

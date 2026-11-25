@@ -19,6 +19,8 @@ mod partition;
 mod reconcile;
 mod rim_linear;
 mod sphere;
+mod toroidal_section;
+pub use toroidal_section::ContactToroidalSectionEvidence;
 mod trim;
 mod trim_graph;
 mod trim_intersections;

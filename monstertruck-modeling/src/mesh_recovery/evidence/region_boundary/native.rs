@@ -347,29 +347,14 @@ fn trim_intervals(
             }])
         }
         SharedTrimGeometry::Conic(conic) => {
-            let mut result = Vec::with_capacity(trim.source_edges.len());
-            let mut previous = start;
-            for edge in &trim.source_edges {
-                let [a, b] = edge.vertices;
-                if a != previous {
-                    return Err(NativeTrimError::InvalidSource);
-                }
-                let sweep = conic
-                    .angular_step(
-                        *points.get(a).ok_or(NativeTrimError::InvalidSource)?,
-                        *points.get(b).ok_or(NativeTrimError::InvalidSource)?,
-                    )
-                    .ok_or(NativeTrimError::EdgeGeometry)?;
-                if sweep * conic.signed_sweep_radians <= 0.0 {
-                    return Err(NativeTrimError::EdgeGeometry);
-                }
-                result.push(TrimInterval {
-                    endpoints: [a, b],
-                    sweep,
-                });
-                previous = b;
-            }
-            Ok(result)
+            angular_intervals(trim, points, start, conic.signed_sweep_radians, |a, b| {
+                conic.angular_step(a, b)
+            })
+        }
+        SharedTrimGeometry::ToroidalSection(section) => {
+            angular_intervals(trim, points, start, section.signed_sweep_radians, |a, b| {
+                section.angular_step(a, b)
+            })
         }
         SharedTrimGeometry::Circle(circle) => {
             let mut result = Vec::new();
@@ -412,6 +397,37 @@ fn trim_intervals(
     }
 }
 
+fn angular_intervals(
+    trim: &SharedAnalyticTrim,
+    points: &[Point3],
+    start: usize,
+    signed_sweep: f64,
+    angular_step: impl Fn(Point3, Point3) -> Option<f64>,
+) -> Result<Vec<TrimInterval>, NativeTrimError> {
+    let mut result = Vec::with_capacity(trim.source_edges.len());
+    let mut previous = start;
+    for edge in &trim.source_edges {
+        let [a, b] = edge.vertices;
+        if a != previous {
+            return Err(NativeTrimError::InvalidSource);
+        }
+        let sweep = angular_step(
+            *points.get(a).ok_or(NativeTrimError::InvalidSource)?,
+            *points.get(b).ok_or(NativeTrimError::InvalidSource)?,
+        )
+        .ok_or(NativeTrimError::EdgeGeometry)?;
+        if sweep * signed_sweep <= 0.0 {
+            return Err(NativeTrimError::EdgeGeometry);
+        }
+        result.push(TrimInterval {
+            endpoints: [a, b],
+            sweep,
+        });
+        previous = b;
+    }
+    Ok(result)
+}
+
 fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
     match trim.geometry {
         SharedTrimGeometry::Line(line) => <[Vector3; 2]>::from(normal_basis(line.direction))
@@ -436,7 +452,7 @@ fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
         // A derived bisector plane resolves the branch where the two
         // cylinder gradients become parallel at their intersection.
         SharedTrimGeometry::Conic(conic) => conic.auxiliary_plane().into_iter().collect(),
-        SharedTrimGeometry::Unresolved => Vec::new(),
+        SharedTrimGeometry::ToroidalSection(_) | SharedTrimGeometry::Unresolved => Vec::new(),
     }
 }
 
@@ -527,6 +543,17 @@ fn native_edge(
         )?,
         SharedTrimGeometry::Conic(conic) => {
             let curve = conic
+                .native_curve(
+                    front.point(),
+                    back.point(),
+                    interval.sweep,
+                    options.intersection_tolerance,
+                )
+                .ok_or(NativeTrimError::EdgeGeometry)?;
+            Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)?
+        }
+        SharedTrimGeometry::ToroidalSection(section) => {
+            let curve = section
                 .native_curve(
                     front.point(),
                     back.point(),
@@ -704,7 +731,9 @@ fn compact_sphere_axis(
                         .max_plane_residual
                         .hypot(circle.max_vertex_radial_residual)
             }
-            SharedTrimGeometry::Conic(_) | SharedTrimGeometry::Unresolved => return None,
+            SharedTrimGeometry::Conic(_)
+            | SharedTrimGeometry::ToroidalSection(_)
+            | SharedTrimGeometry::Unresolved => return None,
         };
         if trim
             .source_edges
@@ -1208,6 +1237,107 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn noncircular_torus_plane_section_is_shared_by_native_faces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A contractible toroidal patch, bounded by two parallel circles,
+        // a meridian circle and a noncircular plane intersection.
+        let steps = 8;
+        let width = steps + 1;
+        let mut positions = Vec::new();
+        for i in 0..=steps {
+            let beta = 0.9 * crate::usize_to_f64(i) / crate::usize_to_f64(steps) - 0.3;
+            let (sin, cos) = beta.sin_cos();
+            let radius = 0.5_f64.mul_add(cos, 2.0);
+            let end = (0.7 / radius).acos();
+            for j in 0..=steps {
+                let theta =
+                    (end - 0.5).mul_add(crate::usize_to_f64(j) / crate::usize_to_f64(steps), 0.5);
+                let (sine, cosine) = theta.sin_cos();
+                positions.push(Point3::new(radius * cosine, radius * sine, 0.5 * sin));
+            }
+        }
+        let mut faces = Vec::new();
+        for i in 0..steps {
+            for j in 0..steps {
+                let a = i * width + j;
+                faces.push(vec![a, a + 1, a + width + 1]);
+                faces.push(vec![a, a + width + 1, a + width]);
+            }
+        }
+        let patch_facets = faces.len();
+        // Reverse the boundary traversal along the plane side.
+        faces.push((0..=steps).rev().map(|i| i * width + steps).collect());
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let supports = evidence
+            .planar_supports
+            .iter()
+            .enumerate()
+            .filter(|(_, support)| {
+                support
+                    .source_face_indices
+                    .iter()
+                    .all(|&i| i < patch_facets)
+            })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: 2.0,
+            profile_radius: 0.5,
+        };
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1.0e-8,
+                    chord: 0.1,
+                },
+            )
+            .ok_or("torus patch")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let section = trims
+            .trims
+            .iter()
+            .position(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
+            .ok_or("shared torus-plane trim")?;
+        assert!(trims.trims[section].regions.1.is_some());
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?;
+        let edges = native.trims[section].as_ref().map_err(|error| *error)?;
+        assert_eq!(edges.len(), steps);
+        assert_eq!(native.regions.len(), 2);
+        let shell = native
+            .regions
+            .into_iter()
+            .flat_map(|region| match region.faces {
+                Ok(faces) => faces.into_iter().map(Ok).collect::<Vec<_>>(),
+                Err(error) => vec![Err(error)],
+            })
+            .collect::<Result<crate::Shell, _>>()?;
+        assert_eq!(shell.len(), 2);
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Oriented
+        );
+        Ok(())
+    }
+
     #[test]
     fn spherical_patch_with_multiple_distinct_rims_avoids_chart_poles()
     -> Result<(), Box<dyn std::error::Error>> {
