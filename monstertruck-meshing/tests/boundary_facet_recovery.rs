@@ -34,7 +34,7 @@ fn reconstructed_curved_facet_tessellates_without_dropped_faces() -> anyhow::Res
     assert_eq!(mesh.face_iter().count(), 3);
     for face in mesh.face_iter() {
         let polygon = face.surface().expect("no dropped face");
-        assert!(!polygon.tri_faces().is_empty());
+        assert_ne!(polygon.tri_faces(), []);
         assert!(polygon.positions().iter().all(|p| p.z.abs() <= 0.2));
     }
     Ok(())
@@ -114,7 +114,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     assert_eq!(mesh.face_iter().count(), 10);
     for face in mesh.face_iter() {
         let polygon = face.surface().expect("hybrid face tessellates");
-        assert!(!polygon.tri_faces().is_empty());
+        assert_ne!(polygon.tri_faces(), []);
     }
     let mut polygon = mesh.to_polygon();
     polygon
@@ -128,5 +128,67 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     // unit sphere octant. Its positive volume is exactly pi/6.
     let expected = std::f64::consts::PI / 6.0;
     assert!((polygon.volume() - expected).abs() < expected * 0.03);
+    Ok(())
+}
+
+/// A nonplanar fan can have a coarse chord normal opposite its differential
+/// normals even when projection onto the XY plane is a strictly oriented
+/// star fan. The chart orientation must not depend on the spatial chord.
+/// Stitching must consume the native edge chain in both resolutions.
+#[test]
+fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Result<()> {
+    use monstertruck_geometry::prelude::{
+        BsplineSurface, InnerSpace, NurbsSurface, ParametricSurface3D,
+    };
+    use monstertruck_modeling::{Face, Surface, Wire};
+
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.1, 0.0, 0.0),
+        Point3::new(0.05, 0.0002, 0.001),
+    ];
+    let [a, b, apex] = points.map(builder::vertex);
+    let controls = vec![
+        Vector4::new(0.0, 0.0, 0.0, 1.0),
+        Vector4::new(0.05, -0.0004, 0.004, 1.0),
+        Vector4::new(0.1, 0.0, 0.0, 1.0),
+    ];
+    let knots = KnotVector::bezier_knot(2);
+    let curve = NurbsCurve::new(BsplineCurve::new(knots.clone(), controls.clone())?);
+    let surface = NurbsSurface::new(BsplineSurface::new(
+        (knots, KnotVector::bezier_knot(1)),
+        controls
+            .into_iter()
+            .map(|control| vec![control, Vector4::new(0.05, 0.0002, 0.001, 1.0)])
+            .collect(),
+    )?);
+    // The XY projection of the base is a convex quadratic below y=0;
+    // the apex lies above y=0, so its projected angular derivative is positive.
+    let chord_normal = (points[1] - points[0]).cross(points[2] - points[0]);
+    for u in [0.0, 0.5, 1.0] {
+        let normal = surface.normal(u, 0.0);
+        assert!(normal.z > 0.0);
+        assert!(chord_normal.dot(normal) < 0.0);
+    }
+    let wire = [
+        Edge::new(&a, &b, Curve::NurbsCurve(curve))?,
+        builder::line(&b, &apex),
+        builder::line(&apex, &a),
+    ]
+    .into_iter()
+    .collect::<Wire>();
+    let face = Face::new(vec![wire], Surface::NurbsSurface(surface))?;
+    let shell = std::iter::once(face).collect::<Shell>().compress();
+    for (tolerance, coarse) in [(0.005, true), (0.0005, false)] {
+        let mesh = shell.triangulation(tolerance);
+        if coarse {
+            assert_eq!(mesh.edges[0].curve.0.len(), 2);
+        }
+        let stitched = stitch_compressed_shell(&mesh, monstertruck_modeling::KERNEL_EPSILON)?;
+        assert_eq!(
+            stitched.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Oriented
+        );
+    }
     Ok(())
 }
