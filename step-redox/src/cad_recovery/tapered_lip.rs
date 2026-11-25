@@ -341,7 +341,15 @@ fn projected_polygon(lip: &RecoveredSolidExtrusion, frame: Frame) -> Option<Vec<
     convex_polygon(&points).then_some(points)
 }
 
-fn extend_rear(points: &mut [[f64; 2]], back: f64, width: f64) -> Option<f64> {
+// Use the authored side-plane equations, not the tiny differences
+// between separately evaluated cap vertices, to define the taper.
+fn extend_rear(
+    points: &mut [[f64; 2]],
+    back: f64,
+    width: f64,
+    frame: Frame,
+    sides: &[&ReducedFace],
+) -> Option<f64> {
     let mut rear = points
         .iter()
         .zip(points.iter().cycle().skip(1))
@@ -362,21 +370,60 @@ fn extend_rear(points: &mut [[f64; 2]], back: f64, width: f64) -> Option<f64> {
     {
         return None;
     }
+    let equations = points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .enumerate()
+        .map(|(i, (&a, &b))| {
+            if i == index {
+                return Some(([0.0, 1.0], back));
+            }
+            let mut candidates = sides.iter().filter_map(|face| {
+                let SurfaceSupport::Plane(plane) = face.surface else {
+                    return None;
+                };
+                let normal = [
+                    dot(plane.normal, frame.width),
+                    dot(plane.normal, frame.side),
+                ];
+                let offset = dot(sub(plane.origin_mm, frame.origin), plane.normal);
+                let evaluate = |p: [f64; 2]| normal[0].mul_add(p[0], normal[1] * p[1]) - offset;
+                (evaluate(a).abs() <= LENGTH && evaluate(b).abs() <= LENGTH)
+                    .then_some((normal, offset))
+            });
+            let equation = candidates.next()?;
+            candidates.next().is_none().then_some(equation)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let intersection = |(n, a): ([f64; 2], f64), (m, b): ([f64; 2], f64)| {
+        let det = math2::cross(n, m);
+        (det.abs() > DIRECTION).then(|| {
+            [
+                a.mul_add(m[1], -b * n[1]) / det,
+                n[0].mul_add(b, -m[0] * a) / det,
+            ]
+        })
+    };
     let count = points.len();
     let next = (index + 1) % count;
-    let extend = |a: [f64; 2], b: [f64; 2]| {
-        let delta = math2::sub(b, a);
-        (delta[1].abs() > LENGTH).then(|| [delta[0].mul_add((back - a[1]) / delta[1], a[0]), back])
-    };
-    let a = extend(points[index], points[(index + count - 1) % count])?;
-    let b = extend(points[next], points[(next + 1) % count])?;
+    for i in 0..count {
+        let p = intersection(equations[(i + count - 1) % count], equations[i])?;
+        if !p.iter().all(|v| v.is_finite())
+            || (i != index && i != next && norm2(math2::sub(p, points[i])) > LENGTH)
+        {
+            return None;
+        }
+        points[i] = p;
+    }
+    let a = points[index];
+    let b = points[next];
     if a[0].min(b[0]).abs() > LENGTH || (a[0].max(b[0]) - width).abs() > LENGTH {
         return None;
     }
-    points[index] = a;
-    points[next] = b;
     convex_polygon(points).then_some(front)
 }
+
+fn norm2(p: [f64; 2]) -> f64 { p[0].hypot(p[1]) }
 
 fn proposal(
     graph: &FaceIncidence<'_>,
@@ -427,7 +474,7 @@ fn proposal(
     let sides = side_faces(graph, caps, radial);
     let back = back_station(graph, &sides, host, frame, band)?;
     let mut polygon = projected_polygon(lip, frame)?;
-    let front = extend_rear(&mut polygon, back, host.height_mm)?;
+    let front = extend_rear(&mut polygon, back, host.height_mm, frame, &sides)?;
     let source_face_ids = host
         .cap_face_ids
         .into_iter()
