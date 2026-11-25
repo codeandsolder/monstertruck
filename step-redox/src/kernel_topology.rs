@@ -42,9 +42,7 @@ pub struct KernelEditedSourceProjection {
 /// needs STEP records; editing itself never serializes/reimports the solid.
 pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspector {
     /// Owned backend-native exact-trim topology after a successful transaction.
-    /// A clone is an independent checkpoint: editing either value must not
-    /// change the other's geometry or stable topology identities.
-    type EditedSource: Clone;
+    type EditedSource;
 
     /// Clone an imported solid and apply all patches transactionally.
     ///

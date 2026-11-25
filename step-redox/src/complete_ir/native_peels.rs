@@ -133,13 +133,11 @@ impl Journal {
         kernel: &K,
         edited: &K::EditedSource,
         target: &ReplayTarget<'_, '_, K>,
-        try_native: bool,
     ) -> Result<Option<CadFragment>> {
         let mut native_error = None;
-        if try_native {
-            match self.native_replay(kernel, edited, target) {
-                Ok(Some(fragment)) => return Ok(Some(fragment)),
-                Ok(None) => (),
+        if let Some(host) = recognize_native_edited_host(kernel, edited)? {
+            match self.evaluate_replay(kernel, host, target, None) {
+                Ok(fragment) => return Ok(Some(fragment)),
                 Err(error) => native_error = Some(error),
             }
         }
@@ -182,22 +180,6 @@ impl Journal {
         Ok(None)
     }
 
-    fn native_replay<K: CadKernel + SourceTopologyEditor>(
-        &self,
-        kernel: &K,
-        edited: &K::EditedSource,
-        target: &ReplayTarget<'_, '_, K>,
-    ) -> Result<Option<CadFragment>> {
-        recognize_native_edited_host(kernel, edited)?
-            .map(|host| self.evaluate_replay(kernel, host, target, None))
-            .transpose()
-    }
-
-    /// Preserve every earlier inverse state while preferring a more complete
-    /// feature history to expensive alternative material decompositions of
-    /// an intermediate host. The initial native recognizer remains a fast
-    /// path without projection. If deeper replay fails, exhaust earlier
-    /// checkpoints with the same independent original-boundary qualification.
     pub(super) fn finish<K: CadKernel + SourceTopologyEditor>(
         mut self,
         kernel: &K,
@@ -207,83 +189,47 @@ impl Journal {
         mut next: NextPeel,
         mut stop: Option<String>,
     ) -> Result<Option<CadFragment>> {
-        let mut replay_error = match self.native_replay(kernel, edited, target) {
-            Ok(Some(fragment)) => return Ok(Some(fragment)),
-            Ok(None) => None,
-            Err(error) => Some(error),
-        };
-        // Each successful inverse transaction strictly decreases native
-        // face count. Work on a detached candidate so a failed multi-pass
-        // peel cannot invalidate the previous checkpoint or its journal.
-        let mut checkpoints = Vec::new();
+        let mut replay_error = None;
         loop {
-            let mut candidate = edited.clone();
-            let prefix = self.steps.len();
-            let step = match next {
-                NextPeel::Boundary => {
-                    match peel_projected_features(
-                        kernel,
-                        &mut candidate,
-                        provenance,
-                        self.next_boundary_pass(),
-                    ) {
-                        Ok(families) if !families.is_empty() => {
-                            next = NextPeel::Treatment;
-                            stop = None;
-                            ReplayStep::Boundary(families)
-                        }
-                        Ok(_) => break,
-                        Err(error) => {
-                            stop = Some(format!("{error:#}"));
-                            break;
-                        }
-                    }
-                }
-                NextPeel::Treatment => {
-                    match treatment_layers::peel_native(
-                        kernel,
-                        &mut candidate,
-                        target.source.data_section,
-                        provenance,
-                    ) {
-                        Ok((layers, reason)) if !layers.is_empty() => {
-                            if let Err(error) = kernel.normalize_edited_source(&mut candidate) {
-                                stop = Some(format!("{error:#}"));
-                                break;
-                            }
-                            next = NextPeel::Boundary;
-                            stop = reason;
-                            ReplayStep::Treatment(layers)
-                        }
-                        Ok((_, reason)) => {
-                            stop = reason.or(stop);
-                            break;
-                        }
-                        Err(error) => {
-                            stop = Some(format!("{error:#}"));
-                            break;
-                        }
-                    }
-                }
-            };
-            checkpoints.push((prefix, std::mem::replace(edited, candidate)));
-            self.steps.push(step);
-        }
-        loop {
-            // At the initial checkpoint the native fast path was already
-            // attempted. All other checkpoints retain every recognizer.
-            match self.recognize_replay(kernel, edited, target, !checkpoints.is_empty()) {
+            // Each successful inverse transaction strictly decreases native
+            // face count. Try complete forward replay before peeling further.
+            match self.recognize_replay(kernel, edited, target) {
                 Ok(Some(fragment)) => return Ok(Some(fragment)),
                 Ok(None) => (),
-                Err(error) => {
-                    replay_error.get_or_insert(error);
+                Err(error) => replay_error = Some(error),
+            }
+            match next {
+                NextPeel::Boundary => {
+                    let families = peel_projected_features(
+                        kernel,
+                        edited,
+                        provenance,
+                        self.next_boundary_pass(),
+                    )?;
+                    if families.is_empty() {
+                        break;
+                    }
+                    self.boundary(families);
+                    next = NextPeel::Treatment;
+                    stop = None;
+                }
+                NextPeel::Treatment => {
+                    let (layers, reason) = treatment_layers::peel_native(
+                        kernel,
+                        edited,
+                        target.source.data_section,
+                        provenance,
+                    )?;
+                    if layers.is_empty() {
+                        stop = reason.or(stop);
+                        break;
+                    }
+                    self.treatment(layers);
+                    kernel.normalize_edited_source(edited)?;
+                    next = NextPeel::Boundary;
+                    stop = reason;
                 }
             }
-            let Some((prefix, previous)) = checkpoints.pop() else {
-                break;
-            };
-            self.steps.truncate(prefix);
-            *edited = previous;
         }
         if let Some(reason) = stop {
             anyhow::bail!("native inverse fixed point: {reason}");

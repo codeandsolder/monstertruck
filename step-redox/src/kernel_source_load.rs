@@ -976,7 +976,6 @@ mod monstertruck_adapter {
     /// Exact-trim compressed solid and original STEP provenance after a
     /// transactional edit. Stable IDs and allocator state remain alive until a
     /// downstream consumer explicitly requests a STEP snapshot.
-    #[derive(Clone)]
     pub struct MonstertruckEditedSource {
         source: SourceEntity,
         imported: StepSolidImport<StepCompressedTrimmedSolid>,
