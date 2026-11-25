@@ -30,6 +30,9 @@ pub struct SolidArgs {
     /// Exact textual STEP #identifier, not model rank, for the candidate shape.
     #[arg(long)]
     candidate_entity_id: Option<u32>,
+    /// Include per-occurrence signed face integrals and surface-family totals.
+    #[arg(long)]
+    face_flux: bool,
 }
 
 struct Selected {
@@ -207,7 +210,7 @@ fn boolean_residual(kernel: &mut OcctKernel, a: ShapeHandle, b: ShapeHandle) -> 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum PairedDiagnostic {
-    Measured(paired_volume::PairedVolume),
+    Measured(Box<paired_volume::PairedVolume>),
     Failed {
         within_absolute_tolerance: bool,
         error: String,
@@ -239,7 +242,7 @@ struct Report {
     tolerances: Tolerances,
 }
 
-fn compare(kernel: &mut OcctKernel, a: Selected, b: Selected) -> Result<Report> {
+fn compare(kernel: &mut OcctKernel, a: Selected, b: Selected, face_flux: bool) -> Result<Report> {
     let measured_a = Measured::new(kernel, a.shape)?;
     let measured_b = Measured::new(kernel, b.shape)?;
     let volume_error = (measured_a.metrics.volume - measured_b.metrics.volume).abs();
@@ -270,13 +273,14 @@ fn compare(kernel: &mut OcctKernel, a: Selected, b: Selected) -> Result<Report> 
             .is_some_and(|value| value <= boolean_tolerance);
     // Paired absolute integration is a stricter independent diagnostic,
     // never a replacement for the established adaptive/Boolean decision.
-    let paired = match paired_volume::paired_volume(kernel, a.shape, b.shape, ABS_VOLUME_TOL) {
-        Ok(result) => PairedDiagnostic::Measured(result),
-        Err(error) => PairedDiagnostic::Failed {
-            within_absolute_tolerance: false,
-            error: format!("{error:#}"),
-        },
-    };
+    let paired =
+        match paired_volume::paired_volume(kernel, a.shape, b.shape, ABS_VOLUME_TOL, face_flux) {
+            Ok(result) => PairedDiagnostic::Measured(Box::new(result)),
+            Err(error) => PairedDiagnostic::Failed {
+                within_absolute_tolerance: false,
+                error: format!("{error:#}"),
+            },
+        };
     Ok(Report {
         reference_entity_id: a.entity_id,
         reference_entity_rank: a.rank,
@@ -303,7 +307,7 @@ pub fn run(args: &SolidArgs) -> Result<ExitCode> {
     let mut kernel = OcctKernel::new()?;
     let a = load_selected(&mut kernel, &args.reference, args.reference_entity_id)?;
     let b = load_selected(&mut kernel, &args.candidate, args.candidate_entity_id)?;
-    let report = compare(&mut kernel, a, b)?;
+    let report = compare(&mut kernel, a, b, args.face_flux)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(if report.geometry_equal {
         ExitCode::SUCCESS
@@ -328,7 +332,7 @@ mod tests {
     fn independent_geometry_gates_and_report_only_paired_volume() -> Result<()> {
         let mut kernel = crate::test_kernel()?;
         let whole = kernel.make_box(2., 3., 4.)?;
-        let equal = compare(&mut kernel, selected(whole), selected(whole))?;
+        let equal = compare(&mut kernel, selected(whole), selected(whole), false)?;
         assert!(equal.geometry_equal);
         assert!(equal.adaptive_volume.consistent);
         assert_eq!(equal.boolean_residual_volume.a_minus_b, Some(0.));
@@ -339,11 +343,11 @@ mod tests {
         let left = kernel.make_box(1., 3., 4.)?;
         let right = kernel.translate(left, 1., 0., 0.)?;
         let subdivided = kernel.fuse(left, right)?;
-        let split = compare(&mut kernel, selected(whole), selected(subdivided))?;
+        let split = compare(&mut kernel, selected(whole), selected(subdivided), false)?;
         assert!(split.geometry_equal);
         assert!(split.a.metrics.topology.faces != split.b.metrics.topology.faces);
         let shifted = kernel.translate(whole, 0.5, 0., 0.)?;
-        let negative = compare(&mut kernel, selected(whole), selected(shifted))?;
+        let negative = compare(&mut kernel, selected(whole), selected(shifted), false)?;
         assert!(!negative.geometry_equal);
         assert!(negative.adaptive_volume.consistent); // same volume but wrong material placement
         assert!(
@@ -356,7 +360,7 @@ mod tests {
                 < 1e-8
         );
         let changed = kernel.make_box(2., 3., 5.)?;
-        let invalid = compare(&mut kernel, selected(whole), selected(changed))?;
+        let invalid = compare(&mut kernel, selected(whole), selected(changed), false)?;
         assert!(!invalid.adaptive_volume.consistent);
         assert!(!invalid.geometry_equal);
         assert!(invalid.errors.volume > 0.);
@@ -393,7 +397,7 @@ mod tests {
         let selected_source = load_selected(&mut kernel, &source, Some(source_id))?;
         let selected_target = load_selected(&mut kernel, &candidate, None)?;
         assert!(selected_source.rank.is_some());
-        let comparison = compare(&mut kernel, selected_source, selected_target)?;
+        let comparison = compare(&mut kernel, selected_source, selected_target, false)?;
         assert!(comparison.geometry_equal);
         assert_eq!(comparison.reference_entity_id, Some(source_id));
         assert!(load_selected(&mut kernel, &source, Some(u32::MAX)).is_err());
