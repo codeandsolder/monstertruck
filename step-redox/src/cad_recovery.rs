@@ -16,6 +16,7 @@ use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
+mod channel_round_ends;
 mod multi_axis_sheet;
 mod proposal_extent;
 pub(crate) mod sectional;
@@ -112,6 +113,7 @@ pub enum CadFragmentSource {
         solid_id: u64,
         host_cap_face_ids: [u64; 2],
         cutter_cap_face_ids: Vec<[u64; 2]>,
+        round_end_face_ids: Vec<u64>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {

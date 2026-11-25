@@ -113,12 +113,16 @@ fn adjacent_pairs<'a>(candidates: &[&'a SignedCapPairProposal]) -> Vec<&'a Signe
 fn compose(
     host: &SignedCapPairProposal,
     cutters: &[&SignedCapPairProposal],
+    rounds: &[super::channel_round_ends::RoundEndProposal],
 ) -> Result<(CadModel, NodeId)> {
-    let mut models = Vec::with_capacity(cutters.len() + 1);
+    let mut models = Vec::with_capacity(cutters.len() + rounds.len() + 1);
     models.push(model(&host.prism)?);
     for cutter in cutters {
         let extended = convex::through_openings(&host.prism, &cutter.prism);
         models.push(model(extended.as_ref().unwrap_or(&cutter.prism))?);
+    }
+    for round in rounds {
+        models.push(round.model()?);
     }
     let steps = models
         .iter()
@@ -150,6 +154,11 @@ pub(super) fn recover<K: CadKernel>(
         return Ok(None);
     }
     let mut best = CheapestProvenFragment::default();
+    let reduced = crate::reduced_brep::ReducedSolid::from_step(
+        source.solid_id,
+        source.entities,
+        source.index,
+    );
     for host in proposals
         .iter()
         .filter(|p| p.interval == CapInterval::Material)
@@ -182,46 +191,76 @@ pub(super) fn recover<K: CadKernel>(
         if selected.is_empty() {
             continue;
         }
-        let (mut model, root) = compose(host, &selected)?;
-        if !source
-            .proves(
-                &model,
-                root,
-                best.ceiling(ceiling, MaterialFamily::SignedCaps),
-            )
-            .unwrap_or(false)
+        let rounds = reduced.as_ref().map_or_else(Vec::new, |solid| {
+            selected
+                .iter()
+                .flat_map(|cutter| super::channel_round_ends::detect(solid, &cutter.prism))
+                .collect::<Vec<_>>()
+        });
+        for rounds in [
+            Some(&[][..]),
+            (!rounds.is_empty()).then_some(rounds.as_slice()),
+        ]
+        .into_iter()
+        .flatten()
         {
-            continue;
-        }
-        let cutter_cap_face_ids = selected
-            .iter()
-            .map(|c| c.prism.cap_face_ids)
-            .collect::<Vec<_>>();
-        let mut ids = HashSet::from([source.solid_id]);
-        ids.extend(host.prism.cap_face_ids);
-        ids.extend(cutter_cap_face_ids.iter().flatten().copied());
-        let mut source_entity_ids = ids.into_iter().collect::<Vec<_>>();
-        source_entity_ids.sort_unstable();
-        model.set_provenance(
-            root,
-            Provenance {
-                source_entity_ids,
-                proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
-            },
-        )?;
-        best.consider(
-            MaterialFamily::SignedCaps,
-            Ok(Some(CadFragment {
-                source: CadFragmentSource::SignedCapAssembly {
-                    solid_id: source.solid_id,
-                    host_cap_face_ids: host.prism.cap_face_ids,
-                    cutter_cap_face_ids,
-                },
-                model,
+            let (mut model, root) = match compose(host, &selected, rounds) {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    best.consider(MaterialFamily::SignedCaps, Err(error))?;
+                    continue;
+                }
+            };
+            if !source
+                .proves(
+                    &model,
+                    root,
+                    best.ceiling(ceiling, MaterialFamily::SignedCaps),
+                )
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let cutter_cap_face_ids = selected
+                .iter()
+                .map(|c| c.prism.cap_face_ids)
+                .collect::<Vec<_>>();
+            let round_end_face_ids = rounds
+                .iter()
+                .flat_map(|round| round.round_face_ids().iter().copied())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let mut ids = HashSet::from([source.solid_id]);
+            ids.extend(host.prism.cap_face_ids);
+            ids.extend(cutter_cap_face_ids.iter().flatten().copied());
+            for round in rounds {
+                ids.extend(round.source_entity_ids().iter().copied());
+            }
+            let mut source_entity_ids = ids.into_iter().collect::<Vec<_>>();
+            source_entity_ids.sort_unstable();
+            model.set_provenance(
                 root,
-            })),
-        )?;
+                Provenance {
+                    source_entity_ids,
+                    proof: ProofStatus::WithinTolerance,
+                    max_residual_mm: Some(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+                },
+            )?;
+            best.consider(
+                MaterialFamily::SignedCaps,
+                Ok(Some(CadFragment {
+                    source: CadFragmentSource::SignedCapAssembly {
+                        solid_id: source.solid_id,
+                        host_cap_face_ids: host.prism.cap_face_ids,
+                        cutter_cap_face_ids,
+                        round_end_face_ids,
+                    },
+                    model,
+                    root,
+                })),
+            )?;
+        }
     }
     best.finish()
 }
