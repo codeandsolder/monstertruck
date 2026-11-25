@@ -9,6 +9,8 @@
 use crate::prelude::*;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::{PI, TAU};
+mod source;
+pub use source::SourceIntersectionProposal;
 
 /// A circular cylindrical carrier in physical coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
