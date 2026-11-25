@@ -53,6 +53,7 @@ fn sweep_coordinate_order_is_total_and_preserves_signed_zero() {
     }
 }
 
+mod active_sweep;
 mod collision;
 mod in_out_judge;
 mod point_cloud;
