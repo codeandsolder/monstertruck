@@ -219,9 +219,9 @@ pub mod monstertruck {
     mod circular_selection;
     mod cylinder_boundary_export;
     mod parallel_prisms;
-    mod plane_cylinder_export;
     mod planar_boundary_export;
     mod planar_loft;
+    mod plane_cylinder_export;
 
     #[derive(Debug, Clone, Copy)]
     pub struct MonstertruckKernel {
