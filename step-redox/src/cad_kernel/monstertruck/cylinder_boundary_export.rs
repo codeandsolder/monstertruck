@@ -39,8 +39,11 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
         .min(tolerance);
     // Use a finer sampling budget than the requested export accuracy, since
     // the whole-polyline bound amplifies carrier errors near tangency.
-    let (parameters, points) =
-        algo::curve::parameter_division(intersection, intersection.range_tuple(), tolerance / 16.0);
+    let (parameters, points) = algo::curve::parameter_division(
+        intersection,
+        intersection.range_tuple(),
+        (tolerance / 16.0).max(DEFAULT_NUMERICAL_TOLERANCES.kernel_f64),
+    );
     if points.len() < 2 || parameters.len() != points.len() {
         return None;
     }
@@ -88,11 +91,14 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
     *cubic.control_point_mut(0) = start;
     *cubic.control_point_mut(last) = end;
     let leader = Curve::NurbsCurve(NurbsCurve::from(cubic));
-    let (_, samples) =
-        algo::curve::parameter_division(&leader, leader.range_tuple(), tolerance / 16.0);
+    let (_, samples) = algo::curve::parameter_division(
+        &leader,
+        leader.range_tuple(),
+        (tolerance / 16.0).max(DEFAULT_NUMERICAL_TOLERANCES.kernel_f64),
+    );
     if ![intersection.surface0(), intersection.surface1()]
         .iter()
-        .all(|carrier| validated_step_surface_support(carrier, &samples, proof_tolerance))
+        .all(|carrier| validated_step_surface_support(carrier, &samples, tolerance))
         || ![intersection.boundary0(), intersection.boundary1()]
             .into_iter()
             .flatten()
