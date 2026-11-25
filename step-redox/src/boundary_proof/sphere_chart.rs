@@ -211,7 +211,7 @@ fn great_circle_triangle_chart(
     let [wire] = loops.as_slice() else {
         return None;
     };
-    if !wire.outer || !wire.orientation || wire.edges.len() != 3 || circles.len() != 3 {
+    if !wire.outer || wire.edges.len() != 3 || circles.len() != 3 {
         return None;
     }
     let mut vertices = Vec::with_capacity(3);
@@ -260,9 +260,23 @@ fn great_circle_triangle_chart(
         normals.push(normal);
         edge_ids.push(edge.edge_id);
     }
-    // The spherical convex triangle needs a unique (noncollinear) bounded
-    // interior; the antipodal / complementary winding is deliberately excluded.
-    if dot(vertices[0], cross(vertices[1], vertices[2])).abs() <= 1.0e-3 {
+    // Short arcs bound both the convex spherical triangle and its
+    // complementary patch. Their loci alone do not choose which is material:
+    // orient the wire as used by the face, then compare with the signed radial
+    // normal of the sphere. Positive winding proves the convex side is left
+    // of each directed short arc; negative winding denotes the complement.
+    let surface_forward = match brep::face_sense(*face, entities, index)?.as_str() {
+        "T" => true,
+        "F" => false,
+        _ => return None,
+    };
+    let winding = dot(vertices[0], cross(vertices[1], vertices[2]));
+    let oriented_winding = if wire.orientation == surface_forward {
+        winding
+    } else {
+        -winding
+    };
+    if !oriented_winding.is_finite() || oriented_winding <= DIRECTION_Q {
         return None;
     }
     // If the original chart already keeps the entire triangle in a safe
@@ -274,11 +288,6 @@ fn great_circle_triangle_chart(
         return None;
     }
     let (axis, reference) = safe_hemisphere_frame(&vertices, &normals)?;
-    if norm(cross(axis, sphere.axis)) <= DIRECTION_Q
-        && norm(cross(reference, sphere.x_direction)) <= DIRECTION_Q
-    {
-        return None;
-    }
     Some(AlignedChart {
         axis,
         reference,
@@ -658,6 +667,41 @@ mod geodesic_regressions {
             eligible += 1;
         }
         assert_eq!(eligible, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn great_circle_chart_requires_convex_material_winding() -> Result<()> {
+        let source = ParsedStepSource::parse(DRAFTED_ROUND)?.exchange;
+        let entities = &source.data[0].entities;
+        let index = build_index(entities);
+        let SurfaceSupport::Sphere(sphere) = brep::surface_support(2999, entities, &index) else {
+            anyhow::bail!("source sphere missing");
+        };
+        let face = 2316;
+        let circles =
+            circles_for_faces(&[face], entities, &index).context("source geodesic circles")?;
+        let mut changed = entities.to_vec();
+        let set_false = |entities: &mut [EntityInstance], id, slot| -> Result<()> {
+            let record = simple_record_mut(&mut entities[index[&id]])
+                .context("missing orientation record")?;
+            let Parameter::List(params) = &mut record.parameter else {
+                anyhow::bail!("missing orientation parameters");
+            };
+            params[slot] = Parameter::Enumeration("F".to_owned());
+            Ok(())
+        };
+        assert!(great_circle_triangle_chart(sphere, &[face], &changed, &index, &circles).is_some());
+        // Same circle geometry and endpoints, but opposite face sense selects
+        // the complement of the hemisphere-safe triangle.
+        set_false(&mut changed, face, 3)?;
+        assert!(great_circle_triangle_chart(sphere, &[face], &changed, &index, &circles).is_none());
+        // Reversing both the face and bound keeps the convex material side.
+        let bound = brep::face_loops(face, entities, &index)
+            .and_then(|loops| loops.first().map(|wire| wire.bound_id))
+            .context("missing source bound")?;
+        set_false(&mut changed, bound, 2)?;
+        assert!(great_circle_triangle_chart(sphere, &[face], &changed, &index, &circles).is_some());
         Ok(())
     }
 
