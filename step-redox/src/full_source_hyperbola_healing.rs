@@ -10,7 +10,7 @@ use crate::{
     native_hyperbola_intersection::native_healed_intersection_curve,
     source_edge_healing::{HyperbolaHealingRequest, propose_plane_cone_hyperbola_healing},
     source_edge_locus::{StepEdge, source_solid_length_scale_mm},
-    step_entities::{closure_from, named_entity_parameters},
+    step_entities::{closure_from, named_entity_parameters, simple_parameters_mut},
     step_graph::{
         build_index, entity_id, entity_ref_value, rewrite_entity_refs, visit_entity_refs,
     },
@@ -67,31 +67,6 @@ pub struct FullSourceHyperbolaRepairEvidence {
 pub struct FullSourceHyperbolaHealing {
     pub step: String,
     pub repairs: Vec<FullSourceHyperbolaRepairEvidence>,
-}
-
-fn simple_parameters_mut<'a>(
-    section: &'a mut DataSection,
-    index: &HashMap<u64, usize>,
-    id: u64,
-    expected: &str,
-) -> Result<&'a mut [Parameter]> {
-    let position = *index
-        .get(&id)
-        .ok_or_else(|| anyhow!("missing source entity #{id}"))?;
-    let entity = section
-        .entities
-        .get_mut(position)
-        .ok_or_else(|| anyhow!("invalid source entity index for #{id}"))?;
-    let EntityInstance::Simple { id: actual, record } = entity else {
-        bail!("source entity #{id} is complex, expected simple {expected}");
-    };
-    if *actual != id || record.name != expected {
-        bail!("source entity #{id} has unexpected type or stale ID");
-    }
-    let Parameter::List(parameters) = &mut record.parameter else {
-        bail!("source entity #{id} lacks a parameter list");
-    };
-    Ok(parameters)
 }
 
 fn reference(parameter: &Parameter) -> Result<u64> {

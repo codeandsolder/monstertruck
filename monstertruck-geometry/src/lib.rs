@@ -124,6 +124,8 @@ pub mod analytic_carrier;
 pub mod analytic_cone_hyperbola_uv;
 /// Non-sampling, polynomial-bounded curve incidence on analytic carriers.
 pub mod analytic_curve_incidence;
+/// Explicit regular branches of nonparallel cylindrical surface intersections.
+pub mod analytic_cylinder_intersection;
 /// Non-sampling complete-curve locus bounds against finite line segments.
 pub mod analytic_line_segment;
 /// Exact single-nappe hyperbola from an axis-parallel, axis-offset plane and cone.

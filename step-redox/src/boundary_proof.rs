@@ -42,11 +42,15 @@ type GroupedSplineSegments = BTreeMap<
     Vec<[spline_strip::ProfilePosition; 2]>,
 >;
 
+type GroupedCylinderIntersections =
+    BTreeMap<([OrientedSupportKey; 2], bounded::CylinderIntersectionKey), Vec<bounded::Arc>>;
+
 #[derive(Default)]
 struct PhysicalBoundaryGroups {
     linear: GroupedBoundarySegments,
     circular: GroupedCircularSegments,
     cylinder_sections: BTreeMap<[OrientedSupportKey; 2], Vec<bounded::Arc>>,
+    cylinder_intersections: GroupedCylinderIntersections,
     splines: GroupedSplineSegments,
 }
 
@@ -153,6 +157,13 @@ pub enum BoundaryChainKey {
         supports: [OrientedSupportKey; 2],
         endpoints_mm: Option<[PointKey; 2]>,
     },
+    /// Regular branch of two nonparallel cylindrical carriers.
+    CylinderIntersection {
+        supports: [OrientedSupportKey; 2],
+        primary_is_second: bool,
+        positive_branch: bool,
+        endpoints_mm: Option<[PointKey; 2]>,
+    },
     /// Complete bounded rational spline, certified on both incident carriers.
     Spline {
         supports: [OrientedSupportKey; 2],
@@ -176,7 +187,8 @@ impl AnalyticBoundarySignature {
             .filter_map(|chain| match chain {
                 BoundaryChainKey::Open { endpoints_mm, .. } => Some(*endpoints_mm),
                 BoundaryChainKey::Circular { endpoints_mm, .. }
-                | BoundaryChainKey::CylinderSection { endpoints_mm, .. } => *endpoints_mm,
+                | BoundaryChainKey::CylinderSection { endpoints_mm, .. }
+                | BoundaryChainKey::CylinderIntersection { endpoints_mm, .. } => *endpoints_mm,
                 BoundaryChainKey::Spline { curve, .. } => curve.ends(),
             })
             .flatten()
@@ -456,6 +468,9 @@ fn analytic_boundary_signature(
     for (supports, arcs) in groups.cylinder_sections {
         chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs)?);
     }
+    for ((supports, key), arcs) in groups.cylinder_intersections {
+        chains.extend(bounded::normalize_intersections(&supports, key, &arcs)?);
+    }
     chains.sort();
 
     let mut supports = component_support.into_values().collect::<Vec<_>>();
@@ -701,7 +716,7 @@ fn group_physical_boundaries(
                 // accept such geometry through the full angular certificate.
                 let explicit =
                     brep::curve_geometry_for_incidence_proof(geometry.curve_id, entities, index);
-                bounded::certify_flagged_cylinder_section(geometry, &explicit, &loci)
+                bounded::certify_flagged_angular_section(geometry, &explicit, &loci)
             },
             |curve| bounded::classify(geometry, curve, &loci, cells),
         );
@@ -719,6 +734,11 @@ fn group_physical_boundaries(
             Some(bounded::BoundedEdge::CylinderSection(arc)) => groups
                 .cylinder_sections
                 .entry(supports)
+                .or_default()
+                .push(arc),
+            Some(bounded::BoundedEdge::CylinderIntersection(key, arc)) => groups
+                .cylinder_intersections
+                .entry((supports, key))
                 .or_default()
                 .push(arc),
             Some(bounded::BoundedEdge::Spline(piece)) => groups
@@ -765,6 +785,7 @@ fn prove_all_supports_are_bounded(
             BoundaryChainKey::Open { supports, .. }
             | BoundaryChainKey::Circular { supports, .. }
             | BoundaryChainKey::CylinderSection { supports, .. }
+            | BoundaryChainKey::CylinderIntersection { supports, .. }
             | BoundaryChainKey::Spline { supports, .. } => supports.iter(),
         })
         .cloned()

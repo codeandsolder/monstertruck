@@ -40,6 +40,9 @@ pub mod periodic_chains;
 pub mod periodic_resize;
 mod planar_features;
 pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+/// Explicit bounded two-cylinder source edge reconstruction.
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod full_source_cylinder_healing;
 /// Opt-in proof-backed original STEP document reconstruction with healed edges.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod full_source_hyperbola_healing;
