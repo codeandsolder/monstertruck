@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-type Point = [f64; 3];
+use crate::vector::{Point, cross, dot, sub, unit};
 type Triangle = [Point; 3];
 const SIZE: u32 = 320;
 const SUPERSAMPLE: u32 = 2;
@@ -64,20 +64,6 @@ impl View {
     }
 }
 
-fn dot(a: Point, b: Point) -> f64 { a.into_iter().zip(b).map(|(x, y)| x * y).sum() }
-fn cross(a: Point, b: Point) -> Point {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn sub(a: Point, b: Point) -> Point { std::array::from_fn(|i| a[i] - b[i]) }
-fn unit(p: Point) -> Point {
-    let norm = dot(p, p).sqrt();
-    p.map(|x| x / norm)
-}
-
 fn triangles(coordinates: &[f64], shift: Point) -> Result<Vec<Triangle>> {
     let (chunks, remainder) = coordinates.as_chunks::<9>();
     ensure!(remainder.is_empty(), "incomplete OCCT triangle");
@@ -109,14 +95,14 @@ struct Frame {
 impl Frame {
     fn new(reference: &[Triangle], view: View) -> Result<Self> {
         ensure!(!reference.is_empty(), "reference mesh is empty");
-        let d = unit(view.direction());
+        let d = unit(view.direction(), 0.0).context("degenerate view direction")?;
         let up = if d[2].abs() > 0.9 {
             [0.0, 1.0, 0.0]
         } else {
             [0.0, 0.0, 1.0]
         };
-        let u = unit(cross(up, d));
-        let v = unit(cross(d, u));
+        let u = unit(cross(up, d), 0.0).context("degenerate horizontal view axis")?;
+        let v = unit(cross(d, u), 0.0).context("degenerate vertical view axis")?;
         let (mut xmin, mut xmax, mut ymin, mut ymax) = (
             f64::INFINITY,
             f64::NEG_INFINITY,

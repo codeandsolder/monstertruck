@@ -11,28 +11,12 @@ use anyhow::{Context, Result, bail, ensure};
 use occt_wasm::{CurveGeometry, OcctKernel, ShapeHandle, SurfaceData, Vec3};
 use serde::Serialize;
 
-type Point = [f64; 3];
+use crate::vector::{Point, cross, dot, norm, scale, sub};
 
 const RESIDUAL_LIMIT: f64 = 1.0e-11;
 
-fn sub(a: Point, b: Point) -> Point { std::array::from_fn(|i| a[i] - b[i]) }
-fn scale(a: Point, s: f64) -> Point { a.map(|x| x * s) }
-fn dot(a: Point, b: Point) -> f64 { a.iter().zip(b).map(|(a, b)| a * b).sum() }
-fn cross(a: Point, b: Point) -> Point {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn norm(a: Point) -> f64 { dot(a, a).sqrt() }
 fn unit(a: Point) -> Result<Point> {
-    let length = norm(a);
-    ensure!(
-        length.is_finite() && length > RESIDUAL_LIMIT,
-        "degenerate direction"
-    );
-    Ok(scale(a, 1.0 / length))
+    crate::vector::unit(a, RESIDUAL_LIMIT).context("degenerate direction")
 }
 fn xyz(v: Vec3) -> Point { [v.x, v.y, v.z] }
 fn spatial(h: Homogeneous) -> Point { [h[0], h[1], h[2]] }
