@@ -171,7 +171,7 @@ fn joint_summary(recovery: &RecoveredAnalyticMesh) -> Value {
         "planes":repaired.planes.iter().map(|p|json!({"region":p.region,"supports":p.supports,"max_plane_residual":p.max_plane_residual,"normal_shift":p.normal_shift,
         "source_polygons":p.supports.iter().flat_map(|&id|&evidence.planar_supports[id].source_face_indices).collect::<Vec<_>>() })).collect::<Vec<_>>()});
     json!({
-        "curved_proposals":stats.curved_proposals,"linear_proposals":stats.linear_proposals,
+        "curved_proposals":stats.curved_proposals,"expanded_circular_proposals":stats.expanded_circular_proposals,"linear_proposals":stats.linear_proposals,
         "direct_linear_proposals":stats.direct_linear_proposals,"rim_linear_proposals":stats.rim_linear_proposals,"compared_native_neighborhoods":stats.compared_native_neighborhoods,"expanded_native_neighborhoods":stats.expanded_native_neighborhoods,"direct_linear_hypotheses":stats.linear_candidates.len(),
         "selected_curved":stats.selected_curved,"selected_linear":stats.selected.len()-stats.selected_curved,
         "selected":stats.selected.iter().map(|p|proposal_summary(evidence,p)).collect::<Vec<_>>(),

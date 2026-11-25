@@ -7,6 +7,7 @@ use super::super::{
 use super::MeshEvidence;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+mod circular_growth;
 mod coincidence;
 mod conic;
 mod contacts;

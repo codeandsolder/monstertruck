@@ -235,6 +235,8 @@ pub struct AnalyticDiscoveryStats {
     pub linear_candidates: Vec<StationLinearCandidate>,
     /// Admissible circular region proposals.
     pub curved_proposals: usize,
+    /// Fixed independently measured circular cores expanded over irregular supports.
+    pub expanded_circular_proposals: usize,
     /// Admissible linear region proposals (direct and grown).
     pub linear_proposals: usize,
     /// Direct station-graph linear proposals.
@@ -276,6 +278,7 @@ struct ProposalSelection {
     partition: SurfaceRegionPartition,
     selected: Vec<SelectedSurfaceProposal>,
     curved_proposals: usize,
+    expanded_circular_proposals: usize,
     direct_linear_proposals: usize,
     rim_linear_proposals: usize,
     rim_linear_candidates: Vec<SelectedSurfaceProposal>,
@@ -370,6 +373,7 @@ pub fn discover_analytic_regions(
         circular_candidates: candidates.circular,
         linear_candidates: candidates.linear,
         curved_proposals: selection.curved_proposals,
+        expanded_circular_proposals: selection.expanded_circular_proposals,
         linear_proposals: selection.linear_proposals,
         direct_linear_proposals: selection.direct_linear_proposals,
         rim_linear_proposals: selection.rim_linear_proposals,
@@ -451,12 +455,12 @@ pub fn construct_analytic_recovery(
         stats.compared_native_neighborhoods = selection.compared_neighborhoods;
         stats.expanded_native_neighborhoods = selection.expanded_neighborhoods;
         stats.selected = selection.alternative.selected;
-        stats.selected_curved = selection
-            .alternative
-            .partition
-            .selected_proposals
+        stats.selected_curved = stats
+            .selected
             .iter()
-            .filter(|&&id| id < stats.curved_proposals)
+            .filter(|proposal| {
+                matches!(proposal.carrier, SurfaceCarrier::CircularRevolution { .. })
+            })
             .count();
         selection.assembly
     } else {
@@ -838,26 +842,12 @@ fn choose_partition(
     circles: &[SourceCircleObservation],
     options: AnalyticRecoveryOptions,
 ) -> Result<ProposalSelection, AnalyticRecoveryError> {
-    let curved = &candidates.circular;
-    let linear = &candidates.linear;
-    let mut proposals = Vec::new();
-    let mut seen = BTreeSet::new();
-    proposals.extend(
-        curved
-            .iter()
-            .filter_map(|c| curved_proposal(boundary, c, options)),
-    );
-    // A sphere has no physically distinguished rotational axis. Generate
-    // independent connected candidates directly from cyclic source facets.
-    // They compete in the same globally selected, nonoverlapping partition.
     let absolute_tolerance = options.trim_options(evidence).absolute_tolerance;
-    proposals.extend(boundary.discover_spherical_regions(
-        options.relative_surface_tolerance,
-        absolute_tolerance,
-        options.max_circular_relative_chord_error,
-    ));
+    let (mut proposals, expanded) =
+        circular_proposals(boundary, &candidates.circular, options, absolute_tolerance);
+    let mut seen = BTreeSet::new();
     let curved_count = proposals.len();
-    for candidate in linear {
+    for candidate in &candidates.linear {
         if let Some(proposal) = boundary.measure_surface_region(
             &candidate.supports,
             candidate.carrier,
@@ -881,6 +871,8 @@ fn choose_partition(
         &mut proposals,
     );
     let core_count = proposals.len();
+    append_expanded_circular_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
+    let expanded_circular_count = proposals.len() - core_count;
     let rim_linear_candidates = append_rim_proposals(
         boundary,
         circles,
@@ -888,7 +880,7 @@ fn choose_partition(
         absolute_tolerance,
         &mut proposals,
     );
-    let rim_linear_count = proposals.len() - core_count;
+    let rim_linear_count = proposals.len() - core_count - expanded_circular_count;
     let partition = boundary.select_surface_partition(
         &proposals,
         planar_baseline,
@@ -920,22 +912,93 @@ fn choose_partition(
     } else {
         None
     };
-    let selected_curved = partition
-        .selected_proposals
+    let selected_curved = chosen
         .iter()
-        .filter(|&&id| id < curved_count)
+        .filter(|proposal| matches!(proposal.carrier, SurfaceCarrier::CircularRevolution { .. }))
         .count();
     Ok(ProposalSelection {
         partition,
         selected: chosen,
-        curved_proposals: curved_count,
+        curved_proposals: curved_count + expanded_circular_count,
+        expanded_circular_proposals: expanded_circular_count,
         direct_linear_proposals: direct_linear_count,
         rim_linear_proposals: rim_linear_count,
         rim_linear_candidates,
         core_alternative,
-        linear_proposals: proposals.len() - curved_count,
+        linear_proposals: proposals.len() - curved_count - expanded_circular_count,
         selected_curved,
     })
+}
+
+fn circular_proposals<'a>(
+    boundary: &RegionBoundaryIndex<'a>,
+    candidates: &[StationMeridianCandidate],
+    options: AnalyticRecoveryOptions,
+    absolute_tolerance: f64,
+) -> (
+    Vec<SurfaceRegionProposal<'a>>,
+    Vec<SurfaceRegionProposal<'a>>,
+) {
+    let mut core = Vec::new();
+    let mut expanded = Vec::new();
+    for candidate in candidates {
+        if let Some(proposal) = curved_proposal(boundary, candidate, options) {
+            let budget = SurfaceRegionBudget {
+                vertex: options.relative_surface_tolerance * candidate.fit.geometric_scale(),
+                chord: candidate.chord_tolerance,
+            };
+            expanded.extend(boundary.expand_circular_region(
+                &proposal,
+                budget,
+                options.profile_normal_tolerance_radians,
+            ));
+            core.push(proposal);
+        }
+    }
+    // Spheres already have a placed-carrier-independent core/growth path.
+    core.extend(boundary.discover_spherical_regions(
+        options.relative_surface_tolerance,
+        absolute_tolerance,
+        options.max_circular_relative_chord_error,
+    ));
+    (core, expanded)
+}
+
+fn append_expanded_circular_proposals<'a>(
+    evidence: &MeshEvidence,
+    expanded: Vec<SurfaceRegionProposal<'a>>,
+    tolerance: f64,
+    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
+) {
+    // Identical ownership is not proof of identical fitted geometry.
+    // Keep competing carriers unless their residual functions agree
+    // throughout the actual source domain.
+    let mut seen = BTreeMap::<Vec<usize>, Vec<usize>>::new();
+    for (id, p) in proposals.iter().enumerate() {
+        seen.entry(p.supports().to_vec()).or_default().push(id);
+    }
+    for proposal in expanded {
+        let matches = seen.entry(proposal.supports().to_vec()).or_default();
+        let reference = evidence.planar_supports[proposal.supports()[0]].origin;
+        let extent = proposal
+            .supports()
+            .iter()
+            .flat_map(|&id| &evidence.planar_supports[id].source_face_indices)
+            .filter_map(|&id| evidence.source_polygon_vertices(id))
+            .flatten()
+            .map(|&id| (evidence.positions[id] - reference).magnitude())
+            .fold(0.0_f64, f64::max);
+        if matches.iter().any(|&id| {
+            proposal
+                .carrier()
+                .compare_in_ball(proposals[id].carrier(), reference, extent)
+                .is_some_and(|agreement| agreement.residual_difference_upper_bound <= tolerance)
+        }) {
+            continue;
+        }
+        matches.push(proposals.len());
+        proposals.push(proposal);
+    }
 }
 
 fn append_rim_proposals<'a>(

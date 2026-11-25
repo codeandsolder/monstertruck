@@ -125,6 +125,132 @@ impl CircularProfile {
         Some(measured)
     }
 
+    // Bound the meridian distance over the convex hull of the source
+    // samples, not just the perimeter. For x = sum(w_i x_i), rho(x)
+    // lies between a fixed transverse projection and sum(w_i rho_i).
+    // Both surrogates are affine in the weights. Convexity of the
+    // meridian norm gives an upper bound from the two sets of vertex
+    // values; one supporting meridian direction gives a lower bound.
+    fn hull_bound(self, points: &[Vector3]) -> Option<CarrierResidual> {
+        let first = *points.first()?;
+        let center = first
+            + points
+                .iter()
+                .map(|&p| p - first)
+                .fold(Vector3::new(0.0, 0.0, 0.0), |sum, p| sum + p)
+                / crate::usize_to_f64(points.len());
+        let radial = self.transverse(center);
+        let radial_direction = if radial.magnitude2() > 0.0 {
+            radial.normalize()
+        } else {
+            let farthest = points
+                .iter()
+                .map(|&p| self.transverse(p))
+                .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
+            if farthest.magnitude2() > 0.0 {
+                farthest.normalize()
+            } else {
+                super::normal_basis(self.axis).0
+            }
+        };
+        let axial = center.dot(self.axis);
+        let offset = radial.magnitude() - self.radial_center;
+        let distance = axial.hypot(offset);
+        let (direction_z, direction_r) = if distance > 0.0 {
+            (axial / distance, offset / distance)
+        } else {
+            (0.0, 1.0)
+        };
+        let mut upper = 0.0_f64;
+        let mut lower = f64::INFINITY;
+        let mut witnessed = self.error(center);
+        let mut scale = self.radial_center.abs().max(self.profile_radius);
+        for &point in points {
+            let z = point.dot(self.axis);
+            let radial = self.transverse(point);
+            let low = radial.dot(radial_direction) - self.radial_center;
+            let high = radial.magnitude() - self.radial_center;
+            upper = upper.max(z.hypot(low)).max(z.hypot(high));
+            lower = lower.min(
+                direction_z.mul_add(z, direction_r * if direction_r >= 0.0 { low } else { high }),
+            );
+            witnessed = witnessed.max(self.error(point));
+            scale = scale.max(point.magnitude());
+        }
+        // The supporting affine expression may be negative, but the
+        // actual meridian distance is always nonnegative.
+        let roundoff = 64.0 * f64::EPSILON * scale;
+        let bound = (upper - self.profile_radius)
+            .max(self.profile_radius - lower.max(0.0))
+            .max(witnessed)
+            + roundoff;
+        residual(bound, witnessed, None)
+    }
+
+    fn triangle_to_budget(
+        self,
+        vertices: [Vector3; 3],
+        budget: f64,
+        depth: usize,
+    ) -> Option<CarrierResidual> {
+        let measured = self.hull_bound(&vertices)?;
+        if depth == 0 || measured.upper_bound <= budget || measured.witnessed_max > budget {
+            return Some(measured);
+        }
+        // Split the longest edge, so even a skinny source triangle
+        // converges without wasting subdivision on its short edges.
+        let (a, b, c) =
+            [(0, 1, 2), (1, 2, 0), (2, 0, 1)]
+                .into_iter()
+                .max_by(|&(a, b, _), &(i, j, _)| {
+                    (vertices[b] - vertices[a])
+                        .magnitude2()
+                        .total_cmp(&(vertices[j] - vertices[i]).magnitude2())
+                })?;
+        let middle = vertices[a] + (vertices[b] - vertices[a]) * 0.5;
+        let left =
+            self.triangle_to_budget([vertices[a], middle, vertices[c]], budget, depth - 1)?;
+        if left.witnessed_max > budget {
+            return residual(
+                measured.upper_bound,
+                measured.witnessed_max.max(left.witnessed_max),
+                None,
+            );
+        }
+        let right =
+            self.triangle_to_budget([middle, vertices[b], vertices[c]], budget, depth - 1)?;
+        residual(
+            left.upper_bound.max(right.upper_bound),
+            left.witnessed_max.max(right.witnessed_max),
+            None,
+        )
+    }
+
+    // Source polygon interiors use the same vertex-zero fan semantics as
+    // the mesh triangle iterator. First certify the entire convex hull
+    // when possible; only subdivide triangles for inconclusive bounds.
+    pub(super) fn facet(self, points: &[Point3], budget: f64) -> Option<CarrierResidual> {
+        if points.len() < 3 || budget.is_nan() || budget < 0.0 {
+            return None;
+        }
+        let local = points.iter().map(|&p| p - self.center).collect::<Vec<_>>();
+        let measured = self.hull_bound(&local)?;
+        if measured.upper_bound <= budget {
+            let witness = local.iter().map(|&p| self.error(p)).fold(0.0_f64, f64::max);
+            return residual(measured.upper_bound, witness, None);
+        }
+        // The hull centroid need not lie in a concave source polygon.
+        // Do not use its witness to reject the original filled fan.
+        let mut upper = 0.0_f64;
+        let mut witnessed = 0.0_f64;
+        for pair in local[1..].windows(2) {
+            let measured = self.triangle_to_budget([local[0], pair[0], pair[1]], budget, 8)?;
+            upper = upper.max(measured.upper_bound);
+            witnessed = witnessed.max(measured.witnessed_max);
+        }
+        residual(upper, witnessed, None)
+    }
+
     pub(super) fn circle(
         self,
         center: Point3,
@@ -253,6 +379,63 @@ mod tests {
     use super::*;
     use crate::mesh_recovery::sample_fit::normal_basis;
     use std::f64::consts::TAU;
+
+    #[test]
+    fn toroidal_inner_ring_perimeter_does_not_certify_filled_disk()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let profile = CircularProfile::new(center, Vector3::unit_z(), 2.0, 1.0).ok_or("profile")?;
+        let points = (0..64)
+            .map(|i| {
+                let (sin, cos) = (TAU * f64::from(i) / 64.0).sin_cos();
+                Point3::new(cos, sin, 0.0)
+            })
+            .collect::<Vec<_>>();
+        for (&a, &b) in points.iter().zip(points.iter().cycle().skip(1)) {
+            assert!(profile.line(a, b).ok_or("edge")?.upper_bound < 0.01);
+        }
+        let filled = profile.facet(&points, 0.01).ok_or("filled disk")?;
+        assert!(filled.witnessed_max > 0.5);
+        assert!(filled.upper_bound >= 1.0 - 1.0e-12);
+        assert!(filled.upper_bound >= filled.witnessed_max);
+        Ok(())
+    }
+
+    #[test]
+    fn filled_facet_bounds_enclose_scattered_toroid_samples()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // All meridian quadrants, nonuniform azimuth/meridian sampling,
+        // and a large world-coordinate translation.
+        let center = Point3::new(1000.0, -2000.0, 3000.0);
+        let axis = Vector3::new(1.0, 2.0, 3.0).normalize();
+        let (u, v) = normal_basis(axis);
+        let profile = CircularProfile::new(center, axis, 4.0, 1.5).ok_or("profile")?;
+        let point = |a: f64, b: f64| {
+            let (sa, ca) = a.sin_cos();
+            let (sb, cb) = b.sin_cos();
+            center + (u * ca + v * sa) * 1.5_f64.mul_add(cb, 4.0) + axis * (1.5 * sb)
+        };
+        for i in 0..16 {
+            let a = 0.33 * f64::from(i);
+            let b = TAU * f64::from(i) / 16.0;
+            let points = [
+                point(a, b),
+                point(a + 0.2, b + 0.04),
+                point(a + 0.06, b + 0.3),
+            ];
+            let bound = profile.facet(&points, 0.1).ok_or("triangle bound")?;
+            assert!(bound.upper_bound <= 0.1, "{bound:?}");
+            for i in 0..=20 {
+                for j in 0..=20 - i {
+                    let sample = points[0]
+                        + (points[1] - points[0]) * (f64::from(i) / 20.0)
+                        + (points[2] - points[0]) * (f64::from(j) / 20.0);
+                    assert!(profile.error(sample - center) <= bound.upper_bound + 1e-12);
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn toroidal_parallel_and_meridian_circles_are_contained()

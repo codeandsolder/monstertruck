@@ -253,6 +253,11 @@ impl<'a> RegionBoundaryIndex<'a> {
                         }
                         maximum
                     }
+                    SurfaceCarrier::CircularRevolution { .. } => {
+                        carrier
+                            .measure_circular_source_facets(self.evidence, supports, chord)?
+                            .upper_bound
+                    }
                     _ => {
                         carrier
                             .measure_source_chords(self.evidence, supports, chord)?

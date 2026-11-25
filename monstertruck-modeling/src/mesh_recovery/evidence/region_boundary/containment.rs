@@ -273,6 +273,46 @@ impl SurfaceCarrier {
         result
     }
 
+    /// Measure the filled original source facets of a circular revolution.
+    /// A perimeter-only chord certificate does not bound polygon interiors.
+    /// All original triangles (including the mesh's polygon fan
+    /// triangulation) are checked against the same absolute budget.
+    #[must_use = "the full-facet bound is distinct from source chord evidence"]
+    pub fn measure_circular_source_facets(
+        self,
+        evidence: &MeshEvidence,
+        supports: &[usize],
+        budget: f64,
+    ) -> Option<CarrierResidual> {
+        let Self::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        } = self
+        else {
+            return None;
+        };
+        let profile = CircularProfile::new(axial_center, axis, radial_center, profile_radius)?;
+        let mut result = None::<CarrierResidual>;
+        for &id in supports {
+            for &polygon in &evidence.planar_supports.get(id)?.source_face_indices {
+                let vertices = evidence.source_polygon_vertices(polygon)?;
+                let points = vertices
+                    .iter()
+                    .map(|&id| evidence.positions.get(id).copied())
+                    .collect::<Option<Vec<_>>>()?;
+                let measured = profile.facet(&points, budget)?;
+                result = Some(result.map_or(measured, |previous| CarrierResidual {
+                    upper_bound: previous.upper_bound.max(measured.upper_bound),
+                    witnessed_max: previous.witnessed_max.max(measured.witnessed_max),
+                    minimum_profile_radius: None,
+                }));
+            }
+        }
+        result
+    }
+
     fn measure_segment_to_budget(
         self,
         start: Point3,
