@@ -140,7 +140,7 @@ pub enum HybridRecoveryError {
         /// Number of attempted native transactions.
         trials: usize,
         /// Most recent geometric rejection.
-        last: Box<HybridRecoveryError>,
+        last: Box<Self>,
     },
     /// A previously valid retained analytic trim would fail.
     #[error("hybrid recovery would invalidate retained trim {trim}: {error}")]
