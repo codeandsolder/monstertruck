@@ -107,7 +107,7 @@ impl BoundedSourceIntersection {
     }
 }
 
-fn clamped_continuous(curve: &BsplineCurve<Vector4>) -> bool {
+pub(super) fn clamped_continuous(curve: &BsplineCurve<Vector4>) -> bool {
     if !valid(curve) {
         return false;
     }
@@ -126,7 +126,7 @@ fn clamped_continuous(curve: &BsplineCurve<Vector4>) -> bool {
         && !(degree + 1..count).any(|i| same(knots[i - degree], knots[i]))
 }
 
-fn euclidean_controls(curve: &BsplineCurve<Vector4>) -> Option<Vec<Point3>> {
+pub(super) fn euclidean_controls(curve: &BsplineCurve<Vector4>) -> Option<Vec<Point3>> {
     curve
         .control_points()
         .iter()
@@ -148,7 +148,7 @@ fn ray_angle(first: Vector3, second: Vector3, axis: Vector3) -> f64 {
 /// the projected curve traverses one directed interval, with no axis crossing,
 /// extra turn, or hidden backward span. The exact endpoint ray difference,
 /// lifted onto this interval, is used rather than an accumulated angle sum.
-fn ordered_sweep(
+pub(super) fn ordered_sweep(
     carrier: CylinderCarrier,
     curve: &BsplineCurve<Vector4>,
     points: &[Point3],

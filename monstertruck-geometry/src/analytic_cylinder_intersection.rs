@@ -12,7 +12,10 @@ use std::f64::consts::{PI, TAU};
 mod carrier;
 mod leader;
 mod source;
-pub use carrier::{certified_circular_cylinder, project_positive_homogeneous_point};
+pub use carrier::{
+    CircularCylinderChart, certified_circular_cylinder, certified_circular_cylinder_chart,
+    project_positive_homogeneous_point,
+};
 pub use leader::IntersectionLeader;
 pub use source::{BoundedSourceIntersection, SourceIntersectionProposal};
 
