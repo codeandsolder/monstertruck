@@ -56,6 +56,7 @@ fn deduped_surface_curve_still_reloads() {
         CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
 
     // Structurally valid and reloads to the same face set.
+    assert_eq!(count(&step, "PARAMETRIC_REPRESENTATION_CONTEXT()"), 0);
     let table = Table::from_step(&step).unwrap();
     let step_shell = table
         .shell
@@ -73,6 +74,28 @@ fn exact_pcurves_reference_their_existing_face_surfaces() {
         CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string();
     assert_eq!(count(&step, "= PLANE("), 6);
     assert_eq!(count(&step, "= PCURVE("), 24);
+    assert_eq!(count(&step, "PARAMETRIC_REPRESENTATION_CONTEXT()"), 1);
+    // All parameter representations must refer to the same context.
+    // Its identity is shared, not inferred from a coordinate tolerance.
+    let context_id = step
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(3)
+        .find_map(|lines| {
+            (lines[1].trim() == "GEOMETRIC_REPRESENTATION_CONTEXT(2)"
+                && lines[2].trim() == "PARAMETRIC_REPRESENTATION_CONTEXT()")
+                .then(|| lines[0].split_once(" = ").map(|(id, _)| id))
+                .flatten()
+        })
+        .expect("shared context");
+    let context_suffix = format!(", {context_id});");
+    assert_eq!(
+        step.lines()
+            .filter(|line| line.contains("= DEFINITIONAL_REPRESENTATION(")
+                && line.ends_with(&context_suffix))
+            .count(),
+        24
+    );
     let table = Table::from_step(&step).expect("deduplicated STEP parses");
     let shell = table.shell.values().next().expect("closed shell");
     let restored = table
@@ -91,6 +114,45 @@ fn exact_pcurves_reference_their_existing_face_surfaces() {
 }
 
 #[test]
+fn shared_context_indices_do_not_overlap_across_models() {
+    let first = unit_cube().compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
+    let second = unit_cube().compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
+    let models: StepModels<_, _, _> = [&first, &second].into_iter().collect();
+    let step = CompleteStepDisplay::new(models, Default::default()).to_string();
+    assert_eq!(count(&step, "= PCURVE("), 48);
+    assert_eq!(count(&step, "PARAMETRIC_REPRESENTATION_CONTEXT()"), 2);
+    let entity_ids = step
+        .lines()
+        .filter_map(|line| line.strip_prefix('#')?.split_once(" = ").map(|(id, _)| id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entity_ids
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        entity_ids.len()
+    );
+    let table = Table::from_step(&step).expect("multiple models parse");
+    assert_eq!(table.shell.len(), 2);
+    for shell in table.shell.values() {
+        let restored = table
+            .to_compressed_trimmed_shell(shell)
+            .expect("exact trims restore");
+        assert_eq!(restored.faces.len(), 6);
+        assert_eq!(
+            restored
+                .faces
+                .iter()
+                .flat_map(|face| face.boundaries.iter().flatten())
+                .filter(|edge| edge.trim_curve.is_some())
+                .count(),
+            24
+        );
+    }
+}
+
+#[test]
 fn pcurve_reference_requires_the_same_emitted_chart() {
     let face = Plane::xy();
     let foreign = Plane::new(
@@ -105,7 +167,11 @@ fn pcurve_reference_requires_the_same_emitted_chart() {
     assert!(exact.matches_surface_encoding(&encoding));
     assert!(!different.matches_surface_encoding(&encoding));
     assert_eq!(
-        exact.step_length_referencing_surface() + face.step_length(),
+        exact.step_length_with_shared_context(true) + face.step_length() + 1,
         exact.step_length()
+    );
+    assert_eq!(
+        different.step_length_with_shared_context(false) + 1,
+        different.step_length()
     );
 }

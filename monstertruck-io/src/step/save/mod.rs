@@ -315,17 +315,20 @@ pub trait StepPcurve: StepFormat + StepLength {
     /// entities and its parameterization) matches the supplied encoding.
     fn matches_surface_encoding(&self, encoding: &str) -> bool;
 
-    /// Number of newly emitted entities when referencing an existing support.
-    fn step_length_referencing_surface(&self) -> usize;
+    /// Number of newly emitted entities when referencing a shared parameter
+    /// context. A matching support surface can also be referenced.
+    fn step_length_with_shared_context(&self, shared_surface: bool) -> usize;
 
-    /// Write this pcurve referencing an already emitted support entity.
+    /// Write this pcurve using the shared parameter-space context and,
+    /// if supplied, the existing identically encoded support surface.
     ///
     /// # Errors
     /// Returns an error if writing the STEP representation fails.
-    fn fmt_referencing_surface(
+    fn fmt_with_shared_context(
         &self,
         idx: usize,
-        surface_idx: usize,
+        surface_idx: Option<usize>,
+        context_idx: usize,
         formatter: &mut Formatter<'_>,
     ) -> Result;
 }

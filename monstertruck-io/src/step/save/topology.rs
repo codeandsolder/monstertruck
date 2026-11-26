@@ -9,6 +9,7 @@ enum StepAssociatedGeometry<'a> {
     ExactParameterCurve {
         curve: &'a dyn StepPcurve,
         support_reference: Option<usize>,
+        context_reference: usize,
     },
     /// Reference to an already-emitted surface entity (the adjacent face's
     /// surface). It emits nothing and claims no entity index; the enclosing
@@ -23,13 +24,13 @@ impl StepFormat for StepAssociatedGeometry<'_> {
             Self::ExactParameterCurve {
                 curve,
                 support_reference,
-            } => {
-                if let Some(surface_idx) = support_reference {
-                    curve.fmt_referencing_surface(idx, *surface_idx, formatter)
-                } else {
-                    StepFormat::fmt(*curve, idx, formatter)
-                }
-            }
+                context_reference,
+            } => curve.fmt_with_shared_context(
+                idx,
+                *support_reference,
+                *context_reference,
+                formatter,
+            ),
             Self::SurfaceRef(_) => Ok(()),
         }
     }
@@ -41,13 +42,8 @@ impl StepLength for StepAssociatedGeometry<'_> {
             Self::ExactParameterCurve {
                 curve,
                 support_reference,
-            } => {
-                if support_reference.is_some() {
-                    curve.step_length_referencing_surface()
-                } else {
-                    StepLength::step_length(*curve)
-                }
-            }
+                ..
+            } => curve.step_length_with_shared_context(support_reference.is_some()),
             Self::SurfaceRef(_) => 0,
         }
     }
@@ -179,6 +175,7 @@ pub(super) struct StepShell<'a, P, C, S> {
     ep_edges: usize,
     ep_vertices: usize,
     surface_indices: Vec<usize>,
+    parameter_context: Option<usize>,
     edge_geometries: Vec<StepEdgeGeometry<'a, C>>,
     curve_indices: Vec<usize>,
     ep_points: usize,
@@ -357,6 +354,13 @@ where
                 res
             })
             .collect::<Vec<_>>();
+        let context_index = cursor;
+        let parameter_context = edge_associations
+            .iter()
+            .flatten()
+            .any(|source| matches!(source, EdgeAssociationSource::ExactParameterCurve { .. }))
+            .then_some(context_index);
+        cursor += usize::from(parameter_context.is_some());
         let edge_geometries = edges
             .iter()
             .enumerate()
@@ -376,6 +380,7 @@ where
                             } => StepAssociatedGeometry::ExactParameterCurve {
                                 curve,
                                 support_reference: face_reference.map(|pos| surface_indices[pos]),
+                                context_reference: context_index,
                             },
                             EdgeAssociationSource::FaceSurface(face_pos) => {
                                 StepAssociatedGeometry::SurfaceRef(surface_indices[face_pos])
@@ -407,6 +412,7 @@ where
             ep_edges,
             ep_vertices,
             surface_indices,
+            parameter_context,
             edge_geometries,
             curve_indices,
             ep_points,
@@ -457,6 +463,9 @@ where
         faces.iter().zip(surface_indices).try_for_each(|(f, idx)| {
             Display::fmt(&StepDisplay::new(&f.surface, *idx), formatter)
         })?;
+        if let Some(idx) = self.parameter_context {
+            super::geometry::fmt_parameter_context(idx, formatter)?;
+        }
         edge_geometries
             .iter()
             .zip(curve_indices)
@@ -484,6 +493,7 @@ where
             ep_edges,
             ep_vertices: _,
             surface_indices,
+            parameter_context: _,
             edge_geometries: _,
             curve_indices: _,
             ep_points: _,

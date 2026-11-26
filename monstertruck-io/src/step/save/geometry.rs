@@ -490,10 +490,25 @@ impl<C: StepCurve, S0, S1> StepCurve for IntersectionCurve<C, S0, S1> {
     fn same_sense(&self) -> bool { self.leader().same_sense() }
 }
 
+// The parameter-space context specifies only a dimension and the fixed
+// context identifier. The support and the actual chart coordinates belong
+// to the PCURVE itself, not to this context.
+pub(super) fn fmt_parameter_context(idx: usize, f: &mut Formatter<'_>) -> Result {
+    f.write_fmt(format_args!(
+        "#{idx} = (
+    GEOMETRIC_REPRESENTATION_CONTEXT(2)
+    PARAMETRIC_REPRESENTATION_CONTEXT()
+    REPRESENTATION_CONTEXT('2D SPACE', '')
+);
+"
+    ))
+}
+
 fn fmt_pcurve<C, S>(
     pcurve: &ParameterCurve<C, S>,
     idx: usize,
     support_reference: Option<usize>,
+    context_reference: Option<usize>,
     f: &mut Formatter<'_>,
 ) -> Result
 where
@@ -503,8 +518,8 @@ where
     let surface_idx = support_reference.unwrap_or(idx + 1);
     let repr_idx =
         support_reference.map_or_else(|| surface_idx + pcurve.surface().step_length(), |_| idx + 1);
-    let context_idx = repr_idx + 1;
-    let curve_idx = repr_idx + 2;
+    let context_idx = context_reference.unwrap_or(repr_idx + 1);
+    let curve_idx = repr_idx + 1 + usize::from(context_reference.is_none());
     let mapped = pcurve
         .surface()
         .parameter_space_transform()
@@ -517,14 +532,12 @@ where
         StepFormat::fmt(pcurve.surface(), surface_idx, f)?;
     }
     f.write_fmt(format_args!(
-        "#{repr_idx} = DEFINITIONAL_REPRESENTATION('', (#{curve_idx}), #{context_idx});
-#{context_idx} = (
-    GEOMETRIC_REPRESENTATION_CONTEXT(2)
-    PARAMETRIC_REPRESENTATION_CONTEXT()
-    REPRESENTATION_CONTEXT('2D SPACE', '')
-);
-{curve}"
-    ))
+        "#{repr_idx} = DEFINITIONAL_REPRESENTATION('', (#{curve_idx}), #{context_idx});\n"
+    ))?;
+    if context_reference.is_none() {
+        fmt_parameter_context(context_idx, f)?;
+    }
+    std::fmt::Display::fmt(&curve, f)
 }
 
 impl<C, S> StepFormat for ParameterCurve<C, S>
@@ -532,7 +545,9 @@ where
     C: StepFormat + Transformed<Matrix3> + Clone,
     S: StepFormat + StepLength,
 {
-    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result { fmt_pcurve(self, idx, None, f) }
+    fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
+        fmt_pcurve(self, idx, None, None, f)
+    }
 }
 
 impl<C, S> StepPcurve for ParameterCurve<C, S>
@@ -544,15 +559,23 @@ where
         canonical_step_encoding(self.surface()).is_some_and(|support| support == encoding)
     }
 
-    fn step_length_referencing_surface(&self) -> usize { 3 + self.curve().step_length() }
+    fn step_length_with_shared_context(&self, shared_surface: bool) -> usize {
+        2 + self.curve().step_length()
+            + if shared_surface {
+                0
+            } else {
+                self.surface().step_length()
+            }
+    }
 
-    fn fmt_referencing_surface(
+    fn fmt_with_shared_context(
         &self,
         idx: usize,
-        surface_idx: usize,
+        surface_idx: Option<usize>,
+        context_idx: usize,
         f: &mut Formatter<'_>,
     ) -> Result {
-        fmt_pcurve(self, idx, Some(surface_idx), f)
+        fmt_pcurve(self, idx, surface_idx, Some(context_idx), f)
     }
 }
 
