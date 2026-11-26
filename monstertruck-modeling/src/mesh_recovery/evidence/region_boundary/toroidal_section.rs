@@ -491,26 +491,6 @@ impl ContactToroidalSectionEvidence {
             .then_some(controls)
     }
 
-    fn append_cubics(
-        self,
-        start: f64,
-        end: f64,
-        tolerance: f64,
-        depth: usize,
-        pieces: &mut Vec<(f64, [Point3; 4])>,
-    ) -> Option<()> {
-        if let Some(controls) = self.cubic(start, end, tolerance) {
-            pieces.push((end, controls));
-            return Some(());
-        }
-        if depth == 0 {
-            return None;
-        }
-        let mid = start.midpoint(end);
-        self.append_cubics(start, mid, tolerance, depth - 1, pieces)?;
-        self.append_cubics(mid, end, tolerance, depth - 1, pieces)
-    }
-
     pub(super) fn native_curve(
         self,
         a: Point3,
@@ -529,23 +509,7 @@ impl ContactToroidalSectionEvidence {
         {
             return None;
         }
-        let mut pieces = Vec::new();
-        self.append_cubics(start, end, tolerance, 8, &mut pieces)?;
-        let mut controls = Vec::with_capacity(3 * pieces.len() + 1);
-        let mut knots = vec![0.0; 4];
-        controls.push(pieces.first()?.1[0]);
-        let last = pieces.len() - 1;
-        for (i, (angle, piece)) in pieces.into_iter().enumerate() {
-            controls.extend_from_slice(&piece[1..]);
-            if i == last {
-                knots.extend([1.0; 4]);
-            } else {
-                knots.extend([(angle - start) / step; 3]);
-            }
-        }
-        Some(Curve::BsplineCurve(
-            BsplineCurve::new(KnotVector::from(knots), controls).ok()?,
-        ))
+        super::section_curve::section_curve(start, end, |a, b| self.cubic(a, b, tolerance))
     }
 }
 

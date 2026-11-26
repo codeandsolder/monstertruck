@@ -47,8 +47,8 @@ fn carrier_summary(carrier: SurfaceCarrier) -> Value {
 fn trim_summary(
     trims: &[monstertruck_modeling::mesh_recovery::SharedAnalyticTrim],
     carriers: &[Option<SurfaceCarrier>],
-) -> ([usize; 5], BTreeMap<String, usize>) {
-    let mut trim_edges = [0_usize; 5];
+) -> ([usize; 6], BTreeMap<String, usize>) {
+    let mut trim_edges = [0_usize; 6];
     let mut unresolved_contact_pairs = BTreeMap::new();
     for trim in trims {
         let kind = match trim.geometry {
@@ -56,6 +56,7 @@ fn trim_summary(
             SharedTrimGeometry::Circle(_) => 1,
             SharedTrimGeometry::Conic(_) => 3,
             SharedTrimGeometry::ToroidalSection(_) => 4,
+            SharedTrimGeometry::LinearSection(_) => 5,
             SharedTrimGeometry::Unresolved => 2,
         };
         trim_edges[kind] += trim.source_edges.len();
@@ -285,7 +286,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "source_signed_volume":recovery.evidence.closed_source_volume(),
     });
     let trim_summary = json!({
-        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],"toroidal_section_source_edges":trim_edges[4],
+        "line_source_edges":trim_edges[0],"circle_source_edges":trim_edges[1],"conic_source_edges":trim_edges[3],"toroidal_section_source_edges":trim_edges[4],"linear_section_source_edges":trim_edges[5],
         "unresolved_source_edges":trim_edges[2],
         "unresolved_contact_pairs":unresolved_contact_pairs,
         "unresolved_trims":unresolved_trims,

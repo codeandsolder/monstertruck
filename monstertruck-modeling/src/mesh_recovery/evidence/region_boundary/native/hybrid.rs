@@ -7,10 +7,9 @@
 
 use super::super::patch_lift::{junction_roundoff, lift_native_source_edge};
 use super::{
-    ContactToroidalSectionEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph,
-    NativeTrimOptions, RegionAssemblyInput, SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier,
-    SurfaceRegionPartition, TrimInterval, build_trim, geometry_constraints, junction_candidates,
-    trim_intervals,
+    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, RegionAssemblyInput,
+    SectionBranch, SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition,
+    TrimInterval, build_trim, geometry_constraints, junction_candidates, trim_intervals,
 };
 use crate::{
     Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
@@ -190,7 +189,7 @@ struct HybridEdges {
 
 struct JunctionConstraints {
     carriers: Vec<SurfaceCarrier>,
-    sections: Vec<ContactToroidalSectionEvidence>,
+    sections: Vec<SectionBranch>,
 }
 
 struct HybridInput<'a> {
@@ -485,7 +484,7 @@ impl HybridInput<'_> {
                 }
                 if let Some(constraints) = constraints.get_mut(&vertex) {
                     constraints.carriers.extend(geometry.iter().copied());
-                    if let SharedTrimGeometry::ToroidalSection(section) = trim.geometry {
+                    if let Some(section) = trim.geometry.section() {
                         constraints.sections.push(section);
                     }
                 }

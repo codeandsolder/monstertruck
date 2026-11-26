@@ -538,9 +538,9 @@ fn contact_quality(
             for piece in fit.pieces {
                 let target = match piece.geometry {
                     SharedTrimGeometry::Unresolved => &mut quality.unresolved,
-                    SharedTrimGeometry::Conic(_) | SharedTrimGeometry::ToroidalSection(_) => {
-                        &mut quality.noncircular
-                    }
+                    SharedTrimGeometry::Conic(_)
+                    | SharedTrimGeometry::ToroidalSection(_)
+                    | SharedTrimGeometry::LinearSection(_) => &mut quality.noncircular,
                     _ => continue,
                 };
                 for offset in 0..piece.edge_count {
