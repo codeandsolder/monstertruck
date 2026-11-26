@@ -1013,7 +1013,7 @@ dependencies = [
 [[package]]
 name = "occt-wasm"
 version = "7.3.0"
-source = "git+https://github.com/codeandsolder/occt-wasm-truck.git?rev=1c669eddb7ae16f475912a94f8638f4da5c641ef#1c669eddb7ae16f475912a94f8638f4da5c641ef"
+source = "git+https://github.com/codeandsolder/occt-wasm-truck.git?rev=e52286aa84cabcfd99594510de6a02fbb5de3aa8#e52286aa84cabcfd99594510de6a02fbb5de3aa8"
 dependencies = [
  "brotli",
  "thiserror",
