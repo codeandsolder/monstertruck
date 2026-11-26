@@ -5,24 +5,68 @@
 //! thresholds; they must not alter the source vertices or edge graph.
 
 use super::{
-    EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, positions_and_polygons,
-    seams, segment_patches, signed_plane_distance, source_edge_incidence,
+    EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, input_polygon_from_ids,
+    seams, segment_patches, signed_plane_distance, source_edge_incidence, welded_source_polygons,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
+mod circle_axes;
 mod curvature;
 mod growth;
 mod join;
+mod meridian;
+mod region_boundary;
+mod source_collapse;
+mod source_sectors;
+mod source_sheet;
+mod source_topology;
 mod spatial;
+mod station_graph;
 mod support;
+pub use circle_axes::{
+    CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions, CircleAxisStation,
+    SourceCircleObservation, discover_circle_axes,
+};
 pub use curvature::{CurvatureTrack, CurvatureTrackOptions, trace_curvature_tracks};
 pub use growth::{
     CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep,
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
-pub use spatial::{AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial};
+pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
+pub use region_boundary::{
+    CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactConicEvidence,
+    ContactCurveEvidence, ContactLineEvidence, ContactLinearSectionEvidence,
+    ContactToroidalSectionEvidence, HybridConnectorOptions, HybridConnectorRecovery,
+    HybridConnectorRelease, HybridPatchEvidence, HybridPlanarSimplification, HybridPolygonFaces,
+    HybridRecovery, HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed,
+    HybridSupportSearchOptions, HybridSupportSearchRecovery, LiftedRegionPatch, LiftedSourceChord,
+    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim,
+    PatchSupportConflict, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
+    RefinedHybridRecovery, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
+    RegionPatchError, RegionPatchOptions, RegionTrimBoundary, RegionTrimLoops, SharedAnalyticTrim,
+    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
+    SharedTrimSegmentation, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
+    SurfaceRegionPartition, SurfaceRegionProposal,
+};
+pub(in crate::mesh_recovery) use region_boundary::{
+    JointFitCandidate, JointFitContext, JointFitOptions, RimLinearOptions, fit_neighborhood,
+};
+pub use region_boundary::{JointFitMethod, JointFitRejection};
+pub use source_collapse::CollapsedSourceFacet;
+pub use source_sectors::SourceSectorPair;
+pub use source_sheet::CanceledSourceSheet;
+pub use source_topology::{SeparatedSourceVertex, SourceForcedPair};
+pub use spatial::{
+    AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
+    measure_spatial_support_set,
+};
+pub use station_graph::{
+    MeridianGraphOptions, MeridianStation, MeridianStationGraph, MeridianTransition,
+    StationLinearCandidate, StationMeridianCandidate, StationMeridianDiscovery,
+};
 use support::build_support_interfaces;
 pub use support::{SupportBoundaryTopology, SupportInterface};
 
@@ -127,7 +171,7 @@ pub struct ParallelBundle {
 impl ParallelBundle {
     /// Transverse separation of two members in the bundle's seed plane.
     /// For nearly parallel candidates, it is only a local measurement.
-    #[must_use]
+    #[must_use = "the separation measures the distance between source chains"]
     pub fn transverse_separation(&self, first: usize, second: usize) -> Option<f64> {
         let a = self.placements.get(first)?.transverse_offset;
         let b = self.placements.get(second)?.transverse_offset;
@@ -225,11 +269,34 @@ pub struct SupportNormalRotationEvidence {
     pub normal_space_axis_to_boundaries_radians: Option<f64>,
 }
 
+/// Complete source normalization provenance, shared by evidence,
+/// support refinement, and recovered native geometry.
+#[derive(Clone, Debug)]
+pub struct SourceProvenance {
+    /// Total polygon count in the unmodified input.
+    pub original_polygon_count: usize,
+    /// Active polygon index to original input polygon index.
+    pub original_polygon_ids: Vec<usize>,
+    /// Exactly collinear zero-area source facets and chain certificates.
+    pub collapsed_facets: Vec<CollapsedSourceFacet>,
+    /// Coordinate-identical copies created to preserve closed components.
+    pub separated_vertices: Vec<SeparatedSourceVertex>,
+    /// Exact angular sector pairings accepted by closed component proofs.
+    pub sector_pairs: Vec<SourceSectorPair>,
+    /// Necessary component joins certified by incidence and matching.
+    pub forced_pairs: Vec<SourceForcedPair>,
+    /// Opt-in canceled opposite source sheets, using original polygon IDs.
+    pub canceled_sheets: Vec<CanceledSourceSheet>,
+}
+
 /// Reusable primitive-free geometric evidence for a source mesh.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MeshEvidence {
-    /// Exactly welded source positions.
+    /// Exactly welded source positions, except separately certified closed
+    /// component vertices that retain distinct topological IDs at contacts.
     pub positions: Vec<Point3>,
+    /// Original source ownership and exact/optional normalization certificates.
+    pub provenance: SourceProvenance,
     /// Boundary and dihedral source edges in canonical index order.
     pub edges: Vec<FeatureEdge>,
     /// Maximal exact collinear straight-through chains.
@@ -262,20 +329,103 @@ pub struct MeshEvidence {
 }
 
 impl MeshEvidence {
+    /// Signed polyhedral volume of a closed, consistently oriented source chain.
+    /// Returns none for open, ambiguous, or empty source incidence. This is
+    /// a numerical integral, not a non-self-intersection certificate.
+    #[must_use = "the signed source volume establishes orientation and scale"]
+    pub fn closed_source_volume(&self) -> Option<f64> {
+        if self
+            .edges
+            .iter()
+            .any(|edge| edge.kind != FeatureEdgeKind::Dihedral)
+            || self.non_manifold_edge_count != 0
+            || self.inconsistent_winding_edge_count != 0
+        {
+            return None;
+        }
+        let polygons = (0..self.source_planar_support.len())
+            .map(|id| self.source_polygon_vertices(id))
+            .collect::<Option<Vec<_>>>()?;
+        super::signed_polygon_volume(&self.positions, polygons)
+    }
+
     /// Exact canonical source vertex IDs of an input polygon, including any
     /// collinear points inserted to resolve original T-junctions.
-    #[must_use]
+    #[must_use = "the returned indices identify the original polygon"]
     pub fn source_polygon_vertices(&self, source_polygon: usize) -> Option<&[usize]> {
         let begin = *self.source_polygon_vertex_offsets.get(source_polygon)?;
         let end = *self.source_polygon_vertex_offsets.get(source_polygon + 1)?;
         self.source_polygon_vertex_indices.get(begin..end)
     }
 
+    /// Refine selected coplanar support groups into individual original
+    /// polygons while preserving all canonical source vertices, polygon IDs,
+    /// edge incidence, and feature observations. Rebuild only support-level
+    /// membership and interfaces; the original grouping remains available as
+    /// an independent planar explanation in the caller's baseline evidence.
+    ///
+    /// # Errors
+    /// Returns an error when the refinement references invalid support or
+    /// source polygon IDs, or the original polygon geometry is inconsistent.
+    pub fn refine_planar_supports(&self, split: &[usize]) -> Result<Self, MeshRecoveryError> {
+        let split = split.iter().copied().collect::<HashSet<_>>();
+        if split.iter().any(|&id| id >= self.planar_supports.len()) {
+            return Err(MeshRecoveryError::InvalidEvidenceOptions);
+        }
+        let polygons = (0..self.source_planar_support.len())
+            .map(|id| {
+                let vertices = self
+                    .source_polygon_vertices(id)
+                    .ok_or(MeshRecoveryError::DegeneratePolygon(id))?;
+                input_polygon_from_ids(&self.positions, vertices.to_vec(), id, KERNEL_EPSILON)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut groups = Vec::new();
+        for (id, support) in self.planar_supports.iter().enumerate() {
+            if split.contains(&id) {
+                groups.extend(support.source_face_indices.iter().map(|&id| vec![id]));
+            } else {
+                groups.push(support.source_face_indices.clone());
+            }
+        }
+        let mut membership = vec![usize::MAX; polygons.len()];
+        let mut supports = Vec::with_capacity(groups.len());
+        for (id, group) in groups.into_iter().enumerate() {
+            for &polygon in &group {
+                let slot = membership
+                    .get_mut(polygon)
+                    .ok_or(MeshRecoveryError::DegeneratePolygon(polygon))?;
+                if *slot != usize::MAX {
+                    return Err(MeshRecoveryError::DegeneratePolygon(polygon));
+                }
+                *slot = id;
+            }
+            supports.push(measure_planar_support(&polygons, &self.positions, group));
+        }
+        if membership.contains(&usize::MAX) {
+            return Err(MeshRecoveryError::InvalidEvidenceOptions);
+        }
+        let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+        let (support_interfaces, support_interface_indices) = build_support_interfaces(
+            &self.positions,
+            &polygons,
+            &incidence,
+            &membership,
+            supports.len(),
+        );
+        let mut refined = self.clone();
+        refined.planar_supports = supports;
+        refined.source_planar_support = membership;
+        refined.support_interfaces = support_interfaces;
+        refined.support_interface_indices = support_interface_indices;
+        Ok(refined)
+    }
+
     /// Planar-support region IDs on the two sides of a regular manifold edge.
     ///
     /// This does not certify a sharp CAD seam: regions may be chord facets of
     /// a curved surface. Returns None for open or ambiguous source incidence.
-    #[must_use]
+    #[must_use = "the support pair identifies both incident source regions"]
     pub fn edge_planar_support_pair(&self, edge_index: usize) -> Option<[usize; 2]> {
         let edge = self.edges.get(edge_index)?;
         if edge.kind != FeatureEdgeKind::Dihedral {
@@ -297,7 +447,7 @@ impl MeshEvidence {
     /// candidate surface tracks. A match is not evidence that the original
     /// designer used an analytic curved surface: it can also describe a
     /// deliberately faceted design.
-    #[must_use]
+    #[must_use = "the rotation is needed to evaluate curvature evidence"]
     pub fn support_normal_rotation(
         &self,
         center: usize,
@@ -397,7 +547,7 @@ impl MeshEvidence {
     /// Compare the infinite support lines of any two recovered feature
     /// chains, computing geometric relations lazily rather than materializing
     /// a quadratic matrix of all chain pairs.
-    #[must_use]
+    #[must_use = "the pair evidence describes the geometric relationship"]
     pub fn chain_pair(&self, first: usize, second: usize) -> Option<ChainPairEvidence> {
         let a = self.chains.get(first)?;
         let b = self.chains.get(second)?;
@@ -625,7 +775,7 @@ fn trace_chains(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<CollinearCha
     chains
 }
 
-fn canonical_unit(vector: Vector3) -> Vector3 {
+pub(super) fn canonical_unit(vector: Vector3) -> Vector3 {
     let axis = (0..3)
         .max_by(|&a, &b| vector[a].abs().total_cmp(&vector[b].abs()))
         .unwrap_or(0);
@@ -758,53 +908,61 @@ fn planar_supports(
     let (membership, groups) = segment_patches(polygons, positions, &neighbors, options);
     let supports = groups
         .into_iter()
-        .map(|source_face_indices| {
-            let seed = &polygons[source_face_indices[0]];
-            let mut area = 0.0;
-            let mut max_vertex_plane_residual = 0.0_f64;
-            let mut max_normal_angle_radians = 0.0_f64;
-            for &face_id in &source_face_indices {
-                let face = &polygons[face_id];
-                let reference = positions[face.vertices[0]];
-                // Signed fan contributions cancel for concave polygons;
-                // summing triangle magnitudes would overestimate their area.
-                let mut signed_twice_area = 0.0;
-                for vertex in face.vertices.windows(2).skip(1) {
-                    let first = positions[vertex[0]] - reference;
-                    let second = positions[vertex[1]] - reference;
-                    signed_twice_area += first.cross(second).dot(face.normal);
-                }
-                area = signed_twice_area.abs().mul_add(0.5, area);
-                max_vertex_plane_residual = face
-                    .vertices
-                    .iter()
-                    .map(|&id| signed_plane_distance(positions[id], seed.origin, seed.normal).abs())
-                    .fold(max_vertex_plane_residual, f64::max);
-                let angular = face
-                    .normal
-                    .cross(seed.normal)
-                    .magnitude()
-                    .atan2(face.normal.dot(seed.normal));
-                max_normal_angle_radians = max_normal_angle_radians.max(angular);
-            }
-            PlanarSupport {
-                source_face_indices,
-                normal: seed.normal,
-                origin: seed.origin,
-                area,
-                max_vertex_plane_residual,
-                max_normal_angle_radians,
-            }
-        })
+        .map(|group| measure_planar_support(polygons, positions, group))
         .collect();
     (membership, supports)
+}
+
+fn measure_planar_support(
+    polygons: &[InputPolygon],
+    positions: &[Point3],
+    source_face_indices: Vec<usize>,
+) -> PlanarSupport {
+    let seed = &polygons[source_face_indices[0]];
+    let mut area = 0.0;
+    let mut max_vertex_plane_residual = 0.0_f64;
+    let mut max_normal_angle_radians = 0.0_f64;
+    for &face_id in &source_face_indices {
+        let face = &polygons[face_id];
+        let reference = positions[face.vertices[0]];
+        // Signed fan contributions cancel for concave polygons;
+        // summing triangle magnitudes would overestimate their area.
+        let mut signed_twice_area = 0.0;
+        for vertex in face.vertices.windows(2).skip(1) {
+            let first = positions[vertex[0]] - reference;
+            let second = positions[vertex[1]] - reference;
+            signed_twice_area += first.cross(second).dot(face.normal);
+        }
+        area = signed_twice_area.abs().mul_add(0.5, area);
+        max_vertex_plane_residual = face
+            .vertices
+            .iter()
+            .map(|&id| signed_plane_distance(positions[id], seed.origin, seed.normal).abs())
+            .fold(max_vertex_plane_residual, f64::max);
+        let angular = face
+            .normal
+            .cross(seed.normal)
+            .magnitude()
+            .atan2(face.normal.dot(seed.normal));
+        max_normal_angle_radians = max_normal_angle_radians.max(angular);
+    }
+    PlanarSupport {
+        source_face_indices,
+        normal: seed.normal,
+        origin: seed.origin,
+        area,
+        max_vertex_plane_residual,
+        max_normal_angle_radians,
+    }
 }
 
 /// Extract maximal exact straight feature chains and candidate parallel
 /// spatial arrangements without presupposing any analytic CAD primitive.
 ///
-/// Source coordinates are exactly welded; T-junctions are repaired using
-/// adaptive exact predicates; coplanar triangulation edges are suppressed.
+/// Source coordinates are exactly welded initially. Independently closed,
+/// nonzero-volume components retain distinct topological IDs at coincident
+/// contacts; exact T-junction repair operates only on unresolved components.
+/// Coplanar triangulation edges are suppressed.
 /// Other source edges retain polygon adjacency and measured dihedrals.
 /// Chain collinearity is exact in the stored coordinates, while direction
 /// groups are only bounded-angular hypotheses.
@@ -818,6 +976,69 @@ pub fn analyze_mesh_evidence(
     mesh: &PolygonMesh,
     options: EvidenceOptions,
 ) -> Result<MeshEvidence, MeshRecoveryError> {
+    validate_evidence_options(options)?;
+    let (mut positions, source) = welded_source_polygons(mesh)?;
+    let mut provenance = SourceProvenance {
+        original_polygon_count: source.len(),
+        original_polygon_ids: Vec::with_capacity(source.len()),
+        collapsed_facets: Vec::new(),
+        separated_vertices: Vec::new(),
+        sector_pairs: Vec::new(),
+        forced_pairs: Vec::new(),
+        canceled_sheets: Vec::new(),
+    };
+    let mut polygons = Vec::with_capacity(source.len());
+    for (id, vertices) in source.iter().enumerate() {
+        match input_polygon_from_ids(&positions, vertices.clone(), id, KERNEL_EPSILON) {
+            Ok(polygon) => {
+                polygons.push(polygon);
+                provenance.original_polygon_ids.push(id);
+            }
+            Err(error) => {
+                let collapsed = source_collapse::CollapsedSourceFacet::certify(
+                    &positions,
+                    id,
+                    vertices.clone(),
+                )
+                .ok_or(error)?;
+                provenance.collapsed_facets.push(collapsed);
+            }
+        }
+    }
+    if polygons.is_empty()
+        && let Some(facet) = provenance.collapsed_facets.first()
+    {
+        return Err(MeshRecoveryError::DegeneratePolygon(facet.polygon));
+    }
+    let repairs = if provenance.collapsed_facets.is_empty() {
+        Vec::new()
+    } else {
+        source_collapse::required_repairs(&source, &provenance.original_polygon_ids)
+    };
+    drop(source);
+    let closed =
+        source_topology::separate_closed_components(&mut positions, &mut polygons, &mut provenance);
+    // A component whose original edge uses already form a closed chain
+    // has no T-junctions to repair. Do not split it at another body's
+    // coincident geometry, or use its vertices to attach unresolved faces.
+    if closed.contains(&false) {
+        seams::split_source_t_junctions(
+            &positions,
+            polygons
+                .iter_mut()
+                .zip(&closed)
+                .filter_map(|(p, &closed)| (!closed).then_some(p)),
+        );
+        // Exact subdivision can reveal additional independently closed chains.
+        source_topology::separate_closed_components(&mut positions, &mut polygons, &mut provenance);
+    }
+    source_collapse::verify_repairs(&positions, &polygons, &repairs)?;
+    Ok(analyze_welded_evidence(
+        positions, &polygons, options, provenance,
+    ))
+}
+
+fn validate_evidence_options(options: EvidenceOptions) -> Result<(), MeshRecoveryError> {
     if !options.min_dihedral_angle_radians.is_finite()
         || !(0.0..std::f64::consts::PI).contains(&options.min_dihedral_angle_radians)
         || !options.max_parallel_angle_radians.is_finite()
@@ -830,20 +1051,27 @@ pub fn analyze_mesh_evidence(
     {
         return Err(MeshRecoveryError::InvalidEvidenceOptions);
     }
-    let (positions, mut polygons) = positions_and_polygons(mesh, KERNEL_EPSILON)?;
-    seams::split_source_t_junctions(&positions, &mut polygons);
-    let incidence = source_edge_incidence(&polygons);
+    Ok(())
+}
+
+fn analyze_welded_evidence(
+    positions: Vec<Point3>,
+    polygons: &[InputPolygon],
+    options: EvidenceOptions,
+    provenance: SourceProvenance,
+) -> MeshEvidence {
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let EdgeSelection {
         edges,
         suppressed_coplanar,
         non_manifold,
         winding_conflicts,
-    } = select_edges(&polygons, &incidence, options);
+    } = select_edges(polygons, &incidence, options);
     let (source_planar_support, planar_supports) =
-        planar_supports(&polygons, &positions, &incidence, options.planar_support);
+        planar_supports(polygons, &positions, &incidence, options.planar_support);
     let (support_interfaces, support_interface_indices) = build_support_interfaces(
         &positions,
-        &polygons,
+        polygons,
         &incidence,
         &source_planar_support,
         planar_supports.len(),
@@ -852,13 +1080,14 @@ pub fn analyze_mesh_evidence(
     let parallel_bundles = parallel_bundles(&positions, &chains, options);
     let mut source_polygon_vertex_offsets = Vec::with_capacity(polygons.len() + 1);
     let mut source_polygon_vertex_indices = Vec::new();
-    for polygon in &polygons {
+    for polygon in polygons {
         source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
         source_polygon_vertex_indices.extend_from_slice(&polygon.vertices);
     }
     source_polygon_vertex_offsets.push(source_polygon_vertex_indices.len());
-    Ok(MeshEvidence {
+    MeshEvidence {
         positions,
+        provenance,
         edges,
         chains,
         parallel_bundles,
@@ -871,7 +1100,7 @@ pub fn analyze_mesh_evidence(
         suppressed_interior_edge_count: suppressed_coplanar,
         non_manifold_edge_count: non_manifold,
         inconsistent_winding_edge_count: winding_conflicts,
-    })
+    }
 }
 
 #[cfg(test)]

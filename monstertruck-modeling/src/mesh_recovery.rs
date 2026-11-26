@@ -36,20 +36,61 @@ impl Default for PlanarRecoveryOptions {
     }
 }
 
+mod analytic;
+pub use analytic::{
+    AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
+    AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
+    JointFitAttempt, JointFitMethod, JointFitRejection, JointFitReport, RecoveredAnalyticMesh,
+    SelectedSurfaceProposal, SupportRefinementPass, construct_analytic_recovery,
+    discover_analytic_regions, recover_analytic_evidence, recover_analytic_mesh,
+};
+mod boundary_facet;
+pub use boundary_facet::{
+    BoundaryFacetApproximation, BoundaryFacetError, BoundaryFacetInput, approximate_boundary_facet,
+};
+mod boundary_patch;
+pub use boundary_patch::{
+    BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge,
+    approximate_boundary_patch,
+};
 mod cylinder;
 mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod evidence;
+mod planar_domain;
+pub use planar_domain::{PlanarDomainCertificate, certify_projected_planar_domain};
+mod planar_fans;
+pub use planar_fans::{PlanarFanOptions, PlanarFanSimplification, simplify_planar_fan_shell};
+mod sample_fit;
 mod seams;
 pub use evidence::{
-    AxialRadialStation, ChainPairEvidence, CollinearChain, CurvatureGrowthHypothesis,
+    AxialRadialStation, CanceledSourceSheet, CarrierCoincidenceEvidence, CarrierResidual,
+    ChainPairEvidence, CircleAxisDiscovery, CircleAxisEvidence, CircleAxisOptions,
+    CircleAxisStation, CircularMeridianEvidence, CollapsedSourceFacet, CollinearChain,
+    ContactCircleEvidence, ContactConicEvidence, ContactCurveEvidence, ContactLineEvidence,
+    ContactLinearSectionEvidence, ContactToroidalSectionEvidence, CurvatureGrowthHypothesis,
     CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack,
-    CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, MeshEvidence,
-    ParallelBundle, ParallelPlacement, PlanarSupport, SpatialTrackEvidence,
-    SpatialTrackJoinEvidence, SupportBoundaryTopology, SupportInterface,
-    SupportNormalRotationEvidence, analyze_mesh_evidence, measure_curvature_spatial,
-    measure_curvature_spatial_join, trace_curvature_tracks,
+    CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, HybridConnectorOptions,
+    HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
+    HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
+    HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
+    HybridSupportSearchRecovery, LiftedRegionPatch, LiftedSourceChord, MeridianGraphOptions,
+    MeridianStation, MeridianStationGraph, MeridianTransition, MeshEvidence, NativeRegionFace,
+    NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim, ParallelBundle,
+    ParallelPlacement, PatchSupportConflict, PlanarSupport, ReconciledPartition, ReconciledPlane,
+    ReconciliationOptions, RefinedHybridRecovery, RegionBoundary, RegionBoundaryEdge,
+    RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph,
+    RegionContactPath, RegionPatchError, RegionPatchOptions, RegionTrimBoundary, RegionTrimLoops,
+    SeparatedSourceVertex, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
+    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation,
+    SourceForcedPair, SourceProvenance, SourceSectorPair, SpatialTrackEvidence,
+    SpatialTrackJoinEvidence, StationLinearCandidate, StationMeridianCandidate,
+    StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
+    SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
+    SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
+    measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,
+    measure_spatial_support_set, trace_curvature_tracks,
 };
 
 /// Source evidence for one reconstructed planar face.
@@ -160,15 +201,29 @@ fn signed_plane_distance(point: Point3, origin: Point3, normal: Vector3) -> f64 
 ///
 /// Compensated summation protects thin solids with cancelling oriented faces.
 fn signed_source_volume(positions: &[Point3], polygons: &[InputPolygon]) -> Option<f64> {
-    let first = polygons.first()?.vertices.first()?;
-    let origin = positions[*first];
+    signed_polygon_volume(
+        positions,
+        polygons.iter().map(|polygon| polygon.vertices.as_slice()),
+    )
+}
+
+fn signed_polygon_volume<'a>(
+    positions: &[Point3],
+    polygons: impl IntoIterator<Item = &'a [usize]>,
+) -> Option<f64> {
+    let mut polygons = polygons.into_iter();
+    let first = polygons.next()?;
+    let origin = *positions.get(*first.first()?)?;
     let mut six_volume = 0.0_f64;
     let mut compensation = 0.0_f64;
-    for polygon in polygons {
-        let a = positions[polygon.vertices[0]] - origin;
-        for i in 1..polygon.vertices.len() - 1 {
-            let b = positions[polygon.vertices[i]] - origin;
-            let c = positions[polygon.vertices[i + 1]] - origin;
+    for polygon in std::iter::once(first).chain(polygons) {
+        if polygon.len() < 3 {
+            return None;
+        }
+        let a = *positions.get(polygon[0])? - origin;
+        for pair in polygon[1..].windows(2) {
+            let b = *positions.get(pair[0])? - origin;
+            let c = *positions.get(pair[1])? - origin;
             let term = a.dot(b.cross(c));
             let corrected = term - compensation;
             let next = six_volume + corrected;
@@ -190,6 +245,18 @@ fn positions_and_polygons(
     mesh: &PolygonMesh,
     tolerance: f64,
 ) -> Result<(Vec<Point3>, Vec<InputPolygon>), MeshRecoveryError> {
+    let (positions, source) = welded_source_polygons(mesh)?;
+    let polygons = source
+        .into_iter()
+        .enumerate()
+        .map(|(id, vertices)| input_polygon_from_ids(&positions, vertices, id, tolerance))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((positions, polygons))
+}
+
+fn welded_source_polygons(
+    mesh: &PolygonMesh,
+) -> Result<(Vec<Point3>, Vec<Vec<usize>>), MeshRecoveryError> {
     // Only exactly identical coordinates are welded. Distinct nearby points
     // can be separate intentional material boundaries; fuzzy welding is unsafe.
     let mut positions = Vec::new();
@@ -229,49 +296,77 @@ fn positions_and_polygons(
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut seen = HashSet::new();
-        if vertices.len() < 3 || !vertices.iter().all(|&id| seen.insert(id)) {
-            return Err(MeshRecoveryError::DegeneratePolygon(source));
-        }
-        let origin = positions[vertices[0]];
-        let mut area_vector = Vector3::new(0.0, 0.0, 0.0);
-        for i in 0..vertices.len() {
-            let p = positions[vertices[i]] - origin;
-            let q = positions[vertices[(i + 1) % vertices.len()]] - origin;
-            area_vector += p.cross(q);
-            if positions[vertices[i]] == positions[vertices[(i + 1) % vertices.len()]] {
-                return Err(MeshRecoveryError::DegeneratePolygon(source));
-            }
-        }
-        let length_sq = area_vector.magnitude2();
-        if !length_sq.is_finite() || length_sq <= 0.0 {
-            return Err(MeshRecoveryError::DegeneratePolygon(source));
-        }
-        let normal = area_vector / length_sq.sqrt();
-        if vertices
-            .iter()
-            .any(|&id| signed_plane_distance(positions[id], origin, normal).abs() > tolerance)
-        {
-            return Err(MeshRecoveryError::NonPlanarPolygon(source));
-        }
-        polygons.push(InputPolygon {
-            vertices,
-            normal,
-            origin,
-        });
+        polygons.push(vertices);
     }
     Ok((positions, polygons))
+}
+
+/// Measure an already welded original polygon; shared by initial ingestion
+/// and subsequent support refinement without changing source coordinates.
+fn input_polygon_from_ids(
+    positions: &[Point3],
+    vertices: Vec<usize>,
+    source: usize,
+    tolerance: f64,
+) -> Result<InputPolygon, MeshRecoveryError> {
+    let mut seen = HashSet::new();
+    if vertices.len() < 3 || !vertices.iter().all(|&id| seen.insert(id)) {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    let origin = positions[vertices[0]];
+    let mut area_vector = Vector3::new(0.0, 0.0, 0.0);
+    let mut compensation = Vector3::new(0.0, 0.0, 0.0);
+    for pair in vertices[1..].windows(2) {
+        let term = seams::oriented_triangle_area(origin, positions[pair[0]], positions[pair[1]]);
+        let corrected = term - compensation;
+        let next = area_vector + corrected;
+        compensation = (next - area_vector) - corrected;
+        area_vector = next;
+    }
+    if vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .any(|(&a, &b)| positions[a] == positions[b])
+    {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    // Scale before normalization so a finite nonzero area is not lost by
+    // squaring subnormal components or overflowing a large area vector.
+    let scale = area_vector
+        .x
+        .abs()
+        .max(area_vector.y.abs())
+        .max(area_vector.z.abs());
+    if ![area_vector.x, area_vector.y, area_vector.z]
+        .into_iter()
+        .all(f64::is_finite)
+        || scale <= 0.0
+    {
+        return Err(MeshRecoveryError::DegeneratePolygon(source));
+    }
+    let normal = (area_vector / scale).normalize();
+    if vertices
+        .iter()
+        .any(|&id| signed_plane_distance(positions[id], origin, normal).abs() > tolerance)
+    {
+        return Err(MeshRecoveryError::NonPlanarPolygon(source));
+    }
+    Ok(InputPolygon {
+        vertices,
+        normal,
+        origin,
+    })
 }
 
 /// Collect every original oriented polygon use without enforcing manifoldness.
 /// The evidence frontend must preserve ambiguous connections and report them,
 /// while B-rep construction calls the strict validator below.
-fn source_edge_incidence(polygons: &[InputPolygon]) -> EdgeIncidence {
+fn source_edge_incidence<'a>(polygons: impl IntoIterator<Item = &'a [usize]>) -> EdgeIncidence {
     let mut incidence = HashMap::<EdgeKey, Vec<EdgeUse>>::default();
-    for (polygon_id, polygon) in polygons.iter().enumerate() {
-        for i in 0..polygon.vertices.len() {
-            let a = polygon.vertices[i];
-            let b = polygon.vertices[(i + 1) % polygon.vertices.len()];
+    for (polygon_id, vertices) in polygons.into_iter().enumerate() {
+        for i in 0..vertices.len() {
+            let a = vertices[i];
+            let b = vertices[(i + 1) % vertices.len()];
             let (key, forward) = edge_key(a, b);
             incidence
                 .entry(key)
@@ -285,7 +380,7 @@ fn source_edge_incidence(polygons: &[InputPolygon]) -> EdgeIncidence {
 fn edge_incidence(
     polygons: &[InputPolygon],
 ) -> Result<(EdgeIncidence, PolygonNeighbors), MeshRecoveryError> {
-    let incidence = source_edge_incidence(polygons);
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
     let mut neighbors = vec![Vec::new(); polygons.len()];
     for (&key, uses) in &incidence {
         match uses.as_slice() {
@@ -347,6 +442,33 @@ fn segment_patches(
     (membership, patches)
 }
 
+/// Decompose a one-successor source edge graph into deterministic oriented
+/// cycles. No planar geometry or outer/inner classification is assumed.
+fn trace_oriented_boundary_cycles(mut next: HashMap<usize, usize>) -> Option<Vec<Vec<usize>>> {
+    let mut starts = next.keys().copied().collect::<Vec<_>>();
+    starts.sort_unstable();
+    let mut loops = Vec::new();
+    for start in starts {
+        if !next.contains_key(&start) {
+            continue;
+        }
+        let mut cycle = Vec::new();
+        let mut current = start;
+        loop {
+            cycle.push(current);
+            current = next.remove(&current)?;
+            if current == start {
+                break;
+            }
+        }
+        if cycle.len() < 3 {
+            return None;
+        }
+        loops.push(cycle);
+    }
+    Some(loops)
+}
+
 fn boundary_loops(
     patch_id: usize,
     member_faces: &[usize],
@@ -376,31 +498,8 @@ fn boundary_loops(
     if next.is_empty() || next.len() != incoming.len() {
         return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
     }
-    let mut loops = Vec::new();
-    while !next.is_empty() {
-        let Some(&start) = next.keys().min() else {
-            return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-        };
-        let mut cycle = Vec::new();
-        let mut current = start;
-        loop {
-            cycle.push(current);
-            let Some(other) = next.remove(&current) else {
-                return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-            };
-            if other == start {
-                break;
-            }
-            if cycle.len() > incoming.len() || !incoming.contains_key(&other) {
-                return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-            }
-            current = other;
-        }
-        if cycle.len() < 3 {
-            return Err(MeshRecoveryError::InvalidPatchBoundary(patch_id));
-        }
-        loops.push(cycle);
-    }
+    let mut loops = trace_oriented_boundary_cycles(next)
+        .ok_or(MeshRecoveryError::InvalidPatchBoundary(patch_id))?;
     // The winding of an orientable planar patch gives one positive outer loop
     // and zero or more negative inner loops.
     let signed_area = |cycle: &[usize]| -> f64 {

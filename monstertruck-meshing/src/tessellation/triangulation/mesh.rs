@@ -8,69 +8,14 @@ use std::iter;
 
 use super::{
     Cdt, CdtEdge, EuclideanSpace, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, InnerSpace,
-    Instant, Invertible, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin,
-    ParametricSurface3D, Point2, Point3, PolygonMesh, PreMeshableSurface, SPoint2,
-    StandardAttributes, StandardVertex, StructuringFilter, TessellationPrimitiveMode,
-    TessellationPrimitiveOptions, Triangulation, Vector2, Vector3, VertexIterator, Zero, array,
-    boundary, log_mesh_trace,
+    Instant, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2,
+    Point3, PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
+    StructuringFilter, TessellationPrimitiveMode, TessellationPrimitiveOptions, Triangulation,
+    Vector2, Vector3, VertexIterator, array, boundary, log_mesh_trace,
 };
 use boundary::{PolyBoundary, UvKey, boundary_segment_parameter, uv_key};
 
 const MAX_SURFACE_SPAN_INTERVALS: usize = 32;
-
-/// Ensures the mesh winding direction globally matches the stored vertex normals.
-///
-/// Sums the area-weighted dot product of each face's geometric normal against its
-/// vertex normals. If the total is negative the entire mesh is inverted, keeping
-/// all faces consistently wound.
-///
-/// # Why the weight is the raw cross-product sum and not `FaceNormal`
-///
-/// Ledger class C15, measured 2026-08-01. `FaceNormal::new` NORMALIZES, so a
-/// face of zero area answers `0/0 = NaN`. A sphere's parameter grid ends in a
-/// row of such faces at each pole, and one NaN term makes the whole `vote`
-/// NaN -- at which point `vote < 0.0` is FALSE and the mesh is never corrected.
-///
-/// `occt-sphere.step` measured **-523.253857** on a `+523.5988` ball for
-/// exactly this reason: 158 of its 24,964 mesh faces (one pole strip) voted
-/// NaN, the raw grid winding is `-Su x Sv`, and the correction that exists to
-/// catch that never ran. The torus next to it in the same fixture set has no
-/// degenerate row, voted finite, and was right all along.
-///
-/// The raw sum is also what the doc line above always CLAIMED -- it is
-/// area-weighted, so a degenerate face contributes exactly zero instead of
-/// poisoning the sum, and a large face outvotes a sliver.
-fn ensure_winding_matches_normals(mesh: &mut PolygonMesh) {
-    let positions = mesh.positions();
-    let normals = mesh.normals();
-    let mut vote = 0.0f64;
-    for face in mesh.faces().face_iter() {
-        let center = face
-            .iter()
-            .fold(Vector3::zero(), |sum, v| sum + positions[v.pos].to_vec())
-            / crate::count_as_f64(face.len());
-        // Twice the area-weighted normal of the (possibly non-planar) polygon.
-        // Deliberately NOT normalized: see the note above.
-        let geo = face
-            .windows(2)
-            .chain(iter::once([face[face.len() - 1], face[0]].as_ref()))
-            .fold(Vector3::zero(), |sum, v| {
-                let vec0 = positions[v[0].pos].to_vec() - center;
-                let vec1 = positions[v[1].pos].to_vec() - center;
-                sum + vec0.cross(vec1)
-            });
-        let vtx: Vector3 = face.iter().fold(Vector3::zero(), |sum, v| {
-            sum + v.nor.map_or_else(Vector3::zero, |i| normals[i])
-        });
-        let term = geo.dot(vtx);
-        if term.is_finite() {
-            vote += term;
-        }
-    }
-    if vote < 0.0 {
-        mesh.invert();
-    }
-}
 
 pub(super) fn spade_round(x: f64) -> f64 {
     if f64::abs(x) < MIN_ALLOWED_VALUE {
@@ -163,9 +108,9 @@ where
             .flat_map(|i| {
                 (0..nv - 1).flat_map(move |j| {
                     let a = idx(i, j);
-                    let b = idx(i, j + 1);
+                    let b = idx(i + 1, j);
                     let c = idx(i + 1, j + 1);
-                    let d = idx(i + 1, j);
+                    let d = idx(i, j + 1);
                     [[sv(a), sv(b), sv(c)], [sv(a), sv(c), sv(d)]]
                 })
             })
@@ -176,25 +121,23 @@ where
             .flat_map(|i| {
                 (0..nv - 1).map(move |j| {
                     let a = idx(i, j);
-                    let b = idx(i, j + 1);
+                    let b = idx(i + 1, j);
                     let c = idx(i + 1, j + 1);
-                    let d = idx(i + 1, j);
+                    let d = idx(i, j + 1);
                     [sv(a), sv(b), sv(c), sv(d)]
                 })
             })
             .collect();
         (Vec::new(), quad_faces)
     };
-    let mut mesh = PolygonMesh::new_unchecked(
+    PolygonMesh::new_unchecked(
         StandardAttributes {
             positions,
             uv_coords,
             normals,
         },
         Faces::from_tri_and_quad_faces(tri_faces, quad_faces),
-    );
-    ensure_winding_matches_normals(&mut mesh);
-    mesh
+    )
 }
 
 /// Tessellates one surface trimmed by polyline.
@@ -208,7 +151,11 @@ pub(super) fn trimming_tessellation<S>(
 where
     S: PreMeshableSurface,
 {
-    let mut mesh = if primitive_config.mode == TessellationPrimitiveMode::IsoQuads {
+    // The CDT emits counterclockwise UV triangles. Structured cells and
+    // primitive conversion retain that orientation. A spatial chord can
+    // point opposite the differential normal on a coarse curved sliver;
+    // that is not evidence that the entire parameter chart is reversed.
+    if primitive_config.mode == TessellationPrimitiveMode::IsoQuads {
         iso_quad_trimmed_tessellation(surface, polyboundary, tolerance, face_idx).unwrap_or_else(
             || cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx),
         )
@@ -216,9 +163,7 @@ where
         let mut mesh = cdt_trimming_tessellation(surface, polyboundary, tolerance, face_idx);
         apply_primitive_mode(&mut mesh, primitive_config);
         mesh
-    };
-    ensure_winding_matches_normals(&mut mesh);
-    mesh
+    }
 }
 
 fn cdt_trimming_tessellation<S>(
@@ -326,9 +271,9 @@ where
             let j = cell_index % nv_cells;
             [
                 vertex(idx(i, j)),
-                vertex(idx(i, j + 1)),
-                vertex(idx(i + 1, j + 1)),
                 vertex(idx(i + 1, j)),
+                vertex(idx(i + 1, j + 1)),
+                vertex(idx(i, j + 1)),
             ]
         })
         .collect::<Vec<_>>();
@@ -565,7 +510,6 @@ fn force_all_triangles_to_quads(
         let editor = mesh.editor();
         *editor.faces = Faces::from_tri_and_quad_faces(Vec::new(), quadrangles);
     }
-    ensure_winding_matches_normals(mesh);
 }
 
 type VertexKey = (usize, Option<usize>, Option<usize>);

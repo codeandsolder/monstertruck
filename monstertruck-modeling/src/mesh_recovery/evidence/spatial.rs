@@ -5,6 +5,7 @@
 //! support-plane offsets and every canonical source polygon vertex, without
 //! assuming the identity or primitive family of any original STEP surface.
 
+use super::super::sample_fit::normal_basis;
 use super::{CurvatureTrack, MeshEvidence};
 use crate::{InnerSpace, Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
@@ -96,18 +97,6 @@ pub struct SpatialTrackEvidence {
     /// nonzero even for perfectly tessellated conical walls because the
     /// apothem differs from the circumradius by a facet-angle-dependent term.
     pub radius_slope_disagreement: Option<f64>,
-}
-
-fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {
-    // Select a transverse reference away from the axis for conditioning.
-    let reference = if axis.z.abs() <= 0.75 {
-        Vector3::unit_z()
-    } else {
-        Vector3::unit_x()
-    };
-    let u = axis.cross(reference).normalize();
-    let v = axis.cross(u);
-    (u, v)
 }
 
 struct PlaneFit {
@@ -263,13 +252,12 @@ struct RadialFit {
     axial_mean: f64,
 }
 
-fn fit_source_vertex_radial_profile(
+pub(super) fn source_meridian_samples(
     evidence: &MeshEvidence,
     support_ids: &[usize],
     origin: Point3,
     axis: Vector3,
-    inferred_axis_angular_uncertainty: f64,
-) -> Option<RadialFit> {
+) -> Option<Vec<(f64, f64)>> {
     // Use every source polygon vertex, including those not participating in
     // the support-contact interfaces. Dedup canonical position IDs exactly.
     let mut source_vertices = HashSet::<usize>::default();
@@ -295,6 +283,17 @@ fn fit_source_vertex_radial_profile(
         }
         data.push((axial, radial));
     }
+    Some(data)
+}
+
+fn fit_source_vertex_radial_profile(
+    evidence: &MeshEvidence,
+    support_ids: &[usize],
+    origin: Point3,
+    axis: Vector3,
+    inferred_axis_angular_uncertainty: f64,
+) -> Option<RadialFit> {
+    let data = source_meridian_samples(evidence, support_ids, origin, axis)?;
     let count = crate::usize_to_f64(data.len());
     let (axial_sum, radius_sum, axial_min, axial_max) = data.iter().fold(
         (0.0, 0.0, f64::INFINITY, f64::NEG_INFINITY),
@@ -351,12 +350,21 @@ fn fit_source_vertex_radial_profile(
 /// returns actual source geometry fit residuals, not a yes/no primitive
 /// classification. Low fit rank or insufficient axial sample span is
 /// explicitly reported, never replaced by an assumed center or cone slope.
-pub(super) fn fit_spatial_support_set(
+/// The support IDs must be strictly increasing (unique), the axis must be
+/// a finite unit vector, and angular uncertainty must lie in `[0, pi/2]`.
+#[must_use = "the spatial fit contains the measured source residuals"]
+pub fn measure_spatial_support_set(
     evidence: &MeshEvidence,
     supports: &[usize],
     axis: Vector3,
     angular_uncertainty: f64,
 ) -> Option<SpatialTrackEvidence> {
+    if supports.windows(2).any(|pair| pair[0] >= pair[1])
+        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+        || !(0.0..=std::f64::consts::FRAC_PI_2).contains(&angular_uncertainty)
+    {
+        return None;
+    }
     let plane = fit_support_plane_placement(evidence, supports, axis)?;
     let samples = fit_source_vertex_radial_profile(
         evidence,
@@ -419,7 +427,7 @@ pub(super) fn fit_spatial_support_set(
 
 /// Independently fit complete source geometry of one connected curvature
 /// track; original native STEP face IDs and primitive types are never used.
-#[must_use]
+#[must_use = "the fitted carrier evidence must be checked before use"]
 pub fn measure_curvature_spatial(
     evidence: &MeshEvidence,
     track: &CurvatureTrack,
@@ -427,7 +435,7 @@ pub fn measure_curvature_spatial(
     let mut supports = track.support_indices.clone();
     supports.sort_unstable();
     supports.dedup();
-    fit_spatial_support_set(
+    measure_spatial_support_set(
         evidence,
         &supports,
         track.seed_axis,

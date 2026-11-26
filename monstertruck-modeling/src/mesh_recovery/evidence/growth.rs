@@ -4,7 +4,7 @@
 
 use super::super::MeshRecoveryError;
 use super::join::line_distance;
-use super::spatial::{SpatialTrackEvidence, fit_spatial_support_set};
+use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
 use crate::{InnerSpace, Vector3};
 use rustc_hash::FxHashSet as HashSet;
@@ -62,7 +62,9 @@ impl CurvatureGrowthOptions {
             .all(|x| x.is_finite() && x >= 0.0)
     }
 
-    fn accepts(self, fit: &SpatialTrackEvidence) -> bool {
+    /// Apply the configured independent whole-region spatial residual budgets.
+    #[must_use = "the configured geometric acceptance result must be checked"]
+    pub fn accepts_spatial_fit(self, fit: &SpatialTrackEvidence) -> bool {
         fit.relative_max_sample_radial_residual <= self.max_relative_vertex_radial_residual
             && fit.max_support_plane_offset_residual / fit.mean_sample_radius
                 <= self.max_relative_support_plane_residual
@@ -168,7 +170,7 @@ impl<'a> CurvatureGrowthIndex<'a> {
                     .all(|&id| id < evidence.planar_supports.len()))
             .then(|| measure_curvature_spatial(evidence, track))
             .flatten()
-            .filter(|fit| options.accepts(fit));
+            .filter(|fit| options.accepts_spatial_fit(fit));
             if spatial.is_some() {
                 for &support in &supports {
                     tracks_by_support[support].push(track_id);
@@ -188,7 +190,7 @@ impl<'a> CurvatureGrowthIndex<'a> {
     }
 
     /// Independently eligible local hypotheses, not source CAD surface count.
-    #[must_use]
+    #[must_use = "the count describes usable curvature hypotheses"]
     pub fn eligible_track_count(&self) -> usize {
         self.fits.iter().filter(|fit| fit.is_some()).count()
     }
@@ -196,7 +198,7 @@ impl<'a> CurvatureGrowthIndex<'a> {
     /// Grow one anchored candidate using cumulative fit at each source contact.
     /// Different seeds preserve competing hypotheses instead of mutating the
     /// source mesh or accepting a connected component via transitive closure.
-    #[must_use]
+    #[must_use = "the growth hypothesis contains the candidate support region"]
     pub fn grow(&self, seed_index: usize) -> Option<CurvatureGrowthHypothesis> {
         let local = self.fits.get(seed_index)?.as_ref()?.clone();
         let supports = self.track_supports.get(seed_index)?.clone();
@@ -331,8 +333,9 @@ impl<'a> CurvatureGrowthIndex<'a> {
             .max_axis_uncertainty
             .max(self.tracks[id].max_seed_axis_error_radians)
             .max(seed_angle);
-        let spatial = fit_spatial_support_set(self.evidence, &supports, axis, axis_uncertainty)?;
-        if !self.options.accepts(&spatial) {
+        let spatial =
+            measure_spatial_support_set(self.evidence, &supports, axis, axis_uncertainty)?;
+        if !self.options.accepts_spatial_fit(&spatial) {
             return None;
         }
         let score = (spatial.support_normal_axial_projection_spread

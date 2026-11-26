@@ -1524,6 +1524,14 @@ fn detect_exchange_semantics(
     let mut bodies_out = Vec::new();
 
     for section in &exchange.data {
+        // Both detectors require mapped instances: periodic body candidates
+        // are derived from the recovered instance patterns.
+        if !section.entities.iter().any(|entity| {
+            matches!(entity, step_p21::ast::EntityInstance::Simple { record, .. }
+                if record.name == "MAPPED_ITEM")
+        }) {
+            continue;
+        }
         let index = step_graph::build_index(&section.entities);
         let local_patterns = patterns::detect_instance_patterns_with_index(
             &section.entities,
@@ -1762,6 +1770,67 @@ mod tests {
         assert_eq!(out.stats.input_encoding, "gbk");
         let text = std::str::from_utf8(&out.bytes)?;
         assert!(text.contains("\\X2\\4EFB4F55\\X0\\"));
+        Ok(())
+    }
+
+    #[test]
+    fn recovered_parameter_curves_share_values_without_sharing_topology() -> Result<()> {
+        let src = wrap(concat!(
+            "#1=CARTESIAN_POINT('',(0.,0.));\n",
+            "#2=CARTESIAN_POINT('',(1.,0.));\n",
+            "#3=(BOUNDED_CURVE()B_SPLINE_CURVE(1,(#1,#2),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,1.))REPRESENTATION_ITEM(''));\n",
+            "#4=(BOUNDED_CURVE()B_SPLINE_CURVE(1,(#1,#2),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,1.))REPRESENTATION_ITEM(''));\n",
+            "#5=(BOUNDED_CURVE()B_SPLINE_CURVE(1,(#1,#2),.UNSPECIFIED.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((2,2),(0.,1.),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,2.))REPRESENTATION_ITEM(''));\n",
+            "#6=(GEOMETRIC_REPRESENTATION_CONTEXT(2)PARAMETRIC_REPRESENTATION_CONTEXT()REPRESENTATION_CONTEXT('2D SPACE',''));\n",
+            "#7=(GEOMETRIC_REPRESENTATION_CONTEXT(2)PARAMETRIC_REPRESENTATION_CONTEXT()REPRESENTATION_CONTEXT('2D SPACE',''));\n",
+            "#8=DEFINITIONAL_REPRESENTATION('',(#3),#6);\n",
+            "#9=DEFINITIONAL_REPRESENTATION('',(#4),#7);\n",
+            "#10=PLANE('',#12);\n",
+            "#11=CARTESIAN_POINT('',(0.,0.,0.));\n",
+            "#12=AXIS2_PLACEMENT_3D('',#11,$,$);\n",
+            "#13=PCURVE('',#10,#8);\n",
+            "#14=PCURVE('',#10,#9);\n",
+            "#15=VERTEX_POINT('',#11);\n",
+            "#16=VERTEX_POINT('',#11);\n",
+            "#17=EDGE_CURVE('',#15,#16,#3,.T.);\n",
+            "#18=EDGE_CURVE('',#15,#16,#4,.T.);\n",
+        ));
+        let once = clean_bytes(&src, &Options::default())?;
+        assert_eq!(once.stats.interned_entities, 4);
+        let output = std::str::from_utf8(&once.bytes)?;
+        assert_eq!(output.matches("RATIONAL_B_SPLINE_CURVE(").count(), 2);
+        assert_eq!(
+            output.matches("PARAMETRIC_REPRESENTATION_CONTEXT(").count(),
+            1
+        );
+        assert_eq!(output.matches("DEFINITIONAL_REPRESENTATION(").count(), 1);
+        assert_eq!(output.matches("PCURVE(").count(), 1);
+        assert_eq!(output.matches("VERTEX_POINT(").count(), 2);
+        assert_eq!(output.matches("EDGE_CURVE(").count(), 2);
+        assert_eq!(
+            once.bytes,
+            clean_bytes(&once.bytes, &Options::default())?.bytes
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn independent_definitional_representations_retain_identity() -> Result<()> {
+        let src = wrap(concat!(
+            "#1=CARTESIAN_POINT('',(0.,0.));\n",
+            "#2=(GEOMETRIC_REPRESENTATION_CONTEXT(2)PARAMETRIC_REPRESENTATION_CONTEXT()REPRESENTATION_CONTEXT('2D SPACE',''));\n",
+            "#3=DEFINITIONAL_REPRESENTATION('',(#1),#2);\n",
+            "#4=DEFINITIONAL_REPRESENTATION('',(#1),#2);\n",
+            "#5=PLANE('',#8);\n",
+            "#6=PCURVE('',#5,#3);\n",
+            "#7=PCURVE('',#5,#4);\n",
+            "#8=AXIS2_PLACEMENT_3D('',#1,$,$);\n",
+            "#9=REPRESENTATION_RELATIONSHIP('','',#3,#4);\n",
+        ));
+        let out = clean_bytes(&src, &Options::default())?;
+        let output = std::str::from_utf8(&out.bytes)?;
+        assert_eq!(output.matches("DEFINITIONAL_REPRESENTATION(").count(), 2);
+        assert_eq!(output.matches("PCURVE(").count(), 2);
         Ok(())
     }
 

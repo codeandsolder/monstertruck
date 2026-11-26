@@ -3,7 +3,7 @@
 //! union must instead explain *all* original source vertices with one placed
 //! axis and radial profile to support a larger analytic-surface hypothesis.
 
-use super::spatial::{SpatialTrackEvidence, fit_spatial_support_set};
+use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
 use crate::{InnerSpace, Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
@@ -89,7 +89,7 @@ pub(super) fn line_distance(
 ///
 /// A failed spatial fit or absence of original contact returns None. All
 /// original tracks and source evidence remain available to other hypotheses.
-#[must_use]
+#[must_use = "the joint fit evidence determines whether the regions can be combined"]
 pub fn measure_curvature_spatial_join(
     evidence: &MeshEvidence,
     first: &CurvatureTrack,
@@ -139,7 +139,7 @@ pub fn measure_curvature_spatial_join(
         .max_seed_axis_error_radians
         .max(second.max_seed_axis_error_radians)
         .max(0.5 * axis_angle_radians);
-    let combined = fit_spatial_support_set(evidence, &union, mean_axis, uncertainty)?;
+    let combined = measure_spatial_support_set(evidence, &union, mean_axis, uncertainty)?;
     Some(SpatialTrackJoinEvidence {
         shared_support_count,
         connecting_interface_count,

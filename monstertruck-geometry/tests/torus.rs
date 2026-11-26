@@ -277,3 +277,25 @@ fn unhinted_search_recovers_point_in_declared_period() {
         }
     }
 }
+
+#[test]
+fn torus_division_respects_world_chord_for_small_ratios() {
+    let torus = Torus::new_unchecked(Point3::origin(), 1e5, 2e4);
+    let tolerance = 1e-3;
+    let range = ((0.0, 0.01), (0.0, 0.02));
+    let (u, v) = torus.parameter_division(range, tolerance);
+    assert!(u.len() > 2 && v.len() > 2);
+    for (axis, parameters) in [u, v].iter().enumerate() {
+        for pair in parameters.windows(2) {
+            let eval = |t| {
+                if axis == 0 {
+                    torus.evaluate(t, 0.0)
+                } else {
+                    torus.evaluate(0.0, t)
+                }
+            };
+            let midpoint = eval(pair[0].midpoint(pair[1]));
+            assert!(midpoint.distance(eval(pair[0]).midpoint(eval(pair[1]))) <= tolerance);
+        }
+    }
+}

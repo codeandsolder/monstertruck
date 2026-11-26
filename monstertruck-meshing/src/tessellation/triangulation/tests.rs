@@ -847,6 +847,52 @@ fn trimming_tessellation_is_invariant_to_single_loop_winding() {
     assert!(!forward_mesh.tri_faces().is_empty());
 }
 
+#[test]
+fn chart_winding_is_positive_in_every_primitive_mode() {
+    use super::mesh::untrimmed_tessellation;
+
+    let surface = Plane::xy();
+    let boundary = PolyBoundary::new(vec![square_piece(&surface, 0.0, 1.0, true)], &surface, 0.01);
+    let assert_positive = |mesh: &PolygonMesh| {
+        assert!(!mesh.faces().is_empty());
+        for polygon in mesh.face_iter() {
+            let area = polygon
+                .iter()
+                .zip(polygon.iter().cycle().skip(1))
+                .map(|(a, b)| {
+                    let a = mesh.uv_coords()[a.uv.expect("chart UV")];
+                    let b = mesh.uv_coords()[b.uv.expect("chart UV")];
+                    a.x.mul_add(b.y, -a.y * b.x)
+                })
+                .sum::<f64>();
+            assert!(area > 0.0, "nonpositive chart winding {area}");
+        }
+    };
+    for mode in [
+        TessellationPrimitiveMode::Triangles,
+        TessellationPrimitiveMode::PreferQuads,
+        TessellationPrimitiveMode::AllQuads,
+        TessellationPrimitiveMode::IsoQuads,
+    ] {
+        assert_positive(&untrimmed_tessellation(
+            &surface,
+            ((0.0, 1.0), (0.0, 1.0)),
+            0.01,
+            mode,
+        ));
+        assert_positive(&trimming_tessellation(
+            &surface,
+            &boundary,
+            0.01,
+            TessellationPrimitiveOptions {
+                mode,
+                ..Default::default()
+            },
+            usize::MAX,
+        ));
+    }
+}
+
 // --- spec 007 D1: loud tessellation face-drop diagnostic ---------------
 
 #[test]
