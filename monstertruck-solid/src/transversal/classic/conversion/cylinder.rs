@@ -3,7 +3,7 @@
 //! The marching polyline selects the finite angular interval and transverse
 //! root, not the exported geometry. Both exact cylinder carriers must be
 //! recognized independently; the whole polyline must cover the chosen branch
-//! within the mesh discretization budget. The cubic leader itself is generated
+//! within the mesh discretization budget. The bounded leader itself is generated
 //! to the separate structural precision budget.
 
 use super::{BooleanTolerance, PolylineCurve, polyline_leader_bspline, prove_iso_candidate};
@@ -50,7 +50,7 @@ pub(super) fn crossing_cylinder_leader<S: ShapeOpsSurface>(
         }
     }
     let arc = selected?.proposal.arc;
-    let leader = arc.cubic_leader(
+    let leader = arc.bounded_leader(
         precision * 0.5,
         DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_leader_max_segments,
     )?;

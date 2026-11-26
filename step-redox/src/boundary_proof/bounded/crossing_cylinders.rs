@@ -208,7 +208,7 @@ mod tests {
         loci: &[SupportLocusKey; 2],
         id: u64,
     ) -> Result<(CylinderIntersectionKey, Arc)> {
-        let leader = arc.cubic_leader(1e-9, 8192).context("bounded leader")?;
+        let leader = arc.bounded_leader(1e-9, 8192).context("bounded leader")?;
         let key =
             |point: Point3| point_key([point.x, point.y, point.z]).context("invalid point key");
         let e = EdgeGeometry {
@@ -291,7 +291,7 @@ mod tests {
             expected
         );
         // Endpoints match, but an off-carrier interior must not qualify.
-        let mut leader = whole.cubic_leader(1e-9, 8192).context("leader")?.curve;
+        let mut leader = whole.bounded_leader(1e-9, 8192).context("leader")?.curve;
         let mid_control = leader.control_points().len() / 2;
         *leader.control_point_mut(mid_control) += Vector3::unit_z() * 0.001;
         let e = EdgeGeometry {
