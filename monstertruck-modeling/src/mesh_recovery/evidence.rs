@@ -35,6 +35,7 @@ pub use growth::{
 };
 pub use join::{SpatialTrackJoinEvidence, measure_curvature_spatial_join};
 pub use meridian::{CircularMeridianEvidence, measure_circular_meridian};
+pub use region_boundary::JointFitRejection;
 pub use region_boundary::{
     CarrierCoincidenceEvidence, CarrierResidual, ContactCircleEvidence, ContactConicEvidence,
     ContactCurveEvidence, ContactLineEvidence, ContactLinearSectionEvidence,

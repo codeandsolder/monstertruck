@@ -8,6 +8,48 @@ use super::{
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
 
+/// Reason a source-aware fit was rejected before committing any geometry.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub enum JointFitRejection {
+    /// Missing incidence or neighborhood exceeds the current work budget.
+    #[error("invalid or oversized neighborhood")]
+    Neighborhood,
+    /// Singular or nonfinite carrier linearization.
+    #[error("invalid carrier linearization")]
+    Linearization,
+    /// No meaningful change in the carrier or position table.
+    #[error("unchanged fit")]
+    Unchanged,
+    /// A source sample cannot satisfy all of its applicable constraints.
+    #[error("sample {vertex} exceeds its constraints (allowance {allowance:e})")]
+    Sample {
+        /// Original welded vertex identifier.
+        vertex: usize,
+        /// Immutable local displacement budget.
+        allowance: f64,
+    },
+    /// A source polygon would reverse orientation.
+    #[error("source polygon orientation")]
+    Orientation,
+    /// Affected trim preflight did not predict an improvement.
+    #[error("trim preflight")]
+    TrimPreflight,
+    /// Native assembly moved a vertex beyond its source budget.
+    #[error("native vertex {vertex} exceeds its allowance {allowance:e}")]
+    NativeDisplacement {
+        /// Original welded vertex identifier.
+        vertex: usize,
+        /// Maximum permissible displacement.
+        allowance: f64,
+    },
+    /// Native reconstruction did not reduce failed source edges.
+    #[error("no reduction in failed source edges")]
+    NoImprovement,
+    /// New failed source edges, invalid regions or ambiguous incidence.
+    #[error("native reconstruction regression")]
+    Regression,
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::mesh_recovery) struct JointFitOptions {
     pub maximum_adjustment: f64,
@@ -168,18 +210,23 @@ impl<'a> Neighborhood<'a> {
         &self,
         carriers: &[Option<SurfaceCarrier>],
         prior: &[Point3],
-    ) -> Option<(Vec<Point3>, Vec<f64>, f64)> {
+    ) -> Result<(Vec<Point3>, Vec<f64>, f64), JointFitRejection> {
         let mut positions = prior.to_vec();
         let mut allowances = vec![0.0; prior.len()];
         let tolerance = KERNEL_EPSILON * 0.01;
         let mut max_displacement = 0.0_f64;
         for sample in &self.samples {
+            let rejection = JointFitRejection::Sample {
+                vertex: sample.id,
+                allowance: sample.allowance,
+            };
             let source = self.evidence.positions[sample.id];
             let local = sample
                 .regions
                 .iter()
                 .map(|&id| carriers[id])
-                .collect::<Option<Vec<_>>>()?;
+                .collect::<Option<Vec<_>>>()
+                .ok_or(JointFitRejection::Neighborhood)?;
             // Interior source samples measure the carrier fit. They are
             // not native topological vertices and need not lie exactly
             // on the reconstructed surface. Only actual shared/open
@@ -195,7 +242,7 @@ impl<'a> Neighborhood<'a> {
                         |(_, residual)| residual.abs() <= sample.allowance,
                     )
                 }) {
-                    return None;
+                    return Err(rejection);
                 }
                 allowances[sample.id] = sample.allowance;
                 continue;
@@ -218,21 +265,20 @@ impl<'a> Neighborhood<'a> {
                         max_normal_angle: self.options.angular_resolution * 2.0,
                         intersection_tolerance: tolerance,
                     },
-                )?
+                )
+                .ok_or(rejection)?
             };
             let displacement = (point - source).magnitude();
             if !displacement.is_finite() || displacement > sample.allowance {
-                return None;
+                return Err(rejection);
             }
             positions[sample.id] = point;
             allowances[sample.id] = sample.allowance;
             max_displacement = max_displacement.max(displacement);
         }
-        preserves_polygon_orientation(self.evidence, &positions, &self.supports).then_some((
-            positions,
-            allowances,
-            max_displacement,
-        ))
+        preserves_polygon_orientation(self.evidence, &positions, &self.supports)
+            .then_some((positions, allowances, max_displacement))
+            .ok_or(JointFitRejection::Orientation)
     }
 }
 
@@ -669,8 +715,9 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     regions: &[usize],
     context: &JointFitContext,
     refit: bool,
-) -> Option<JointFitCandidate> {
-    let neighborhood = Neighborhood::new(evidence, partition, regions, context)?;
+) -> Result<JointFitCandidate, JointFitRejection> {
+    let neighborhood = Neighborhood::new(evidence, partition, regions, context)
+        .ok_or(JointFitRejection::Neighborhood)?;
     let mut partition = partition.clone();
     let mut refitted_regions = 0;
     let mut carrier_changes = Vec::new();
@@ -680,11 +727,13 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
         let mut models = regions
             .iter()
             .map(|&id| Some((id, CarrierModel::new(&neighborhood, id)?)))
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Option<Vec<_>>>()
+            .ok_or(JointFitRejection::Linearization)?;
         for anchor_weight in [
             1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7, 1.0e-8, 1.0e-9,
         ] {
-            let step = joint_step(&neighborhood, &models, anchor_weight)?;
+            let step = joint_step(&neighborhood, &models, anchor_weight)
+                .ok_or(JointFitRejection::Linearization)?;
             if step.iter().all(|v| v.abs() <= KERNEL_EPSILON * 0.001) {
                 continue;
             }
@@ -720,12 +769,12 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
             }
         }
         if refitted_regions == 0 {
-            return None;
+            return Err(JointFitRejection::Unchanged);
         }
     }
     let (positions, allowances, maximum_displacement) =
         neighborhood.exact_positions(&partition.carriers, prior)?;
-    Some(JointFitCandidate {
+    Ok(JointFitCandidate {
         partition,
         positions,
         allowances,
@@ -793,7 +842,7 @@ mod tests {
                 &context,
                 false
             )
-            .is_none()
+            .is_err()
         );
         let result = fit_neighborhood(
             &evidence,
@@ -802,8 +851,7 @@ mod tests {
             &regions,
             &context,
             true,
-        )
-        .ok_or("joint fit should restore compatible planes")?;
+        )?;
         assert!(result.refitted_regions > 0);
         assert!(result.maximum_displacement <= 0.01);
         let trims = index.assemble_shared_trims(

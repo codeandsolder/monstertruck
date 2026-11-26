@@ -9,7 +9,10 @@ use crate::{
     InnerSpace, KERNEL_EPSILON,
     mesh_recovery::{
         MeshEvidence,
-        evidence::{JointFitCandidate, JointFitContext, JointFitOptions, fit_neighborhood},
+        evidence::{
+            JointFitCandidate, JointFitContext, JointFitOptions, JointFitRejection,
+            fit_neighborhood,
+        },
     },
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +33,17 @@ pub struct JointFitReport {
     pub max_allowance: f64,
     /// Bound on added normalized carrier residual over all original source facets.
     pub max_additional_carrier_residual: f64,
+}
+
+/// One rejected trial, with the original region IDs and exact rejection stage.
+#[derive(Clone, Debug)]
+pub struct JointFitAttempt {
+    /// Adjustable carrier region IDs.
+    pub regions: Vec<usize>,
+    /// Whether carrier refitting was enabled.
+    pub refit: bool,
+    /// Reason this trial was not committed.
+    pub rejection: JointFitRejection,
 }
 
 fn failed_neighborhoods(assembly: &NativeAssembly) -> Vec<Vec<usize>> {
@@ -89,7 +103,7 @@ fn native_displacement(
     candidate: &JointFitCandidate,
     native: &crate::mesh_recovery::NativeTrimGraph,
     numerical_allowance: f64,
-) -> Option<f64> {
+) -> Result<f64, JointFitRejection> {
     let mut maximum = candidate.maximum_displacement;
     for (id, (vertex, old)) in native
         .vertices
@@ -114,10 +128,13 @@ fn native_displacement(
             (old - source).magnitude() + numerical_allowance
         };
         if !displacement.is_finite() || displacement > allowed {
-            return None;
+            return Err(JointFitRejection::NativeDisplacement {
+                vertex: id,
+                allowance: allowed,
+            });
         }
     }
-    Some(maximum)
+    Ok(maximum)
 }
 
 // A full native rebuild is only useful if at least one previously
@@ -177,24 +194,25 @@ fn try_fit(
     options: AnalyticRecoveryOptions,
     context: &mut JointFitContext,
     refit: bool,
-) -> Result<Option<JointFitReport>, AnalyticRecoveryError> {
-    let Some(candidate) = fit_neighborhood(
+) -> Result<Result<JointFitReport, JointFitRejection>, AnalyticRecoveryError> {
+    let candidate = match fit_neighborhood(
         evidence,
         &assembly.reconciled.partition,
         &assembly.reconciled.positions,
         regions,
         context,
         refit,
-    ) else {
-        return Ok(None);
+    ) {
+        Ok(candidate) => candidate,
+        Err(reason) => return Ok(Err(reason)),
     };
     if candidate.refitted_regions == 0 && candidate.positions == assembly.reconciled.positions {
-        return Ok(None);
+        return Ok(Err(JointFitRejection::Unchanged));
     }
     let boundary = RegionBoundaryIndex::new(evidence)?;
     let trim = options.trim_options(evidence);
     if !can_improve_trims(assembly, &candidate, regions, trim) {
-        return Ok(None);
+        return Ok(Err(JointFitRejection::TrimPreflight));
     }
     let trims = boundary.assemble_shared_trims(&candidate.partition, &candidate.positions, trim)?;
     let native = boundary.construct_native_trims(
@@ -207,14 +225,15 @@ fn try_fit(
             angular_resolution: options.axis_relative_resolution,
         },
     )?;
-    let Some(max_displacement) = native_displacement(
+    let max_displacement = match native_displacement(
         evidence,
         assembly,
         &candidate,
         &native,
         trim.absolute_tolerance,
-    ) else {
-        return Ok(None);
+    ) {
+        Ok(displacement) => displacement,
+        Err(reason) => return Ok(Err(reason)),
     };
     let refitted_regions = candidate.refitted_regions;
     let max_additional_carrier_residual = candidate.max_additional_carrier_residual;
@@ -234,19 +253,21 @@ fn try_fit(
     };
     let before = failed_edges(assembly);
     let after = failed_edges(&next);
-    if after.len() >= before.len()
-        || !after.is_subset(&before)
+    if after.len() >= before.len() {
+        return Ok(Err(JointFitRejection::NoImprovement));
+    }
+    if !after.is_subset(&before)
         || next.trims.ambiguous_edges != assembly.trims.ambiguous_edges
         || !valid_regions(assembly).is_subset(&valid_regions(&next))
     {
-        return Ok(None);
+        return Ok(Err(JointFitRejection::Regression));
     }
     // Existing plane records describe prior accepted transactions; keep
     // them as provenance, not a claim that the carriers were never refit.
     next.reconciled.planes = std::mem::take(&mut assembly.reconciled.planes);
     context.commit(&candidate.carrier_changes);
     *assembly = next;
-    Ok(Some(JointFitReport {
+    Ok(Ok(JointFitReport {
         regions: regions.to_vec(),
         refitted_regions,
         repaired_edges: before.len() - after.len(),
@@ -260,13 +281,14 @@ pub(super) fn repair(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
     options: AnalyticRecoveryOptions,
-) -> Result<Vec<JointFitReport>, AnalyticRecoveryError> {
+) -> Result<(Vec<JointFitReport>, Vec<JointFitAttempt>), AnalyticRecoveryError> {
     let mut reports = Vec::new();
+    let mut rejected = Vec::new();
     if options.max_reconstruction_adjustment == 0.0 || options.max_joint_fit_trials == 0 {
-        return Ok(reports);
+        return Ok((reports, rejected));
     }
     if failed_neighborhoods(assembly).is_empty() {
-        return Ok(reports);
+        return Ok((reports, rejected));
     }
     let Some(mut context) = JointFitContext::new(
         evidence,
@@ -277,7 +299,7 @@ pub(super) fn repair(
             angular_resolution: options.axis_relative_resolution,
         },
     ) else {
-        return Ok(reports);
+        return Ok((reports, rejected));
     };
     let mut trials = 0;
     while trials < options.max_joint_fit_trials {
@@ -288,17 +310,22 @@ pub(super) fn repair(
                 break;
             }
             trials += 1;
-            // Reconcile fixed carriers first; only refit when necessary.
-            let report = if let Some(report) =
-                try_fit(evidence, assembly, &regions, options, &mut context, false)?
-            {
-                Some(report)
-            } else {
-                try_fit(evidence, assembly, &regions, options, &mut context, true)?
-            };
-            if let Some(report) = report {
-                reports.push(report);
-                improved = true;
+            // Reconcile fixed carriers first; record every failed attempt.
+            for refit in [false, true] {
+                match try_fit(evidence, assembly, &regions, options, &mut context, refit)? {
+                    Ok(report) => {
+                        reports.push(report);
+                        improved = true;
+                        break;
+                    }
+                    Err(rejection) => rejected.push(JointFitAttempt {
+                        regions: regions.clone(),
+                        refit,
+                        rejection,
+                    }),
+                }
+            }
+            if improved {
                 break;
             }
         }
@@ -306,5 +333,5 @@ pub(super) fn repair(
             break;
         }
     }
-    Ok(reports)
+    Ok((reports, rejected))
 }

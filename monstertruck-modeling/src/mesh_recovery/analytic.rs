@@ -21,7 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod coplanar_contacts;
 pub use coplanar_contacts::CoplanarSupportReassignment;
 mod joint_recovery;
-pub use joint_recovery::JointFitReport;
+pub use super::evidence::JointFitRejection;
+pub use joint_recovery::{JointFitAttempt, JointFitReport};
 mod native_selection;
 use native_selection::{PartitionAlternative, select_native};
 
@@ -323,6 +324,8 @@ pub struct RecoveredAnalyticMesh {
     pub coplanar_reassignments: Vec<CoplanarSupportReassignment>,
     /// Accepted uncertainty-bounded joint analytic recovery transactions.
     pub joint_fits: Vec<JointFitReport>,
+    /// Rejected local reconstruction attempts with actionable diagnostics.
+    pub joint_fit_rejections: Vec<JointFitAttempt>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -506,7 +509,8 @@ pub fn construct_analytic_recovery(
         assemble_native(&evidence, partition, options)?
     };
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
-    let joint_fits = joint_recovery::repair(&evidence, &mut assembly, options)?;
+    let (joint_fits, joint_fit_rejections) =
+        joint_recovery::repair(&evidence, &mut assembly, options)?;
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,
@@ -515,6 +519,7 @@ pub fn construct_analytic_recovery(
         native: assembly.native,
         coplanar_reassignments,
         joint_fits,
+        joint_fit_rejections,
     })
 }
 

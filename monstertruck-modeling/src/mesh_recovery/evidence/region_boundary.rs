@@ -17,6 +17,7 @@ pub use chord_lift::LiftedSourceChord;
 pub use conic::ContactConicEvidence;
 mod curve_evidence;
 mod joint_fit;
+pub use joint_fit::JointFitRejection;
 pub(in crate::mesh_recovery) use joint_fit::{
     JointFitCandidate, JointFitContext, JointFitOptions, fit_neighborhood,
 };
