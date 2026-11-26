@@ -1,4 +1,4 @@
-//! Regular plane/ring-torus intersection branches. Both angular charts
+//! Regular plane/positive-radial toroidal intersection branches. Both angular charts
 //! are available; a branch is admitted only on intervals with a resolved
 //! discriminant. Polynomial native approximants carry a continuous
 //! two-carrier Bernstein certificate, not merely a sampled fit.
@@ -18,7 +18,7 @@ enum Chart {
     Azimuth,
 }
 
-/// Source-backed regular branch of a plane/ring-torus intersection.
+/// Source-backed regular branch of a plane/toroidal profile intersection.
 ///
 /// This is generally not a conic. Native polynomial edges approximate the
 /// selected analytic branch within an independently verified tolerance.
@@ -120,8 +120,8 @@ fn sine_range(a: f64, b: f64) -> Range {
         }
     }
     Range {
-        low: 16.0_f64.mul_add(-f64::EPSILON, range.low).max(-1.0),
-        high: 16.0_f64.mul_add(f64::EPSILON, range.high).min(1.0),
+        low: (range.low - 16.0 * f64::EPSILON).max(-1.0),
+        high: (range.high + 16.0 * f64::EPSILON).min(1.0),
     }
 }
 
@@ -158,7 +158,7 @@ impl Frame {
             || !super::containment::unit(normal)
             || !major.is_finite()
             || !minor.is_finite()
-            || major <= minor
+            || major <= 0.0
             || minor <= 0.0
         {
             return None;
@@ -237,7 +237,7 @@ impl Frame {
         let rho = self.major + profile_offset;
         let plane_x = -self.axial_normal.mul_add(axial, self.offset) / self.transverse_normal;
         let squared = (rho - plane_x) * (rho + plane_x);
-        if squared <= 0.0 || !squared.is_finite() {
+        if rho <= 0.0 || squared <= 0.0 || !squared.is_finite() {
             return None;
         }
         let plane_y = squared.sqrt() * if positive { 1.0 } else { -1.0 };
@@ -282,10 +282,44 @@ impl Frame {
         ))
     }
 
-    fn regular(self, chart: Chart, start: f64, end: f64, tolerance: f64, depth: usize) -> bool {
+    // The azimuth discriminant is a quadratic in b. Ring tori give a
+    // concave quadratic; spindle tori give a convex one. Both extrema must
+    // be included, since the selected branch radius also depends on sqrt(D).
+    fn azimuth_discriminant(self, b: Range) -> Range {
+        let evaluate = |value: f64| {
+            let normal_squared = self.axial_normal.mul_add(self.axial_normal, value * value);
+            let offset = value.mul_add(self.major, self.offset);
+            self.minor
+                .mul_add(self.minor * normal_squared, -offset * offset)
+        };
+        let mut result = Range::from_values([evaluate(b.low), evaluate(b.high)]);
+        let coefficient = (self.minor - self.major) * (self.minor + self.major);
+        if coefficient != 0.0 {
+            let critical = self.major * self.offset / coefficient;
+            if (b.low..=b.high).contains(&critical) {
+                let d = evaluate(critical);
+                result.low = result.low.min(d);
+                result.high = result.high.max(d);
+            }
+        }
+        result
+    }
+
+    fn regular(
+        self,
+        chart: Chart,
+        positive: bool,
+        start: f64,
+        end: f64,
+        tolerance: f64,
+        depth: usize,
+    ) -> bool {
         let sine = sine_range(start, end);
         let cosine = sine_range(start + FRAC_PI_2, end + FRAC_PI_2);
-        let lower = match chart {
+        let scale = self.major.max(self.minor).max(self.offset.abs());
+        let roundoff = 256.0 * f64::EPSILON * scale * scale;
+        let margin = tolerance.mul_add(tolerance, roundoff);
+        let admitted = match chart {
             Chart::Meridian => {
                 if self.transverse_normal <= 64.0 * f64::EPSILON {
                     return false;
@@ -296,33 +330,44 @@ impl Frame {
                     .add(Range::point(self.offset))
                     .abs_max()
                     / self.transverse_normal;
-                (rho - x) * (rho + x)
+                rho > tolerance && (rho - x) * (rho + x) > margin
             }
             Chart::Azimuth => {
-                // The discriminant is concave in b for a ring torus.
-                // Its minimum on the observed b interval is at an end.
                 let b = cosine.scale(self.transverse_normal);
-                [b.low, b.high]
-                    .into_iter()
-                    .map(|b| {
-                        let d = self.axial_normal.mul_add(self.axial_normal, b * b);
-                        let h = b.mul_add(self.major, self.offset);
-                        self.minor.mul_add(self.minor * d, -h * h)
-                    })
-                    .fold(f64::INFINITY, f64::min)
+                let d = self.azimuth_discriminant(b);
+                if d.low <= margin || !d.high.is_finite() {
+                    false
+                } else if self.major - self.minor > tolerance {
+                    true
+                } else {
+                    // rho = (R*a^2 - b*offset + a*det)/(a^2+b^2).
+                    // Use an interval for the complete selected root, not
+                    // just its positive endpoint radii. Neither a crossing
+                    // of the axis nor the reflected spindle sheet is valid.
+                    let a = self.axial_normal;
+                    let determinant = Range {
+                        low: (d.low - roundoff).sqrt(),
+                        high: (d.high + roundoff).sqrt(),
+                    }
+                    .scale(if positive { 1.0 } else { -1.0 });
+                    let numerator = Range::point(self.major * a * a)
+                        .add(b.scale(-self.offset))
+                        .add(determinant.scale(a));
+                    let denominator = a.mul_add(a, b.abs_max().powi(2));
+                    let rho_margin = 256.0 * f64::EPSILON * scale;
+                    numerator.low > tolerance * denominator + rho_margin
+                }
             }
         };
-        let scale = self.major.max(self.minor).max(self.offset.abs());
-        let margin = tolerance.mul_add(tolerance, 128.0 * f64::EPSILON * scale * scale);
-        if lower > margin {
+        if admitted {
             return true;
         }
-        if depth == 0 || !lower.is_finite() {
+        if depth == 0 {
             return false;
         }
         let mid = start.midpoint(end);
-        self.regular(chart, start, mid, tolerance, depth - 1)
-            && self.regular(chart, mid, end, tolerance, depth - 1)
+        self.regular(chart, positive, start, mid, tolerance, depth - 1)
+            && self.regular(chart, positive, mid, end, tolerance, depth - 1)
     }
 
     // Full control-hull proof that the polynomial stays on the selected
@@ -421,7 +466,7 @@ impl ContactToroidalSectionEvidence {
             let point = *points.get(id)?;
             let (projected, _) = self.project(point)?;
             let residual = (projected - point).magnitude();
-            if residual > tolerance {
+            if !residual.is_finite() || residual > tolerance {
                 return None;
             }
             self.max_vertex_residual = self.max_vertex_residual.max(residual);
@@ -437,7 +482,7 @@ impl ContactToroidalSectionEvidence {
                 || step * sign < 0.0
                 || !self
                     .frame
-                    .regular(self.chart, start, start + step, tolerance, 8)
+                    .regular(self.chart, self.positive, start, start + step, tolerance, 8)
             {
                 return None;
             }
@@ -505,11 +550,26 @@ impl ContactToroidalSectionEvidence {
             || step.abs() > FRAC_PI_2
             || (self.evaluated(start)?.0 - a).magnitude() > tolerance
             || (self.evaluated(end)?.0 - b).magnitude() > tolerance
-            || !self.frame.regular(self.chart, start, end, tolerance, 8)
+            || !self
+                .frame
+                .regular(self.chart, self.positive, start, end, tolerance, 8)
         {
             return None;
         }
-        super::section_curve::section_curve(start, end, |a, b| self.cubic(a, b, tolerance))
+        let curve = super::section_curve::section_curve(start, end, |a, b| {
+            self.cubic(a, b, tolerance * 0.5)
+        })?;
+        let Curve::BsplineCurve(spline) = &curve else {
+            return None;
+        };
+        self.frame
+            .analytic_supports()
+            .into_iter()
+            .all(|support| {
+                certify_bspline_curve_on_support(spline, support, tolerance)
+                    == CurveIncidence::Proven
+            })
+            .then_some(curve)
     }
 }
 
@@ -623,6 +683,35 @@ mod tests {
             [carriers[1], carriers[0]],
             &points.into_iter().rev().collect::<Vec<_>>(),
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn spindle_and_horn_sections_retain_the_positive_radial_chart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for major in [0.7, 1.0] {
+            let surfaces = [
+                SurfaceCarrier::Plane {
+                    origin: Point3::new(0.4, 0.0, 0.0),
+                    normal: Vector3::unit_x(),
+                },
+                SurfaceCarrier::CircularRevolution {
+                    axial_center: Point3::new(0.0, 0.0, 0.0),
+                    axis: Vector3::unit_z(),
+                    radial_center: major,
+                    profile_radius: 1.0,
+                },
+            ];
+            let points = [-0.4_f64, -0.2, 0.0, 0.2, 0.4].map(|angle| {
+                let rho = major + angle.cos();
+                Point3::new(0.4, (rho * rho - 0.16).sqrt(), angle.sin())
+            });
+            check_section(surfaces, &points)?;
+            // The regular local section has no continuation through the
+            // axis into the reflected spindle sheet.
+            let frame = Frame::new(&surfaces).ok_or("frame")?;
+            assert!(!frame.regular(Chart::Meridian, true, PI - 0.05, PI + 0.05, 1.0e-8, 8));
+        }
         Ok(())
     }
 

@@ -198,7 +198,15 @@ fn torus(
     let norm_lower = nonnegative_quotient_lower(&norm, &w2, allowance);
     let radial_lower = nonnegative_quotient_lower(&radial, &w2, allowance);
     let global = minor.mul_add(-minor, major * major);
-    let factor_lower = (2.0 * major).mul_add(radial_lower.sqrt(), norm_lower + global);
+    let rho_lower = radial_lower.sqrt();
+    let factor_lower = (2.0 * major).mul_add(rho_lower, norm_lower + global) - allowance;
+    // Away from the rotation axis, the positive-radius profile and the
+    // reflected profile are distinct. For a spindle/horn torus the
+    // competing quartic factor must be strictly separated locally; there
+    // is no globally positive lower bound for that factor.
+    if major <= minor && (rho_lower <= 0.0 || factor_lower <= 0.0) {
+        return None;
+    }
     Some((polynomial, factor_lower))
 }
 
@@ -319,13 +327,15 @@ fn torus_bound(
         || !valid_axis(axis)
         || !major_radius.is_finite()
         || !minor_radius.is_finite()
-        || major_radius <= minor_radius
+        || major_radius <= 0.0
         || minor_radius <= tolerance
     {
         return None;
     }
     // F = (tube_distance^2-r^2)*((rho+R)^2+z^2-r^2).
-    // The second factor is >= R^2-r^2 for a genuine ring torus.
+    // For a ring torus the second factor is globally positive. For a
+    // horn/spindle torus, only a locally positive, separated factor admits
+    // the positive-radial sheet; the reflected sheet is not interchangeable.
     let (polynomial, factor_lower) = torus(points, center, axis, major_radius, minor_radius)?;
     let limit =
         tolerance * 2.0_f64.mul_add(minor_radius, -tolerance) * factor_lower * min_w.powi(4);
@@ -589,6 +599,35 @@ mod tests {
             certify_nurbs_curve_on_support(&circle, wrong, 1.0e-7),
             CurveIncidence::NotProven
         );
+    }
+
+    #[test]
+    fn spindle_torus_certifies_only_regular_positive_radius_sheet() {
+        for major in [1.0, 2.0] {
+            let minor = 2.0;
+            let support = AnalyticSupport::Torus {
+                center: p(0.0, 0.0, 0.0),
+                axis: Vector3::unit_z(),
+                major_radius: major,
+                minor_radius: minor,
+            };
+            assert_eq!(
+                certify_nurbs_curve_on_support(&rational_circle(major + minor), support, 1.0e-7),
+                CurveIncidence::Proven
+            );
+            if major < minor {
+                // The reflected spindle sheet satisfies the quartic but
+                // not (rho-R)^2+z^2=r^2.
+                assert_ne!(
+                    certify_nurbs_curve_on_support(
+                        &rational_circle(minor - major),
+                        support,
+                        1.0e-7
+                    ),
+                    CurveIncidence::Proven
+                );
+            }
+        }
     }
 
     #[test]
