@@ -193,42 +193,15 @@ fn ambiguous_source_incidence(evidence: &MeshEvidence) -> Vec<Value> {
         .collect()
 }
 
-fn benchmark(
-    path: &Path,
-    evidence_only: bool,
-    normalize: bool,
-    joint_fit: bool,
-    shell_output: Option<&Path>,
-) -> Result<Value> {
-    let start = Instant::now();
-    let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
-    let read_seconds = start.elapsed().as_secs_f64();
-    let mut options = AnalyticRecoveryOptions {
-        normalize_coincident_sheets: normalize,
-        ..Default::default()
-    };
-    if !joint_fit {
-        options.max_joint_fit_trials = 0;
-    }
-    let evidence = analyze_mesh_evidence(&mesh, options.evidence)?;
-    let evidence_seconds = start.elapsed().as_secs_f64() - read_seconds;
-    if evidence_only {
-        return Ok(json!({
-            "status":"ok","source":path,"source_polygons":mesh.face_iter().count(),
-            "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
-            "source_supports":evidence.planar_supports.len(),
-            "collapsed_source_facets":evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
-            "original_polygon_ids":evidence.provenance.original_polygon_ids,
-            "separated_source_vertices":evidence.provenance.separated_vertices.len(),
-            "source_sector_pairs":evidence.provenance.sector_pairs.len(),
-            "source_forced_pairs":evidence.provenance.forced_pairs.len(),
-            "source_nonmanifold_edges":evidence.non_manifold_edge_count,
-            "ambiguous_source_incidence":ambiguous_source_incidence(&evidence),
-            "source_winding_conflicts":evidence.inconsistent_winding_edge_count,
-            "source_signed_volume":evidence.closed_source_volume(),
-        }));
-    }
-    let recovery = recover_analytic_evidence(&evidence, options)?;
+struct RegionSummary {
+    errors: BTreeMap<String, usize>,
+    failed: usize,
+    faces: usize,
+    chart_cuts: usize,
+    info: Vec<Value>,
+}
+
+fn region_summary(recovery: &RecoveredAnalyticMesh) -> Result<RegionSummary> {
     let partition = &recovery.reconciled.partition;
     let mut errors = BTreeMap::new();
     let mut failed_regions = 0;
@@ -259,6 +232,69 @@ fn benchmark(
             "native_faces":faces,"pending_chart_cut":region.requires_chart_cut,"error":error}),
         );
     }
+    Ok(RegionSummary {
+        errors,
+        failed: failed_regions,
+        faces: native_faces,
+        chart_cuts,
+        info: region_info,
+    })
+}
+
+fn evidence_summary(
+    evidence: &MeshEvidence,
+    path: &Path,
+    source_polygons: usize,
+    read_seconds: f64,
+    evidence_seconds: f64,
+) -> Value {
+    json!({
+            "status":"ok","source":path,"source_polygons":source_polygons,
+            "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
+            "source_supports":evidence.planar_supports.len(),
+            "collapsed_source_facets":evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
+            "original_polygon_ids":evidence.provenance.original_polygon_ids,
+            "separated_source_vertices":evidence.provenance.separated_vertices.len(),
+            "source_sector_pairs":evidence.provenance.sector_pairs.len(),
+            "source_forced_pairs":evidence.provenance.forced_pairs.len(),
+            "source_nonmanifold_edges":evidence.non_manifold_edge_count,
+            "ambiguous_source_incidence":ambiguous_source_incidence(evidence),
+            "source_winding_conflicts":evidence.inconsistent_winding_edge_count,
+            "source_signed_volume":evidence.closed_source_volume(),
+    })
+}
+
+fn benchmark(
+    path: &Path,
+    evidence_only: bool,
+    normalize: bool,
+    joint_fit: bool,
+    shell_output: Option<&Path>,
+) -> Result<Value> {
+    let start = Instant::now();
+    let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
+    let read_seconds = start.elapsed().as_secs_f64();
+    let mut options = AnalyticRecoveryOptions {
+        normalize_coincident_sheets: normalize,
+        ..Default::default()
+    };
+    if !joint_fit {
+        options.max_joint_fit_trials = 0;
+    }
+    let evidence = analyze_mesh_evidence(&mesh, options.evidence)?;
+    let evidence_seconds = start.elapsed().as_secs_f64() - read_seconds;
+    if evidence_only {
+        return Ok(evidence_summary(
+            &evidence,
+            path,
+            mesh.face_iter().count(),
+            read_seconds,
+            evidence_seconds,
+        ));
+    }
+    let recovery = recover_analytic_evidence(&evidence, options)?;
+    let partition = &recovery.reconciled.partition;
+    let regions = region_summary(&recovery)?;
     let canceled_sheets = recovery
         .evidence
         .provenance
@@ -277,7 +313,7 @@ fn benchmark(
         "status":"ok","source":path,"source_polygons":mesh.face_iter().count(),
         "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
         "total_seconds":start.elapsed().as_secs_f64(),
-        "regions":region_info,"region_by_polygon":partition.region_by_polygon,
+        "regions":regions.info,"region_by_polygon":partition.region_by_polygon,
         "coplanar_reassignments":recovery.coplanar_reassignments.iter().map(|r|json!({"support":r.support,"old_region":r.old_region,"new_region":r.new_region,"max_plane_residual":r.max_plane_residual})).collect::<Vec<_>>(),
         "joint_fits":recovery.joint_fits.iter().map(|r|json!({"regions":r.regions,"refitted_regions":r.refitted_regions,"repaired_edges":r.repaired_edges,"max_displacement":r.max_displacement,"max_allowance":r.max_allowance,"max_additional_carrier_residual":r.max_additional_carrier_residual})).collect::<Vec<_>>(),
         "original_polygon_ids":recovery.evidence.provenance.original_polygon_ids,
@@ -287,8 +323,8 @@ fn benchmark(
         "source_sector_pairs":recovery.evidence.provenance.sector_pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons,"positive_volume":p.positive_volume})).collect::<Vec<_>>(),
         "canceled_sheets":canceled_sheets,
         "normalize_coincident_sheets":normalize,
-        "failed_regions":failed_regions,"native_faces":native_faces,"pending_chart_cuts":chart_cuts,
-        "native_region_errors":errors,
+        "failed_regions":regions.failed,"native_faces":regions.faces,"pending_chart_cuts":regions.chart_cuts,
+        "native_region_errors":regions.errors,
         "native_trim_errors":recovery.native.trims.iter().filter(|trim|trim.is_err()).count(),
         "ambiguous_source_edges":recovery.trims.ambiguous_edges.len(),
         "source_nonmanifold_edges":recovery.evidence.non_manifold_edge_count,
