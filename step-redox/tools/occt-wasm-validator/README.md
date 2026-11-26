@@ -168,3 +168,30 @@ face to be covered and the measured paired difference, coarse/fine drift,
 and shared-reference spread (plus the summed estimated spatial quadrature
 error) to fit the requested absolute tolerance. This is not a rigorous
 interval enclosure or an alternative process exit criterion.
+
+## Spatial elementary-carrier volume diagnostic
+
+For solids bounded by planes, circular cylinders and supported spherical
+patches, use independent directed spatial-wire integration:
+
+```sh
+step-redox-occt-wasm-validator spatial-volume source.step candidate.step \
+  --absolute-tolerance 1e-10 --boundary-tolerance-mm 2e-9
+```
+
+This path reads actual OCCT finite 3-D curve trims and topological vertex
+occurrences. Positive-weight rational curves are decomposed into Bézier
+spans. Lines, circles and ellipses use exact finite representations.
+Planar flux follows from the oriented vector area of the wire; cylindrical
+flux uses Green's theorem on the periodic angular/axial chart, without
+imported pcurves. Spherical faces use the spatial two-gauge method.
+
+The report includes per-face carrier incidence bounds and explicit endpoint
+closure corrections, both quadrature resolutions, paired signed-term
+differences at four common references and reference invariance. Unsupported
+faces are reported with reasons; an incomplete inventory never yields a
+whole-solid measurement. Finite-f64 Bernstein bounds and embedded
+quadrature estimates are not interval arithmetic or a bound on the total
+geometric volume error. Measurement consistency is separate from the
+unchanged paired-volume acceptance gate; the command exit status indicates
+execution success, not geometric equivalence.
