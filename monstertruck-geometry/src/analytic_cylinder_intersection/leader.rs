@@ -90,7 +90,7 @@ impl CylinderIntersectionArc {
             }
             // Positive arithmetic only. Include finite-f64 evaluation
             // slack in each bound before using it in the next recurrence.
-            q[n] = numerator / (2.0 * root) * (1.0 + 64.0 * f64::EPSILON);
+            q[n] = numerator / (2.0 * root) * 64.0_f64.mul_add(f64::EPSILON, 1.0);
         }
         let upper = radius + (q[order] + radius) / self.axis_sine;
         (upper.is_finite() && upper > 0.0).then_some(upper)
