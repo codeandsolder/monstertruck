@@ -1,7 +1,7 @@
 //! Export a regular crossing-cylinder branch without reintroducing marching
 //! chord error. Recognition of the rational carriers is independent of the
 //! evaluated SSI points. The branch is selected using the complete directed
-//! polyline, and its new cubic leader has an independent analytic error bound.
+//! polyline, and its new polynomial leader has an independent analytic error bound.
 
 use super::{validated_step_parameter_curve, validated_step_surface_support};
 use monstertruck_core::tolerance::{
@@ -71,26 +71,26 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
             selected = Some(bound);
         }
     }
-    let leader = selected?.proposal.arc.cubic_leader(
+    let leader = selected?.proposal.arc.bounded_leader(
         proof_tolerance.min(DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_structural_length) * 0.5,
         DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_leader_max_segments,
     )?;
-    let mut cubic = leader.curve;
+    let mut spline = leader.curve;
     let start = guide.front();
     let end = guide.back();
-    let endpoint_error = (cubic.front() - start)
+    let endpoint_error = (spline.front() - start)
         .magnitude()
-        .max((cubic.back() - end).magnitude());
+        .max((spline.back() - end).magnitude());
     if !endpoint_error.is_finite() || leader.maximum_error + endpoint_error > proof_tolerance {
         return None;
     }
     // The clamped polynomial basis is a nonnegative partition of unity.
     // Endpoint control displacement therefore consumes at most this much
     // of the whole-curve approximation budget.
-    let last = cubic.control_points().len().checked_sub(1)?;
-    *cubic.control_point_mut(0) = start;
-    *cubic.control_point_mut(last) = end;
-    let leader = Curve::NurbsCurve(NurbsCurve::from(cubic));
+    let last = spline.control_points().len().checked_sub(1)?;
+    *spline.control_point_mut(0) = start;
+    *spline.control_point_mut(last) = end;
+    let leader = Curve::NurbsCurve(NurbsCurve::from(spline));
     let (_, samples) = algo::curve::parameter_division(
         &leader,
         leader.range_tuple(),

@@ -314,7 +314,7 @@ mod tests {
             1e-8,
         )
         .expect("regular arc");
-        let leader = arc.cubic_leader(1.9e-10, 8192).expect("fine leader");
+        let leader = arc.bounded_leader(1.9e-10, 8192).expect("fine leader");
         let curve = NurbsCurve::from(leader.curve);
         let quantized_primary = CylinderCarrier::new(
             Point3::new(67.7545, 5.1613720, 0.0),

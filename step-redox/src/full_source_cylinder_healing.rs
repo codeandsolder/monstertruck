@@ -45,6 +45,8 @@ pub struct FullSourceCylinderRepairEvidence {
     pub leader_curve_id: u64,
     pub new_geometry_entity_ids: Vec<u64>,
     pub leader_segments: u32,
+    pub leader_degree: usize,
+    pub leader_control_count: usize,
     pub leader_error_upper_mm: f64,
     pub leader_arithmetic_margin_mm: f64,
     pub serialized_control_error_upper_mm: f64,
@@ -132,7 +134,7 @@ fn prepare(source: &DataSection, request: FullSourceCylinderRepair) -> Result<Pr
     ];
     let leader = candidate
         .arc
-        .cubic_leader(
+        .bounded_leader(
             request.leader_tolerance_mm * 0.95,
             request.max_leader_segments,
         )
@@ -305,6 +307,8 @@ fn apply(
         leader_curve_id: leader,
         new_geometry_entity_ids: ids,
         leader_segments: prepared.leader.segments,
+        leader_degree: prepared.leader.curve.degree(),
+        leader_control_count: prepared.leader.curve.control_points().len(),
         leader_error_upper_mm: maximum_error,
         leader_arithmetic_margin_mm: prepared.leader.arithmetic_margin,
         serialized_control_error_upper_mm: control_error_mm,
@@ -436,7 +440,15 @@ mod tests {
                         <= repair.leader_error_upper_mm
                 );
             }
-            eprintln!("repair {repair:?}");
+            assert_eq!(repair.leader_degree, spline.degree);
+            assert_eq!(repair.leader_control_count, spline.control_points_mm.len());
+            eprintln!(
+                "edge #{edge}: degree {}, {} segments, {} controls, bounded error {} mm",
+                repair.leader_degree,
+                repair.leader_segments,
+                repair.leader_control_count,
+                repair.leader_error_upper_mm
+            );
         }
         let proof = crate::boundary_proof::compare_analytic_boundaries(171, target, 171, target);
         assert!(
