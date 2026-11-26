@@ -18,11 +18,11 @@ ci: fmt-check lint-check readme-check test-cpu test-doc meshing-features
 
 # Format code.
 fmt:
-    cargo +nightly fmt --all
+    cargo fmt --all
 
 # Verify formatting without writing.
 fmt-check:
-    cargo +nightly fmt --all -- --check
+    cargo fmt --all -- --check
 
 # Run clippy with autofix (modifies working tree).
 lint:
@@ -32,7 +32,7 @@ lint:
 lint-check:
     cargo clippy --all-targets -- -D warnings
 
-# Run CPU-only tests on the stable toolchain.
+# Run CPU-only tests on the repository-pinned nightly.
 #
 # `cargo nextest run`, not `cargo test`: nextest gives each test its own PROCESS.
 # Some tests here read process-global measurement counters (the
@@ -46,15 +46,11 @@ test-cpu:
 # Validate the source-derived six-stage CAD fixture under normal production
 # geometry/tolerance policies. This is also covered by the Step-redox lib suite.
 test-mixed-cad:
-    cargo +1.100.0 test -p step-redox --features cad-kernel-monstertruck --lib mixed_complete_constructive_ir_replays_without_intermediate_step_import
+    cargo test -p step-redox --features cad-kernel-monstertruck --lib mixed_complete_constructive_ir_replays_without_intermediate_step_import
 
 # Doctests. Nextest cannot run these, so they are their own step.
 test-doc:
     cargo test --doc {{ cpu_crates }} --features derive --features polynomial
-
-# Run CPU-only tests on the nightly toolchain.
-test-cpu-nightly:
-    rustup run nightly cargo nextest run {{ cpu_crates }} --features derive --features polynomial
 
 # Run GPU tests (requires a working GPU). Serialized: these create real wgpu
 # devices, which do not tolerate concurrent construction.

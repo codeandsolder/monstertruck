@@ -33,7 +33,7 @@ impl RecoveredProfileCurve {
         self.source_edge_ids().first().copied().unwrap_or(u64::MAX)
     }
 
-    #[must_use]
+    #[must_use = "The source edge ids accessor exposes its value only through the returned reference."]
     pub fn source_edge_ids(&self) -> &[u64] {
         match self {
             Self::Line {

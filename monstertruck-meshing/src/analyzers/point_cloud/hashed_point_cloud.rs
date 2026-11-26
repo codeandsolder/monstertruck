@@ -67,6 +67,136 @@ impl HashedPointCloud {
         self[index].push(point);
     }
 
+    // Hash every cell that can contain a point within radius of the query
+    // AABB, including adjacent bins at floating-point partition boundaries.
+    fn cells_near_bounds(
+        &self,
+        bounds: &BoundingBox<Point3>,
+        radius: f64,
+    ) -> Option<([usize; 3], [usize; 3])> {
+        if !radius.is_finite()
+            || radius < 0.0
+            || (0..3).any(|axis| !bounds.min()[axis].is_finite() || !bounds.max()[axis].is_finite())
+        {
+            return None;
+        }
+        let lower = array![axis => {
+            let limit = bounds.min()[axis] - radius;
+            if limit.is_finite() {
+                hash_axis(limit.next_down(), self.range[axis], self.size[axis])
+            } else {
+                0
+            }
+        }; 3];
+        let upper = array![axis => {
+            let limit = bounds.max()[axis] + radius;
+            if limit.is_finite() {
+                hash_axis(limit.next_up(), self.range[axis], self.size[axis])
+            } else {
+                self.size[axis] - 1
+            }
+        }; 3];
+        Some((lower, upper))
+    }
+
+    fn any_within_distance2(
+        &self,
+        bounds: BoundingBox<Point3>,
+        radius: f64,
+        distance2: impl Fn(Point3) -> f64,
+    ) -> bool {
+        let radius2 = radius * radius;
+        let Some((lower, upper)) = self.cells_near_bounds(&bounds, radius) else {
+            return self
+                .space
+                .iter()
+                .flatten()
+                .any(|point| distance2(*point) < radius2);
+        };
+        for x in lower[0]..=upper[0] {
+            for y in lower[1]..=upper[1] {
+                for z in lower[2]..=upper[2] {
+                    if self[[x, y, z]]
+                        .iter()
+                        .any(|point| distance2(*point) < radius2)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Find the actual nearest sample to a bounded query geometry.
+    ///
+    /// The initial search uses the grid, but arbitrary nearby buckets cannot
+    /// establish a global minimum. A finite candidate gives an upper bound:
+    /// any better point must lie inside the query AABB expanded by its
+    /// distance. We hash those limits and visit every potentially better cell.
+    fn minimum_distance2(
+        &self,
+        bounds: BoundingBox<Point3>,
+        distance2: impl Fn(Point3) -> f64,
+    ) -> f64 {
+        let exhaustive = || {
+            self.space
+                .iter()
+                .flatten()
+                .fold(f64::INFINITY, |best, point| best.min(distance2(*point)))
+        };
+        if (0..3).any(|axis| !bounds.min()[axis].is_finite() || !bounds.max()[axis].is_finite()) {
+            return exhaustive();
+        }
+
+        let low = bounds.min().hash(self).map(|index| index.saturating_sub(1));
+        let high = bounds.max().hash(self);
+        let high = array![axis => high[axis].saturating_add(1).min(self.size[axis] - 1); 3];
+        let mut best = f64::INFINITY;
+        for x in low[0]..=high[0] {
+            for y in low[1]..=high[1] {
+                for z in low[2]..=high[2] {
+                    for point in &self[[x, y, z]] {
+                        best = best.min(distance2(*point));
+                    }
+                }
+            }
+        }
+        if best == 0.0 {
+            return 0.0;
+        }
+        if !best.is_finite() {
+            // A sparse grid can leave the initial neighborhood empty.
+            // One complete scan is cheaper than seeding an arbitrary distant
+            // witness and scanning its expanded bounding region again.
+            return exhaustive();
+        }
+
+        // Expand slightly for floating-point rounding at bin boundaries.
+        // The hash is monotone, so all points that can beat this upper bound
+        // reside between the hashed limits on each axis.
+        let radius = best.sqrt().next_up();
+        let Some((lower, upper)) = self.cells_near_bounds(&bounds, radius) else {
+            return exhaustive();
+        };
+        for x in lower[0]..=upper[0] {
+            for y in lower[1]..=upper[1] {
+                for z in lower[2]..=upper[2] {
+                    if (low[0]..=high[0]).contains(&x)
+                        && (low[1]..=high[1]).contains(&y)
+                        && (low[2]..=high[2]).contains(&z)
+                    {
+                        continue;
+                    }
+                    for point in &self[[x, y, z]] {
+                        best = best.min(distance2(*point));
+                    }
+                }
+            }
+        }
+        best
+    }
+
     pub(super) fn distance2<T: DistanceWithPointCloud + ?Sized>(&self, target: &T) -> f64 {
         target.distance2(self)
     }
@@ -186,72 +316,38 @@ impl SpaceHash for usize {
 pub(super) trait DistanceWithPointCloud {
     fn distance2(&self, space: &HashedPointCloud) -> f64;
 
-    fn is_colliding(&self, space: &HashedPointCloud, tolerance: f64) -> bool {
-        nonpositive_tolerance!(tolerance, 0.0);
-        self.distance2(space) < tolerance * tolerance
-    }
+    fn is_colliding(&self, space: &HashedPointCloud, tolerance: f64) -> bool;
 }
 
 impl DistanceWithPointCloud for Point3 {
     fn distance2(&self, space: &HashedPointCloud) -> f64 {
-        let idcs = self.hash(space);
-        let closure = |dist2: f64, pt: &Self| f64::min(dist2, MetricSpace::distance2(*self, *pt));
-        let mut dist2 = space[idcs].iter().fold(f64::INFINITY, closure);
-        if idcs[0] > 0 {
-            dist2 = space[[idcs[0] - 1, idcs[1], idcs[2]]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        if idcs[0] + 1 < space.size[0] {
-            dist2 = space[[idcs[0] + 1, idcs[1], idcs[2]]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        if idcs[1] > 0 {
-            dist2 = space[[idcs[0], idcs[1] - 1, idcs[2]]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        if idcs[1] + 1 < space.size[1] {
-            dist2 = space[[idcs[0], idcs[1] + 1, idcs[2]]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        if idcs[2] > 0 {
-            dist2 = space[[idcs[0], idcs[1], idcs[2] - 1]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        if idcs[2] + 1 < space.size[2] {
-            dist2 = space[[idcs[0], idcs[1], idcs[2] + 1]]
-                .iter()
-                .fold(dist2, closure);
-        }
-        dist2
+        let mut bounds = BoundingBox::<Self>::new();
+        bounds.push(*self);
+        space.minimum_distance2(bounds, |point| MetricSpace::distance2(*self, point))
+    }
+
+    fn is_colliding(&self, space: &HashedPointCloud, tolerance: f64) -> bool {
+        nonpositive_tolerance!(tolerance, 0.0);
+        let mut bounds = BoundingBox::<Self>::new();
+        bounds.push(*self);
+        space.any_within_distance2(bounds, tolerance, |point| {
+            MetricSpace::distance2(*self, point)
+        })
     }
 }
 
 impl DistanceWithPointCloud for [Point3; 3] {
     fn distance2(&self, space: &HashedPointCloud) -> f64 {
-        let bdd: BoundingBox<Point3> = self.iter().collect();
-        let mut range: [[usize; 3]; 2] = [bdd.min().hash(space), bdd.max().hash(space)];
-        range[0][0] = usize::max(range[0][0], 1) - 1;
-        range[0][1] = usize::max(range[0][1], 1) - 1;
-        range[0][2] = usize::max(range[0][2], 1) - 1;
-        range[1][0] = usize::min(range[1][0] + 1, space.size[0] - 1);
-        range[1][1] = usize::min(range[1][1] + 1, space.size[1] - 1);
-        range[1][2] = usize::min(range[1][2] + 1, space.size[2] - 1);
-        let mut dist2 = f64::INFINITY;
-        (range[0][0]..=range[1][0]).for_each(|ix| {
-            (range[0][1]..=range[1][1]).for_each(|iy| {
-                (range[0][2]..=range[1][2]).for_each(|iz| {
-                    dist2 = space[[ix, iy, iz]].iter().fold(dist2, |dist2, pt| {
-                        f64::min(dist2, distance2_point_triangle(*pt, *self))
-                    });
-                });
-            });
-        });
-        dist2
+        let bounds: BoundingBox<Point3> = self.iter().collect();
+        space.minimum_distance2(bounds, |point| distance2_point_triangle(point, *self))
+    }
+
+    fn is_colliding(&self, space: &HashedPointCloud, tolerance: f64) -> bool {
+        nonpositive_tolerance!(tolerance, 0.0);
+        let bounds: BoundingBox<Point3> = self.iter().collect();
+        space.any_within_distance2(bounds, tolerance, |point| {
+            distance2_point_triangle(point, *self)
+        })
     }
 }
 
@@ -267,7 +363,7 @@ impl DistanceWithPointCloud for &PolygonMesh {
         nonpositive_tolerance!(tol, 0.0);
         self.faces().triangle_iter().any(|tri| {
             let tri = array![i => self.positions()[tri[i].pos]; 3];
-            tri.distance2(space) < tol * tol
+            tri.is_colliding(space, tol)
         })
     }
 }
@@ -295,6 +391,88 @@ fn hashed_point_cloud_handles_zero_span_axes_without_nan_indexing() {
     assert_eq!(points[0].hash(&cloud)[0], 0);
     assert_eq!(points[0].hash(&cloud)[2], 0);
     assert!(cloud.distance2(&points[1]).is_finite());
+}
+
+#[test]
+fn nearest_point_considers_diagonal_and_nonlocal_grid_cells() {
+    // A diagonal neighbor is not one of the six face-adjacent buckets.
+    let diagonal = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(51.0, 51.0, 51.0),
+        Point3::new(100.0, 100.0, 100.0),
+    ];
+    let Some(cloud) = HashedPointCloud::from_points(&diagonal, 1.0) else {
+        panic!("valid point cloud");
+    };
+    let query = Point3::new(49.0, 49.0, 49.0);
+    assert_eq!(cloud.distance2(&query), 12.0);
+
+    // With five X bins, the middle three can be empty. A nearest-point query
+    // there must produce a finite answer even if its immediate neighbors do not.
+    let points = (0..64)
+        .map(|i| Point3::new(if i % 2 == 0 { 0.0 } else { 100.0 }, 0.0, 0.0))
+        .collect::<Vec<_>>();
+    let Some(cloud) = HashedPointCloud::from_points(&points, 1.0) else {
+        panic!("valid point cloud");
+    };
+    let query = Point3::new(50.0, 0.0, 0.0);
+    assert_eq!(cloud.distance2(&query), 2500.0);
+
+    let triangle = [
+        Point3::new(50.0, 0.0, 0.0),
+        Point3::new(50.0, 1.0, 0.0),
+        Point3::new(50.0, 0.0, 1.0),
+    ];
+    assert_eq!(cloud.distance2(&triangle), 2500.0);
+}
+
+#[test]
+fn bounded_nearest_distance_matches_exhaustive_geometry() {
+    let points = (0..173)
+        .map(|i| {
+            Point3::new(
+                f64::from((i * 17 % 113) - 56),
+                f64::from((i * 29 % 127) - 63),
+                f64::from((i * 31 % 97) - 48),
+            )
+        })
+        .collect::<Vec<_>>();
+    let Some(cloud) = HashedPointCloud::from_points(&points, 4.0) else {
+        panic!("valid point cloud");
+    };
+    for n in 0..90 {
+        let query = Point3::new(
+            f64::from((n * 37 % 183) - 91),
+            f64::from((n * 41 % 139) - 69),
+            f64::from((n * 43 % 149) - 74),
+        );
+        let expected = points
+            .iter()
+            .map(|point| MetricSpace::distance2(*point, query))
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(cloud.distance2(&query), expected, "point query {n}");
+
+        let triangle = [
+            query,
+            query + Vector3::new(11.0, 0.0, 0.0),
+            query + Vector3::new(0.0, 7.0, 3.0),
+        ];
+        let expected = points
+            .iter()
+            .map(|point| distance2_point_triangle(*point, triangle))
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(cloud.distance2(&triangle), expected, "triangle query {n}");
+        for tolerance in [0.0, 0.1, 2.0, 11.0, 80.0] {
+            let expected_point = points
+                .iter()
+                .any(|point| MetricSpace::distance2(*point, query) < tolerance * tolerance);
+            let expected_triangle = points
+                .iter()
+                .any(|point| distance2_point_triangle(*point, triangle) < tolerance * tolerance);
+            assert_eq!(cloud.is_colliding(&query, tolerance), expected_point);
+            assert_eq!(cloud.is_colliding(&triangle, tolerance), expected_triangle);
+        }
+    }
 }
 
 #[test]

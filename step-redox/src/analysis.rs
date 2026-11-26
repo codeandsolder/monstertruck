@@ -91,7 +91,7 @@ impl AnalysisSession {
             })
     }
 
-    #[must_use]
+    #[must_use = "The computed formed sheet evidence collection is returned and must be retained or inspected."]
     pub fn formed_sheet_evidence(&self) -> Vec<formed_sheet::FormedSheetEvidence> {
         self.indexed_sections()
             .flat_map(|(entities, index, _)| {
@@ -105,7 +105,7 @@ impl AnalysisSession {
     /// return the same evidence without geometry traversal or deep cloning.
     ///
     /// Call `.to_vec()` explicitly only when an owned snapshot is necessary.
-    #[must_use]
+    #[must_use = "The solid surface signatures accessor exposes its value only through the returned reference."]
     pub fn solid_surface_signatures(&self) -> &[solid_revolutions::SolidSurfaceSignature] {
         &self
             .surface_signatures
@@ -129,14 +129,14 @@ impl AnalysisSession {
             .signatures
     }
 
-    #[must_use]
+    #[must_use = "The computed dominant extrusion candidates collection is returned and must be retained or inspected."]
     pub fn dominant_extrusion_candidates(
         &self,
     ) -> Vec<dominant_extrusions::DominantExtrusionCandidate> {
         dominant_extrusions::detect_dominant_extrusion_candidates(self.solid_surface_signatures())
     }
 
-    #[must_use]
+    #[must_use = "The computed solid revolutions collection is returned and must be retained or inspected."]
     pub fn solid_revolutions(&self) -> Vec<solid_revolutions::RecoveredSolidRevolution> {
         self.indexed_sections()
             .flat_map(|(entities, index, cache)| {
@@ -150,7 +150,7 @@ impl AnalysisSession {
             .collect()
     }
 
-    #[must_use]
+    #[must_use = "The computed radial slot revolutions collection is returned and must be retained or inspected."]
     pub fn radial_slot_revolutions(&self) -> Vec<solid_revolutions::RecoveredRadialSlotRevolution> {
         self.indexed_sections()
             .flat_map(|(entities, index, cache)| {
@@ -164,7 +164,7 @@ impl AnalysisSession {
             .collect()
     }
 
-    #[must_use]
+    #[must_use = "The computed solid extrusions collection is returned and must be retained or inspected."]
     pub fn solid_extrusions(&self) -> Vec<solid_extrusions::RecoveredSolidExtrusion> {
         self.indexed_sections()
             .flat_map(|(entities, index, _)| {
@@ -177,7 +177,7 @@ impl AnalysisSession {
             .collect()
     }
 
-    #[must_use]
+    #[must_use = "The computed periodic chains collection is returned and must be retained or inspected."]
     pub fn periodic_chains(&self) -> Vec<periodic_chains::PeriodicChainPattern> {
         self.indexed_sections()
             .flat_map(|(entities, index, _)| {

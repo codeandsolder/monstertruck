@@ -30,7 +30,7 @@ impl std::fmt::Debug for ContentHasher {
 
 impl ContentHasher {
     /// Create a new hasher with the default seed.
-    #[must_use]
+    #[must_use = "retain the seeded hasher for content hashing"]
     pub fn new() -> Self { Self::default() }
 }
 

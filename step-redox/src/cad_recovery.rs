@@ -1,7 +1,7 @@
 use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, FusedPeriodicChain, IndexedCount, NodeId, ProofStatus, Provenance,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::solid_extrusions::RecoveredSolidExtrusion;
@@ -16,10 +16,14 @@ use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
+mod channel_round_ends;
 mod multi_axis_sheet;
 mod proposal_extent;
 pub(crate) mod sectional;
+mod signed_caps;
 mod solid;
+mod source_incidence;
+mod tapered_lip;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
     recover_radial_slot_revolution_fragment, recover_radial_slot_revolution_fragments,
@@ -105,6 +109,14 @@ pub enum CadFragmentSource {
         solid_id: u64,
         face_ids: Vec<u64>,
         cap_face_ids: Vec<u64>,
+    },
+    /// A source-proven material prism with translated empty-channel cutters.
+    SignedCapAssembly {
+        solid_id: u64,
+        host_cap_face_ids: [u64; 2],
+        cutter_cap_face_ids: Vec<[u64; 2]>,
+        round_end_face_ids: Vec<u64>,
+        additive_face_ids: Vec<u64>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
@@ -424,8 +436,13 @@ fn evaluated_step_solid<K: CadKernel>(
     Ok(Some((*id, data.entities)))
 }
 
-fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> bool {
-    let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
+fn has_only_planar_cylindrical_carriers<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    fragment: &CadFragment,
+) -> bool {
+    let kernel = source.kernel;
+    let Ok(evaluated) = kernel.evaluate_replay(&fragment.model, fragment.root, None, source.mode)
+    else {
         return false;
     };
     if !kernel.summarize(&evaluated).is_single_solid() {
@@ -448,9 +465,13 @@ fn has_only_planar_cylindrical_carriers<K: CadKernel>(kernel: &K, fragment: &Cad
     })
 }
 
+/// Additional qualification of an independently proven material candidate.
+pub(crate) type CandidateAcceptance<'a, K> = dyn for<'m> Fn(&'m CadModel, NodeId, Option<crate::cad_kernel::EvaluationSeed<'m, K>>) -> bool
+    + 'a;
+
 /// Immutable section-local evidence, shared by every material proposal. A
 /// complexity ceiling may only come from a previously certified candidate.
-pub(crate) struct SourceRecovery<'a, K> {
+pub(crate) struct SourceRecovery<'a, K: CadKernel> {
     solid_id: u64,
     entities: &'a [EntityInstance],
     index: &'a HashMap<u64, usize>,
@@ -459,6 +480,8 @@ pub(crate) struct SourceRecovery<'a, K> {
     reconciled_entities: Option<Vec<EntityInstance>>,
     strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
+    acceptance: Option<&'a CandidateAcceptance<'a, K>>,
+    mode: ReplayMode,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -524,7 +547,21 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             reconciled_entities,
             strip_face_sense_repairs,
             boundary_vertices,
+            acceptance: None,
+            mode: ReplayMode::General,
         })
+    }
+
+    /// A peeled host must also support the remaining forward operations.
+    /// Apply the caller's acceptance only after independent host proof.
+    pub(crate) fn requiring(
+        mut self,
+        acceptance: &'a CandidateAcceptance<'a, K>,
+        mode: ReplayMode,
+    ) -> Self {
+        self.acceptance = Some(acceptance);
+        self.mode = mode;
+        self
     }
 
     pub(crate) fn strip_face_sense_repairs(
@@ -552,11 +589,14 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
-        let evaluated = self.kernel.evaluate(model, root)?;
-        if !self.kernel.summarize(&evaluated).is_single_solid() {
+        let seed = self.kernel.evaluate_seed(model, root, self.mode)?;
+        if !self.kernel.summarize(seed.evaluated()).is_single_solid() {
             return Ok(false);
         }
-        self.matches_evaluated_boundary(&evaluated)
+        Ok(self.matches_evaluated_boundary(seed.evaluated())?
+            && self
+                .acceptance
+                .is_none_or(|accept| accept(model, root, Some(seed))))
     }
 
     /// Compare an already evaluated single-solid candidate without repeating
@@ -634,7 +674,7 @@ fn canonical_core_pair(core: &RecoveredSolidExtrusion) -> [u64; 2] {
 
 /// The source-derived union context is invariant for all core combinations.
 /// In particular, build and recognize terminal extensions only once.
-struct CoreUnionEvidence<'a, 's, K> {
+struct CoreUnionEvidence<'a, 's, K: CadKernel> {
     source: &'a SourceRecovery<'s, K>,
     face_ids: Vec<u64>,
     extensions: Vec<RuledEndExtension>,
@@ -697,7 +737,7 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
             })
             && *self.analytic_extensions.get_or_init(|| {
                 self.extensions.iter().all(|extension| {
-                    has_only_planar_cylindrical_carriers(self.source.kernel, &extension.fragment)
+                    has_only_planar_cylindrical_carriers(self.source, &extension.fragment)
                 })
             })
         {
@@ -914,6 +954,7 @@ enum MaterialFamily {
     Sectional,
     FormedSheet,
     CapCover,
+    SignedCaps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1083,6 +1124,11 @@ pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
     best.consider(
         family,
         cap_cover::recover(source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::SignedCaps;
+    best.consider(
+        family,
+        signed_caps::recover(source, best.ceiling(ceiling, family)),
     )?;
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.
@@ -1471,6 +1517,39 @@ mod tests {
                 kernel.to_step(&body)?,
             )?;
         }
+        Ok(())
+    }
+
+    /// A standalone round-end cutter has two regular crossing-cylinder
+    /// branches. Verify the actual emitted STEP, not just the SSI leader.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn crossing_cylinder_cutter_exports_certified_analytic_chains() -> Result<()> {
+        use crate::{
+            boundary_proof::{BoundaryChainKey, analytic_boundary_diagnostic},
+            cad_kernel::{CadKernel, monstertruck::MonstertruckKernel},
+        };
+        let (model, upper, _) = mixed_fixture_models::rounding_caps()?;
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let body = kernel.evaluate(&model, upper)?;
+        anyhow::ensure!(kernel.summarize(&body).is_single_solid());
+        let (id, entities) = evaluated_step_solid(&kernel, &body)?
+            .ok_or_else(|| anyhow::anyhow!("expected one exported cutter"))?;
+        let diagnostic = analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+        anyhow::ensure!(
+            diagnostic.supported,
+            "unsupported emitted cutter: {:?}",
+            diagnostic.reason
+        );
+        let signature = diagnostic
+            .signature
+            .ok_or_else(|| anyhow::anyhow!("missing cutter boundary signature"))?;
+        let count = signature
+            .chains
+            .iter()
+            .filter(|chain| matches!(chain, BoundaryChainKey::CylinderIntersection { .. }))
+            .count();
+        assert_eq!(count, 2);
         Ok(())
     }
 

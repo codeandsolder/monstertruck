@@ -11,12 +11,12 @@ use std::iter::Peekable;
 impl<P, C> Wire<P, C> {
     /// Creates the empty wire.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new() -> Self { Self::default() }
 
     /// Creates the empty wire with space for at least `capacity` edges.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             edge_list: VecDeque::with_capacity(capacity),
@@ -25,18 +25,18 @@ impl<P, C> Wire<P, C> {
 
     /// Returns an iterator over the edges. Practically, an alias of `iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards an iterator over the edges. Practically, an alias of `iter()`."]
     pub fn edge_iter(&self) -> EdgeIter<'_, P, C> { self.iter() }
     /// Returns a mutable iterator over the edges. Practically, an alias of `iter_mut()`.
     #[inline]
     pub fn edge_iter_mut(&mut self) -> EdgeIterMut<'_, P, C> { self.iter_mut() }
     /// Creates a consuming iterator. Practically, an alias of `into_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "The consuming iterator is returned without traversal; ignoring it skips iteration."]
     pub fn edge_into_iter(self) -> EdgeIntoIter<P, C> { self.into_iter() }
     /// Returns an parallel iterator over the edges. Practically, an alias of `par_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards an parallel iterator over the edges. Practically, an alias of `par_iter()`."]
     pub fn edge_par_iter(&self) -> EdgeParallelIter<'_, P, C>
     where
         P: Send,
@@ -53,7 +53,7 @@ impl<P, C> Wire<P, C> {
     }
     /// Creates a consuming iterator. Practically, an alias of `into_par_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "The parallel iterator is lazy; ignoring it skips traversal."]
     pub fn edge_into_par_iter(self) -> EdgeParallelIntoIter<P, C>
     where
         P: Send,
@@ -63,7 +63,7 @@ impl<P, C> Wire<P, C> {
 
     /// Returns an iterator over the vertices.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards an iterator over the vertices."]
     pub fn vertex_iter(&self) -> VertexIter<'_, P, C> {
         VertexIter {
             edge_iter: self.edge_iter().peekable(),
@@ -75,7 +75,7 @@ impl<P, C> Wire<P, C> {
     /// Returns the front edge. If `self` is empty wire, returns `None`.\
     /// Practically, an alias of the inherited method `VecDeque::front()`.
     #[inline]
-    #[must_use]
+    #[must_use = "The optional front edge outcome must be inspected to distinguish a value from absence."]
     pub fn front_edge(&self) -> Option<&Edge<P, C>> { self.front() }
 
     /// Returns the front vertex. If `self` is empty wire, returns None.
@@ -90,13 +90,13 @@ impl<P, C> Wire<P, C> {
     /// assert_eq!(wire.front_vertex(), Some(&v[0]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the front vertex. If `self` is empty wire, returns None."]
     pub fn front_vertex(&self) -> Option<&Vertex<P>> { self.front().map(super::Edge::front) }
 
     /// Returns the back edge. If `self` is empty wire, returns `None`.
     /// Practically, an alias of the inherited method `VecDeque::back()`
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the back edge. If `self` is empty wire, returns `None`."]
     pub fn back_edge(&self) -> Option<&Edge<P, C>> { self.back() }
 
     /// Returns the back edge. If `self` is empty wire, returns None.
@@ -111,7 +111,7 @@ impl<P, C> Wire<P, C> {
     /// assert_eq!(wire.back_vertex(), Some(&v[2]));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the back edge. If `self` is empty wire, returns None."]
     pub fn back_vertex(&self) -> Option<&Vertex<P>> { self.back().map(super::Edge::back) }
 
     /// Returns vertices at both ends.
@@ -125,7 +125,7 @@ impl<P, C> Wire<P, C> {
     /// assert_eq!(wire.ends_vertices(), Some((&v[0], &v[2])));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards vertices at both ends."]
     pub fn ends_vertices(&self) -> Option<(&Vertex<P>, &Vertex<P>)> {
         match (self.front_vertex(), self.back_vertex()) {
             (Some(got0), Some(got1)) => Some((got0, got1)),
@@ -156,7 +156,7 @@ impl<P, C> Wire<P, C> {
     /// # Panics
     /// Panics if `at > self.len()`
     #[inline]
-    #[must_use]
+    #[must_use = "The split-off wire segment is returned; ignoring it loses the detached portion."]
     pub fn split_off(&mut self, at: usize) -> Self {
         Self {
             edge_list: self.edge_list.split_off(at),
@@ -201,7 +201,7 @@ impl<P, C> Wire<P, C> {
     /// }
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     pub fn inverse(&self) -> Self {
         let edge_list = self.edge_iter().rev().map(super::Edge::inverse).collect();
         Self { edge_list }
@@ -225,7 +225,7 @@ impl<P, C> Wire<P, C> {
     /// // The empty wire is continuous
     /// assert!(Wire::<(), ()>::new().is_continuous());
     /// ```
-    #[must_use]
+    #[must_use = "The returned boolean reports whether all the adjacent pairs of edges have shared vertices or not."]
     pub fn is_continuous(&self) -> bool {
         let mut iter = self.edge_iter();
         if let Some(edge) = iter.next() {
@@ -259,13 +259,13 @@ impl<P, C> Wire<P, C> {
     /// assert!(Wire::<(), ()>::new().is_cyclic());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the front vertex of the wire is the same as the back one or not."]
     pub fn is_cyclic(&self) -> bool { self.front_vertex() == self.back_vertex() }
 
     /// Returns whether the wire is closed or not.
     /// Here, "closed" means "continuous" and "cyclic".
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the wire is closed or not."]
     pub fn is_closed(&self) -> bool { self.is_continuous() && self.is_cyclic() }
 
     /// Returns whether simple or not.
@@ -291,7 +291,7 @@ impl<P, C> Wire<P, C> {
     /// // The empty wire is simple.
     /// assert!(Wire::<(), ()>::new().is_simple());
     /// ```
-    #[must_use]
+    #[must_use = "The returned boolean reports whether simple or not."]
     pub fn is_simple(&self) -> bool {
         let mut set = HashSet::default();
         self.vertex_iter()
@@ -316,7 +316,7 @@ impl<P, C> Wire<P, C> {
     /// assert!(Wire::disjoint_wires(&[wire0.clone(), wire2]));
     /// assert!(!Wire::disjoint_wires(&[wire0, wire1]));
     /// ```
-    #[must_use]
+    #[must_use = "The boolean result of `disjoint_wires` must be observed to use the predicate."]
     pub fn disjoint_wires(wires: &[Self]) -> bool {
         let mut set = HashSet::default();
         wires.iter().all(move |wire| {
@@ -524,7 +524,7 @@ impl<P, C> Wire<P, C> {
     /// Returns the consistence of the geometry of end vertices
     /// and the geometry of edge.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the geometry satisfies consistency checks."]
     pub fn is_geometric_consistent(&self) -> bool
     where
         P: Tolerance,
@@ -561,7 +561,7 @@ impl<P, C> Wire<P, C> {
     /// );
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed display struct for debugging the wire is returned rather than stored."]
     pub const fn display(
         &self,
         format: WireDisplayFormat,

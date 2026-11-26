@@ -382,7 +382,7 @@ impl ToSameGeometry<Curve> for BsplineCurve<Point3> {
 
 impl Curve {
     /// Into non-ratinalized 4-dimensional B-spline curve
-    #[must_use]
+    #[must_use = "use the lifted homogeneous B-spline rather than discarding the representation"]
     pub fn lift_up(&self) -> BsplineCurve<Vector4> {
         match self {
             Self::Line(curve) => Self::BsplineCurve((*curve).into()).lift_up(),

@@ -46,7 +46,7 @@ impl ToSameGeometry<Curve3D> for BsplineCurve<Point3> {
 }
 
 impl Conic3D {
-    #[must_use]
+    #[must_use = "The geometry posture matrix is returned for coordinate transformation."]
     pub const fn posture(&self) -> Matrix4 {
         match self {
             Self::Ellipse(processor) => *processor.transform(),

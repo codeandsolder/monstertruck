@@ -15,6 +15,7 @@ use super::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator,
 };
 use crate::Point2;
+use crate::common::point_segment_distance2;
 use crate::filters::StructuringFilter;
 use array_macro::array;
 use handles::FixedVertexHandle;
@@ -388,18 +389,6 @@ where
     Some(monstertruck_mesh::PolylineCurve(points))
 }
 
-fn point_segment_distance2(point: Point3, front: Point3, back: Point3) -> f64 {
-    let segment = back - front;
-    let denom = segment.dot(segment);
-    if denom.so_small() {
-        point.distance2(front)
-    } else {
-        let t = ((point - front).dot(segment) / denom).clamp(0.0, 1.0);
-        let nearest = front + segment * t;
-        point.distance2(nearest)
-    }
-}
-
 fn simplify_parameter_boundary<S>(
     surface: &S,
     boundary: Vec<Point2>,
@@ -703,11 +692,11 @@ fn tessellate_preboundary<S: PreMeshableSurface>(
         "polyboundary",
         format!(
             "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-            boundary.loops.len(),
-            boundary.uv_min.x,
-            boundary.uv_min.y,
-            boundary.uv_max.x,
-            boundary.uv_max.y,
+            boundary.loops().len(),
+            boundary.uv_min().x,
+            boundary.uv_min().y,
+            boundary.uv_max().x,
+            boundary.uv_max().y,
         ),
         close_start,
     );
@@ -1244,11 +1233,11 @@ fn tessellate_trimmed_preboundary<S: PreMeshableSurface>(
         "polyboundary",
         format!(
             "closed_loops={} uv_min=({:.6},{:.6}) uv_max=({:.6},{:.6})",
-            boundary.loops.len(),
-            boundary.uv_min.x,
-            boundary.uv_min.y,
-            boundary.uv_max.x,
-            boundary.uv_max.y,
+            boundary.loops().len(),
+            boundary.uv_min().x,
+            boundary.uv_min().y,
+            boundary.uv_max().x,
+            boundary.uv_max().y,
         ),
         close_start,
     );

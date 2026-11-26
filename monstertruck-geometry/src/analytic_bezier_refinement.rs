@@ -48,7 +48,7 @@ type Controls = Vec<[f64; 4]>;
 type Split = (Controls, Controls);
 
 /// Homogeneous de Casteljau subdivision at the exact parameter midpoint.
-#[must_use]
+#[must_use = "The optional subdivide homogeneous bezier outcome must be inspected to distinguish a value from absence."]
 pub fn subdivide_homogeneous_bezier(controls: &[[f64; 4]]) -> Option<Split> {
     let mut row = controls.to_vec();
     let mut left = Vec::with_capacity(row.len());

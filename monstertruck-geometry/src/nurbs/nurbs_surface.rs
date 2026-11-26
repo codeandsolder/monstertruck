@@ -21,12 +21,12 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 impl<V> NurbsSurface<V> {
     /// constructor
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(bspsurface: BsplineSurface<V>) -> Self { Self(bspsurface) }
 
     /// Returns the nurbs surface before rationalized
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the nurbs surface before rationalized."]
     pub const fn non_rationalized(&self) -> &BsplineSurface<V> { &self.0 }
     /// Returns the nurbs surface before rationalized
     #[inline]
@@ -34,35 +34,35 @@ impl<V> NurbsSurface<V> {
 
     /// Returns the reference of the knot vectors.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the knot vectors."]
     pub const fn knot_vectors(&self) -> &(KnotVector, KnotVector) { &self.0.knot_vecs }
 
     /// Returns the u knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the u knot vector."]
     pub const fn knot_vector_u(&self) -> &KnotVector { &self.0.knot_vecs.0 }
     /// Returns the v knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the v knot vector."]
     pub const fn knot_vector_v(&self) -> &KnotVector { &self.0.knot_vecs.1 }
 
     /// Returns the `idx`th u knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th u knot."]
     pub fn knot_u(&self, idx: usize) -> f64 { self.0.knot_vecs.0[idx] }
     /// returns the `idx`th v knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th v knot."]
     pub fn knot_v(&self, idx: usize) -> f64 { self.0.knot_vecs.1[idx] }
 
     /// Returns the reference of the vector of the control points
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the vector of the control points."]
     pub const fn control_points(&self) -> &Vec<Vec<V>> { &self.0.control_points }
 
     /// Returns the reference of the control point corresponding to the index `(idx0, idx1)`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control point corresponding to the index `(idx0, idx1)`."]
     pub fn control_point(&self, idx0: usize, idx1: usize) -> &V {
         &self.0.control_points[idx0][idx1]
     }
@@ -147,7 +147,7 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.udegree(), 1);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn udegree(&self) -> usize { self.0.udegree() }
 
     /// Returns the degrees of B-spline surface
@@ -165,7 +165,7 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.vdegree(), 2);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn vdegree(&self) -> usize { self.0.vdegree() }
 
     /// Returns the degrees of B-spline surface
@@ -183,11 +183,11 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.degrees(), (1, 2));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn degrees(&self) -> (usize, usize) { (self.udegree(), self.vdegree()) }
     /// Returns whether the knot vectors are clamped or not.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vectors are clamped or not."]
     pub fn is_clamped(&self) -> bool { self.0.is_clamped() }
     /// Swaps two parameters.
     pub fn swap_axes(&mut self) -> &mut Self
@@ -197,18 +197,18 @@ impl<V> NurbsSurface<V> {
     }
     /// The range of the parameter of the surface.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned parameter bounds define the surface domain and must be observed."]
     pub fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.0.parameter_range() }
     /// Creates the sectional curve along v, at the given u control-point index.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed sectional curve along v, at the given u control-point index is returned rather than stored."]
     pub fn curve_v(&self, index_u: usize) -> NurbsCurve<V>
     where V: Clone {
         NurbsCurve(self.0.curve_v(index_u))
     }
     /// Creates the sectional curve along u, at the given v control-point index.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed sectional curve along u, at the given v control-point index is returned rather than stored."]
     pub fn curve_u(&self, index_v: usize) -> NurbsCurve<V>
     where V: Clone {
         NurbsCurve(self.0.curve_u(index_v))
@@ -280,7 +280,7 @@ where V::Point: Tolerance
     /// assert!(!surface.is_const());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether constant curve or not, i.e. all control points are same or not."]
     pub fn is_const(&self) -> bool {
         let pt = self.0.control_points[0][0].to_point();
         for vec in self.0.control_points.iter().flat_map(|pts| pts.iter()) {
@@ -312,7 +312,7 @@ where V::Point: Tolerance
     /// assert!(!surface0.near_as_surface(&surface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near_as_surface` must be observed to use the predicate."]
     pub fn near_as_surface(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_surface(&other.0, 2, move |x, y| x.to_point().near(&y.to_point()))
@@ -342,7 +342,7 @@ where V::Point: Tolerance
     /// assert!(!surface0.near2_as_surface(&surface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near2_as_surface` must be observed to use the predicate."]
     pub fn near2_as_surface(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_surface(&other.0, 2, move |x, y| x.to_point().near2(&y.to_point()))
@@ -427,12 +427,12 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
 
     /// Cuts the surface into two surfaces at the parameter `u`
     #[inline]
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_u(&mut self, u: f64) -> Self { Self::new(self.0.cut_u(u)) }
 
     /// Cuts the surface into two surfaces at the parameter `v`
     #[inline]
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_v(&mut self, v: f64) -> Self { Self::new(self.0.cut_v(v)) }
 
     /// Normalizes the knot vectors
@@ -602,7 +602,7 @@ where V::Point: Bounded<Scalar = f64>
 {
     /// Returns the bounding box including all control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bounding box including all control points."]
     pub fn roughly_bounding_box(&self) -> BoundingBox<V::Point> {
         self.0
             .control_points

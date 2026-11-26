@@ -123,7 +123,7 @@ struct PlanePairCandidate {
     separation_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect formed sheet evidence collection is returned and must be retained or inspected."]
 pub fn detect_formed_sheet_evidence(entities: &[EntityInstance]) -> Vec<FormedSheetEvidence> {
     let index = build_index(entities);
     detect_formed_sheet_evidence_with_index(entities, &index)
@@ -147,7 +147,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_index(
 /// This keeps the public high-confidence diagnostic policy separate from
 /// constructive recovery, whose own grammar may legitimately prove a body from
 /// a single bend pair plus independent topology/trim evidence.
-#[must_use]
+#[must_use = "The detected formed-sheet evidence is returned for feature recovery, not stored."]
 #[expect(
     clippy::too_many_lines,
     reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"

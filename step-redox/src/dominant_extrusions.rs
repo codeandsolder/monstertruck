@@ -34,7 +34,7 @@ pub struct DominantExtrusionCandidate {
     pub compatible_side_fraction: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect dominant extrusion candidates collection is returned and must be retained or inspected."]
 pub fn detect_dominant_extrusion_candidates(
     signatures: &[SolidSurfaceSignature],
 ) -> Vec<DominantExtrusionCandidate> {

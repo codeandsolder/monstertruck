@@ -156,16 +156,16 @@ fn full_period_cone_loop_closes_to_singular_side() {
     let boundary = PolyBoundary::new(vec![ring], &surface, 0.01);
 
     assert!(
-        boundary.uv_min.y <= -2.5 + KERNEL_EPSILON,
+        boundary.uv_min().y <= -2.5 + KERNEL_EPSILON,
         "expected cone cap to include the apex side, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
     assert!(
-        boundary.uv_max.y <= KERNEL_EPSILON,
+        boundary.uv_max().y <= KERNEL_EPSILON,
         "expected cone cap to end at the trim ring, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
 }
 
@@ -209,17 +209,17 @@ fn full_period_ring_pair_uses_shared_periodic_seam() {
         &surface,
         0.01,
     );
-    let span = boundary.uv_max.x - boundary.uv_min.x;
+    let span = boundary.uv_max().x - boundary.uv_min().x;
 
     assert!(
         span <= TAU + KERNEL_EPSILON,
         "expected full-period rings to share a seam, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
     assert!(original_points.iter().all(|point| {
         boundary
-            .loops
+            .loops()
             .iter()
             .flatten()
             .any(|boundary_point| boundary_point.point.distance(*point) <= KERNEL_EPSILON)
@@ -301,16 +301,12 @@ fn cdt_insertion_splits_duplicate_seam_chords_through_existing_vertices() {
         .iter()
         .map(|(u, v)| Point2::new(f64::from_bits(*u), f64::from_bits(*v)))
         .collect::<Vec<_>>();
-    let boundary = PolyBoundary {
-        loops: vec![
-            loop_points
-                .into_iter()
-                .map(|uv| SurfacePoint::from((uv, Point3::new(uv.x, uv.y, 0.0))))
-                .collect(),
-        ],
-        uv_min: Point2::new(0.0, f64::from_bits(4585802930648964182)),
-        uv_max: Point2::new(TAU * 0.5, f64::from_bits(4591506709037279730)),
-    };
+    let boundary = PolyBoundary::from_closed_loops(vec![
+        loop_points
+            .into_iter()
+            .map(|uv| SurfacePoint::from((uv, Point3::new(uv.x, uv.y, 0.0))))
+            .collect(),
+    ]);
     let mut triangulation = Cdt::new();
     let mut boundary_map = HashMap::<FixedVertexHandle, Point3>::default();
 

@@ -10,7 +10,7 @@ use super::SurfaceCarrier;
 use crate::{BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
-    analytic_cone_deviation::bound_nurbs_cone_deviation,
+    analytic_radial_deviation::bound_nurbs_radial_deviation,
     analytic_curve_incidence::{CurveIncidence, certify_bspline_curve_on_support},
 };
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -65,7 +65,7 @@ impl Linear {
         };
         let height = (*first - self.origin).dot(self.axis);
         let radius = self.slope.mul_add(height, self.radius);
-        bound_nurbs_cone_deviation(
+        bound_nurbs_radial_deviation(
             &NurbsCurve::from(curve.clone()),
             self.origin + self.axis * height,
             self.axis * self.slope.signum(),

@@ -1,12 +1,13 @@
 //! Planar-region evidence and coplanar interface imprinting.
 
+use monstertruck_meshing::analyzers::ProjectionNeighborhood;
 use std::sync::OnceLock;
 
 use super::{
     BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
     Invertible, LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2,
     Point3, PolygonMesh, SearchNearestParameter, SearchParameter, ShapesOpStatus, StandardVertex,
-    Vector2, Vector3, WithPointCloud,
+    Vector2, Vector3,
 };
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
@@ -619,8 +620,9 @@ where
     let proximity = 2.0 * BooleanTolerance::new(tol).length;
     for face_index in 0..target.len() {
         let polygon = target_polygons[face_index].as_ref()?;
+        let index = ProjectionNeighborhood::new(polygon, proximity);
         for (edge, samples) in &candidates {
-            if !polygon.neighborhood_include(samples, proximity) {
+            if !index.includes(samples) {
                 continue;
             }
             if target[face_index]

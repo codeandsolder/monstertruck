@@ -10,7 +10,7 @@ use monstertruck_geometry::analytic_line_segment::{
 ///
 /// The result is not an oriented edge topology, simple face trim or solid
 /// occupied-set equivalence certificate.
-#[must_use]
+#[must_use = "use the whole-locus certificate when claiming native curve segment equivalence"]
 pub fn certify_native_curve_segment_locus(
     curve: &Curve,
     start: Point3,

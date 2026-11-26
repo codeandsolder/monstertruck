@@ -399,25 +399,26 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     let label_positive_len = difference0.len();
     difference0.append(&mut difference1);
-    let label_regions = planar_union::overlay_difference_regions(
+    // A failed arrangement or weld is not evidence that the alternative
+    // geometric classification is invalid. Try it before reporting failure,
+    // just as when the labeled shell materializes but has invalid topology.
+    if let Some(label_regions) = planar_union::overlay_difference_regions(
         difference0,
         label_positive_len,
         &full_positive_regions,
         &full_cutter_regions,
         tol,
-    )
-    .ok_or(ShapeOpsError::RegionMaterializationFailed {
-        operation: "difference_planar_overlay",
-    })?;
-    let mut label_shell =
-        weld_and_convert(&label_regions, "difference", BooleanTolerance::new(tol))?;
-    let _ = orient_regular_shell(&mut label_shell);
-    if label_shell
-        .connected_components()
-        .iter()
-        .all(|component| component.check_solid_boundary().is_ok())
+    ) && let Ok(mut label_shell) =
+        weld_and_convert(&label_regions, "difference", BooleanTolerance::new(tol))
     {
-        return Ok(label_shell);
+        let _ = orient_regular_shell(&mut label_shell);
+        if label_shell
+            .connected_components()
+            .iter()
+            .all(|component| component.check_solid_boundary().is_ok())
+        {
+            return Ok(label_shell);
+        }
     }
 
     let [and0, or0, unknown0] = analysis.cls0.and_or_unknown();

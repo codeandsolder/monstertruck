@@ -126,6 +126,46 @@ pub(super) fn crossing_parameters<C: BoundedCurve<Point = Point3, Vector = Vecto
     )
 }
 
+/// Refine an already accepted curve/surface intersection in its original
+/// charts. The Newton step solves C(t) = S(u,v); a singular tangent or an
+/// exhausted line search leaves the best finite residual unchanged.
+pub(super) fn curve_surface_parameters<C: ParametricCurve3D, S: ParametricSurface3D>(
+    curve: &C,
+    surface: &S,
+    seeds: [f64; 3],
+) -> Option<[f64; 3]> {
+    let unbounded = (-f64::MAX, f64::MAX);
+    let (u, v) = surface.try_range_tuple();
+    let (intrinsic_u, intrinsic_v) = surface.parameter_bounds_are_intrinsic();
+    let ranges = [
+        curve.try_range_tuple().unwrap_or(unbounded),
+        if intrinsic_u && surface.period_u().is_none() {
+            u.unwrap_or(unbounded)
+        } else {
+            unbounded
+        },
+        if intrinsic_v && surface.period_v().is_none() {
+            v.unwrap_or(unbounded)
+        } else {
+            unbounded
+        },
+    ];
+    improve(
+        seeds,
+        ranges,
+        |[t, u, v]| curve.evaluate(t) - surface.evaluate(u, v),
+        |[t, u, v], gap| {
+            let matrix = Matrix3::from_cols(
+                curve.derivative(t),
+                -surface.derivative_u(u, v),
+                -surface.derivative_v(u, v),
+            );
+            let update = matrix.invert()? * -gap;
+            Some([update.x, update.y, update.z])
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -43,7 +43,7 @@ impl ConeHyperbolaUv {
     /// Use the literal STEP cone x direction, not a guessed world axis.
     /// Reject reference directions outside the source axis orthogonality
     /// allowance and preserve the misalignment for error provenance.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new(hyperbola: AxisParallelPlaneConeHyperbola, source_x: Vector3) -> Option<Self> {
         let axis = hyperbola.cone_axis();
         if !unit(source_x) {
@@ -70,14 +70,14 @@ impl ConeHyperbolaUv {
 
     /// The source-aligned orthonormal reference vectors used by the native
     /// cone-revolution surface (with the original STEP axis preserved).
-    #[must_use]
+    #[must_use = "The source-aligned cone reference axes are returned; dropping them loses chart orientation."]
     pub const fn reference_axes(self) -> (Vector3, Vector3) { (self.x, self.y) }
 
     /// Analytic UV at the existing 3D hyperbola parameter, with no wrap.
     ///
     /// Axial coordinate = (|d| cosh(t) - r0) / slope.
     /// Angle = `vertex_angle + sign(d) * atan(sinh(t))`.
-    #[must_use]
+    #[must_use = "The optional evaluate outcome must be inspected to distinguish a value from absence."]
     pub fn evaluate(self, t: f64) -> Option<Point2> {
         if !t.is_finite() {
             return None;
@@ -92,7 +92,7 @@ impl ConeHyperbolaUv {
     }
 
     /// Analytic parameter tangent; azimuth is strictly monotone.
-    #[must_use]
+    #[must_use = "The optional derivative outcome must be inspected to distinguish a value from absence."]
     pub fn derivative(self, t: f64) -> Option<Vector2> {
         if !t.is_finite() {
             return None;
@@ -105,7 +105,7 @@ impl ConeHyperbolaUv {
 
     /// Evaluate the source cone's independent generator-line revolution
     /// chart, not a projection onto the proposed healed hyperbola.
-    #[must_use]
+    #[must_use = "The source cone point is returned, if defined, without changing the cone."]
     pub fn cone_evaluate(self, uv: Point2) -> Option<Point3> {
         if !uv.x.is_finite() || !uv.y.is_finite() {
             return None;
@@ -125,7 +125,7 @@ impl ConeHyperbolaUv {
 
     /// The finite branch's angle is monotone and spans strictly less than
     /// pi radians, including if its source-cone chart seam lies inside it.
-    #[must_use]
+    #[must_use = "The optional trim outcome must be inspected to distinguish a value from absence."]
     pub fn trim(self, trim: OrientedHyperbolaTrim) -> Option<ConeUvTrim> {
         let first = self.evaluate(trim.start_parameter)?;
         let last = self.evaluate(trim.end_parameter)?;

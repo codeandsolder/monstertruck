@@ -3,6 +3,7 @@ mod geometry;
 mod manifest;
 mod occupancy;
 mod paired_volume;
+mod vector;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
@@ -35,6 +36,8 @@ enum Command {
     Occupancy(occupancy::OccupancyArgs),
     /// Report common volume and both directed cuts for matched solid occurrences.
     BooleanResiduals(geometry::boolean::BooleanArgs),
+    /// Compare two individual solids, optionally addressed by exact STEP entity IDs.
+    SolidDiagnostics(geometry::solid_diagnostics::SolidArgs),
     /// Report independent OCCT geometry metrics in the native oracle schema.
     Analyze {
         input: PathBuf,
@@ -73,12 +76,24 @@ enum Command {
     },
     /// Hash the strict world-coordinate tessellation at 1e-9 mm precision.
     MeshHash { input: PathBuf },
+    /// Independent elementary-carrier spatial volume diagnostic (no UV quadrature).
+    SpatialVolume {
+        reference: PathBuf,
+        candidate: PathBuf,
+        #[arg(long, default_value_t = 1e-10)]
+        absolute_tolerance: f64,
+        #[arg(long, default_value_t = 2e-9)]
+        boundary_tolerance_mm: f64,
+    },
     /// Compare signed face integrals at two quadrature tolerances and four references.
     PairedVolume {
         reference: PathBuf,
         candidate: PathBuf,
         #[arg(long)]
         absolute_tolerance: f64,
+        /// Include per-face signed fluxes at both quadrature tolerances.
+        #[arg(long)]
+        face_flux: bool,
     },
 }
 
@@ -232,6 +247,7 @@ fn main() -> Result<ExitCode> {
     match cli.command {
         Command::Occupancy(args) => occupancy::run(&args),
         Command::BooleanResiduals(args) => geometry::boolean::run(&args),
+        Command::SolidDiagnostics(args) => geometry::solid_diagnostics::run(&args),
         Command::FetchFixtures(args) => {
             manifest::fetch(&args)?;
             Ok(ExitCode::SUCCESS)
@@ -316,16 +332,42 @@ fn main() -> Result<ExitCode> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::PairedVolume {
+        Command::SpatialVolume {
             reference,
             candidate,
             absolute_tolerance,
+            boundary_tolerance_mm,
         } => {
             let mut kernel = OcctKernel::new()?;
             let (a, _) = load(&mut kernel, &reference)?;
             let (b, _) = load(&mut kernel, &candidate)?;
-            let report =
-                paired_volume::paired_volume(&mut kernel, a.shape, b.shape, absolute_tolerance)?;
+            let report = paired_volume::spatial_volume(
+                &mut kernel,
+                a.shape,
+                b.shape,
+                absolute_tolerance,
+                boundary_tolerance_mm,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            // This diagnostic is never the strict paired-volume gate.
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::PairedVolume {
+            reference,
+            candidate,
+            absolute_tolerance,
+            face_flux,
+        } => {
+            let mut kernel = OcctKernel::new()?;
+            let (a, _) = load(&mut kernel, &reference)?;
+            let (b, _) = load(&mut kernel, &candidate)?;
+            let report = paired_volume::paired_volume(
+                &mut kernel,
+                a.shape,
+                b.shape,
+                absolute_tolerance,
+                face_flux,
+            )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(if report.within_absolute_tolerance {
                 ExitCode::SUCCESS

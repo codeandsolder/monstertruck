@@ -44,17 +44,17 @@ pub struct SurfaceCurveTrimRef<'a> {
 
 impl<'a> SurfaceCurveTrimRef<'a> {
     /// Creates a new trim lookup reference.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(curve: &'a SurfaceCurve3D, surface: &'a Surface) -> Self {
         Self { curve, surface }
     }
 
     /// Returns the referenced STEP `surface_curve`.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the referenced STEP `surface_curve`."]
     pub const fn curve(self) -> &'a SurfaceCurve3D { self.curve }
 
     /// Returns the target surface.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the target surface."]
     pub const fn surface(self) -> &'a Surface { self.surface }
 }
 
@@ -67,15 +67,15 @@ pub struct CurveTrimRef<'a> {
 
 impl<'a> CurveTrimRef<'a> {
     /// Creates a new trim lookup reference.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(curve: &'a Curve3D, surface: &'a Surface) -> Self { Self { curve, surface } }
 
     /// Returns the referenced curve.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the referenced curve."]
     pub const fn curve(self) -> &'a Curve3D { self.curve }
 
     /// Returns the target surface.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the target surface."]
     pub const fn surface(self) -> &'a Surface { self.surface }
 }
 
@@ -163,7 +163,7 @@ impl SurfaceCurve3D {
     }
 
     /// Creates a new STEP `surface_curve`.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(
         kind: SurfaceCurveKind,
         leader: Box<Curve3D>,
@@ -179,30 +179,30 @@ impl SurfaceCurve3D {
     }
 
     /// Returns the STEP `surface_curve` flavor.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the STEP `surface_curve` flavor."]
     pub const fn kind(&self) -> SurfaceCurveKind { self.kind }
 
     /// Returns the master representation.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the master representation."]
     pub const fn master_representation(&self) -> SurfaceCurveRepresentation {
         self.master_representation
     }
 
     /// Returns the 3D leader curve.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the 3D leader curve."]
     pub fn leader(&self) -> &Curve3D { self.leader.as_ref() }
 
     /// Returns the mutable 3D leader curve.
     pub fn leader_mut(&mut self) -> &mut Curve3D { self.leader.as_mut() }
 
     /// Returns the associated geometries.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the associated geometries."]
     pub fn associated_geometry(&self) -> &[SurfaceCurveAssociatedGeometry] {
         &self.associated_geometry
     }
 
     /// Returns the first associated `ParameterCurve` whose basis surface matches `surface`.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the first associated `ParameterCurve` whose basis surface matches `surface`."]
     pub fn parameter_curve_on(&self, surface: &Surface) -> Option<&StepParameterCurve> {
         self.associated_geometry
             .iter()

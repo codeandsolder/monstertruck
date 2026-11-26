@@ -2,6 +2,10 @@ use anyhow::{Context, Result, ensure};
 use occt_wasm::{BoundingBox, OcctKernel, ShapeHandle};
 use serde::Serialize;
 
+mod face_flux;
+pub(crate) use face_flux::spatial_volume::compare as spatial_volume;
+use face_flux::{FaceFluxAccumulator, FaceFluxReport};
+
 const EPSILONS: [f64; 2] = [1e-12, 1e-13];
 
 #[derive(Debug, Serialize)]
@@ -37,6 +41,8 @@ pub struct PairedVolume {
     pub within_absolute_tolerance: bool,
     reference_spread: ReferenceSpread,
     pub samples: Vec<ReferenceSample>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    face_flux: Option<FaceFluxReport>,
 }
 
 // Distill a non-overlapping floating-point expansion using error-free
@@ -91,12 +97,12 @@ fn accurate_sum(values: impl IntoIterator<Item = f64>) -> Result<f64> {
     Ok(hi)
 }
 
-fn integrate(
+fn signed_terms(
     kernel: &mut OcctKernel,
     shape: ShapeHandle,
     point: [f64; 3],
     epsilon: f64,
-) -> Result<Integral> {
+) -> Result<Vec<f64>> {
     let [x, y, z] = point;
     let terms = kernel.get_signed_face_volume_integrals(shape, x, y, z, epsilon)?;
     let pairs = terms.as_chunks::<2>();
@@ -111,10 +117,28 @@ fn integrate(
             .all(|[mass, error]| mass.is_finite() && error.is_finite() && *error >= 0.0),
         "invalid signed face integration"
     );
+    Ok(terms)
+}
+
+fn integrate(terms: &[f64]) -> Result<Integral> {
+    let pairs = terms.as_chunks::<2>().0;
     Ok(Integral {
-        volume: accurate_sum(pairs.0.iter().map(|pair| pair[0]))?,
-        summed_face_error_estimate: accurate_sum(pairs.0.iter().map(|pair| pair[1]))?,
+        volume: accurate_sum(pairs.iter().map(|pair| pair[0]))?,
+        summed_face_error_estimate: accurate_sum(pairs.iter().map(|pair| pair[1]))?,
     })
+}
+
+/// Difference the signed face terms before rounding either whole-solid
+/// volume. Independently rounded volumes can compare equal even when the
+/// represented geometry differs by more than the requested tolerance.
+fn signed_volume_difference(a: &[f64], b: &[f64]) -> Result<f64> {
+    accurate_sum(
+        a.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| pair[0])
+            .chain(b.as_chunks::<2>().0.iter().map(|pair| -pair[0])),
+    )
 }
 
 fn references(a: BoundingBox, b: BoundingBox) -> Result<[[f64; 3]; 4]> {
@@ -164,6 +188,7 @@ pub fn paired_volume(
     a: ShapeHandle,
     b: ShapeHandle,
     tolerance: f64,
+    include_face_flux: bool,
 ) -> Result<PairedVolume> {
     ensure!(
         tolerance.is_finite() && tolerance > 0.0,
@@ -171,18 +196,27 @@ pub fn paired_volume(
     );
     let bbox_a = kernel.get_optimal_bounds(a, false, false)?;
     let bbox_b = kernel.get_optimal_bounds(b, false, false)?;
-    let mut samples = Vec::with_capacity(4);
+    let references = references(bbox_a, bbox_b)?;
+    let mut flux = include_face_flux
+        .then(|| FaceFluxAccumulator::new(kernel, a, b))
+        .transpose()?;
+    let mut samples = Vec::with_capacity(references.len());
     let mut max_absolute_delta = 0.0_f64;
     let mut max_quadrature_drift = 0.0_f64;
-    for reference in references(bbox_a, bbox_b)? {
-        let coarse_a = integrate(kernel, a, reference, EPSILONS[0])?;
-        let coarse_b = integrate(kernel, b, reference, EPSILONS[0])?;
-        let fine_a = integrate(kernel, a, reference, EPSILONS[1])?;
-        let fine_b = integrate(kernel, b, reference, EPSILONS[1])?;
-        let delta = finite_difference(fine_a.volume, fine_b.volume)?;
-        let coarse_delta = finite_difference(coarse_a.volume, coarse_b.volume)?;
-        let a_quadrature_drift = finite_difference(fine_a.volume, coarse_a.volume)?.abs();
-        let b_quadrature_drift = finite_difference(fine_b.volume, coarse_b.volume)?.abs();
+    for (index, reference) in references.into_iter().enumerate() {
+        let coarse_a = signed_terms(kernel, a, reference, EPSILONS[0])?;
+        let coarse_b = signed_terms(kernel, b, reference, EPSILONS[0])?;
+        let fine_a = signed_terms(kernel, a, reference, EPSILONS[1])?;
+        let fine_b = signed_terms(kernel, b, reference, EPSILONS[1])?;
+        if let Some(flux) = &mut flux {
+            flux.record(index, [&coarse_a, &coarse_b], [&fine_a, &fine_b])?;
+        }
+        let delta = signed_volume_difference(&fine_a, &fine_b)?;
+        let coarse_delta = signed_volume_difference(&coarse_a, &coarse_b)?;
+        let a_quadrature_drift = signed_volume_difference(&fine_a, &coarse_a)?.abs();
+        let b_quadrature_drift = signed_volume_difference(&fine_b, &coarse_b)?.abs();
+        let fine_a = integrate(&fine_a)?;
+        let fine_b = integrate(&fine_b)?;
         max_absolute_delta = max_absolute_delta.max(delta.abs()).max(coarse_delta.abs());
         max_quadrature_drift = max_quadrature_drift
             .max(a_quadrature_drift)
@@ -210,12 +244,32 @@ pub fn paired_volume(
             b: spread(&samples, |sample| sample.b.volume)?,
         },
         samples,
+        face_flux: flux
+            .map(|flux| flux.finish(references, tolerance))
+            .transpose()?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paired_difference_retains_sub_ulp_volume_changes() -> Result<()> {
+        // Two valid finite signed face buffers whose whole-solid volumes
+        // round to the same representable f64.
+        let a = [1e16, 0.0, 1.0, 0.0];
+        let b = [1e16, 0.0];
+        assert!(
+            integrate(&a)?
+                .volume
+                .total_cmp(&integrate(&b)?.volume)
+                .is_eq()
+        );
+        assert!(signed_volume_difference(&a, &b)?.total_cmp(&1.0).is_eq());
+        assert!(signed_volume_difference(&b, &a)?.total_cmp(&-1.0).is_eq());
+        Ok(())
+    }
 
     #[test]
     fn sum_retains_small_terms_and_rounds_ties() -> Result<()> {
@@ -245,8 +299,8 @@ mod tests {
                 > kernel.sub_shape_occurrence_count(whole, "face")?
         );
         let tolerance = 1e-10;
-        let forward = paired_volume(&mut kernel, whole, split, tolerance)?;
-        let reverse = paired_volume(&mut kernel, split, whole, tolerance)?;
+        let forward = paired_volume(&mut kernel, whole, split, tolerance, false)?;
+        let reverse = paired_volume(&mut kernel, split, whole, tolerance, false)?;
         assert!(forward.within_absolute_tolerance && reverse.within_absolute_tolerance);
         for (a, b) in forward.samples.iter().zip(&reverse.samples) {
             assert!(
@@ -261,7 +315,7 @@ mod tests {
         }
         for change in [1e-6, 1e-10] {
             let changed = kernel.make_box(2.0, 3.0, 4.0 + change)?;
-            let report = paired_volume(&mut kernel, whole, changed, tolerance)?;
+            let report = paired_volume(&mut kernel, whole, changed, tolerance, false)?;
             assert!(!report.within_absolute_tolerance);
             for sample in report.samples {
                 assert!((sample.delta + 6.0 * change).abs() <= tolerance);
@@ -270,7 +324,7 @@ mod tests {
         let outer = kernel.make_box(3.0, 3.0, 3.0)?;
         let cavity = kernel.make_box_from_corners(1.0, 1.0, 1.0, 2.0, 2.0, 2.0)?;
         let hollow = kernel.cut(outer, cavity)?;
-        let report = paired_volume(&mut kernel, hollow, hollow, tolerance)?;
+        let report = paired_volume(&mut kernel, hollow, hollow, tolerance, false)?;
         assert!(report.within_absolute_tolerance);
         assert!(
             report
@@ -280,8 +334,8 @@ mod tests {
         );
         let faces = kernel.get_sub_shape_occurrences(whole, "face")?;
         let face = *faces.first().context("box has no faces")?;
-        assert!(paired_volume(&mut kernel, whole, face, tolerance).is_err());
-        assert!(paired_volume(&mut kernel, whole, split, 0.0).is_err());
+        assert!(paired_volume(&mut kernel, whole, face, tolerance, false).is_err());
+        assert!(paired_volume(&mut kernel, whole, split, 0.0, false).is_err());
         Ok(())
     }
 }

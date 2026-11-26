@@ -1,6 +1,9 @@
+#[cfg(test)]
+use super::EuclideanSpace;
+use super::active_sweep::ActiveSweep;
 use super::{
-    BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3,
-    PolygonMesh, StandardVertex, Vector3, hash,
+    BoundingBox, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh,
+    StandardVertex, Vector3, hash, sweep_coordinate_key, triangle_projection_interval,
 };
 use array_macro::array;
 
@@ -30,115 +33,119 @@ pub trait Collision {
 impl Collision for PolygonMesh {
     #[inline]
     fn collide_with(&self, other: &PolygonMesh) -> Option<(Point3, Point3)> {
-        are_colliding(self, other)
+        interference_segments(self, other).next()
     }
     #[inline]
     fn extract_interference(&self, other: &PolygonMesh) -> Vec<(Point3, Point3)> {
-        collision(self, other)
+        interference_segments(self, other).collect()
     }
 }
 
-#[repr(u8)]
+/// Event rank encodes the original tie order: front before back,
+/// then operand number, then original triangle index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum EndPointType {
-    Front,
-    Back,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 struct EndPoint {
-    entity: f64,
-    r#type: EndPointType,
-    segnum: usize,
-    index: usize,
+    coordinate: u64,
+    rank: usize,
 }
 
 impl EndPoint {
-    #[inline]
-    const fn new(entity: f64, r#type: EndPointType, segnum: usize, index: usize) -> Self {
-        Self {
-            entity,
-            r#type,
-            segnum,
-            index,
-        }
-    }
-    #[inline]
-    fn from_seg(seg: (f64, f64), segnum: usize, index: usize) -> Vec<Self> {
-        vec![
-            Self::new(seg.0, EndPointType::Front, segnum, index),
-            Self::new(seg.1, EndPointType::Back, segnum, index),
+    const fn from_seg(seg: (f64, f64), index: usize, total: usize) -> [Self; 2] {
+        [
+            Self {
+                coordinate: sweep_coordinate_key(seg.0),
+                rank: index,
+            },
+            Self {
+                coordinate: sweep_coordinate_key(seg.1),
+                rank: total + index,
+            },
         ]
     }
 }
 
-fn tri_to_seg(tri: [Point3; 3], unit: Vector3) -> (f64, f64) {
-    let a = tri[0].to_vec().dot(unit);
-    let b = tri[1].to_vec().dot(unit);
-    let c = tri[2].to_vec().dot(unit);
-    (f64::min(f64::min(a, b), c), f64::max(f64::max(a, b), c))
+#[derive(Clone, Copy)]
+struct TriangleData {
+    points: [Point3; 3],
+    bounds: BoundingBox<Point3>,
 }
 
-fn sorted_endpoints<I, J>(first_triangles: I, second_triangles: J, unit: Vector3) -> Vec<EndPoint>
-where
-    I: IntoIterator<Item = [Point3; 3]>,
-    J: IntoIterator<Item = [Point3; 3]>, {
-    let mut res: Vec<EndPoint> = first_triangles
-        .into_iter()
-        .enumerate()
-        .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-        .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit), 0, i))
-        .chain(
-            second_triangles
-                .into_iter()
-                .enumerate()
-                .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-                .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit), 1, i)),
-        )
-        .collect();
-    res.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
-    res
+impl TriangleData {
+    fn new(points: [Point3; 3]) -> Self {
+        Self {
+            bounds: points.iter().collect(),
+            points,
+        }
+    }
 }
 
-fn colliding_segment_pairs(sort_endpoints: Vec<EndPoint>) -> impl Iterator<Item = (usize, usize)> {
-    let mut current = [Vec::<usize>::new(), Vec::<usize>::new()];
-    sort_endpoints
-        .into_iter()
-        .filter_map(
-            move |EndPoint {
-                      r#type,
-                      segnum,
-                      index,
-                      ..
-                  }| match r#type {
-                EndPointType::Front => {
-                    current[segnum].push(index);
-                    Some(
-                        current[1 - segnum]
-                            .clone()
-                            .into_iter()
-                            .map(move |i| if segnum == 0 { (index, i) } else { (i, index) }),
-                    )
-                }
-                EndPointType::Back => {
-                    let i = current[segnum].iter().position(|idx| *idx == index)?;
-                    current[segnum].swap_remove(i);
-                    None
-                }
-            },
-        )
+fn sorted_endpoints(triangles: &[Vec<TriangleData>; 2], unit: Vector3) -> Vec<EndPoint> {
+    let total = triangles.iter().map(Vec::len).sum();
+    let mut events = triangles
+        .iter()
         .flatten()
+        .enumerate()
+        .filter(|(_, triangle)| {
+            let [a, b, c] = triangle.points;
+            !(b - a).cross(c - a).so_small()
+        })
+        .flat_map(|(index, triangle)| {
+            EndPoint::from_seg(
+                triangle_projection_interval(triangle.points, unit, 0.0),
+                index,
+                total,
+            )
+        })
+        .collect::<Vec<_>>();
+    events.sort_unstable();
+    events
 }
 
-fn disjoint_bdbs(first_triangle: [Point3; 3], second_triangle: [Point3; 3]) -> bool {
-    let bdb0: BoundingBox<Point3> = first_triangle.iter().collect();
-    let bdb1: BoundingBox<Point3> = second_triangle.iter().collect();
-    bdb0.max()[0] < bdb1.min()[0]
-        || bdb1.max()[0] < bdb0.min()[0]
-        || bdb0.max()[1] < bdb1.min()[1]
-        || bdb1.max()[1] < bdb0.min()[1]
-        || bdb0.max()[2] < bdb1.min()[2]
-        || bdb1.max()[2] < bdb0.min()[2]
+fn colliding_segment_pairs(
+    sort_endpoints: Vec<EndPoint>,
+    counts: [usize; 2],
+) -> impl Iterator<Item = (usize, usize)> {
+    let mut current = counts.map(ActiveSweep::new);
+    let total = counts.iter().sum::<usize>();
+    let mut events = sort_endpoints.into_iter();
+    // Drain each front event against the unchanged opposite active set
+    // before reading the next event. No per-event allocation or copying.
+    let mut pending = None::<(usize, usize, usize)>;
+    std::iter::from_fn(move || {
+        loop {
+            if let Some((operand, index, offset)) = pending.as_mut() {
+                if let Some(&other) = current[1 - *operand].indices().get(*offset) {
+                    *offset += 1;
+                    return Some(if *operand == 0 {
+                        (*index, other)
+                    } else {
+                        (other, *index)
+                    });
+                }
+                pending = None;
+            }
+            let event = events.next()?;
+            let back = event.rank >= total;
+            let global = if back { event.rank - total } else { event.rank };
+            let operand = usize::from(global >= counts[0]);
+            let index = if operand == 0 {
+                global
+            } else {
+                global - counts[0]
+            };
+            if back {
+                current[operand].remove(index);
+            } else if current[operand].insert(index) {
+                pending = Some((operand, index, 0));
+            }
+        }
+    })
+}
+
+fn disjoint_bdbs(first: BoundingBox<Point3>, second: BoundingBox<Point3>) -> bool {
+    (0..3).any(|axis| {
+        first.max()[axis] < second.min()[axis] || second.max()[axis] < first.min()[axis]
+    })
 }
 
 fn collide_seg_triangle(seg: [Point3; 2], tri: [Point3; 3]) -> Option<Point3> {
@@ -209,50 +216,177 @@ const fn make_pos_tri(poly: &PolygonMesh, face: [StandardVertex; 3]) -> [Point3;
     array![i => poly.positions()[face[i].pos]; 3]
 }
 
-fn collision(poly0: &PolygonMesh, poly1: &PolygonMesh) -> Vec<(Point3, Point3)> {
-    let unit = if poly0.positions().is_empty() {
-        return Vec::new();
-    } else {
-        hash::take_one_unit(poly0.positions()[0])
-    };
-    let first_faces = poly0.faces().triangle_iter().collect::<Vec<_>>();
-    let second_faces = poly1.faces().triangle_iter().collect::<Vec<_>>();
-    let first_triangles = first_faces.iter().map(|face| make_pos_tri(poly0, *face));
-    let second_triangles = second_faces.iter().map(|face| make_pos_tri(poly1, *face));
-    colliding_segment_pairs(sorted_endpoints(first_triangles, second_triangles, unit))
-        .filter_map(|(idx0, idx1)| {
-            let first_triangle = make_pos_tri(poly0, first_faces[idx0]);
-            let second_triangle = make_pos_tri(poly1, second_faces[idx1]);
-            if disjoint_bdbs(first_triangle, second_triangle) {
-                None
-            } else {
-                collide_triangles(first_triangle, second_triangle)
-            }
-        })
-        .collect()
+fn interference_segments(
+    poly0: &PolygonMesh,
+    poly1: &PolygonMesh,
+) -> impl Iterator<Item = (Point3, Point3)> {
+    let triangles = [poly0, poly1].map(|mesh| {
+        if poly0.positions().is_empty() || poly1.positions().is_empty() {
+            Vec::new()
+        } else {
+            mesh.faces()
+                .triangle_iter()
+                .map(|face| TriangleData::new(make_pos_tri(mesh, face)))
+                .collect::<Vec<_>>()
+        }
+    });
+    let counts = triangles.each_ref().map(Vec::len);
+    let events = poly0.positions().first().map_or_else(Vec::new, |&first| {
+        sorted_endpoints(&triangles, hash::take_one_unit(first))
+    });
+    colliding_segment_pairs(events, counts).filter_map(move |(left, right)| {
+        let first = &triangles[0][left];
+        let second = &triangles[1][right];
+        if disjoint_bdbs(first.bounds, second.bounds) {
+            None
+        } else {
+            collide_triangles(first.points, second.points)
+        }
+    })
 }
 
-fn are_colliding(poly0: &PolygonMesh, poly1: &PolygonMesh) -> Option<(Point3, Point3)> {
-    let unit = if poly0.positions().is_empty() {
-        return None;
-    } else {
-        hash::take_one_unit(poly0.positions()[0])
-    };
-    let first_faces = poly0.faces().triangle_iter().collect::<Vec<_>>();
-    let second_faces = poly1.faces().triangle_iter().collect::<Vec<_>>();
-    let first_triangles = first_faces.iter().map(|face| make_pos_tri(poly0, *face));
-    let second_triangles = second_faces.iter().map(|face| make_pos_tri(poly1, *face));
-    colliding_segment_pairs(sorted_endpoints(first_triangles, second_triangles, unit)).find_map(
-        |(idx0, idx1)| {
-            let first_triangle = make_pos_tri(poly0, first_faces[idx0]);
-            let second_triangle = make_pos_tri(poly1, second_faces[idx1]);
-            if disjoint_bdbs(first_triangle, second_triangle) {
-                None
+#[cfg(test)]
+fn reference_pairs(mut original: Vec<(f64, bool, usize, usize)>) -> Vec<(usize, usize)> {
+    original.sort_by(|a, b| {
+        super::compare_sweep_coordinate(a.0, b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.3.cmp(&b.3))
+    });
+    let mut active = [Vec::new(), Vec::new()];
+    let mut reference = Vec::new();
+    for (_, back, operand, index) in original {
+        if back {
+            let slot = active[operand]
+                .iter()
+                .position(|&value| value == index)
+                .expect("active test interval");
+            active[operand].swap_remove(slot);
+        } else {
+            active[operand].push(index);
+            reference.extend(active[1 - operand].iter().map(|&other| {
+                if operand == 0 {
+                    (index, other)
+                } else {
+                    (other, index)
+                }
+            }));
+        }
+    }
+    reference
+}
+
+#[test]
+fn streaming_pairs_preserve_exact_event_and_active_order() {
+    let counts = [73, 91];
+    let total = counts.iter().sum();
+    let mut events = Vec::new();
+    let mut original = Vec::new();
+    for (operand, count) in counts.into_iter().enumerate() {
+        for index in 0..count {
+            // Repeated, nested, zero-width and coincident intervals.
+            let low = f64::from(
+                u32::try_from((index * 17 + operand * 5) % 19).expect("small test index"),
+            ) - 9.0;
+            let high = low + f64::from(u32::try_from((index * 11) % 13).expect("small test index"));
+            let global = if operand == 0 {
+                index
             } else {
-                collide_triangles(first_triangle, second_triangle)
+                counts[0] + index
+            };
+            events.extend(EndPoint::from_seg((low, high), global, total));
+            original.extend([(low, false, operand, index), (high, true, operand, index)]);
+        }
+    }
+    let reference = reference_pairs(original);
+    events.sort_unstable();
+    assert_eq!(
+        colliding_segment_pairs(events, counts).collect::<Vec<_>>(),
+        reference
+    );
+}
+
+#[test]
+fn cached_collision_matches_original_order_and_narrow_phase() -> anyhow::Result<()> {
+    use super::{Faces, StandardAttributes};
+    let mesh = |vertical: bool, shift: f64| -> anyhow::Result<PolygonMesh> {
+        let mut points = Vec::new();
+        let mut faces = Vec::new();
+        for row in 0..12 {
+            for col in 0..9 {
+                let x = f64::from(col) * 0.2 - 0.6;
+                let y = f64::from(row) * 0.2 - 0.9;
+                let z = shift + f64::from((row + col) % 3) * 0.07;
+                let triangle = if vertical {
+                    [
+                        Point3::new(x, z, y),
+                        Point3::new(x + 0.29, z, y),
+                        Point3::new(x, z, y + 0.29),
+                    ]
+                } else {
+                    [
+                        Point3::new(x, y, z),
+                        Point3::new(x + 0.29, y, z),
+                        Point3::new(x, y + 0.29, z),
+                    ]
+                };
+                let start = points.len();
+                points.extend(triangle);
+                faces.push([start, start + 1, start + 2]);
+                if (row + col) % 7 == 0 {
+                    faces.push([start, start + 1, start + 1]);
+                }
             }
-        },
-    )
+        }
+        Ok(PolygonMesh::new(
+            StandardAttributes {
+                positions: points,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?)
+    };
+    for shift in [-0.7, 0.0, 0.2, 4.0] {
+        let horizontal = mesh(false, 0.0)?;
+        let vertical = mesh(true, shift)?;
+        for (left, right) in [(&horizontal, &vertical), (&vertical, &horizontal)] {
+            let triangles = [left, right].map(|mesh| {
+                mesh.faces()
+                    .triangle_iter()
+                    .map(|face| make_pos_tri(mesh, face))
+                    .collect::<Vec<_>>()
+            });
+            let unit = hash::take_one_unit(left.positions()[0]);
+            let mut events = Vec::new();
+            for (operand, list) in triangles.iter().enumerate() {
+                for (index, &triangle) in list.iter().enumerate() {
+                    if !(triangle[1] - triangle[0])
+                        .cross(triangle[2] - triangle[0])
+                        .so_small()
+                    {
+                        let (low, high) = triangle_projection_interval(triangle, unit, 0.0);
+                        events.extend([(low, false, operand, index), (high, true, operand, index)]);
+                    }
+                }
+            }
+            let expected = reference_pairs(events)
+                .into_iter()
+                .filter_map(|(i, j)| {
+                    let first = triangles[0][i];
+                    let second = triangles[1][j];
+                    (!disjoint_bdbs(first.iter().collect(), second.iter().collect()))
+                        .then(|| collide_triangles(first, second))
+                        .flatten()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(left.extract_interference(right), expected, "shift={shift}");
+            assert_eq!(left.collide_with(right), expected.first().copied());
+            if shift == 0.0 {
+                assert!(!expected.is_empty());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

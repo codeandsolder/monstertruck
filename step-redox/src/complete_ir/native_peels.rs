@@ -3,19 +3,22 @@
 //! every edit is applied to the same backend-owned solid.
 use super::{
     CadFragment, CadFragmentSource, CadKernel, RecoveredBoundaryFeatureFamily,
-    compose_boundary_feature_fragment, prepare_native_boundary_pass,
-    recognize_edited_host_with_fallback, recognize_single_healed_host, treatment_layers,
+    compose_boundary_feature_fragment, prepare_native_boundary_pass, recognize_native_edited_host,
+    recognize_single_healed_host, treatment_layers,
 };
 use crate::{
     SourceEntity,
     brep::face_loops,
+    cad_ir::CadModel,
+    cad_kernel::{EvaluationSeed, ReplayMode},
+    cad_recovery::SourceRecovery,
     kernel_source_load::{KernelTopologyId, KernelTopologyProvenance},
     kernel_topology::{KernelPatchEdgeRef, KernelPatchEdgeUse, SourceTopologyEditor},
     planar_features::apply_boundary_feature_peel_plan,
     reduced_brep::ReducedSolid,
 };
 use anyhow::{Context, Result, ensure};
-use std::collections::BTreeSet;
+use std::{cell::RefCell, collections::BTreeSet};
 
 enum ReplayStep {
     Boundary(Vec<RecoveredBoundaryFeatureFamily>),
@@ -31,6 +34,14 @@ pub(super) struct Journal {
 pub(super) enum NextPeel {
     Boundary,
     Treatment,
+}
+
+/// The original unpeeled source, not the intermediate host, is the
+/// final qualification boundary for a replayed constructive history.
+pub(super) struct ReplayTarget<'a, 's, K: CadKernel> {
+    pub(super) source: SourceEntity,
+    pub(super) proof: Option<&'a SourceRecovery<'s, K>>,
+    pub(super) mode: ReplayMode,
 }
 
 impl Journal {
@@ -59,12 +70,12 @@ impl Journal {
             .map_or(0, |last| last + 1)
     }
 
-    fn replay(self, mut host: CadFragment, solid_id: u64) -> Result<CadFragment> {
+    fn replay(&self, mut host: CadFragment, solid_id: u64) -> Result<CadFragment> {
         let passes = self.next_boundary_pass();
         let mut feature_families = 0;
         let mut feature_instances = 0;
         host.model.provenance.clear();
-        for step in self.steps.into_iter().rev() {
+        for step in self.steps.iter().rev() {
             match step {
                 ReplayStep::Boundary(families) => {
                     feature_families += families.len();
@@ -72,10 +83,10 @@ impl Journal {
                         .iter()
                         .map(|family| family.members.len())
                         .sum::<usize>();
-                    host = compose_boundary_feature_fragment(solid_id, &host, &families)?;
+                    host = compose_boundary_feature_fragment(solid_id, &host, families)?;
                 }
                 ReplayStep::Treatment(layers) => {
-                    host = treatment_layers::replay(host, solid_id, layers)?;
+                    host = treatment_layers::replay(host, solid_id, layers.clone())?;
                 }
             }
         }
@@ -92,28 +103,98 @@ impl Journal {
         Ok(host)
     }
 
+    fn evaluate_replay<K: CadKernel>(
+        &self,
+        kernel: &K,
+        host: CadFragment,
+        target: &ReplayTarget<'_, '_, K>,
+        seed: Option<EvaluationSeed<'_, K>>,
+    ) -> Result<CadFragment> {
+        let fragment = self.replay(host, target.source.id)?;
+        let evaluated =
+            kernel.evaluate_replay(&fragment.model, fragment.root, seed, target.mode)?;
+        ensure!(
+            kernel.summarize(&evaluated).is_single_solid(),
+            "native feature replay did not produce one solid"
+        );
+        if let Some(proof) = target.proof {
+            ensure!(
+                proof.matches_evaluated_boundary(&evaluated)?,
+                "native feature replay does not match the original source boundary"
+            );
+        }
+        Ok(fragment)
+    }
+
+    fn recognize_replay<K: CadKernel + SourceTopologyEditor>(
+        &self,
+        kernel: &K,
+        edited: &K::EditedSource,
+        target: &ReplayTarget<'_, '_, K>,
+    ) -> Result<Option<CadFragment>> {
+        let mut native_error = None;
+        if let Some(host) = recognize_native_edited_host(kernel, edited)? {
+            match self.evaluate_replay(kernel, host, target, None) {
+                Ok(fragment) => return Ok(Some(fragment)),
+                Err(error) => native_error = Some(error),
+            }
+        }
+        // Serialize the edited host once, only when native recognition is
+        // insufficient. Each material candidate must prove this intermediate
+        // boundary and pass the full forward replay before ranking.
+        let snapshot = kernel.edited_source_to_step(edited)?;
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
+        )?;
+        let replay_error = RefCell::new(native_error);
+        let acceptance = |model: &CadModel, root, seed: Option<EvaluationSeed<'_, K>>| {
+            let host = CadFragment {
+                source: CadFragmentSource::SameDomainNormalized {
+                    solid_id: target.source.id,
+                },
+                model: model.clone(),
+                root,
+            };
+            match self.evaluate_replay(kernel, host, target, seed) {
+                Ok(_) => true,
+                Err(error) => {
+                    replay_error.borrow_mut().get_or_insert(error);
+                    false
+                }
+            }
+        };
+        if let Some(host) =
+            recognize_single_healed_host(document.as_ref(), kernel, Some(&acceptance), target.mode)?
+        {
+            // Qualification already evaluated this exact DAG and journal.
+            // Recompose only the IR to retain the actual host's source kind;
+            // do not repeat kernel evaluation or the original boundary proof.
+            return self.replay(host, target.source.id).map(Some);
+        }
+        if let Some(error) = replay_error.into_inner() {
+            return Err(error
+                .context("no recognized host could replay the complete native feature journal"));
+        }
+        Ok(None)
+    }
+
     pub(super) fn finish<K: CadKernel + SourceTopologyEditor>(
         mut self,
         kernel: &K,
         edited: &mut K::EditedSource,
-        source: SourceEntity,
+        target: &ReplayTarget<'_, '_, K>,
         provenance: &KernelTopologyProvenance,
         mut next: NextPeel,
         mut stop: Option<String>,
     ) -> Result<Option<CadFragment>> {
+        let mut replay_error = None;
         loop {
-            // Attempt recognition before removing anything further. Each
-            // successful transaction strictly decreases native face count.
-            let host = recognize_edited_host_with_fallback(kernel, edited, || {
-                let snapshot = kernel.edited_source_to_step(edited)?;
-                let document = kernel.resolve_source_exchange(
-                    monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
-                        .exchange,
-                )?;
-                recognize_single_healed_host(document.as_ref(), kernel)
-            })?;
-            if let Some(host) = host {
-                return self.replay(host, source.id).map(Some);
+            // Each successful inverse transaction strictly decreases native
+            // face count. Try complete forward replay before peeling further.
+            match self.recognize_replay(kernel, edited, target) {
+                Ok(Some(fragment)) => return Ok(Some(fragment)),
+                Ok(None) => (),
+                Err(error) => replay_error = Some(error),
             }
             match next {
                 NextPeel::Boundary => {
@@ -134,7 +215,7 @@ impl Journal {
                     let (layers, reason) = treatment_layers::peel_native(
                         kernel,
                         edited,
-                        source.data_section,
+                        target.source.data_section,
                         provenance,
                     )?;
                     if layers.is_empty() {
@@ -150,6 +231,10 @@ impl Journal {
         }
         if let Some(reason) = stop {
             anyhow::bail!("native inverse fixed point: {reason}");
+        }
+        if let Some(error) = replay_error {
+            return Err(error
+                .context("no recognized host could replay the complete native feature journal"));
         }
         Ok(None)
     }

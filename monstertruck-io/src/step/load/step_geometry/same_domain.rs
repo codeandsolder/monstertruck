@@ -342,7 +342,7 @@ pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> O
 /// The returned relation includes the orientation induced by each carrier's
 /// parameterization, allowing topology to distinguish a harmless reversed
 /// parameterization from an oppositely oriented physical face.
-#[must_use]
+#[must_use = "The optional same surface domain outcome must be inspected to distinguish a value from absence."]
 pub fn same_surface_domain(
     left: &Surface,
     right: &Surface,

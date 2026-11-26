@@ -197,7 +197,7 @@ pub fn bound_nurbs_segment_locus(
 /// This is a tolerance and arithmetic-conditioning claim, not a proof that
 /// two CAD solids enclose the same occupied set. In particular it does not
 /// certify the simplicity of an enclosing face loop.
-#[must_use]
+#[must_use = "The segment-locus certificate records the source spline's bounded global deviation."]
 pub fn certify_nurbs_segment_locus(
     curve: &NurbsCurve<Vector4>,
     start: Point3,
@@ -224,7 +224,7 @@ pub fn certify_nurbs_segment_locus(
 }
 
 /// Weight-one embedding of a polynomial spline with the same global proof.
-#[must_use]
+#[must_use = "The segment-locus certificate records the original polynomial spline's global agreement."]
 pub fn certify_bspline_segment_locus(
     curve: &BsplineCurve<Point3>,
     start: Point3,

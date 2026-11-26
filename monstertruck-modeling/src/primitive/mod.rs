@@ -42,7 +42,7 @@ use std::f64::consts::PI;
 /// assert_eq!(rect[2].front().point(), Point3::new(3.0, 1.0, 0.0));
 /// assert_eq!(rect[3].front().point(), Point3::new(0.0, 1.0, 0.0));
 /// ```
-#[must_use]
+#[must_use = "retain the rectangular wire for further topology construction"]
 pub fn rect<C>(r#box: BoundingBox<Point2>, plane: Plane) -> Wire<Point3, C>
 where Line<Point3>: ToSameGeometry<C> {
     let (min, max) = (r#box.min(), r#box.max());
@@ -86,7 +86,7 @@ where Line<Point3>: ToSameGeometry<C> {
 ///     }
 /// }
 /// ```
-#[must_use]
+#[must_use = "retain the circular wire when constructing a planar boundary"]
 pub fn circle<C>(start: Point3, origin: Point3, axis: Vector3, division: usize) -> Wire<Point3, C>
 where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
     let origin = origin + (start - origin).dot(axis) * axis;
@@ -135,7 +135,7 @@ where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
 ///     assert!(x.z.near(&p.z) || x.z.near(&q.z));
 /// }
 /// ```
-#[must_use]
+#[must_use = "retain the constructed cuboid solid for further modeling"]
 pub fn cuboid<C, S>(r#box: BoundingBox<Point3>) -> Solid<Point3, C, S>
 where
     Line<Point3>: ToSameGeometry<C>,

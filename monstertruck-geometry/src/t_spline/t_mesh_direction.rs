@@ -10,7 +10,7 @@ impl TmeshDirection {
     }
 
     /// Rotates `self` a quarter of a rotation clockwise.
-    #[must_use]
+    #[must_use = "The clockwise direction value is returned rather than changing an existing direction."]
     pub const fn clockwise(self) -> Self {
         match self {
             Self::Up => Self::Right,
@@ -21,7 +21,7 @@ impl TmeshDirection {
     }
 
     /// Rotates `self` a quarter of a turn anti-clockwise.
-    #[must_use]
+    #[must_use = "The anticlockwise direction value is returned rather than changing an existing direction."]
     pub const fn anti_clockwise(self) -> Self {
         match self {
             Self::Up => Self::Left,
@@ -32,7 +32,7 @@ impl TmeshDirection {
     }
 
     /// Flips `self`, rotating it half a turn.
-    #[must_use]
+    #[must_use = "The flipped direction is returned and must be used to reverse orientation."]
     pub const fn flip(self) -> Self {
         match self {
             Self::Up => Self::Down,
@@ -43,7 +43,7 @@ impl TmeshDirection {
     }
 
     /// Returns true if the direction is UP or DOWN
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the direction is UP or DOWN."]
     pub const fn vertical(self) -> bool {
         match self {
             Self::Up | Self::Down => true,
@@ -52,7 +52,7 @@ impl TmeshDirection {
     }
 
     /// Returns true if the direction is RIGHT or LEFT
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the direction is RIGHT or LEFT."]
     pub const fn horizontal(self) -> bool {
         match self {
             Self::Up | Self::Down => false,
@@ -61,7 +61,7 @@ impl TmeshDirection {
     }
 
     /// Returns true if a knot interval in the direction is a positive delta.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether a knot interval in the direction is a positive delta."]
     pub const fn knot_delta_positive(self) -> bool {
         match self {
             Self::Down | Self::Left => false,
@@ -70,7 +70,7 @@ impl TmeshDirection {
     }
 
     /// Returns true if a knot interval in the direction is a negative delta.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether a knot interval in the direction is a negative delta."]
     pub const fn knot_delta_negative(self) -> bool {
         match self {
             Self::Down | Self::Left => true,
@@ -81,7 +81,7 @@ impl TmeshDirection {
     /// Adds `delta` to an existing set of knot `coords`, taking into account the direction `self`
     /// such that `delta` is correctly added or subtracted from one of `coords`'s members in order
     /// to move `coords` in the direction `self` by a distance `delta`.
-    #[must_use]
+    #[must_use = "The adjusted knot-coordinate pair is returned, not written into the input pair."]
     pub fn mutate_knot_coordinates(self, coords: (f64, f64), delta: f64) -> (f64, f64) {
         match self {
             Self::Up => (coords.0, coords.1 + delta),

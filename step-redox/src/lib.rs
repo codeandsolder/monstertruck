@@ -40,6 +40,9 @@ pub mod periodic_chains;
 pub mod periodic_resize;
 mod planar_features;
 pub use planar_features::{PlanarFeatureDiagnostics, PlanarHostDiagnostic};
+/// Explicit bounded two-cylinder source edge reconstruction.
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub mod full_source_cylinder_healing;
 /// Opt-in proof-backed original STEP document reconstruction with healed edges.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod full_source_hyperbola_healing;
@@ -70,6 +73,11 @@ use monstertruck_io::step::load::ParsedStepSource;
 use normalization::{dense_renumber, intern_section};
 pub use step_io::write_exchange;
 mod surface_recovery;
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub use surface_recovery::{
+    SourceCapPrecisionPatch, SourceCapRechartManifest, SourceCapRechartProposal,
+    propose_source_cap_rechart,
+};
 mod surface_replicas;
 mod units;
 
@@ -129,7 +137,7 @@ impl Default for Options {
 }
 
 impl Options {
-    #[must_use]
+    #[must_use = "The configured output profile is returned; ignoring it loses the profile selection."]
     pub fn for_profile(profile: OutputProfile) -> Self {
         let mut options = Self {
             experimental_recover_straight_bspline_lines: true,
@@ -661,6 +669,21 @@ pub fn detect_extrusion_core_candidates_bytes(
         .data
         .iter()
         .flat_map(|section| solid_extrusions::detect_extrusion_core_candidates(&section.entities))
+        .collect())
+}
+
+/// Discover signed material and void cap-pair hypotheses in every DATA section.
+///
+/// # Errors
+/// Returns an error for an invalid STEP exchange.
+pub fn detect_signed_cap_pairs_bytes(
+    input: &[u8],
+) -> Result<Vec<solid_extrusions::SignedCapPairProposal>> {
+    let exchange = ParsedStepSource::parse(input)?.exchange;
+    Ok(exchange
+        .data
+        .iter()
+        .flat_map(|section| solid_extrusions::detect_signed_cap_pairs(&section.entities))
         .collect())
 }
 

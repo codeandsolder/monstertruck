@@ -4,6 +4,10 @@ use super::{
 };
 use array_macro::array;
 
+use super::super::{
+    active_sweep::ActiveSweep, compare_sweep_coordinate, triangle_projection_interval,
+};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum EndPointType {
@@ -12,7 +16,7 @@ enum EndPointType {
     Back,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct EndPoint {
     entity: f64,
     r#type: EndPointType,
@@ -29,22 +33,12 @@ impl EndPoint {
         }
     }
     #[inline]
-    fn from_seg(seg: (f64, f64), index: usize) -> Vec<Self> {
-        vec![
+    const fn from_seg(seg: (f64, f64), index: usize) -> [Self; 2] {
+        [
             Self::new(seg.0, EndPointType::Front, index),
             Self::new(seg.1, EndPointType::Back, index),
         ]
     }
-}
-
-fn tri_to_seg(tri: [Point3; 3], unit: Vector3, tol: f64) -> (f64, f64) {
-    let a = tri[0].to_vec().dot(unit);
-    let b = tri[1].to_vec().dot(unit);
-    let c = tri[2].to_vec().dot(unit);
-    (
-        f64::min(f64::min(a, b), c) - tol,
-        f64::max(f64::max(a, b), c) + tol,
-    )
 }
 
 fn sorted_endpoints<'a, I, J>(iter0: I, iter1: J, unit: Vector3, tol: f64) -> Vec<EndPoint>
@@ -55,7 +49,7 @@ where
         .into_iter()
         .enumerate()
         .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
-        .flat_map(|(i, tri)| EndPoint::from_seg(tri_to_seg(tri, unit, tol), i))
+        .flat_map(|(i, tri)| EndPoint::from_seg(triangle_projection_interval(tri, unit, tol), i))
         .chain(
             iter1
                 .into_iter()
@@ -63,7 +57,11 @@ where
                 .map(|(i, point)| EndPoint::new(point.to_vec().dot(unit), EndPointType::Middle, i)),
         )
         .collect();
-    res.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
+    res.sort_unstable_by(|a, b| {
+        compare_sweep_coordinate(a.entity, b.entity)
+            .then_with(|| a.r#type.cmp(&b.r#type))
+            .then_with(|| a.index.cmp(&b.index))
+    });
     res
 }
 
@@ -96,23 +94,14 @@ pub fn pointcloud_in_polygon_neighborhood(
     tol: f64,
 ) -> bool {
     nonpositive_tolerance!(tol, 0.0);
-    let mut current = Vec::new();
     let triangles = polygon.faces().triangle_iter().collect::<Vec<_>>();
+    let mut current = ActiveSweep::new(triangles.len());
     sorted_endpoints_by_polymesh_points(polygon, points, tol)
         .into_iter()
         .all(move |EndPoint { r#type, index, .. }| match r#type {
-            EndPointType::Front => {
-                current.push(index);
-                true
-            }
-            EndPointType::Back => {
-                let Some(i) = current.iter().position(|idx| *idx == index) else {
-                    return false;
-                };
-                current.swap_remove(i);
-                true
-            }
-            EndPointType::Middle => current.iter().any(|i| {
+            EndPointType::Front => current.insert(index),
+            EndPointType::Back => current.remove(index),
+            EndPointType::Middle => current.indices().iter().any(|i| {
                 let tri = triangles[*i];
                 let tri = array![i => polygon.positions()[tri[i].pos]; 3];
                 distance2_point_triangle(points[index], tri) < tol * tol

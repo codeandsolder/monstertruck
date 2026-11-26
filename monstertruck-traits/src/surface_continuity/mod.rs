@@ -19,11 +19,11 @@ pub struct UnsupportedContinuityOrder {
 
 impl UnsupportedContinuityOrder {
     /// Returns the rejected order.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the rejected order."]
     pub const fn requested(self) -> usize { self.requested }
 
     /// Returns the highest represented order.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the highest represented order."]
     pub const fn maximum(self) -> usize { self.maximum }
 }
 
@@ -62,12 +62,12 @@ impl ContinuityOrder {
 
     /// Returns the numeric derivative order.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the numeric derivative order."]
     pub const fn as_usize(self) -> usize { self.0 }
 
     /// Returns whether this order is experimental.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean identifies whether this order is experimental."]
     pub const fn is_experimental(self) -> bool { self.0 == Self::G4.0 }
 }
 
@@ -166,11 +166,11 @@ pub struct InvalidContinuityCapability {
 
 impl InvalidContinuityCapability {
     /// Returns the requested continuity order.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the requested continuity order."]
     pub const fn requested(self) -> ContinuityOrder { self.requested }
 
     /// Returns the inconsistent maximum order.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the inconsistent maximum order."]
     pub const fn maximum(self) -> ContinuityOrder { self.maximum }
 }
 
@@ -260,19 +260,19 @@ impl SurfaceContinuityCapability {
     }
 
     /// Returns the inspected surface side.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the inspected surface side."]
     pub const fn side(self) -> BoundarySide { self.side }
 
     /// Returns the requested continuity order.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the requested continuity order."]
     pub const fn requested(self) -> ContinuityOrder { self.requested }
 
     /// Returns the typed support determination.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the typed support determination."]
     pub const fn support(self) -> SurfaceContinuitySupport { self.support }
 
     /// Returns the highest supported order when it is known.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the highest supported order when it is known."]
     pub const fn maximum_supported_order(self) -> Option<ContinuityOrder> {
         match self.support {
             SurfaceContinuitySupport::Supported { maximum_order } => Some(maximum_order),
@@ -281,7 +281,7 @@ impl SurfaceContinuityCapability {
     }
 
     /// Returns the typed reason that the request is unsupported.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the typed reason that the request is unsupported."]
     pub const fn unsupported_reason(self) -> Option<UnsupportedContinuityCapability> {
         match self.support {
             SurfaceContinuitySupport::Supported { .. } => None,

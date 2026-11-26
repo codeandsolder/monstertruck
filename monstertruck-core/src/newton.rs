@@ -223,7 +223,7 @@ mod newtonlog {
     impl<T> NewtonLog<T> {
         /// constructor
         #[inline]
-        #[must_use]
+        #[must_use = "retain the Newton iteration log for diagnostics"]
         pub fn new(activate: bool, trials: usize) -> Self {
             if activate {
                 Self {
@@ -239,7 +239,7 @@ mod newtonlog {
         }
         /// Returns `true` iff the Newton method terminates due to Jacobian degeneracy.
         #[inline]
-        #[must_use]
+        #[must_use = "check whether Jacobian degeneracy terminated the Newton solve"]
         pub const fn degenerate(&self) -> bool { self.degenerate }
         #[inline]
         pub(super) fn push(&mut self, log: T) {

@@ -77,7 +77,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Create without validation (for performance-critical code).
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new_unchecked(boundaries: Vec<Shell<P, C, S>>) -> Self {
         Self {
             boundaries,
@@ -97,7 +97,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns a reference to this solid's [`StableIdAllocator`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to this solid's [`StableIdAllocator`]."]
     pub const fn id_allocator(&self) -> &StableIdAllocator { &self.id_allocator }
 
     /// Returns a mutable reference to this solid's [`StableIdAllocator`].
@@ -106,7 +106,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns a reference to this solid's [`SolidAttributes`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to this solid's [`SolidAttributes`]."]
     pub const fn attributes(&self) -> &SolidAttributes { &self.attributes }
 
     /// Returns a mutable reference to this solid's [`SolidAttributes`].
@@ -115,7 +115,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns a reference to the face [`ElementAttributes`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to the face [`ElementAttributes`]."]
     pub const fn face_attributes(&self) -> &ElementAttributes { &self.attributes.faces }
 
     /// Returns a mutable reference to the face [`ElementAttributes`].
@@ -126,7 +126,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns a reference to the edge [`ElementAttributes`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to the edge [`ElementAttributes`]."]
     pub const fn edge_attributes(&self) -> &ElementAttributes { &self.attributes.edges }
 
     /// Returns a mutable reference to the edge [`ElementAttributes`].
@@ -137,7 +137,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns a reference to the vertex [`ElementAttributes`].
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to the vertex [`ElementAttributes`]."]
     pub const fn vertex_attributes(&self) -> &ElementAttributes { &self.attributes.vertices }
 
     /// Returns a mutable reference to the vertex [`ElementAttributes`].
@@ -148,11 +148,11 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Returns the reference of boundary shells
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of boundary shells."]
     pub const fn boundaries(&self) -> &Vec<Shell<P, C, S>> { &self.boundaries }
     /// Returns the boundary shells
     #[inline]
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn into_boundaries(self) -> Vec<Shell<P, C, S>> { self.boundaries }
 
     /// The valid EMPTY solid: zero boundary shells, hence zero faces and zero
@@ -165,13 +165,13 @@ impl<P, C, S> Solid<P, C, S> {
     /// (e.g. the intersection of disjoint solids), so a consumer receives a
     /// closed zero-volume value rather than an error signal.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn empty() -> Self { Self::new_unchecked(Vec::new()) }
 
     /// True when this solid is the EMPTY set: it has no boundary shells (hence
     /// no faces and zero volume). See [`Solid::empty`].
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `is_empty` must be observed to use the predicate."]
     pub const fn is_empty(&self) -> bool { self.boundaries.is_empty() }
 
     /// Returns an iterator over the faces.
@@ -486,7 +486,7 @@ impl<P, C, S> Solid<P, C, S> {
     /// Returns the consistence of the geometry of end vertices
     /// and the geometry of edge.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the geometry satisfies consistency checks."]
     pub fn is_geometric_consistent(&self) -> bool
     where
         P: Tolerance,
@@ -555,7 +555,7 @@ impl<P, C, S> Solid<P, C, S> {
 
     /// Creates display struct for debugging the solid.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed display struct for debugging the solid is returned rather than stored."]
     pub const fn display(
         &self,
         format: SolidDisplayFormat,

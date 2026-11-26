@@ -26,7 +26,7 @@ pub trait Invertible: Clone {
     fn invert(&mut self);
     /// Returns the inverse.
     #[inline]
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     fn inverse(&self) -> Self {
         let mut res = self.clone();
         res.invert();
@@ -60,7 +60,7 @@ pub trait Transformed<T>: Clone {
     fn transform_by(&mut self, trans: T);
     /// transformed geometry by `trans`.
     #[inline]
-    #[must_use]
+    #[must_use = "This operation returns a new transformed value; it does not replace the original."]
     fn transformed(&self, trans: T) -> Self {
         let mut res = self.clone();
         res.transform_by(trans);

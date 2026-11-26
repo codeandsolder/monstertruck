@@ -67,7 +67,7 @@ impl<Shape, NodeAttrs, Matrix, EdgeAttrs>
     /// assert_eq!(path.matrix(), 3628800.0);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards transform matrix of `self`."]
     pub fn matrix(&self) -> Matrix
     where Matrix: One + Copy + std::ops::Mul<Output = Matrix> {
         self.edges()
@@ -81,11 +81,11 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
 {
     /// Returns the shape.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the shape."]
     pub const fn shape(self) -> &'a Shape { &self.entity().shape }
     /// Returns the node attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the node attributes."]
     pub const fn attributes(self) -> &'a NodeAttrs { &self.entity().attrs }
 }
 
@@ -103,11 +103,11 @@ impl<'a, Shape, NodeAttrs, Matrix, EdgeAttrs>
 impl<'a, Matrix, EdgeAttrs> Edge<'a, EdgeEntity<Matrix, EdgeAttrs>> {
     /// Returns the transform matrix of the edge.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the transform matrix of the edge."]
     pub const fn matrix(self) -> &'a Matrix { &self.entity().matrix }
     /// Returns the edge attributes.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the edge attributes."]
     pub const fn attributes(self) -> &'a EdgeAttrs { &self.entity().attrs }
 }
 
@@ -137,7 +137,7 @@ impl<'a, Matrix, EdgeAttrs> EdgeMut<'a, EdgeEntity<Matrix, EdgeAttrs>> {
 /// ```
 pub trait Takeable {
     /// take contents
-    #[must_use]
+    #[must_use = "The taken shape is returned; dropping it loses the extracted component."]
     fn take(&mut self) -> Self;
     /// Return `true` if the contents has been taken.
     /// # Examples

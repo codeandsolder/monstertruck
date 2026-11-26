@@ -85,3 +85,113 @@ the same deterministic geometry metric correspondence as the release
 validator, without truncating uneven inventories. The report identifies
 both occurrence indices. These are diagnostics, not an exact boundary
 certificate or a proof of globally optimal material correspondence.
+
+## Exact single-solid diagnostic comparison
+
+Compare the same individual solid across independently exported STEP files,
+including reconstructed solids with different face subdivisions:
+
+```sh
+step-redox-occt-wasm-validator solid-diagnostics source.step candidate.step
+```
+
+For a source containing repeated or overlapping solids, select the exact
+Part 21 textual entity number (the `#123` label, **not** OCCT's model rank):
+
+```sh
+step-redox-occt-wasm-validator solid-diagnostics full-source.step recovered.step \
+  --reference-entity-id 123
+```
+
+`--candidate-entity-id` selects a source entity in the other operand
+independently. Without these options, each entire file must transfer to
+exactly one solid. Entity selection uses OCCT's parsed STEP model, rejecting
+missing, ambiguous, or nontransferable identifiers.
+
+The JSON includes signed default BRep properties, topology, center/bounds,
+native whole-solid adaptive Gauss–Kronrod volumes and relative error
+estimates, both directed Boolean cut volumes, and the shared-reference
+paired absolute face-integral diagnostic. `geometry_equal` requires both
+valid solids, consistent adaptive volumes, and both material cuts below
+the existing absolute/relative policy. The stricter paired-volume result is
+reported **separately**, not used to override that decision. Face-count
+equality is deliberately not required. Exit status 0 indicates equality,
+1 a measured mismatch, and an execution error fails with an error message.
+The tolerances and adaptive integration targets retain the previous native
+oracle's definitions; the new implementation uses the independently built
+WASM kernel without native Python/OCP.
+
+For diagnosing a nonzero paired-volume residual, add `--face-flux` to
+`solid-diagnostics` or `paired-volume`. The optional detail is part of the
+paired-volume report and reuses exactly its integration terms. This includes the ordered, oriented shell/face occurrences,
+carrier types, bounds, UV bounds, surface areas, and signed integrals and
+quadrature error estimates at the four shared reference points for both
+quadrature tolerances. The report
+also sums the signed contributions by carrier type using the same accurate
+summation as paired volume. Carrier families can change under exact
+reconstruction, so a family difference alone is not a geometric error or a
+face correspondence. The optional report does not change acceptance policy.
+
+For spherical faces, the optional geodesic diagnostic reports an independent
+analytic signed area and volume flux for a convex single-wire polygon with
+minor great-circle edges. Native circles are checked analytically; finite
+nonperiodic rational B-spline trims are refined into homogeneous Bézier spans,
+then the full span's plane, squared radius and angular progression are checked
+using Bernstein coefficients. The bounds are computed in floating point,
+not interval arithmetic. Unsupported or ambiguous patches include an explicit
+reason. This result is diagnostic only and does not replace the quadrature
+volume or change the acceptance gate.
+
+When at least one spherical face can be independently evaluated, the report
+also includes `analytic_substitution`: the mixed analytic and quadrature
+volume at each reference, its direct signed-term difference, quadrature
+drift, reference spread and substituted/unsupported face counts. The
+original quadrature report and exit status remain unchanged.
+
+The spatial spherical boundary diagnostic additionally integrates the actual
+3-D trim rather than the imported UV pcurve. Native circle trims are
+represented as exact rational quadratic spans; finite clamped rational
+B-splines retain their homogeneous Bézier spans. Full-domain Bernstein
+squared-radius bounds, directed wire closure by native vertex identity, and
+two independent certified nonsingular gauges are required. Tiny gaps between
+trim endpoints and successive spans are closed by explicit radially projected
+short chords; their total normalized length is reported separately. Solid angle is recovered modulo the full
+sphere using the actual face orientation, and vector area follows from
+Stokes' boundary integral. Two quadrature tolerances, their estimated errors
+and gauge disagreement are reported separately. Multiple wires, small-circle
+trims and complementary spherical regions are supported; ambiguous empty/full
+regions and unsupported curves remain explicit rejections. The
+`spatial_substitution` diagnostic combines these fluxes with the original
+quadrature for other faces, without changing the raw gate or its exit status.
+Its separate `observed_within_tolerance` diagnostic requires every spherical
+face to be covered and the measured paired difference, coarse/fine drift,
+and shared-reference spread (plus the summed estimated spatial quadrature
+error) to fit the requested absolute tolerance. This is not a rigorous
+interval enclosure or an alternative process exit criterion.
+
+## Spatial elementary-carrier volume diagnostic
+
+For solids bounded by planes, circular cylinders and supported spherical
+patches, use independent directed spatial-wire integration:
+
+```sh
+step-redox-occt-wasm-validator spatial-volume source.step candidate.step \
+  --absolute-tolerance 1e-10 --boundary-tolerance-mm 2e-9
+```
+
+This path reads actual OCCT finite 3-D curve trims and topological vertex
+occurrences. Positive-weight rational curves are decomposed into Bézier
+spans. Lines, circles and ellipses use exact finite representations.
+Planar flux follows from the oriented vector area of the wire; cylindrical
+flux uses Green's theorem on the periodic angular/axial chart, without
+imported pcurves. Spherical faces use the spatial two-gauge method.
+
+The report includes per-face carrier incidence bounds and explicit endpoint
+closure corrections, both quadrature resolutions, paired signed-term
+differences at four common references and reference invariance. Unsupported
+faces are reported with reasons; an incomplete inventory never yields a
+whole-solid measurement. Finite-f64 Bernstein bounds and embedded
+quadrature estimates are not interval arithmetic or a bound on the total
+geometric volume error. Measurement consistency is separate from the
+unchanged paired-volume acceptance gate; the command exit status indicates
+execution success, not geometric equivalence.

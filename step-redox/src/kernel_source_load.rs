@@ -81,7 +81,7 @@ pub struct KernelTopologyId(u64);
 impl KernelTopologyId {
     pub(crate) const fn from_raw(raw: u64) -> Self { Self(raw) }
 
-    #[must_use]
+    #[must_use = "The computed raw quantity is reported through this return value."]
     pub const fn raw(self) -> u64 { self.0 }
 }
 

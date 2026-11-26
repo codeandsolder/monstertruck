@@ -1,7 +1,7 @@
 use super::{InnerSpace, Matrix3, Origin, Point3, PolygonMesh, SquareMatrix, Vector3, hash};
+use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 use derive_more::{Deref, DerefMut};
 use std::borrow::Borrow;
-use std::ops::Range;
 
 #[cfg(test)]
 use crate::{Faces, StandardAttributes};
@@ -62,37 +62,9 @@ fn triangles(mesh: &PolygonMesh) -> impl Iterator<Item = Triangle> + '_ {
     })
 }
 
-#[derive(Clone, Copy, Debug)]
-struct RayBounds {
-    low: [f64; 3],
-    high: [f64; 3],
-}
+type RayBounds = Bounds<3>;
 
 impl RayBounds {
-    fn from_triangle(triangle: Triangle) -> Self {
-        Self {
-            low: std::array::from_fn(|axis| {
-                triangle
-                    .iter()
-                    .map(|p| p[axis])
-                    .fold(f64::INFINITY, f64::min)
-            }),
-            high: std::array::from_fn(|axis| {
-                triangle
-                    .iter()
-                    .map(|p| p[axis])
-                    .fold(f64::NEG_INFINITY, f64::max)
-            }),
-        }
-    }
-
-    fn union(self, other: Self) -> Self {
-        Self {
-            low: std::array::from_fn(|axis| self.low[axis].min(other.low[axis])),
-            high: std::array::from_fn(|axis| self.high[axis].max(other.high[axis])),
-        }
-    }
-
     // Conservatively round each subtraction and division outward. Do not
     // add a geometric tolerance or exclude tangent/parallel boundary rays:
     // the unchanged triangle intersection test makes the final decision.
@@ -132,18 +104,6 @@ struct OrientedTriangle {
     bounds: RayBounds,
 }
 
-#[derive(Clone, Debug)]
-enum NodeKind {
-    Leaf(Range<usize>),
-    Branch([usize; 2]),
-}
-
-#[derive(Clone, Debug)]
-struct Node {
-    bounds: RayBounds,
-    kind: NodeKind,
-}
-
 /// Immutable spatial index for repeated signed ray queries.
 ///
 /// Each input mesh contributes its original fan triangles and topological
@@ -152,14 +112,13 @@ struct Node {
 #[derive(Clone, Debug)]
 pub struct SignedRayIndex {
     triangles: Vec<OrientedTriangle>,
-    nodes: Vec<Node>,
-    root: Option<usize>,
+    hierarchy: Option<SpatialHierarchy<3>>,
 }
 
 impl SignedRayIndex {
     /// Build an owned index from oriented meshes. A false orientation
     /// subtracts that mesh's original winding contribution.
-    #[must_use]
+    #[must_use = "retain the spatial ray index before querying signed mesh crossings"]
     pub fn new<M: Borrow<PolygonMesh>>(meshes: impl IntoIterator<Item = (M, bool)>) -> Self {
         let mut entries = Vec::new();
         let mut finite = true;
@@ -172,52 +131,15 @@ impl SignedRayIndex {
                 entries.push(OrientedTriangle {
                     triangle,
                     sign,
-                    bounds: RayBounds::from_triangle(triangle),
+                    bounds: RayBounds::from_points(triangle.0.map(|p| [p.x, p.y, p.z])),
                 });
             }
         }
-        let mut nodes = Vec::new();
-        let root = if finite && !entries.is_empty() {
-            Self::build(&mut entries, 0, &mut nodes)
-        } else {
-            None
-        };
+        let hierarchy = finite.then(|| SpatialHierarchy::new(&mut entries, |entry| entry.bounds));
         Self {
             triangles: entries,
-            nodes,
-            root,
+            hierarchy,
         }
-    }
-
-    fn build(
-        entries: &mut [OrientedTriangle],
-        offset: usize,
-        nodes: &mut Vec<Node>,
-    ) -> Option<usize> {
-        const LEAF_TRIANGLES: usize = 8;
-        let bounds = entries
-            .iter()
-            .map(|entry| entry.bounds)
-            .reduce(RayBounds::union)?;
-        let kind = if entries.len() <= LEAF_TRIANGLES {
-            NodeKind::Leaf(offset..offset + entries.len())
-        } else {
-            let axis = (0..3).max_by(|&a, &b| {
-                (bounds.high[a] - bounds.low[a]).total_cmp(&(bounds.high[b] - bounds.low[b]))
-            })?;
-            let middle = entries.len() / 2;
-            let center =
-                |entry: &OrientedTriangle| entry.bounds.low[axis].midpoint(entry.bounds.high[axis]);
-            entries.select_nth_unstable_by(middle, |a, b| center(a).total_cmp(&center(b)));
-            let (left, right) = entries.split_at_mut(middle);
-            NodeKind::Branch([
-                Self::build(left, offset, nodes)?,
-                Self::build(right, offset + middle, nodes)?,
-            ])
-        };
-        let id = nodes.len();
-        nodes.push(Node { bounds, kind });
-        Some(id)
     }
 
     fn sum_triangles(entries: &[OrientedTriangle], ray: Ray) -> isize {
@@ -227,33 +149,28 @@ impl SignedRayIndex {
             .sum()
     }
 
-    fn query(&self, node: usize, ray: Ray) -> isize {
-        let node = &self.nodes[node];
-        if !node.bounds.intersects(ray) {
-            return 0;
-        }
-        match &node.kind {
-            NodeKind::Leaf(range) => Self::sum_triangles(&self.triangles[range.clone()], ray),
-            NodeKind::Branch([left, right]) => self.query(*left, ray) + self.query(*right, ray),
-        }
-    }
-
     /// Count signed crossings of a positive ray. Nonfinite input uses the
     /// exhaustive narrow phase instead of unsafe spatial rejection.
-    #[must_use]
+    #[must_use = "use the signed crossing count when classifying a point against the mesh"]
     pub fn signed_crossing_faces(&self, point: Point3, ray_direction: Vector3) -> isize {
         let ray = Ray {
             origin: point,
             direction: ray_direction,
         };
-        self.root
-            .filter(|_| {
-                (0..3).all(|axis| point[axis].is_finite() && ray_direction[axis].is_finite())
-            })
-            .map_or_else(
-                || Self::sum_triangles(&self.triangles, ray),
-                |root| self.query(root, ray),
-            )
+        let Some(hierarchy) = self.hierarchy.as_ref().filter(|_| {
+            (0..3).all(|axis| point[axis].is_finite() && ray_direction[axis].is_finite())
+        }) else {
+            return Self::sum_triangles(&self.triangles, ray);
+        };
+        let mut total = 0;
+        hierarchy.all_matching(
+            |bounds| bounds.intersects(ray),
+            |range| {
+                total += Self::sum_triangles(&self.triangles[range], ray);
+                true
+            },
+        );
+        total
     }
 }
 
@@ -398,7 +315,7 @@ fn indexed_winding_matches_exhaustive_polygon_fans() {
         })
         .collect::<Vec<_>>();
     let index = SignedRayIndex::new(meshes.iter().map(|(mesh, forward)| (mesh, *forward)));
-    assert!(index.nodes.len() > 1);
+    assert!(index.hierarchy.is_some());
     let directions = [
         Vector3::unit_x(),
         -Vector3::unit_x(),
@@ -442,4 +359,64 @@ fn indexed_winding_matches_exhaustive_polygon_fans() {
         empty.signed_crossing_faces(Point3::new(0., 0., 0.), Vector3::unit_x()),
         0
     );
+}
+
+/// Benchmark the complete public index build, including gathering its native
+/// triangle records. The same fixture can be run against previous revisions.
+#[test]
+#[ignore = "release-only signed ray index timing"]
+fn benchmark_signed_ray_hierarchy_build() -> anyhow::Result<()> {
+    use std::{hint::black_box, time::Instant};
+    let mut positions = Vec::new();
+    let mut faces = Vec::new();
+    for layer in 0..64 {
+        for row in 0..64 {
+            for col in 0..64 {
+                let x = f64::from(col) + f64::from(row).sin() * 0.25;
+                let y = f64::from(row) + f64::from(layer).cos() * 0.25;
+                let z = f64::from(layer) + f64::from(col).sin() * 0.25;
+                let start = positions.len();
+                positions.extend([
+                    Point3::new(x, y, z),
+                    Point3::new(x + 0.4, y, z + 0.2),
+                    Point3::new(x, y + 0.4, z + 0.1),
+                ]);
+                faces.push([start, start + 1, start + 2]);
+            }
+        }
+    }
+    // Deterministic permutation makes build measurements independent of
+    // trivially sorted input; the actual narrow phase keeps original fans.
+    let count = faces.len();
+    for i in 0..count {
+        faces.swap(
+            i,
+            (i.wrapping_mul(2654435761_usize).wrapping_add(17)) % count,
+        );
+    }
+    let mesh = PolygonMesh::new(
+        StandardAttributes {
+            positions,
+            ..Default::default()
+        },
+        Faces::from_iter(faces),
+    )?;
+    for round in 0..4 {
+        let start = Instant::now();
+        let index = SignedRayIndex::new([(black_box(&mesh), true)]);
+        let build = start.elapsed();
+        let start = Instant::now();
+        let checksum = (0..128)
+            .map(|i| {
+                let p = Point3::new(f64::from(i % 64) + 0.1, f64::from(i / 2) + 0.12, -1.0);
+                index.signed_crossing_faces(black_box(p), Vector3::new(0.013, 0.029, 1.0))
+            })
+            .sum::<isize>();
+        eprintln!(
+            "triangles={count} round={round} build={build:?} queries={:?} checksum={checksum}",
+            start.elapsed()
+        );
+        black_box(index);
+    }
+    Ok(())
 }

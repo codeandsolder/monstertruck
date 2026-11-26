@@ -99,7 +99,7 @@ pub struct PointLattice {
     pub max_residual_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The optional fit point lattice outcome must be inspected to distinguish a value from absence."]
 pub fn fit_point_lattice(points: &[[f64; 3]], tolerance_mm: f64) -> Option<PointLattice> {
     if points.len() < 2 || !tolerance_mm.is_finite() || tolerance_mm <= 0.0 {
         return None;
@@ -154,7 +154,7 @@ struct GridProjection {
 /// This is a second stage after primitive lattice fitting. A staggered array
 /// can be an exact subset of a finer Bravais lattice yet have a much simpler
 /// CAD description as (small motif) × (coarser full grid).
-#[must_use]
+#[must_use = "The optional factor point motif pattern outcome must be inspected to distinguish a value from absence."]
 pub fn factor_point_motif_pattern(
     points: &[[f64; 3]],
     tolerance_mm: f64,
@@ -434,7 +434,7 @@ struct Fit {
     max_residual_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect instance patterns collection is returned and must be retained or inspected."]
 pub fn detect_instance_patterns(
     entities: &[EntityInstance],
     tolerance_mm: f64,

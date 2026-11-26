@@ -20,6 +20,10 @@ use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
 
+#[cfg(feature = "cad-kernel-monstertruck")]
+mod cap_trim;
+#[cfg(any(test, feature = "cad-kernel-monstertruck"))]
+pub(super) mod coincidence;
 mod embedding;
 mod restriction;
 pub(super) use restriction::{ProfilePosition, complete_profile_cover};
@@ -91,6 +95,14 @@ fn weight_ratios(weights: &[f64]) -> Option<Vec<u64>> {
 /// dehomogenization and rational evaluation. Reject rather than claim a
 /// sub-quantum geometric certificate for very ill-conditioned input.
 fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
+    certified_bspline_extraction_error_mm(spline).map(|_| ())
+}
+
+/// The actual (input-dependent) conservative arithmetic margin for the
+/// polynomial/rational B-spline to homogeneous Bernstein conversion.
+/// The strict key proof only needs to know whether this fits a quarter of
+/// its coordinate quantum; a geometric proximity proof also needs the value.
+fn certified_bspline_extraction_error_mm(spline: &BSplineSupport) -> Option<f64> {
     let (lo, hi) = super::bspline_domain(spline)?;
     let n = spline.control_points_mm.len();
     let order = spline.degree.checked_add(1)?;
@@ -121,7 +133,7 @@ fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
     };
     let operation_error = 16. * order.to_f64()? * f64::EPSILON / min_span;
     let error_mm = 2. * coordinate_scale * operation_error / weight_ratio.powi(2);
-    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(())
+    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(error_mm)
 }
 
 /// A finite union of planes and elliptic cylinders cannot contain an

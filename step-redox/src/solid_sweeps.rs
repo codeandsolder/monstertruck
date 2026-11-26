@@ -94,7 +94,7 @@ struct ClosedRoundSupports {
     corner_radius_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect round sweeps collection is returned and must be retained or inspected."]
 pub(crate) fn detect_round_sweeps(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
@@ -114,7 +114,7 @@ pub(crate) fn detect_round_sweeps(
     out
 }
 
-#[must_use]
+#[must_use = "The computed detect revolved round tails collection is returned and must be retained or inspected."]
 pub(crate) fn detect_revolved_round_tails(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,

@@ -64,7 +64,7 @@ struct FaceKey {
     local_points: Vec<[i64; 3]>,
 }
 
-#[must_use]
+#[must_use = "The computed detect periodic bodies collection is returned and must be retained or inspected."]
 pub fn detect_periodic_bodies(
     entities: &[EntityInstance],
     instance_patterns: &[InstancePattern],

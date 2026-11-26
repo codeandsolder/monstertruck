@@ -38,7 +38,7 @@ impl Torus {
     /// Use this only when the caller has already established that both radii
     /// are finite and strictly positive (for example, fixed test geometry).
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new_unchecked(center: Point3, large_radius: f64, small_radius: f64) -> Self {
         Self {
             center,
@@ -49,17 +49,17 @@ impl Torus {
 
     /// get center
     #[inline]
-    #[must_use]
+    #[must_use = "The geometric center is returned; ignoring it discards the placement."]
     pub const fn center(&self) -> Point3 { self.center }
 
     /// get large radius
     #[inline]
-    #[must_use]
+    #[must_use = "The computed large radius quantity is reported through this return value."]
     pub const fn large_radius(&self) -> f64 { self.large_radius }
 
     /// get small radius
     #[inline]
-    #[must_use]
+    #[must_use = "The computed small radius quantity is reported through this return value."]
     pub const fn small_radius(&self) -> f64 { self.small_radius }
 }
 

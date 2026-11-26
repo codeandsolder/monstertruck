@@ -251,7 +251,7 @@ where C: ParametricCurve3D + TryIntoHomogeneousBsplineCurve
     /// face's spatial trim and must not reuse its old parameter-space curves.
     /// Numerical samples only propose the sphere; whole-domain rational
     /// circle incidence and angular coverage are mandatory for admission.
-    #[must_use]
+    #[must_use = "The optional sphere represents a certified bounded revolution, not a whole-solid proof."]
     pub fn try_certified_sphere(&self, tolerance: f64) -> Option<Processor<Sphere, Matrix4>> {
         use crate::analytic_carrier::similarity_scale;
         use crate::analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage};

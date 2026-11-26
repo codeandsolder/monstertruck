@@ -5,7 +5,7 @@ use num_traits::ToPrimitive;
 use occt_wasm::{OcctKernel, ShapeHandle};
 use rand_chacha::{
     ChaCha12Rng,
-    rand_core::{RngCore, SeedableRng},
+    rand_core::{Rng, SeedableRng},
 };
 use serde::{Deserialize, Serialize};
 use std::{

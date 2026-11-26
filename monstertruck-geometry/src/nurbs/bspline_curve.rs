@@ -45,7 +45,7 @@ impl<P> BsplineCurve<P> {
     /// This method does NOT check the rules for constructing B-spline curve.\
     /// The programmer must guarantee these conditions before using this method.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new_unchecked(knot_vec: KnotVector, control_points: Vec<P>) -> Self {
         Self {
             knot_vec,
@@ -55,22 +55,22 @@ impl<P> BsplineCurve<P> {
 
     /// Returns the reference of the knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the knot vector."]
     pub const fn knot_vector(&self) -> &KnotVector { &self.knot_vec }
 
     /// Returns the `idx`th knot
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th knot."]
     pub fn knot(&self, idx: usize) -> f64 { self.knot_vec[idx] }
 
     /// Returns the reference of the control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control points."]
     pub const fn control_points(&self) -> &Vec<P> { &self.control_points }
 
     /// Returns the reference of the control point corresponding to the index `idx`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control point corresponding to the index `idx`."]
     pub fn control_point(&self, idx: usize) -> &P { &self.control_points[idx] }
 
     /// Returns the mutable reference of the control point corresponding to index `idx`.
@@ -84,7 +84,7 @@ impl<P> BsplineCurve<P> {
 
     /// Into the tuple of knot vector and control points.
     #[inline]
-    #[must_use]
+    #[must_use = "The knot vector and control points are returned as a tuple; ignoring it loses them."]
     pub fn destruct(self) -> (KnotVector, Vec<P>) { (self.knot_vec, self.control_points) }
 
     /// Apply the given transformation to all control points.
@@ -103,12 +103,12 @@ impl<P> BsplineCurve<P> {
     /// assert_eq!(bspcurve.degree(), 2);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degree of B-spline curve."]
     pub fn degree(&self) -> usize { self.knot_vec.len() - self.control_points.len() - 1 }
 
     /// Returns whether the knot vector is clamped or not.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vector is clamped or not."]
     pub fn is_clamped(&self) -> bool { self.knot_vec.is_clamped(self.degree()) }
 
     /// Normalizes the knot vector  
@@ -170,7 +170,7 @@ impl<P: ControlPoint<f64>> BsplineCurve<P> {
     ///     assert_near2!(derived.evaluate(t), Vector2::new(1.0, 2.0 * t));
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards the derived B-spline curve."]
     pub fn derivation(&self) -> BsplineCurve<P::Diff> {
         let n = self.control_points.len();
         let k = self.degree();
@@ -614,7 +614,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// // bspcurve.is_const() is true
     /// assert!(bspcurve.is_const());
     /// ```
-    #[must_use]
+    #[must_use = "The returned boolean reports whether all control points are the same or not."]
     pub fn is_const(&self) -> bool {
         self.control_points
             .iter()
@@ -979,7 +979,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     ///     assert_near2!(bspcurve.evaluate(t), beziers[1].evaluate(t));
     /// }
     /// ```
-    #[must_use]
+    #[must_use = "The computed bezier decomposition collection is returned and must be retained or inspected."]
     pub fn bezier_decomposition(&self) -> Vec<Self> {
         let mut bspline = self.clone();
         bspline.clamp();
@@ -1088,7 +1088,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// assert!(!bspcurve0.near_as_curve(&bspcurve1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near_as_curve` must be observed to use the predicate."]
     pub fn near_as_curve(&self, other: &Self) -> bool {
         self.sub_near_as_curve(other, 1, monstertruck_core::tolerance::Tolerance::near)
     }
@@ -1119,7 +1119,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineCurve<P> {
     /// assert!(!bspcurve0.near2_as_curve(&bspcurve1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near2_as_curve` must be observed to use the predicate."]
     pub fn near2_as_curve(&self, other: &Self) -> bool {
         self.sub_near_as_curve(other, 1, monstertruck_core::tolerance::Tolerance::near2)
     }
@@ -1290,7 +1290,7 @@ where
     /// *part.control_point_mut(2) += Vector3::new(1.0, 2.0, 3.0);
     /// assert!(part.is_arc_of(&bspcurve, 0.6).is_none());
     /// ```
-    #[must_use]
+    #[must_use = "The boolean result of `is_arc_of` must be observed to use the predicate."]
     pub fn is_arc_of(&self, curve: &Self, mut hint: f64) -> Option<f64> {
         let degree = std::cmp::max(self.degree(), curve.degree()) * 3 + 1;
         let (knots, _) = self.knot_vec.to_single_multi();
@@ -1403,7 +1403,7 @@ where
 impl<P: Bounded> BsplineCurve<P> {
     /// Returns the bounding box including all control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bounding box including all control points."]
     pub fn roughly_bounding_box(&self) -> BoundingBox<P> { self.control_points.iter().collect() }
 }
 

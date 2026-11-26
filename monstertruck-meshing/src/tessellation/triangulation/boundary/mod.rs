@@ -14,6 +14,7 @@ use super::{
     resample_boundary, simplify_parameter_boundary,
 };
 
+mod index;
 mod loops;
 mod periodic;
 mod projection;
