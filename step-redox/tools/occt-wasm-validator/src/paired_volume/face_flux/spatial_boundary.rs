@@ -1,7 +1,7 @@
-//! Exact spatial edge representations, normalized to a unit sphere. All
-//! admitted edges must satisfy the whole-domain sphere incidence bound.
+//! Shared exact spatial edge representations and directed wire closure.
+//! Each carrier integration independently checks its own incidence.
 
-use super::super::{
+use super::{
     array,
     rational_bezier::{self, Homogeneous, spatial},
 };
@@ -9,12 +9,12 @@ use crate::vector::{Point, add, cross, dot, norm, scale, sub, xyz};
 use anyhow::{Context, Result, bail, ensure};
 use occt_wasm::{CurveGeometry, OcctKernel, ShapeHandle};
 
-pub(super) const RESIDUAL_LIMIT: f64 = 1e-11;
+const FRAME_TOLERANCE: f64 = 1e-11;
 pub(super) type Span = Vec<Homogeneous>;
 
 pub(super) fn cartesian(h: Homogeneous) -> Point { scale(spatial(h), h[3].recip()) }
 
-fn homogeneous(point: Point, weight: f64) -> Homogeneous {
+pub(super) fn homogeneous(point: Point, weight: f64) -> Homogeneous {
     [
         point[0] * weight,
         point[1] * weight,
@@ -31,41 +31,52 @@ pub(super) fn circle_spans(
     first: f64,
     last: f64,
 ) -> Result<Vec<Span>> {
+    ellipse_spans(offset, [radius; 2], axis, x_direction, first, last)
+}
+
+fn ellipse_spans(
+    offset: Point,
+    radii: [f64; 2],
+    axis: Point,
+    x_direction: Point,
+    first: f64,
+    last: f64,
+) -> Result<Vec<Span>> {
     ensure!(
-        radius.is_finite() && radius > 0.0,
-        "invalid circular edge radius"
+        radii.iter().all(|r| r.is_finite() && *r > 0.0),
+        "invalid elliptic edge radii"
     );
     ensure!(
         first.is_finite()
             && last.is_finite()
             && first < last
-            && last - first <= std::f64::consts::TAU + RESIDUAL_LIMIT,
-        "invalid circular edge trim"
+            && last - first <= std::f64::consts::TAU + FRAME_TOLERANCE,
+        "invalid elliptic edge trim"
     );
-    let axis = crate::vector::unit(axis, RESIDUAL_LIMIT).context("degenerate circle axis")?;
-    let x = crate::vector::unit(x_direction, RESIDUAL_LIMIT)
-        .context("degenerate circle x direction")?;
+    let axis = crate::vector::unit(axis, FRAME_TOLERANCE).context("degenerate conic axis")?;
+    let x = crate::vector::unit(x_direction, FRAME_TOLERANCE)
+        .context("degenerate conic x direction")?;
     ensure!(
-        dot(axis, x).abs() <= RESIDUAL_LIMIT,
-        "nonorthogonal circle frame"
+        dot(axis, x).abs() <= FRAME_TOLERANCE,
+        "nonorthogonal conic frame"
     );
     let y = cross(axis, x);
-    let direction = |t: f64| {
+    let radial = |t: f64| {
         let (sin, cos) = t.sin_cos();
-        add(scale(x, cos), scale(y, sin))
+        add(scale(x, radii[0] * cos), scale(y, radii[1] * sin))
     };
-    let point = |t| add(offset, scale(direction(t), radius));
+    let point = |t| add(offset, radial(t));
     let mut spans = Vec::new();
     let mut start = first;
     while start < last {
         let end = (start + std::f64::consts::FRAC_PI_2).min(last);
         ensure!(
             end > start && spans.len() < 5,
-            "invalid circular span partition"
+            "invalid elliptic span partition"
         );
         let midpoint = f64::midpoint(start, end);
         let weight = ((end - start) * 0.5).cos();
-        let middle = add(offset, scale(direction(midpoint), radius / weight));
+        let middle = add(offset, scale(radial(midpoint), weight.recip()));
         spans.push(vec![
             homogeneous(point(start), 1.0),
             homogeneous(middle, weight),
@@ -74,18 +85,6 @@ pub(super) fn circle_spans(
         start = end;
     }
     Ok(spans)
-}
-
-/// The homogeneous polynomial Q·Q-W² divided by W² is the normalized
-/// squared-radius residual. Bernstein coefficient extrema and positive
-/// weights bound the entire span, not just evaluated samples.
-pub(super) fn radial_bound(span: &[Homogeneous]) -> Result<f64> {
-    let residual = rational_bezier::normalized_squared_radius_bound(span)?;
-    ensure!(
-        residual.is_finite() && residual <= RESIDUAL_LIMIT,
-        "edge not on sphere: normalized squared-radius residual {residual:e}"
-    );
-    Ok(residual)
 }
 
 pub(super) fn point_derivative(span: &[Homogeneous], parameter: f64) -> (Point, Point) {
@@ -114,10 +113,33 @@ pub(super) fn edge_spans(
     edge: ShapeHandle,
     center: Point,
     radius: f64,
+    tolerance: f64,
 ) -> Result<Vec<Span>> {
     let data = kernel.curve_data(edge)?;
     let (first, last) = (data.first, data.last);
     let mut spans = match data.geometry {
+        CurveGeometry::Line { point, direction } => {
+            let point = scale(sub(xyz(point), center), radius.recip());
+            let direction = scale(xyz(direction), radius.recip());
+            vec![vec![
+                homogeneous(add(point, scale(direction, first)), 1.0),
+                homogeneous(add(point, scale(direction, last)), 1.0),
+            ]]
+        }
+        CurveGeometry::Ellipse {
+            center: c,
+            axis,
+            major_direction,
+            major_radius,
+            minor_radius,
+        } => ellipse_spans(
+            scale(sub(xyz(c), center), radius.recip()),
+            [major_radius / radius, minor_radius / radius],
+            xyz(axis),
+            xyz(major_direction),
+            first,
+            last,
+        )?,
         CurveGeometry::Circle {
             center: c,
             radius: r,
@@ -161,8 +183,8 @@ pub(super) fn edge_spans(
         .and_then(|s| s.last())
         .context("missing span end")?;
     ensure!(
-        norm(sub(cartesian(*begin), start)) <= RESIDUAL_LIMIT
-            && norm(sub(cartesian(*finish), end)) <= RESIDUAL_LIMIT,
+        norm(sub(cartesian(*begin), start)) <= tolerance
+            && norm(sub(cartesian(*finish), end)) <= tolerance,
         "extracted spatial curve endpoints do not match native edge"
     );
     match kernel.shape_orientation(edge)?.as_str() {
@@ -216,13 +238,19 @@ fn endpoints(span: &[Homogeneous]) -> Result<[Point; 2]> {
     ])
 }
 
-fn connect(spans: &mut Vec<Span>, start: Point, end: Point, error: &mut f64) -> Result<()> {
+fn connect(
+    spans: &mut Vec<Span>,
+    start: Point,
+    end: Point,
+    error: &mut f64,
+    tolerance: f64,
+) -> Result<()> {
     let distance = norm(sub(end, start));
-    ensure!(distance <= RESIDUAL_LIMIT, "open spatial boundary span");
+    ensure!(distance <= tolerance, "open spatial boundary span");
     *error += distance;
     if distance > 0.0 {
-        // Radially projecting this straight chord gives the short spherical
-        // connector, including when the endpoints have tiny radial errors.
+        // A spatial chord supplies a small explicit connector. Each carrier
+        // projects it as part of its own boundary integral.
         spans.push(vec![homogeneous(start, 1.0), homogeneous(end, 1.0)]);
     }
     Ok(())
@@ -277,14 +305,15 @@ fn match_ends(options: &[Vec<usize>]) -> Result<Vec<usize>> {
         .collect()
 }
 
-/// Close the radially projected spatial wire explicitly, including between
+/// Close the spatial wire explicitly, including between
 /// consecutive Bézier spans. Native callers additionally require the same
 /// topological vertex at every edge join.
 pub(super) fn close_wire(
     edges: Vec<Vec<Span>>,
+    tolerance: f64,
     mut same_vertex: impl FnMut(usize, usize) -> Result<bool>,
 ) -> Result<ClosedWire> {
-    ensure!(!edges.is_empty(), "empty spherical wire");
+    ensure!(!edges.is_empty(), "empty spatial wire");
     let ends = edges
         .iter()
         .map(|edge| -> Result<_> {
@@ -299,7 +328,7 @@ pub(super) fn close_wire(
         let mut compatible = Vec::new();
         for (end_index, [_, end]) in ends.iter().copied().enumerate() {
             let distance = norm(sub(start, end));
-            if distance <= RESIDUAL_LIMIT && same_vertex(end_index, start_index)? {
+            if distance <= tolerance && same_vertex(end_index, start_index)? {
                 compatible.push((end_index, distance));
             }
         }
@@ -315,7 +344,7 @@ pub(super) fn close_wire(
         for span in edge {
             let [start, end] = endpoints(&span)?;
             if let Some(previous) = previous {
-                connect(&mut spans, previous, start, &mut closure_error)?;
+                connect(&mut spans, previous, start, &mut closure_error, tolerance)?;
             }
             spans.push(span);
             previous = Some(end);
@@ -327,6 +356,7 @@ pub(super) fn close_wire(
             ends[end_index][1],
             ends[start_index][0],
             &mut closure_error,
+            tolerance,
         )?;
     }
     Ok(ClosedWire {
@@ -334,6 +364,71 @@ pub(super) fn close_wire(
         edges: edge_count,
         closure_error,
     })
+}
+
+/// Connect each finite curve to its actual topological vertices, rather
+/// than connecting two independently located curves directly. Opposite
+/// coedges on adjacent faces then share the same spatial boundary chain.
+fn anchor_edge(edge: &mut Vec<Span>, vertices: [Point; 2], tolerance: f64) -> Result<f64> {
+    let start = endpoints(edge.first().context("missing first span")?)?[0];
+    let end = endpoints(edge.last().context("missing last span")?)?[1];
+    let mut before = Vec::new();
+    let mut error = 0.0;
+    connect(&mut before, vertices[0], start, &mut error, tolerance)?;
+    before.append(edge);
+    connect(&mut before, end, vertices[1], &mut error, tolerance)?;
+    *edge = before;
+    Ok(error)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Closure {
+    Direct,
+    NativeVertices,
+}
+
+/// Extract every directed native wire occurrence using topological identity
+/// as well as endpoint proximity. No pcurve or meshing data enters this path.
+pub(super) fn native_wires(
+    kernel: &mut OcctKernel,
+    face: ShapeHandle,
+    center: Point,
+    length: f64,
+    tolerance: f64,
+    closure: Closure,
+) -> Result<Vec<ClosedWire>> {
+    ensure!(
+        length.is_finite() && length > 0.0 && tolerance.is_finite() && tolerance > 0.0,
+        "invalid spatial normalization"
+    );
+    let mut wires = Vec::new();
+    for wire in kernel.get_sub_shape_occurrences(face, "wire")? {
+        let mut edges = Vec::new();
+        let mut vertices = Vec::new();
+        let mut anchor_error = 0.0;
+        for edge in kernel.get_sub_shape_occurrences(wire, "edge")? {
+            let ids = directed_vertices(kernel, edge)?;
+            let mut spans = edge_spans(kernel, edge, center, length, tolerance)?;
+            if matches!(closure, Closure::NativeVertices) {
+                let [start, end] = ids.map(|id| -> Result<Point> {
+                    Ok(scale(
+                        sub(array(kernel.vertex_position(id)?, "native vertex")?, center),
+                        length.recip(),
+                    ))
+                });
+                anchor_error += anchor_edge(&mut spans, [start?, end?], tolerance)?;
+            }
+            vertices.push(ids);
+            edges.push(spans);
+        }
+        let mut closed = close_wire(edges, tolerance, |end, start| {
+            Ok(kernel.is_same(vertices[end][1], vertices[start][0])?)
+        })?;
+        closed.closure_error += anchor_error;
+        wires.push(closed);
+    }
+    ensure!(!wires.is_empty(), "missing spatial boundary wires");
+    Ok(wires)
 }
 
 #[cfg(test)]
@@ -359,9 +454,9 @@ mod tests {
         )?;
         edge[1][0][0] += 1e-13;
         let count = edge.len();
-        let closed = close_wire(vec![edge.clone()], |_, _| Ok(true))?;
+        let closed = close_wire(vec![edge.clone()], FRAME_TOLERANCE, |_, _| Ok(true))?;
         assert!(closed.spans.len() > count && closed.closure_error > 0.0);
-        assert!(close_wire(vec![edge], |_, _| Ok(false)).is_err());
+        assert!(close_wire(vec![edge], FRAME_TOLERANCE, |_, _| Ok(false)).is_err());
         Ok(())
     }
 }

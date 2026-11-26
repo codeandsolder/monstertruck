@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod geodesic;
 mod rational_bezier;
+mod spatial_boundary;
+mod spatial_quadrature;
 mod spatial_sphere;
+pub(super) mod spatial_volume;
 mod substitution;
 
 #[derive(Debug, Serialize)]

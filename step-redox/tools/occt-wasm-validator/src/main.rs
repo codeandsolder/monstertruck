@@ -76,6 +76,15 @@ enum Command {
     },
     /// Hash the strict world-coordinate tessellation at 1e-9 mm precision.
     MeshHash { input: PathBuf },
+    /// Independent elementary-carrier spatial volume diagnostic (no UV quadrature).
+    SpatialVolume {
+        reference: PathBuf,
+        candidate: PathBuf,
+        #[arg(long, default_value_t = 1e-10)]
+        absolute_tolerance: f64,
+        #[arg(long, default_value_t = 2e-9)]
+        boundary_tolerance_mm: f64,
+    },
     /// Compare signed face integrals at two quadrature tolerances and four references.
     PairedVolume {
         reference: PathBuf,
@@ -321,6 +330,26 @@ fn main() -> Result<ExitCode> {
                 "{}",
                 serde_json::to_string_pretty(&mesh_digest(&mut kernel, import.shape)?)?
             );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::SpatialVolume {
+            reference,
+            candidate,
+            absolute_tolerance,
+            boundary_tolerance_mm,
+        } => {
+            let mut kernel = OcctKernel::new()?;
+            let (a, _) = load(&mut kernel, &reference)?;
+            let (b, _) = load(&mut kernel, &candidate)?;
+            let report = paired_volume::spatial_volume(
+                &mut kernel,
+                a.shape,
+                b.shape,
+                absolute_tolerance,
+                boundary_tolerance_mm,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            // This diagnostic is never the strict paired-volume gate.
             Ok(ExitCode::SUCCESS)
         }
         Command::PairedVolume {
