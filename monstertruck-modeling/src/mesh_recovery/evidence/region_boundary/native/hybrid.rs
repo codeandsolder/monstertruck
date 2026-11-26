@@ -28,7 +28,9 @@ use std::{
 mod connectors;
 pub use connectors::{HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease};
 mod refinement;
+mod simplify;
 pub use refinement::{HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery};
+pub use simplify::HybridPlanarSimplification;
 
 /// Provenance of one original polygon in its approximate native region.
 #[derive(Debug, Clone)]
@@ -37,26 +39,35 @@ pub struct HybridPolygonFaces {
     pub polygon: usize,
     /// Original selected region ID.
     pub region: usize,
-    /// Native face range within that region's face list.
-    /// Source polygons in one certified merged cell share the same range.
-    pub faces: Range<usize>,
+    /// Native face indices within that region's face list.
+    /// A face can cover multiple source polygons after cell coalescence
+    /// or certified planar simplification.
+    pub faces: Vec<usize>,
 }
 
 /// Evidence for one connected, bounded approximate region union.
 #[derive(Debug)]
 pub struct HybridPatchEvidence {
+    budget: crate::mesh_recovery::SurfaceRegionBudget,
     /// Regions explicitly replaced by source-backed approximations.
     pub regions: Vec<usize>,
     /// Source polygon-to-native-face provenance.
     pub polygons: Vec<HybridPolygonFaces>,
     /// Number of certified cells covering multiple original polygons.
     pub coalesced_cells: usize,
-    /// Maximum movement of an original source vertex.
+    /// Bound on distance of an original source vertex to the native
+    /// domain, including any certified planar simplification.
     pub vertex_displacement: f64,
     /// Maximum continuous two-sided facet deviation.
     pub deviation_upper_bound: f64,
     /// Maximum bounded radial seam discrepancy within the patch.
     pub seam_deviation_upper_bound: f64,
+}
+
+impl HybridPatchEvidence {
+    /// The original immutable vertex and chord budgets of this patch.
+    #[must_use]
+    pub const fn budget(&self) -> crate::mesh_recovery::SurfaceRegionBudget { self.budget }
 }
 
 /// One global hybrid reconstruction. The input strict result is unchanged.
@@ -755,7 +766,7 @@ impl HybridInput<'_> {
             provenance.push(HybridPolygonFaces {
                 polygon,
                 region,
-                faces: native_range.clone(),
+                faces: native_range.clone().collect(),
             });
         }
         regions.extend(faces.into_iter().map(|(region, faces)| NativeRegionFace {
@@ -765,6 +776,7 @@ impl HybridInput<'_> {
             chart_seams: 0,
         }));
         Ok(HybridPatchEvidence {
+            budget: self.patch.budget,
             regions: ids,
             polygons: provenance,
             coalesced_cells: approximation.coalesced_cells,

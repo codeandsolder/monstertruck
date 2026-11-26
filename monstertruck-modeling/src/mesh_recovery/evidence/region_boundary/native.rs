@@ -3,7 +3,7 @@
 //! rebuilt by each incident face. Periodic-domain cuts are separate from
 //! the geometric consistency of the native edge and surface carriers.
 
-use super::super::super::sample_fit::normal_basis;
+use super::super::super::{planar_domain, sample_fit::normal_basis};
 use super::{
     ContactToroidalSectionEvidence, MeshEvidence, RegionBoundaryIndex, SharedAnalyticTrim,
     SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition,
@@ -21,11 +21,10 @@ use std::{
 
 mod band;
 mod hybrid;
-mod planar_domain;
 pub use hybrid::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
-    HybridPolygonFaces, HybridRecovery, HybridRecoveryError, HybridRefinementOptions,
-    PatchSupportConflict, RefinedHybridRecovery,
+    HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
+    HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery,
 };
 
 /// Numerical and displacement policies for native trim vertex reconciliation.

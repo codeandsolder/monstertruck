@@ -12,14 +12,20 @@
 //! Tangencies, overlapping curves and unresolved near-incidence are not
 //! certified by this test.
 
+use super::sample_fit::normal_basis;
 use crate::{Edge, InnerSpace, Point3, Vector2, Vector3, Wire};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };
 
+mod simple;
+pub(super) use simple::certify_projected_radial_fan;
+pub use simple::{PlanarDomainCertificate, certify_projected_planar_domain};
+
 const MAX_SUBDIVISION: usize = 12;
 const MAX_PAIR_VISITS: usize = 131_072;
 
+#[derive(Clone)]
 struct Span {
     controls: Vec<[f64; 4]>,
     bounds: [Vector2; 2],
@@ -260,7 +266,7 @@ pub(super) fn has_crossing(
     normal: Vector3,
     tolerance: f64,
 ) -> bool {
-    let basis = super::normal_basis(normal).into();
+    let basis = normal_basis(normal).into();
     let Some(spans) = projected_spans(
         wires.iter().flatten().enumerate(),
         origin,

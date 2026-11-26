@@ -57,6 +57,10 @@ mod through_hole;
 pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindrical_solid};
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod evidence;
+mod planar_domain;
+pub use planar_domain::{PlanarDomainCertificate, certify_projected_planar_domain};
+mod planar_fans;
+pub use planar_fans::{PlanarFanOptions, PlanarFanSimplification, simplify_planar_fan_shell};
 mod sample_fit;
 mod seams;
 pub use evidence::{
@@ -67,19 +71,20 @@ pub use evidence::{
     ContactToroidalSectionEvidence, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
     CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack, CurvatureTrackOptions,
     EvidenceOptions, FeatureEdge, FeatureEdgeKind, HybridConnectorOptions, HybridConnectorRecovery,
-    HybridConnectorRelease, HybridPatchEvidence, HybridPolygonFaces, HybridRecovery,
-    HybridRecoveryError, HybridRefinementOptions, LiftedRegionPatch, LiftedSourceChord,
-    MeridianGraphOptions, MeridianStation, MeridianStationGraph, MeridianTransition, MeshEvidence,
-    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, OrientedTrim,
-    ParallelBundle, ParallelPlacement, PatchSupportConflict, PlanarSupport, ReconciledPartition,
-    ReconciledPlane, ReconciliationOptions, RefinedHybridRecovery, RegionBoundary,
-    RegionBoundaryEdge, RegionBoundaryError, RegionBoundaryGap, RegionBoundaryIndex,
-    RegionContactGraph, RegionContactPath, RegionPatchError, RegionPatchOptions,
-    RegionTrimBoundary, RegionTrimLoops, SeparatedSourceVertex, SharedAnalyticTrim,
-    SharedTrimGeometry, SharedTrimGraph, SharedTrimOptions, SharedTrimPiece,
-    SharedTrimSegmentation, SourceCircleObservation, SourceForcedPair, SourceProvenance,
-    SourceSectorPair, SpatialTrackEvidence, SpatialTrackJoinEvidence, StationLinearCandidate,
-    StationMeridianCandidate, StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
+    HybridConnectorRelease, HybridPatchEvidence, HybridPlanarSimplification, HybridPolygonFaces,
+    HybridRecovery, HybridRecoveryError, HybridRefinementOptions, LiftedRegionPatch,
+    LiftedSourceChord, MeridianGraphOptions, MeridianStation, MeridianStationGraph,
+    MeridianTransition, MeshEvidence, NativeRegionFace, NativeTrimError, NativeTrimGraph,
+    NativeTrimOptions, OrientedTrim, ParallelBundle, ParallelPlacement, PatchSupportConflict,
+    PlanarSupport, ReconciledPartition, ReconciledPlane, ReconciliationOptions,
+    RefinedHybridRecovery, RegionBoundary, RegionBoundaryEdge, RegionBoundaryError,
+    RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph, RegionContactPath,
+    RegionPatchError, RegionPatchOptions, RegionTrimBoundary, RegionTrimLoops,
+    SeparatedSourceVertex, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
+    SharedTrimOptions, SharedTrimPiece, SharedTrimSegmentation, SourceCircleObservation,
+    SourceForcedPair, SourceProvenance, SourceSectorPair, SpatialTrackEvidence,
+    SpatialTrackJoinEvidence, StationLinearCandidate, StationMeridianCandidate,
+    StationMeridianDiscovery, SupportBoundaryTopology, SupportInterface,
     SupportNormalRotationEvidence, SurfaceCarrier, SurfaceCurveAgreement, SurfaceRegionBudget,
     SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence, discover_circle_axes,
     measure_circular_meridian, measure_curvature_spatial, measure_curvature_spatial_join,

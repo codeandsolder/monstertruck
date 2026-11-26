@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
     AnalyticRecoveryOptions, BoundaryFacetInput, BoundaryPatchError, HybridConnectorOptions,
-    HybridRecoveryError, HybridRefinementOptions, NativeTrimOptions, RecoveredAnalyticMesh,
-    RegionBoundaryIndex, RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
-    SurfaceRegionPartition, recover_analytic_mesh,
+    HybridRecovery, HybridRecoveryError, HybridRefinementOptions, NativeTrimOptions,
+    RecoveredAnalyticMesh, RegionBoundaryIndex, RegionPatchError, RegionPatchOptions,
+    SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionPartition, recover_analytic_mesh,
 };
 use serde_json::{Value, json};
 use std::{
@@ -243,12 +243,25 @@ fn retained_trim_diagnostic(
       "vertices":endpoints.into_iter().map(|id|json!({"id":id,"source":recovery.evidence.positions[id],"reconciled":recovery.reconciled.positions[id],"native":recovery.native.vertices[id].as_ref().map(monstertruck_modeling::Vertex::point)})).collect::<Vec<_>>()})
 }
 
+fn simplify_report(result: &mut HybridRecovery, enabled: bool) -> Value {
+    if !enabled {
+        return Value::Null;
+    }
+    result.simplify_planar_fans().map_or_else(
+        || json!({"status":"rejected"}),
+        |report| json!({"status":"ok","faces_before":report.faces_before,"faces_after":report.faces_after,
+            "merged_groups":report.merged_groups,"rejected_groups":report.rejected_groups,
+            "rejected_patches":report.rejected_patches,"added_deviation_bound":report.added_deviation_upper_bound}),
+    )
+}
+
 fn global_trial(
     recovery: &RecoveredAnalyticMesh,
     options: RegionPatchOptions,
     selected: &BTreeSet<usize>,
     shell_output: Option<&Path>,
     crossing_limit: Option<usize>,
+    simplify: bool,
 ) -> Result<Value> {
     if selected.is_empty() {
         return Ok(json!({"status":"no_candidates"}));
@@ -297,7 +310,8 @@ fn global_trial(
         },
     );
     Ok(match attempt {
-        Ok((result, selected_count, added_polygons, trials, releases)) => {
+        Ok((mut result, selected_count, added_polygons, trials, releases)) => {
+            let planar_simplification = simplify_report(&mut result, simplify);
             let before = recovery
                 .native
                 .regions
@@ -325,7 +339,7 @@ fn global_trial(
                 false
             };
             json!({"status":"ok","selected_regions":selected_count,"connector_added_polygons":added_polygons,"connector_trials":trials,"connector_releases":releases,
-                "patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
+                "planar_simplification":planar_simplification,"patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
                 "before_failed_regions":before,"failed_regions":after,
                 "before_failed_trims":old_trims,"failed_trims":new_trims,
                 "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
@@ -346,6 +360,7 @@ fn census(
     budget: SurfaceRegionBudget,
     shell_output: Option<&Path>,
     crossing_limit: Option<usize>,
+    simplify: bool,
 ) -> Result<Value> {
     let index = RegionBoundaryIndex::new(&recovery.evidence)?;
     let partition = &recovery.reconciled.partition;
@@ -409,7 +424,14 @@ fn census(
         ),
         (
             "global_hybrid".to_string(),
-            global_trial(recovery, options, &selected, shell_output, crossing_limit)?,
+            global_trial(
+                recovery,
+                options,
+                &selected,
+                shell_output,
+                crossing_limit,
+                simplify,
+            )?,
         ),
     ]);
     Ok(report)
@@ -420,6 +442,7 @@ fn refined_trial(
     budget: SurfaceRegionBudget,
     limit: usize,
     shell_output: Option<&Path>,
+    simplify: bool,
 ) -> Result<Value> {
     let index = RegionBoundaryIndex::new(&recovery.evidence)?;
     let selection = candidate_groups(recovery, &index)?;
@@ -467,7 +490,8 @@ fn refined_trial(
         options,
     ) {
         Ok(refined) => {
-            let result = refined.recovery;
+            let mut result = refined.recovery;
+            let planar_simplification = simplify_report(&mut result, simplify);
             let shell = result.complete_shell();
             let exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
                 let mut writer = BufWriter::new(File::create_new(path)?);
@@ -481,7 +505,7 @@ fn refined_trial(
                 "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
                     "support":c.support,"parent_region":c.parent_region,"edge":c.edge,"distance_lower_witness":c.distance_lower_witness
                 })).collect::<Vec<_>>(),
-                "patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
+                "planar_simplification":planar_simplification,"patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
                 "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).map(|r|json!({"region":r.region,"error":r.faces.as_ref().err().map(ToString::to_string)})).collect::<Vec<_>>(),
                 "failed_trims":result.native.trims.iter().filter(|r|r.is_err()).count(),
                 "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
@@ -522,6 +546,10 @@ fn main() -> Result<()> {
         anyhow::ensure!(args.next().is_none(), "usage: --replay-facet INPUT_JSON");
         return replay_facet(&input);
     }
+    let mut arguments = args.collect::<Vec<_>>();
+    let simplify = arguments.iter().any(|arg| arg == "--simplify-planar-fans");
+    arguments.retain(|arg| arg != "--simplify-planar-fans");
+    let mut args = arguments.into_iter();
     let read_budget = |arg: Option<std::ffi::OsString>| -> Result<f64> {
         arg.context("expected explicit approximation budget")?
             .to_str()
@@ -560,7 +588,7 @@ fn main() -> Result<()> {
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings MAX_ADDED_POLYGONS]"
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings MAX_ADDED_POLYGONS] [--simplify-planar-fans]"
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
@@ -569,10 +597,16 @@ fn main() -> Result<()> {
     let budget = SurfaceRegionBudget { vertex, chord };
     let report = match mode {
         Some((flag, limit)) if flag == "--release-conflicts" => {
-            refined_trial(&recovery, budget, limit, shell_output.as_deref())?
+            refined_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
         }
-        Some((_, limit)) => census(&recovery, budget, shell_output.as_deref(), Some(limit))?,
-        None => census(&recovery, budget, shell_output.as_deref(), None)?,
+        Some((_, limit)) => census(
+            &recovery,
+            budget,
+            shell_output.as_deref(),
+            Some(limit),
+            simplify,
+        )?,
+        None => census(&recovery, budget, shell_output.as_deref(), None, simplify)?,
     };
     println!(
         "{}",
