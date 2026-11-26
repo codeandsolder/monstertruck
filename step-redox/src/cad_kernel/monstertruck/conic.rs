@@ -5,12 +5,13 @@
 use monstertruck_modeling::{
     BsplineCurve, EuclideanSpace, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3, Vector4,
 };
-use std::f64::consts::{FRAC_PI_2, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// Construct a directed circular arc or its nonsingular affine image.
 ///
-/// The supplied radial basis vectors already include scale. Splitting at
-/// quarter turns guarantees strictly positive weights even for major arcs.
+/// The supplied radial basis vectors already include scale. Minor arcs use
+/// a smooth quadratic parameterization with interior knots; major arcs
+/// split at quarter turns to keep all rational weights strictly positive.
 pub(super) fn affine_arc(
     origin: Point3,
     x: Vector3,
@@ -24,6 +25,31 @@ pub(super) fn affine_arc(
         || x.cross(y).magnitude2() <= 0.0
     {
         return None;
+    }
+    if sweep.abs() <= PI {
+        let (sin_half, cos_half) = (0.5 * sweep).sin_cos();
+        let (sin, cos) = sweep.sin_cos();
+        let mut curve = NurbsCurve::new(
+            BsplineCurve::new(
+                KnotVector::bezier_knot(2),
+                vec![
+                    (origin.to_vec() + x).extend(1.0),
+                    (origin.to_vec() * cos_half + x * cos_half + y * sin_half).extend(cos_half),
+                    (origin.to_vec() + x * cos + y * sin).extend(1.0),
+                ],
+            )
+            .ok()?,
+        );
+        // Knot insertion preserves the homogeneous conic exactly, including
+        // semicircles whose original middle weight is nearly zero.
+        for knot in [0.25, 0.5, 0.75] {
+            curve.add_knot(knot);
+        }
+        return curve
+            .control_points()
+            .iter()
+            .all(|h| h.w > 0.0 && [h.x, h.y, h.z, h.w].into_iter().all(f64::is_finite))
+            .then_some(curve);
     }
     let count = (1..=4).find(|n| sweep.abs() <= f64::from(*n) * FRAC_PI_2)?;
     let step = sweep / f64::from(count);

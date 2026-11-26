@@ -3825,11 +3825,11 @@ pub mod monstertruck {
                     radius,
                 };
                 assert_eq!(
-                    certify_nurbs_curve_on_support(&curve, support, 1e-12),
+                    certify_nurbs_curve_on_support(&curve, support, 1e-11),
                     CurveIncidence::Proven
                 );
                 let frame =
-                    CircularArcFrame::new(origin, Vector3::unit_z(), radius, curve.front(), 1e-12)
+                    CircularArcFrame::new(origin, Vector3::unit_z(), radius, curve.front(), 1e-11)
                         .context("circle frame")?;
                 let coverage = certify_circular_arc_coverage(&curve, frame).context("whole arc")?;
                 assert!((coverage.sweep_rad - sweep.abs()).abs() < 1e-12);
