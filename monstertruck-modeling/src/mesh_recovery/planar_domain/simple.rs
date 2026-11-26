@@ -12,8 +12,10 @@ use robust::{Coord, orient2d};
 const MAX_DEPTH: usize = 6;
 const MAX_PIECES: usize = 8192;
 const MAX_PAIR_TESTS: usize = 262_144;
+const MAX_AXIS_TESTS: usize = 1_048_576;
 
 /// Positive simplicity and nesting evidence in an oriented planar chart.
+///
 /// The proof concerns endpoint-aligned projected rational curves; their
 /// discrepancy from the original projected curves is bounded separately.
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +37,7 @@ struct Piece {
     count: usize,
 }
 
-fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
+const fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
 
 fn turn(a: Vector2, b: Vector2, p: Vector2) -> f64 { orient2d(coord(a), coord(b), coord(p)) }
 
@@ -84,25 +86,24 @@ impl Piece {
         if direction.magnitude() <= 2.0 * self.margin {
             return false;
         }
-        // Positive rational weights preserve the order of an ordered
-        // scalar control net. Strict overall extent excludes a constant
-        // map, even when some consecutive control values coincide.
+        // Positive rational weights preserve strict scalar control order.
+        // Require a margin for each difference, not just the endpoints:
+        // a rounded zero alone cannot certify monotonicity.
         (0..2).any(|axis| {
             let sign = direction[axis].signum();
             direction[axis].abs() > 2.0 * self.margin
                 && self
                     .controls
                     .windows(2)
-                    .all(|pair| sign * (pair[1][axis] - pair[0][axis]) >= 0.0)
+                    .all(|pair| sign * (pair[1][axis] - pair[0][axis]) > 2.0 * self.margin)
         }) || self.controls.windows(2).all(|pair| {
-            same_point(pair[0], pair[1])
-                || (pair[1] - pair[0]).dot(direction) > 2.0 * self.margin * direction.magnitude()
+            (pair[1] - pair[0]).dot(direction) > 2.0 * self.margin * direction.magnitude()
         })
     }
 
     fn end(&self) -> Vector2 { self.controls[self.controls.len() - 1] }
 
-    fn next_is(&self, other: &Self) -> bool {
+    const fn next_is(&self, other: &Self) -> bool {
         self.wire == other.wire && (self.index + 1) % self.count == other.index
     }
 
@@ -123,13 +124,17 @@ impl Piece {
             })
     }
 
-    fn separated(&self, other: &Self) -> bool {
+    fn separated(&self, other: &Self, remaining_axes: &mut usize) -> bool {
         if !self.overlaps(other) {
             return true;
         }
         let origin = self.controls[0];
         let margin = self.margin + other.margin;
-        let separates = |axis: Vector2| {
+        let mut separates = |axis: Vector2| {
+            let Some(remaining) = remaining_axes.checked_sub(1) else {
+                return false;
+            };
+            *remaining_axes = remaining;
             let len = axis.magnitude();
             if len <= margin || !len.is_finite() {
                 return false;
@@ -164,16 +169,17 @@ impl Piece {
         // halfplanes through the same junction. Reflect the preceding
         // rays and find an open hemisphere containing both ray sets.
         let margin = self.margin + next.margin;
-        let rays = self
-            .controls
+        let rays = self.controls[..self.controls.len() - 1]
             .iter()
             .map(|&p| join - p)
-            .chain(next.controls.iter().map(|&p| p - join))
-            .filter(|&v| !same_point(v, Vector2::new(0.0, 0.0)))
+            .chain(next.controls[1..].iter().map(|&p| p - join))
             .collect::<Vec<_>>();
         let Some(&first) = rays.first() else {
             return false;
         };
+        if first.magnitude() <= margin {
+            return false;
+        }
         let axis = first.normalize();
         let cross_axis = Vector2::new(-axis.y, axis.x);
         let [lo, hi] = rays
@@ -183,7 +189,7 @@ impl Piece {
         if hi - lo >= std::f64::consts::PI {
             return false;
         }
-        let (sin, cos) = (0.5 * (lo + hi)).sin_cos();
+        let (sin, cos) = lo.midpoint(hi).sin_cos();
         let separator = axis * cos + cross_axis * sin;
         rays.iter().all(|v| v.dot(separator) > margin)
     }
@@ -383,10 +389,13 @@ impl ProjectedLoop {
         if wire.is_empty() || !wire.is_closed() || !wire.is_simple() {
             return None;
         }
-        let edges = wire
-            .iter()
-            .map(|edge| ProjectedEdge::new(edge, origin, basis))
-            .collect::<Option<Vec<_>>>()?;
+        let mut edges = Vec::new();
+        let mut remaining = MAX_PIECES;
+        for edge in wire {
+            let projected = ProjectedEdge::new(edge, origin, basis)?;
+            remaining = remaining.checked_sub(projected.spans.len())?;
+            edges.push(projected);
+        }
         Some(Self { edges })
     }
 
@@ -465,6 +474,7 @@ fn disjoint(pieces: &[Piece]) -> bool {
             .total_cmp(&(pieces[b].bounds[0].x - pieces[b].margin))
     });
     let mut remaining = MAX_PAIR_TESTS;
+    let mut remaining_axes = MAX_AXIS_TESTS;
     for (i, &first) in order.iter().enumerate() {
         let a = &pieces[first];
         for &second in &order[i + 1..] {
@@ -481,7 +491,7 @@ fn disjoint(pieces: &[Piece]) -> bool {
             } else if b.next_is(a) {
                 b.separated_at_join(a)
             } else {
-                a.separated(b)
+                a.separated(b, &mut remaining_axes)
             };
             if !separated {
                 return false;
@@ -559,6 +569,7 @@ fn nesting(loops: &[Vec<Piece>]) -> Option<usize> {
 
 /// Certify a simple, positively oriented projected planar trim domain,
 /// with a single outer loop and disjoint negatively oriented holes.
+///
 /// Positive-weight rational Bézier hulls bound the full homotopy to
 /// ordered chords. Distinct pieces have disjoint hulls, except adjacent
 /// pieces sharing a junction where strict halfplane separation applies.
@@ -586,27 +597,36 @@ pub fn certify_projected_planar_domain(
         return None;
     }
     let basis = normal_basis(normal).into();
-    let projected = wires
-        .iter()
-        .map(|wire| ProjectedLoop::new(wire, origin, basis))
-        .collect::<Option<Vec<_>>>()?;
+    let mut projected = Vec::new();
+    let mut remaining = MAX_PIECES;
+    for wire in wires {
+        let loop_projection = ProjectedLoop::new(wire, origin, basis)?;
+        remaining = remaining.checked_sub(
+            loop_projection
+                .edges
+                .iter()
+                .map(|edge| edge.spans.len())
+                .sum(),
+        )?;
+        projected.push(loop_projection);
+    }
     for depth in 0..=MAX_DEPTH {
-        let Some(attempt) = projected
-            .iter()
-            .enumerate()
-            .map(|(i, wire)| wire.pieces(i, depth, seam_limit))
-            .collect::<Option<Vec<_>>>()
-        else {
+        let mut loops = Vec::new();
+        let mut seam = 0.0_f64;
+        let mut count = 0_usize;
+        for (i, wire) in projected.iter().enumerate() {
+            let Some((pieces, gap)) = wire.pieces(i, depth, seam_limit) else {
+                break;
+            };
+            count = count.checked_add(pieces.len())?;
+            if count > MAX_PIECES {
+                return None;
+            }
+            seam = seam.max(gap);
+            loops.push(pieces);
+        }
+        if loops.len() != projected.len() {
             continue;
-        };
-        let seam = attempt.iter().map(|(_, gap)| *gap).fold(0.0_f64, f64::max);
-        let loops = attempt
-            .into_iter()
-            .map(|(pieces, _)| pieces)
-            .collect::<Vec<_>>();
-        let count = loops.iter().map(Vec::len).sum::<usize>();
-        if count > MAX_PIECES {
-            return None;
         }
         let Some(outer_wire) = nesting(&loops) else {
             continue;

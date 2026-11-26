@@ -212,7 +212,8 @@ impl Fan {
     fn plane_bound(&self, origin: Point3, normal: Vector3) -> f64 {
         // The full rational control hull and native corners lie in this
         // slab; positive weights bound every surface point, not samples.
-        self.points
+        let slab = self
+            .points
             .iter()
             .copied()
             .chain([
@@ -222,8 +223,8 @@ impl Fan {
             ])
             .map(|p| normal.dot(p - origin).abs())
             .fold(0.0_f64, f64::max)
-            + self.margin
-            + 128.0 * f64::EPSILON * origin.x.abs().max(origin.y.abs()).max(origin.z.abs())
+            + self.margin;
+        (128.0 * f64::EPSILON).mul_add(origin.x.abs().max(origin.y.abs()).max(origin.z.abs()), slab)
     }
 
     fn certify(&self, origin: Point3, normal: Vector3, limit: f64) -> Option<Bounds> {
@@ -255,7 +256,7 @@ struct Bounds {
 impl Bounds {
     fn deviation(self) -> f64 { self.plane_and_collapse + self.seam }
 
-    fn include(&mut self, other: Self) {
+    const fn include(&mut self, other: Self) {
         self.plane_and_collapse = self.plane_and_collapse.max(other.plane_and_collapse);
         self.seam = self.seam.max(other.seam);
     }
@@ -428,6 +429,7 @@ impl<'a> UnionContext<'a> {
 
 /// Replace connected coplanar rational fan faces by certified simple
 /// planar domains, without modifying their surviving native edges.
+///
 /// The caller supplies an additional geometric budget and must charge
 /// the reported bound to any original approximation/vertex budgets.
 /// Optional per-face ownership prevents cancellation across different
