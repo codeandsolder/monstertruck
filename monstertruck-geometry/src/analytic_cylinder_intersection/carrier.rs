@@ -279,7 +279,9 @@ pub struct CircularCylinderChart {
 }
 
 /// Certify a single-cover directed circular profile and its linear axial
-/// extrusion. A point-set cylinder certificate alone is insufficient for
+/// extrusion.
+///
+/// A point-set cylinder certificate alone is insufficient for
 /// recharting an oriented trimmed surface: it could cover a circle twice
 /// or reverse the angular direction in an interior knot interval.
 #[must_use = "inspect the complete directed cylinder chart certificate"]

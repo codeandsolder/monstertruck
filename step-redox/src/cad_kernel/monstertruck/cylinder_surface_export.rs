@@ -84,8 +84,10 @@ pub(super) fn rechart_intersection(mut curve: Curve, tolerance: f64) -> Curve {
     curve
 }
 
-/// A complete face can change chart only when every exchanged spatial
-/// boundary is certified on the new carrier and no UV trim is reused.
+/// Rechart a complete face with certified spatial boundaries.
+///
+/// Every exchanged spatial boundary must lie on the new carrier and no
+/// UV trim may be reused.
 pub(super) fn rechart_face(
     surface: &Surface,
     curves: impl IntoIterator<Item = Curve>,
