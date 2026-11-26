@@ -17,6 +17,8 @@ use crate::{
 use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 
+mod variable_rim;
+
 #[derive(Clone, Copy)]
 struct Ring {
     axis: usize,
@@ -99,7 +101,12 @@ impl BandContext<'_> {
         let [first, second] = boundary.loops.as_slice() else {
             return self.cap(boundary, trims);
         };
-        let rings = [self.ring(first)?, self.ring(second)?];
+        let rings = match (self.ring(first), self.ring(second)) {
+            (Some(a), Some(b)) => [a, b],
+            (Some(ring), None) => return self.variable_band([first, second], 0, ring, trims),
+            (None, Some(ring)) => return self.variable_band([first, second], 1, ring, trims),
+            (None, None) => return None,
+        };
         if rings[0].axis != rings[1].axis || rings[0].positive == rings[1].positive {
             return None;
         }
@@ -150,6 +157,176 @@ impl BandContext<'_> {
             .ok()?;
         commit_rings(changed, trims);
         Some(BandPlan { vertices, seams })
+    }
+
+    /// A closed, regular, degree-one source chart covers the complete torus.
+    /// Build four bounded faces with eight shared half-circle seams, not a
+    /// boundaryless provisional face or a synthetic material solid.
+    pub(super) fn closed_torus(&self) -> Option<Vec<Face>> {
+        let SurfaceCarrier::CircularRevolution {
+            radial_center,
+            profile_radius,
+            ..
+        } = self.carrier
+        else {
+            return None;
+        };
+        if radial_center - profile_radius <= self.options.intersection_tolerance
+            || profile_radius <= self.options.intersection_tolerance
+            || !self.has_unit_torus_degree()
+        {
+            return None;
+        }
+        let angles = [0.0, PI];
+        let mut vertices = Vec::with_capacity(4);
+        for u in angles {
+            for v in angles {
+                vertices.push(builder::vertex(world_point(self.carrier, [u, v])?));
+            }
+        }
+        let mut u_edges = Vec::with_capacity(4);
+        let mut v_edges = Vec::with_capacity(4);
+        for (i, u) in angles.into_iter().enumerate() {
+            for (j, v) in angles.into_iter().enumerate() {
+                let start = &vertices[2 * i + j];
+                for (varying, fixed, end, edges) in [
+                    (0, v, &vertices[2 * (1 - i) + j], &mut u_edges),
+                    (1, u, &vertices[2 * i + 1 - j], &mut v_edges),
+                ] {
+                    let circle = parameter_circle(self.carrier, varying, fixed)?;
+                    let edge = native_circle_edge(
+                        start,
+                        end,
+                        circle.center,
+                        circle.normal,
+                        circle.radius,
+                        PI,
+                        self.options.intersection_tolerance,
+                    )
+                    .ok()?;
+                    if !edge.is_geometric_consistent() || !self.surface.include(&edge.curve()) {
+                        return None;
+                    }
+                    edges.push(edge);
+                }
+            }
+        }
+        let mut faces = Vec::with_capacity(4);
+        for i in 0..2 {
+            for j in 0..2 {
+                let wire = Wire::from(vec![
+                    u_edges[2 * i + j].clone(),
+                    v_edges[2 * (1 - i) + j].clone(),
+                    u_edges[2 * i + 1 - j].inverse(),
+                    v_edges[2 * i + j].inverse(),
+                ]);
+                let wire = if self.outward { wire } else { wire.inverse() };
+                let face = Face::new(vec![wire], self.surface.clone()).ok()?;
+                if !face.is_geometric_consistent() {
+                    return None;
+                }
+                faces.push(face);
+            }
+        }
+        let shell = faces.iter().cloned().collect::<crate::Shell>();
+        (shell.shell_condition() == monstertruck_topology::shell::ShellCondition::Closed
+            && shell.singular_vertices().is_empty())
+        .then_some(faces)
+    }
+
+    // The source polygons form an oriented closed 2-chain in the periodic
+    // parameter domain. Check opposite incidence of every edge, unique
+    // local lifts, and consistent nonnegative chart orientation. The total
+    // signed area divided by (2*pi)^2 is its integer mapping degree.
+    // Degree one excludes duplicated covers and a cover with a missing patch.
+    fn has_unit_torus_degree(&self) -> bool {
+        let mut incidence = BTreeMap::<[usize; 2], (usize, bool)>::new();
+        let mut total = 0.0;
+        let mut compensation = 0.0;
+        let mut polygon_count = 0_usize;
+        for &support in self.supports {
+            for &polygon in &self.evidence.planar_supports[support].source_face_indices {
+                let Some(ids) = self.evidence.source_polygon_vertices(polygon) else {
+                    return false;
+                };
+                let Some(area) = self.oriented_chart_polygon_area(ids) else {
+                    return false;
+                };
+                for (&a, &b) in ids.iter().zip(ids.iter().cycle().skip(1)) {
+                    if a == b {
+                        return false;
+                    }
+                    let key = [a.min(b), a.max(b)];
+                    let entry = incidence.entry(key).or_insert((0, a < b));
+                    if entry.0 >= 2 || (entry.0 == 1 && entry.1 == (a < b)) {
+                        return false;
+                    }
+                    entry.0 += 1;
+                }
+                let corrected = area - compensation;
+                let next = total + corrected;
+                compensation = (next - total) - corrected;
+                total = next;
+                polygon_count += 1;
+            }
+        }
+        // An integer-degree chain must have an area of exactly one period
+        // square. Account only for accumulated floating point error.
+        let roundoff = f64::EPSILON * 128.0 * crate::usize_to_f64(polygon_count) * TAU * TAU;
+        polygon_count != 0
+            && incidence.values().all(|&(count, _)| count == 2)
+            && (total - TAU * TAU).abs() <= roundoff
+    }
+
+    fn oriented_chart_polygon_area(&self, ids: &[usize]) -> Option<f64> {
+        if ids.len() < 3 {
+            return None;
+        }
+        let coords = ids
+            .iter()
+            .map(|&id| {
+                chart_point(
+                    self.carrier,
+                    *self.positions.get(id)?,
+                    self.options.angular_resolution,
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let origin = *coords.first()?;
+        let mut previous = origin;
+        let mut area = 0.0;
+        let sign = if self.outward { 1.0 } else { -1.0 };
+        for raw in coords.iter().skip(1).chain(coords.first()) {
+            let mut next = *raw;
+            for axis in 0..2 {
+                let delta = coordinate_difference(self.carrier, axis, raw[axis], previous[axis]);
+                if periodic_coordinate(self.carrier, axis)
+                    && delta.abs() >= PI - self.options.angular_resolution
+                {
+                    return None;
+                }
+                next[axis] = previous[axis] + delta;
+            }
+            let a = [previous[0] - origin[0], previous[1] - origin[1]];
+            let b = [next[0] - origin[0], next[1] - origin[1]];
+            let twice = sign * a[0].mul_add(b[1], -a[1] * b[0]);
+            let scale = a[0]
+                .abs()
+                .max(a[1].abs())
+                .max(b[0].abs())
+                .max(b[1].abs())
+                .max(1.0);
+            let roundoff = 32.0 * f64::EPSILON * scale * scale;
+            if twice < -roundoff {
+                return None;
+            }
+            area += twice;
+            previous = next;
+        }
+        ((previous[0] - origin[0]).abs() <= 32.0 * f64::EPSILON * TAU
+            && (previous[1] - origin[1]).abs() <= 32.0 * f64::EPSILON * origin[1].abs().max(TAU)
+            && area > 0.0)
+            .then_some(area * 0.5)
     }
 
     // A cap is the limiting annular chart whose second ring collapses

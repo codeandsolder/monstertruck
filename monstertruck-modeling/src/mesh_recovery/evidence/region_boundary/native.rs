@@ -399,6 +399,7 @@ impl FaceAssembly<'_> {
         plan: Option<&band::BandPlan>,
     ) -> NativeRegionFace {
         let mut requires_chart_cut = false;
+        let mut chart_seams = 0;
         let faces = (|| {
             let carrier = self
                 .partition
@@ -434,6 +435,22 @@ impl FaceAssembly<'_> {
                 self.positions,
                 self.options,
             )?;
+            if boundary.loops.is_empty()
+                && let Some(faces) = (band::BandContext {
+                    carrier,
+                    surface: &surface,
+                    outward,
+                    evidence: self.evidence,
+                    supports,
+                    positions: self.positions,
+                    graph: self.chart.graph,
+                    options: self.options,
+                })
+                .closed_torus()
+            {
+                chart_seams = 8;
+                return Ok(faces);
+            }
             let RegionWires {
                 mut wires,
                 areas,
@@ -443,6 +460,7 @@ impl FaceAssembly<'_> {
             if let Some(plan) = plan {
                 let faces = plan.faces(&wires, &surface)?;
                 requires_chart_cut = false;
+                chart_seams = 2;
                 return Ok(faces);
             }
             let outer = areas
@@ -461,7 +479,6 @@ impl FaceAssembly<'_> {
             }
             Ok(vec![face])
         })();
-        let chart_seams = usize::from(faces.is_ok() && plan.is_some() && !requires_chart_cut) * 2;
         NativeRegionFace {
             region: region.region,
             faces,
@@ -1544,6 +1561,232 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn cylindrical_band_with_piecewise_slanted_rim_has_shared_chart_cuts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ring = 16_usize;
+        let carrier = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        for piecewise in [false, true] {
+            let mut positions = Vec::new();
+            for top in [false, true] {
+                for i in 0..ring {
+                    let (sin, cos) =
+                        (TAU * crate::usize_to_f64(i) / crate::usize_to_f64(ring)).sin_cos();
+                    let z = if top {
+                        2.0 + 0.4 * if piecewise { cos.abs() } else { cos }
+                    } else {
+                        0.0
+                    };
+                    positions.push(Point3::new(cos, sin, z));
+                }
+            }
+            let mut faces = Vec::new();
+            for i in 0..ring {
+                let next = (i + 1) % ring;
+                faces.push(vec![i, next, next + ring, i + ring]);
+            }
+            faces.push((0..ring).rev().collect());
+            if piecewise {
+                faces.push((ring / 4..=3 * ring / 4).map(|i| ring + i).collect());
+                faces.push(
+                    (3 * ring / 4..=5 * ring / 4)
+                        .map(|i| ring + i % ring)
+                        .collect(),
+                );
+            } else {
+                faces.push((ring..2 * ring).collect());
+            }
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions,
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let mut supports = (0..ring)
+                .map(|id| evidence.source_planar_support[id])
+                .collect::<Vec<_>>();
+            supports.sort_unstable();
+            supports.dedup();
+            let proposal = index
+                .measure_surface_region(
+                    &supports,
+                    carrier,
+                    SurfaceRegionBudget {
+                        vertex: 1.0e-8,
+                        chord: 0.25,
+                    },
+                )
+                .ok_or("cylinder")?;
+            let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+            let trims =
+                index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+            assert!(
+                trims
+                    .trims
+                    .iter()
+                    .any(|trim| matches!(trim.geometry, SharedTrimGeometry::Conic(_)))
+            );
+            let native = index.construct_native_trims(
+                &partition,
+                &trims,
+                &evidence.positions,
+                native_options(),
+            )?;
+            assert!(
+                native
+                    .regions
+                    .iter()
+                    .all(|r| r.faces.is_ok() && !r.requires_chart_cut)
+            );
+            assert_eq!(
+                native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+                2
+            );
+            let shell = native
+                .regions
+                .into_iter()
+                .map(|r| r.faces)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), if piecewise { 5 } else { 4 });
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.is_geometric_consistent());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn complete_torus_is_a_degree_one_closed_four_chart_shell()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let n = 16_usize;
+        let mut positions = Vec::new();
+        for i in 0..n {
+            let (sin, cos) = (TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n)).sin_cos();
+            for j in 0..n {
+                let (z, rho) = (TAU * crate::usize_to_f64(j) / crate::usize_to_f64(n)).sin_cos();
+                positions.push(Point3::new((3.0 + rho) * cos, (3.0 + rho) * sin, z));
+            }
+        }
+        let mut polygons = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let [a, b, c, d] = [
+                    i * n + j,
+                    ((i + 1) % n) * n + j,
+                    ((i + 1) % n) * n + (j + 1) % n,
+                    i * n + (j + 1) % n,
+                ];
+                polygons.extend([vec![a, b, c], vec![a, c, d]]);
+            }
+        }
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: 3.0,
+            profile_radius: 1.0,
+        };
+        for inward in [false, true] {
+            let mut faces = polygons.clone();
+            if inward {
+                faces.iter_mut().for_each(|f| f.reverse());
+            }
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions: positions.clone(),
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+            let proposal = index
+                .measure_surface_region(
+                    &supports,
+                    carrier,
+                    SurfaceRegionBudget {
+                        vertex: 1.0e-8,
+                        chord: 0.5,
+                    },
+                )
+                .ok_or("torus")?;
+            let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+            let trims =
+                index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+            let native = index.construct_native_trims(
+                &partition,
+                &trims,
+                &evidence.positions,
+                native_options(),
+            )?;
+            assert_eq!(native.regions.len(), 1);
+            assert!(trims.trims.is_empty());
+            let region = &native.regions[0];
+            assert!(!region.requires_chart_cut);
+            assert_eq!(region.chart_seams, 8);
+            let shell = region
+                .faces
+                .as_ref()
+                .map_err(|err| *err)?
+                .iter()
+                .cloned()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), 4);
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.singular_vertices().is_empty());
+            assert!(shell.is_geometric_consistent());
+            let (surface, outward) = native_surface(
+                carrier,
+                &evidence,
+                &supports,
+                &evidence.positions,
+                native_options(),
+            )?;
+            assert_eq!(outward, !inward);
+            let incomplete = band::BandContext {
+                carrier,
+                surface: &surface,
+                outward,
+                evidence: &evidence,
+                supports: &supports[1..],
+                positions: &evidence.positions,
+                graph: &trims,
+                options: native_options(),
+            };
+            assert!(incomplete.closed_torus().is_none());
+            let doubled = supports
+                .iter()
+                .chain(&supports)
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(
+                band::BandContext {
+                    supports: &doubled,
+                    ..incomplete
+                }
+                .closed_torus()
+                .is_none()
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn junction_refinement_preserves_existing_native_trim() -> Result<(), Box<dyn std::error::Error>>
     {

@@ -364,15 +364,15 @@ pub(super) mod tests {
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
     use monstertruck_topology::shell::ShellCondition;
 
-    pub(in crate::mesh_recovery::evidence::region_boundary) fn spherical_fixture() -> Result<
-        (
-            crate::mesh_recovery::MeshEvidence,
-            SurfaceRegionPartition,
-            Vec<usize>,
-            usize,
-        ),
-        Box<dyn std::error::Error>,
-    > {
+    type SphericalFixture = (
+        crate::mesh_recovery::MeshEvidence,
+        SurfaceRegionPartition,
+        Vec<usize>,
+        usize,
+    );
+
+    pub(in crate::mesh_recovery::evidence::region_boundary) fn spherical_fixture()
+    -> Result<SphericalFixture, Box<dyn std::error::Error>> {
         let q = std::f64::consts::FRAC_1_SQRT_2;
         let positions = vec![
             Point3::new(1.0, 0.0, 0.0),
