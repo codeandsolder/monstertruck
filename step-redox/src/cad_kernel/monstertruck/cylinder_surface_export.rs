@@ -76,10 +76,10 @@ pub(super) fn rechart_intersection(mut curve: Curve, tolerance: f64) -> Curve {
         .then(|| candidate(intersection.surface1()))
         .flatten();
     if let Some(native) = first {
-        *intersection.surface0_mut() = Box::new(native);
+        **intersection.surface0_mut() = native;
     }
     if let Some(native) = second {
-        *intersection.surface1_mut() = Box::new(native);
+        **intersection.surface1_mut() = native;
     }
     curve
 }
