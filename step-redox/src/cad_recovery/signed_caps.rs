@@ -541,14 +541,45 @@ mod tests {
         let exchange = ParsedStepSource::parse(healed.step.as_bytes())?.exchange;
         let entities = &exchange.data[0].entities;
         let index = build_index(entities);
-        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let kernel = MonstertruckKernel::project_standard();
         let source = SourceRecovery::new(171, entities, &index, &kernel)
             .context("repaired source boundary not certified")?;
-        let fragment = recover(&source, None)?.context("complete mixed assembly not recovered")?;
-        assert!(matches!(
-            fragment.source,
-            CadFragmentSource::SignedCapAssembly { .. }
-        ));
+        let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(
+            healed.step.as_bytes(),
+            &kernel,
+        )?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.constructively_recovered_solid_count, 1,
+            "{:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let selected = report.selected_fragments().collect::<Vec<_>>();
+        let [chosen] = selected.as_slice() else {
+            anyhow::bail!("complete mixed assembly not recovered");
+        };
+        let fragment = &chosen.fragment;
+        let CadFragmentSource::SignedCapAssembly {
+            host_cap_face_ids,
+            cutter_cap_face_ids,
+            round_end_face_ids,
+            additive_face_ids,
+            ..
+        } = &fragment.source
+        else {
+            anyhow::bail!(
+                "expected source-derived signed-cap assembly, got {:?}",
+                fragment.source
+            );
+        };
+        assert_eq!(*host_cap_face_ids, [620, 1159]);
+        assert_eq!(cutter_cap_face_ids, &[[391, 429]]);
+        assert_eq!(round_end_face_ids, &[68, 680, 1079]);
+        assert!(additive_face_ids.contains(&175) && additive_face_ids.contains(&156));
         assert!(source.proves(&fragment.model, fragment.root, None)?);
         Ok(())
     }
