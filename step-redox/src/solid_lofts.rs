@@ -25,6 +25,7 @@ struct Vertex {
 struct Section {
     level: f64,
     corners: [Vertex; 4],
+    bounds: [[f64; 2]; 2],
     profile: Profile2d,
 }
 
@@ -109,6 +110,7 @@ fn section(
     Some(Section {
         level,
         corners,
+        bounds: [[xmin, xmax], [ymin, ymax]],
         profile,
     })
 }
@@ -716,6 +718,80 @@ fn section_from_wall_ring(
     section(level, &vertices, origin, x, y)
 }
 
+/// Each wall owns one of the four rectangular bounds. The measured
+/// section station controls its depth, while the authored plane normal
+/// controls the slope. Propagate bounds from the previous exact section:
+/// subtracting noisy independent vertex coordinates across a short bevel
+/// otherwise magnifies their positional uncertainty into angular error.
+fn propagate_wall_slopes(
+    solid: &ReducedSolid,
+    walls: &[u64],
+    previous: &Section,
+    stage: &mut Section,
+    axes: [[f64; 3]; 3],
+    origin: [f64; 3],
+) -> Option<()> {
+    let [x, y, axis] = axes;
+    let delta = stage.level - previous.level;
+    let mut bounds = [[None; 2]; 2];
+    for &wall_id in walls {
+        let wall = solid.faces().find(|face| face.id == wall_id)?;
+        let SurfaceSupport::Plane(plane) = wall.surface else {
+            return None;
+        };
+        let corners = previous
+            .corners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, vertex)| {
+                wall.loop_edges()
+                    .any(|edge| edge.start_vertex == vertex.id || edge.end_vertex == vertex.id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let (coord, end) = match corners.as_slice() {
+            [0, 1] => (1, 0),
+            [1, 2] => (0, 1),
+            [2, 3] => (1, 1),
+            [0, 3] => (0, 0),
+            _ => return None,
+        };
+        let basis = [x, y];
+        let normal = dot(plane.normal, basis[coord]);
+        if normal.abs() <= DIR_TOL || dot(plane.normal, basis[1 - coord]).abs() > DIR_TOL {
+            return None;
+        }
+        let slope = -dot(plane.normal, axis) / normal;
+        let bound = slope.mul_add(delta, previous.bounds[coord][end]);
+        if !bound.is_finite()
+            || (bound - stage.bounds[coord][end]).abs() > TOL_MM
+            || bounds[coord][end].replace(bound).is_some()
+        {
+            return None;
+        }
+    }
+    let [[Some(xmin), Some(xmax)], [Some(ymin), Some(ymax)]] = bounds else {
+        return None;
+    };
+    if xmax - xmin <= TOL_MM || ymax - ymin <= TOL_MM {
+        return None;
+    }
+    let corners = [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]];
+    let frame_origin = crate::math3::add(origin, crate::math3::mul(axis, stage.level));
+    for (corner, witness) in corners.iter().zip(stage.corners) {
+        let point = crate::math3::add(
+            crate::math3::add(frame_origin, crate::math3::mul(x, corner[0])),
+            crate::math3::mul(y, corner[1]),
+        );
+        if distance(point, witness.point) > TOL_MM {
+            return None;
+        }
+    }
+    stage.bounds = [[xmin, xmax], [ymin, ymax]];
+    stage.profile = Profile2d::polygon(corners.to_vec()).ok()?;
+    Some(())
+}
+
 /// A source terminal cap may lead into several real four-quad rings before
 /// disappearing into a larger solid. Each ring yields an *editable* loft
 /// section; no fictitious shoulder/cap is introduced into source provenance.
@@ -755,12 +831,17 @@ fn terminal_sectioned_ruled_extension(
     let mut wall_ids = Vec::new();
     let mut direction = 0.0_f64;
     while let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) {
-        let Some(stage) = section_from_wall_ring(&next, planes, origin, axis, x, y) else {
+        let Some(mut stage) = section_from_wall_ring(&next, planes, origin, axis, x, y) else {
             break;
         };
-        let previous = sections.last()?.level;
-        let delta = stage.level - previous;
+        let previous = sections.last()?;
+        let delta = stage.level - previous.level;
         if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
+            break;
+        }
+        if propagate_wall_slopes(solid, &walls, previous, &mut stage, [x, y, axis], origin)
+            .is_none()
+        {
             break;
         }
         direction = delta;
