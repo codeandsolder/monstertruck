@@ -202,6 +202,42 @@ fn expand_supports(
     })
 }
 
+// A single seed's mandatory release closure is a subset of the closure of
+// any seed set containing it. Reuse exactly the transaction's witnesses,
+// permissions and budget; the search must not guess a cheaper expansion.
+pub(super) fn support_closure(
+    evidence: &MeshEvidence,
+    partition: &SurfaceRegionPartition,
+    support: usize,
+    permitted: &[usize],
+    options: HybridRefinementOptions,
+) -> Result<BTreeSet<usize>, HybridRecoveryError> {
+    let cost = evidence
+        .planar_supports
+        .get(support)
+        .ok_or(HybridRecoveryError::InvalidInput)?
+        .source_face_indices
+        .len();
+    let limit = options.max_added_polygons;
+    let remaining = limit
+        .checked_sub(cost)
+        .ok_or(HybridRecoveryError::SupportLimit {
+            required: cost,
+            limit,
+        })?;
+    expand_supports(
+        evidence,
+        partition,
+        HybridRefinementSeed::Supports(&[support]),
+        permitted,
+        HybridRefinementOptions {
+            max_added_polygons: remaining,
+            ..options
+        },
+    )
+    .map(|selection| selection.selected)
+}
+
 struct RefinedPartition {
     partition: SurfaceRegionPartition,
     parents: Vec<Option<usize>>,
@@ -348,7 +384,7 @@ impl RecoveredAnalyticMesh {
                 .all(|(support, region)| {
                     !selected_parents.contains(region) || selection.selected.contains(&support)
                 });
-        if selection.added_polygons == 0 && whole_regions {
+        if whole_regions {
             // No support ownership changed. Keep the exact existing
             // recognition/trim graph and native baseline; there is no
             // reason to fit all unchanged contacts again.
@@ -365,7 +401,7 @@ impl RecoveredAnalyticMesh {
                     .collect(),
                 selected_regions,
                 conflicts: selection.conflicts,
-                added_polygons: 0,
+                added_polygons: selection.added_polygons,
                 trims: self.trims.clone(),
                 recovery,
             });

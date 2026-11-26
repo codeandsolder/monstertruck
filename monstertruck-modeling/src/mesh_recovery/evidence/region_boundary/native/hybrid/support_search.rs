@@ -1,11 +1,12 @@
 //! Explicitly budgeted support-local recovery of failed analytic contacts.
 //! A failed shared edge gives two possible source support releases. Search
-//! covers of these incidence constraints by increasing source polygon cost,
+//! covers of these incidence constraints by increasing mandatory released polygon cost,
 //! retaining alternate choices. The native transaction and its continuous
 //! source/patch certificates, not the combinatorial cover, decide admission.
 
 use super::{
     HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, RefinedHybridRecovery,
+    refinement::support_closure,
 };
 use crate::mesh_recovery::RecoveredAnalyticMesh;
 use monstertruck_topology::shell::ShellCondition;
@@ -41,13 +42,21 @@ pub struct HybridSupportSearchRecovery {
     pub refined: RefinedHybridRecovery,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct CoverCandidate {
+    cost: usize,
+    selected: Vec<usize>,
+    seeds: Vec<usize>,
+}
+
 struct CoverSearch {
     choices: Vec<Vec<usize>>,
     candidates: Vec<usize>,
     sizes: Vec<usize>,
+    closures: BTreeMap<usize, BTreeSet<usize>>,
     max_polygons: usize,
     max_states: usize,
-    frontier: BTreeSet<(usize, Reverse<usize>, Vec<usize>)>,
+    frontier: BTreeSet<(usize, Reverse<usize>, CoverCandidate)>,
     visited: BTreeSet<Vec<usize>>,
     states: usize,
 }
@@ -55,14 +64,16 @@ struct CoverSearch {
 impl CoverSearch {
     fn new(
         contacts: BTreeSet<[usize; 2]>,
-        allowed: &BTreeSet<usize>,
+        closures: BTreeMap<usize, BTreeSet<usize>>,
         sizes: Vec<usize>,
         options: HybridSupportSearchOptions,
     ) -> Result<Self, HybridRecoveryError> {
         if contacts.is_empty()
             || options.max_states == 0
             || options.max_trials == 0
-            || allowed.iter().any(|&id| id >= sizes.len())
+            || closures.iter().any(|(&id, closure)| {
+                !closure.contains(&id) || closure.iter().any(|&member| member >= sizes.len())
+            })
         {
             return Err(HybridRecoveryError::InvalidInput);
         }
@@ -70,7 +81,7 @@ impl CoverSearch {
             .into_iter()
             .map(|pair| {
                 pair.into_iter()
-                    .filter(|id| allowed.contains(id))
+                    .filter(|id| closures.contains_key(id))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -90,6 +101,7 @@ impl CoverSearch {
             choices,
             candidates,
             sizes,
+            closures,
             max_polygons: options.refinement.max_added_polygons,
             max_states: options.max_states,
             frontier: BTreeSet::new(),
@@ -106,79 +118,136 @@ impl CoverSearch {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let cost = mandatory
+        let selected = mandatory
+            .iter()
+            .flat_map(|id| search.closures[id].iter().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let cost = selected
             .iter()
             .try_fold(0_usize, |total, &id| total.checked_add(search.sizes[id]))
             .ok_or(HybridRecoveryError::InvalidInput)?;
-        search.enqueue(cost, mandatory);
+        search.enqueue(CoverCandidate {
+            cost,
+            selected,
+            seeds: mandatory,
+        });
         Ok(search)
     }
 
-    // A feasible dual of the weighted vertex-cover relaxation: assign a
-    // price to each uncovered contact without exceeding any incident
-    // support's polygon cost. Every completion must pay at least the sum
-    // of these prices. This bound applies even to non-bipartite graphs.
+    // Allocate a feasible lower-bound charge for each uncovered contact.
+    // Any completion contains one of its full mandatory closures. Shared
+    // members are required whichever side wins; charge them once. Then
+    // charge the smaller remaining capacity of the disjoint alternatives
+    // to both sides. Each support's original cost is allocated at most
+    // once across all contacts, so the sum cannot exceed completion cost.
     fn lower_bound(&self, cost: usize, selected: &[usize]) -> Option<usize> {
-        let mut capacity = BTreeMap::new();
+        let mut capacity = self.sizes.clone();
+        for &id in selected {
+            capacity[id] = 0;
+        }
         let mut bound = cost;
         for choice in &self.choices {
             if choice.iter().any(|id| selected.binary_search(id).is_ok()) {
                 continue;
             }
-            let price = choice
-                .iter()
-                .map(|&id| *capacity.entry(id).or_insert(self.sizes[id]))
-                .min()?;
-            bound = bound.checked_add(price)?;
-            for id in choice {
-                *capacity.get_mut(id)? -= price;
-            }
+            let charge = match choice.as_slice() {
+                [id] => self.closures[id].iter().try_fold(0_usize, |sum, &id| {
+                    sum.checked_add(std::mem::take(&mut capacity[id]))
+                })?,
+                [a, b] => Self::charge_pair(&self.closures[a], &self.closures[b], &mut capacity)?,
+                _ => return None,
+            };
+            bound = bound.checked_add(charge)?;
         }
         Some(bound)
     }
 
-    fn enqueue(&mut self, cost: usize, selection: Vec<usize>) {
-        if self.visited.len() >= self.max_states || self.visited.contains(&selection) {
+    fn charge_pair(
+        a: &BTreeSet<usize>,
+        b: &BTreeSet<usize>,
+        capacity: &mut [usize],
+    ) -> Option<usize> {
+        let common = a.intersection(b).try_fold(0_usize, |sum, &id| {
+            sum.checked_add(std::mem::take(&mut capacity[id]))
+        })?;
+        let available = |members: &BTreeSet<usize>, other: &BTreeSet<usize>| {
+            members
+                .difference(other)
+                .try_fold(0_usize, |sum, &id| sum.checked_add(capacity[id]))
+        };
+        let charge = available(a, b)?.min(available(b, a)?);
+        for (members, other) in [(a, b), (b, a)] {
+            let mut remaining = charge;
+            for &id in members.difference(other) {
+                let debit = remaining.min(capacity[id]);
+                capacity[id] -= debit;
+                remaining -= debit;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        common.checked_add(charge)
+    }
+
+    fn enqueue(&mut self, candidate: CoverCandidate) {
+        if self.visited.len() >= self.max_states || self.visited.contains(&candidate.selected) {
             return;
         }
-        if let Some(bound) = self.lower_bound(cost, &selection)
+        if let Some(bound) = self.lower_bound(candidate.cost, &candidate.selected)
             && bound <= self.max_polygons
         {
-            self.visited.insert(selection.clone());
+            self.visited.insert(candidate.selected.clone());
             // Prefer progress toward a complete cover on equal lower bounds.
-            self.frontier.insert((bound, Reverse(cost), selection));
+            self.frontier
+                .insert((bound, Reverse(candidate.cost), candidate));
         }
     }
 
-    fn extend(&mut self, cost: usize, selected: &[usize], support: usize) {
-        let Err(at) = selected.binary_search(&support) else {
-            return;
-        };
-        let Some(cost) = cost.checked_add(self.sizes[support]) else {
-            return;
-        };
-        if cost > self.max_polygons || self.visited.len() >= self.max_states {
+    fn extend(&mut self, candidate: &CoverCandidate, support: usize) {
+        if candidate.selected.binary_search(&support).is_ok()
+            || self.visited.len() >= self.max_states
+        {
             return;
         }
-        let mut next = selected.to_vec();
-        next.insert(at, support);
-        self.enqueue(cost, next);
+        let mut next = candidate.clone();
+        for &member in &self.closures[&support] {
+            if let Err(at) = next.selected.binary_search(&member) {
+                let Some(cost) = next.cost.checked_add(self.sizes[member]) else {
+                    return;
+                };
+                if cost > self.max_polygons {
+                    return;
+                }
+                next.cost = cost;
+                next.selected.insert(at, member);
+            }
+        }
+        let at = next.seeds.partition_point(|&id| id < support);
+        next.seeds.insert(at, support);
+        self.enqueue(next);
     }
 
-    fn next_cover(&mut self) -> Option<(usize, Vec<usize>)> {
-        while let Some((_, Reverse(cost), selected)) = self.frontier.pop_first() {
+    fn next_cover(&mut self) -> Option<CoverCandidate> {
+        while let Some((_, _, candidate)) = self.frontier.pop_first() {
             self.states += 1;
             let missing = self
                 .choices
                 .iter()
-                .find(|choice| !choice.iter().any(|id| selected.binary_search(id).is_ok()))
+                .find(|choice| {
+                    !choice
+                        .iter()
+                        .any(|id| candidate.selected.binary_search(id).is_ok())
+                })
                 .cloned();
             if let Some(missing) = missing {
                 for support in missing {
-                    self.extend(cost, &selected, support);
+                    self.extend(&candidate, support);
                 }
             } else {
-                return Some((cost, selected));
+                return Some(candidate);
             }
         }
         None
@@ -187,9 +256,9 @@ impl CoverSearch {
     // A failed geometric transaction can require both sides of a contact
     // to be released. Consider supersets only of observed failed-contact
     // support IDs, never arbitrary unrelated regions.
-    fn extend_rejected(&mut self, cost: usize, selected: &[usize]) {
+    fn extend_rejected(&mut self, candidate: &CoverCandidate) {
         for i in 0..self.candidates.len() {
-            self.extend(cost, selected, self.candidates[i]);
+            self.extend(candidate, self.candidates[i]);
             if self.visited.len() >= self.max_states {
                 break;
             }
@@ -232,10 +301,59 @@ impl RecoveredAnalyticMesh {
         Ok(contacts)
     }
 
+    fn contact_support_closures(
+        &self,
+        contacts: &BTreeSet<[usize; 2]>,
+        permitted: &[usize],
+        options: HybridRefinementOptions,
+    ) -> Result<BTreeMap<usize, BTreeSet<usize>>, HybridRecoveryError> {
+        if permitted
+            .iter()
+            .any(|&id| id >= self.evidence.planar_supports.len())
+        {
+            return Err(HybridRecoveryError::InvalidInput);
+        }
+        let allowed = permitted.iter().copied().collect::<BTreeSet<_>>();
+        let endpoints = contacts.iter().flatten().copied().collect::<BTreeSet<_>>();
+        let mut closures = BTreeMap::new();
+        let mut rejected = BTreeMap::new();
+        for id in endpoints.intersection(&allowed).copied() {
+            match support_closure(
+                &self.evidence,
+                &self.reconciled.partition,
+                id,
+                permitted,
+                options,
+            ) {
+                Ok(closure) => {
+                    closures.insert(id, closure);
+                }
+                Err(
+                    error @ (HybridRecoveryError::ForbiddenSupport(_)
+                    | HybridRecoveryError::SupportLimit { .. }),
+                ) => {
+                    rejected.insert(id, error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        // A contact with no feasible endpoint cannot be covered even by
+        // the union of other seed closures: mandatory closure is transitive.
+        for contact in contacts {
+            if contact.iter().all(|id| !closures.contains_key(id)) {
+                return Err(contact
+                    .iter()
+                    .find_map(|id| rejected.remove(id))
+                    .unwrap_or(HybridRecoveryError::NoSupportCandidate));
+            }
+        }
+        Ok(closures)
+    }
+
     /// Try source support releases at failed shared native trims.
     ///
     /// Every failed contact must be covered by at least one explicitly
-    /// permitted incident support. Enumerate smallest seed polygon costs
+    /// permitted incident support. Enumerate smallest mandatory release costs
     /// first, then use the existing witnessed expansion and full hybrid
     /// certificates. A successful result is a complete closed shell, not
     /// a material or self-intersection certificate. This bounded search
@@ -250,27 +368,29 @@ impl RecoveredAnalyticMesh {
         options: HybridSupportSearchOptions,
     ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
         let contacts = self.failed_support_contacts()?;
-        let allowed = permitted_supports.iter().copied().collect::<BTreeSet<_>>();
+        let closures =
+            self.contact_support_closures(&contacts, permitted_supports, options.refinement)?;
         let sizes = self
             .evidence
             .planar_supports
             .iter()
             .map(|s| s.source_face_indices.len())
             .collect();
-        let mut search = CoverSearch::new(contacts, &allowed, sizes, options)?;
+        let mut search = CoverSearch::new(contacts, closures, sizes, options)?;
         let mut last = HybridRecoveryError::NoSupportCandidate;
         let mut trials = 0;
         while trials < options.max_trials {
-            let Some((cost, seed_supports)) = search.next_cover() else {
+            let Some(candidate) = search.next_cover() else {
                 break;
             };
             trials += 1;
+            let seed_cost: usize = candidate.seeds.iter().map(|&id| search.sizes[id]).sum();
             let refinement = HybridRefinementOptions {
-                max_added_polygons: options.refinement.max_added_polygons - cost,
+                max_added_polygons: options.refinement.max_added_polygons - seed_cost,
                 ..options.refinement
             };
             match self.construct_refined_hybrid(
-                HybridRefinementSeed::Supports(&seed_supports),
+                HybridRefinementSeed::Supports(&candidate.seeds),
                 permitted_supports,
                 refinement,
             ) {
@@ -281,8 +401,8 @@ impl RecoveredAnalyticMesh {
                         .is_some_and(|shell| shell.shell_condition() == ShellCondition::Closed)
                     {
                         return Ok(HybridSupportSearchRecovery {
-                            seed_supports,
-                            released_polygons: cost + refined.added_polygons,
+                            seed_supports: candidate.seeds,
+                            released_polygons: seed_cost + refined.added_polygons,
                             states: search.states,
                             trials,
                             refined,
@@ -314,7 +434,7 @@ impl RecoveredAnalyticMesh {
                 }
                 Err(error) => last = error,
             }
-            search.extend_rejected(cost, &seed_supports);
+            search.extend_rejected(&candidate);
         }
         Err(HybridRecoveryError::SupportSearch {
             states: search.states,
@@ -359,20 +479,33 @@ mod tests {
         }
     }
 
+    fn identity_closures(ids: impl IntoIterator<Item = usize>) -> BTreeMap<usize, BTreeSet<usize>> {
+        ids.into_iter()
+            .map(|id| (id, BTreeSet::from([id])))
+            .collect()
+    }
+
+    fn next_pair(search: &mut CoverSearch) -> Option<(usize, Vec<usize>)> {
+        search.next_cover().map(|c| (c.cost, c.selected))
+    }
+
     #[test]
     fn weighted_contact_covers_keep_independent_alternatives() -> Result<(), HybridRecoveryError> {
         let contacts = BTreeSet::from([[0, 1], [1, 2]]);
         let mut search = CoverSearch::new(
             contacts,
-            &BTreeSet::from([0, 1, 2]),
+            identity_closures([0, 1, 2]),
             vec![2, 3, 2],
             options(7, 32),
         )?;
-        assert_eq!(search.next_cover(), Some((3, vec![1])));
-        search.extend_rejected(3, &[1]);
-        assert_eq!(search.next_cover(), Some((4, vec![0, 2])));
-        assert_eq!(search.next_cover(), Some((5, vec![0, 1])));
-        assert_eq!(search.next_cover(), Some((5, vec![1, 2])));
+        let first = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!((first.cost, first.selected.as_slice()), (3, &[1][..]));
+        search.extend_rejected(&first);
+        assert_eq!(next_pair(&mut search), Some((4, vec![0, 2])));
+        assert_eq!(next_pair(&mut search), Some((5, vec![0, 1])));
+        assert_eq!(next_pair(&mut search), Some((5, vec![1, 2])));
         Ok(())
     }
 
@@ -380,12 +513,16 @@ mod tests {
     fn disjoint_contacts_reach_a_cover_with_linear_state_budget() -> Result<(), HybridRecoveryError>
     {
         let contacts = (0..24).map(|i| [2 * i, 2 * i + 1]).collect();
-        let mut search =
-            CoverSearch::new(contacts, &(0..48).collect(), vec![1; 48], options(24, 64))?;
-        let first = search.next_cover();
+        let mut search = CoverSearch::new(
+            contacts,
+            identity_closures(0..48),
+            vec![1; 48],
+            options(24, 64),
+        )?;
+        let first = next_pair(&mut search);
         assert_eq!(first, Some((24, (0..48).step_by(2).collect())));
         assert_eq!(search.states, 25);
-        assert_eq!(search.next_cover().map(|(cost, _)| cost), Some(24));
+        assert_eq!(search.next_cover().map(|c| c.cost), Some(24));
         Ok(())
     }
 
@@ -396,7 +533,7 @@ mod tests {
         let sizes = vec![2, 4, 3, 1, 5];
         let mut search = CoverSearch::new(
             contacts.clone(),
-            &(0..5).collect(),
+            identity_closures(0..5),
             sizes.clone(),
             options(15, 64),
         )?;
@@ -428,13 +565,41 @@ mod tests {
         }
         let mut actual = BTreeSet::new();
         let mut previous = 0;
-        while let Some((cost, selected)) = search.next_cover() {
-            assert!(cost >= previous);
-            previous = cost;
-            search.extend_rejected(cost, &selected);
-            assert!(actual.insert((cost, selected)));
+        while let Some(candidate) = search.next_cover() {
+            assert!(candidate.cost >= previous);
+            previous = candidate.cost;
+            search.extend_rejected(&candidate);
+            assert!(actual.insert((candidate.cost, candidate.selected)));
         }
         assert_eq!(actual, covers);
+        Ok(())
+    }
+
+    #[test]
+    fn mandatory_closures_share_cost_and_deduplicate_transactions()
+    -> Result<(), HybridRecoveryError> {
+        // 0 and 1 belong to the same mandatory release component. 2 and 3
+        // each require 4; paying for 4 twice would reject the true optimum.
+        let closures = BTreeMap::from([
+            (0, BTreeSet::from([0, 1])),
+            (1, BTreeSet::from([0, 1])),
+            (2, BTreeSet::from([2, 4])),
+            (3, BTreeSet::from([3, 4])),
+        ]);
+        let contacts = BTreeSet::from([[0, 2], [1, 3]]);
+        let mut search = CoverSearch::new(contacts, closures, vec![3, 3, 1, 1, 2], options(6, 32))?;
+        assert_eq!(search.lower_bound(0, &[]), Some(4));
+        let first = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!((first.cost, first.selected.as_slice()), (4, &[2, 3, 4][..]));
+        search.extend_rejected(&first);
+        let second = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!((second.cost, second.selected.as_slice()), (6, &[0, 1][..]));
+        search.extend_rejected(&second);
+        assert_eq!(search.next_cover(), None);
         Ok(())
     }
 
@@ -443,17 +608,17 @@ mod tests {
         let contacts = BTreeSet::from([[0, 1], [1, 2]]);
         let mut search = CoverSearch::new(
             contacts.clone(),
-            &BTreeSet::from([0, 2]),
+            identity_closures([0, 2]),
             vec![2, 3, 2],
             options(4, 1),
         )?;
-        assert_eq!(search.next_cover(), Some((4, vec![0, 2])));
+        assert_eq!(next_pair(&mut search), Some((4, vec![0, 2])));
         assert_eq!(search.next_cover(), None);
         assert_eq!(search.states, 1);
         assert!(matches!(
             CoverSearch::new(
                 contacts.clone(),
-                &BTreeSet::from([0]),
+                identity_closures([0]),
                 vec![2, 3, 2],
                 options(4, 32)
             ),
@@ -461,7 +626,7 @@ mod tests {
         ));
         let mut search = CoverSearch::new(
             contacts,
-            &BTreeSet::from([0, 2]),
+            identity_closures([0, 2]),
             vec![2, 3, 2],
             options(3, 32),
         )?;
