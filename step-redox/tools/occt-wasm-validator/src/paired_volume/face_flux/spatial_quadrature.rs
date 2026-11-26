@@ -35,6 +35,7 @@ pub(super) struct Integral<const N: usize> {
     pub(super) value: [f64; N],
     pub(super) estimated_error: f64,
     pub(super) component_errors: [f64; N],
+    absolute_integrals: [f64; N],
 }
 
 fn rule<const N: usize>(
@@ -47,6 +48,7 @@ fn rule<const N: usize>(
     let central = integrand(center)?;
     let mut fine = central.map(|v| v * KRONROD[7]);
     let mut coarse = central.map(|v| v * GAUSS[3]);
+    let mut absolute = central.map(|v| v.abs() * KRONROD[7]);
     for i in 0..7 {
         let offset = NODES[i] * half_width;
         let left = integrand(center - offset)?;
@@ -54,6 +56,7 @@ fn rule<const N: usize>(
         for j in 0..N {
             let pair = left[j] + right[j];
             fine[j] = KRONROD[i].mul_add(pair, fine[j]);
+            absolute[j] = KRONROD[i].mul_add(left[j].abs() + right[j].abs(), absolute[j]);
             if i % 2 == 1 {
                 coarse[j] = GAUSS[i / 2].mul_add(pair, coarse[j]);
             }
@@ -70,6 +73,7 @@ fn rule<const N: usize>(
         value,
         estimated_error,
         component_errors,
+        absolute_integrals: absolute.map(|v| v * half_width),
     })
 }
 
@@ -81,12 +85,23 @@ fn adaptive<const N: usize>(
     depth: u8,
 ) -> Result<Integral<N>> {
     let integral = rule(integrand, start, end)?;
-    // Do not recursively split on floating-point roundoff alone.
-    let scale = integral.value.iter().map(|v| v.abs()).fold(0.0, f64::max);
-    if integral.estimated_error <= tolerance.max(32.0 * f64::EPSILON * scale) {
+    // The roundoff floor depends on the integral of the absolute
+    // integrand, not the potentially cancelling signed result, and is
+    // evaluated component by component. Preserve the actual error estimate.
+    if integral
+        .component_errors
+        .iter()
+        .zip(integral.absolute_integrals)
+        .all(|(&error, absolute)| error <= tolerance.max(32.0 * f64::EPSILON * absolute))
+    {
         return Ok(integral);
     }
-    ensure!(depth < 20, "spatial boundary quadrature did not converge");
+    ensure!(
+        depth < 20,
+        "spatial boundary quadrature did not converge on [{start:e},{end:e}]: error {:e}, target {tolerance:e}, component errors {:?}",
+        integral.estimated_error,
+        integral.component_errors
+    );
     let center = f64::midpoint(start, end);
     let left = adaptive(integrand, start, center, tolerance * 0.5, depth + 1)?;
     let right = adaptive(integrand, center, end, tolerance * 0.5, depth + 1)?;
@@ -95,6 +110,9 @@ fn adaptive<const N: usize>(
         estimated_error: left.estimated_error + right.estimated_error,
         component_errors: std::array::from_fn(|i| {
             left.component_errors[i] + right.component_errors[i]
+        }),
+        absolute_integrals: std::array::from_fn(|i| {
+            left.absolute_integrals[i] + right.absolute_integrals[i]
         }),
     })
 }

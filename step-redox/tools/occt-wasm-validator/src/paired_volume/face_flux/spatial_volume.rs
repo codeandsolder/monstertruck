@@ -8,7 +8,7 @@
 
 use super::{
     rational_bezier::{self, Homogeneous},
-    spatial_boundary::{self, Span, cartesian, point_derivative},
+    spatial_boundary::{self, Span, SpanEvaluator, cartesian},
     spatial_quadrature as quadrature, spatial_sphere,
 };
 use crate::{
@@ -82,8 +82,8 @@ impl Carrier {
     /// its P boundary reverses the carrier boundary and its Q boundary
     /// has the original direction. Exact integration in s gives the
     /// vector area A=D×(P'+Q')/2 and local flux moment P·A.
-    fn integrand(self, span: &Span, t: f64) -> Result<[f64; 9]> {
-        let (q, dq) = point_derivative(span, t);
+    fn integrand(self, span: &SpanEvaluator, t: f64) -> Result<[f64; 9]> {
+        let (q, dq) = span.evaluate(t);
         let (area, vector, angular, projected, displacement, tangent) = match self {
             Self::Plane { normal, .. } => {
                 let area = 0.5 * dot(normal, cross(q, dq));
@@ -149,8 +149,14 @@ impl Carrier {
     ) -> Result<Sample> {
         let terms = spans
             .iter()
-            .map(|span| {
-                quadrature::integrate(&|t| self.integrand(span, t), epsilon / spans.len() as f64)
+            .enumerate()
+            .map(|(index, span)| {
+                let evaluator = SpanEvaluator::new(span)?;
+                quadrature::integrate(
+                    &|t| self.integrand(&evaluator, t),
+                    epsilon / spans.len() as f64,
+                )
+                .with_context(|| format!("spatial span {index}/{}", spans.len()))
             })
             .collect::<Result<Vec<_>>>()?;
         let sums = (0..9)
