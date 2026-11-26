@@ -554,6 +554,46 @@ mod tests {
     }
 
     #[test]
+    fn spatial_volume_handles_holes_partitions_and_small_real_changes() -> Result<()> {
+        let mut kernel = crate::test_kernel()?;
+        let whole = kernel.make_box(2.0, 3.0, 4.0)?;
+        let half = kernel.make_box(1.0, 3.0, 4.0)?;
+        let right = kernel.translate(half, 1.0, 0.0, 0.0)?;
+        let split = kernel.fuse(half, right)?;
+        let report = compare(&mut kernel, whole, split, 1e-10, 2e-9)?;
+        assert_eq!(report.unsupported_faces, [0, 0], "{report:?}");
+        assert!(
+            report
+                .measurement
+                .context("missing split volume")?
+                .observed_within_tolerance
+        );
+        let altered = kernel.make_box(2.0, 3.0, 4.0 + 1e-8)?;
+        let report = compare(&mut kernel, whole, altered, 1e-10, 2e-9)?;
+        let measured = report.measurement.context("missing changed volume")?;
+        assert!(!measured.observed_within_tolerance);
+        for sample in measured.samples {
+            assert!((sample.delta + 6e-8).abs() < 1e-10, "{sample:?}");
+        }
+        let outer = kernel.make_cylinder(2.0, 3.0)?;
+        let inner = kernel.make_cylinder(1.0, 5.0)?;
+        let inner = kernel.translate(inner, 0.0, 0.0, -1.0)?;
+        let hollow = kernel.cut(outer, inner)?;
+        let translated = kernel.translate(hollow, 67.75, 5.1, -9.0)?;
+        let report = compare(&mut kernel, translated, translated, 1e-10, 2e-9)?;
+        assert_eq!(report.unsupported_faces, [0, 0], "{report:?}");
+        let measured = report.measurement.context("missing annular volume")?;
+        assert!(measured.observed_within_tolerance, "{measured:?}");
+        for sample in measured.samples {
+            assert!(
+                (sample.volumes[0] - 9.0 * std::f64::consts::PI).abs() < 1e-10,
+                "{sample:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn closed_cylinder_with_reversed_occurrence_has_negative_flux() -> Result<()> {
         let carrier = Carrier::Cylinder {
             axis: [0., 0., 1.],
