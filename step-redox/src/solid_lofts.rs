@@ -999,6 +999,48 @@ mod terminal_extension_tests {
     use crate::step_graph::build_index;
     use monstertruck_io::step::load::ParsedStepSource;
 
+    #[test]
+    fn authored_plane_corner_refines_noisy_vertex_without_inventing_rank() -> anyhow::Result<()> {
+        let exact = [67.0, 5.0, -9.0];
+        let witness = crate::math3::add(exact, [2e-9, -3e-9, 4e-9]);
+        let plane = |normal, origin_mm| PlaneSupport {
+            normal,
+            origin_mm,
+            max_residual_mm: 0.0,
+        };
+        let supports = [
+            plane([1.0, 0.0, 0.0], exact),
+            plane([0.0, 1.0, 0.0], exact),
+            plane([0.0, 0.0, 1.0], exact),
+            plane(
+                [
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    0.0,
+                ],
+                exact,
+            ),
+        ];
+        let refined = planar_corner(&supports, witness).ok_or_else(|| {
+            anyhow::anyhow!("independent source planes must determine the corner")
+        })?;
+        assert!(distance(refined, exact) < 1e-14);
+        let rank_deficient = planar_corner(&supports[..2], witness)
+            .ok_or_else(|| anyhow::anyhow!("rank-deficient incidence should retain the witness"))?;
+        assert!(distance(rank_deficient, witness) < f64::EPSILON);
+        let inconsistent = [
+            supports[0],
+            supports[1],
+            supports[2],
+            plane(
+                [1.0, 0.0, 0.0],
+                crate::math3::add(exact, [10.0 * TOL_MM, 0.0, 0.0]),
+            ),
+        ];
+        assert!(planar_corner(&inconsistent, witness).is_none());
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn two_section_drafted_rectangle_with_unlabelled_bounds_is_exact() -> anyhow::Result<()> {
