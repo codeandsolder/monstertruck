@@ -3,7 +3,7 @@
 //! source support connectivity is retained separately from the projection.
 
 use super::super::sample_fit::fit_circle_2d;
-use super::meridian::{MeridianCluster, circular_profile_normal, cluster_meridian};
+use super::meridian::{MeridianClusters, circular_profile_normal, cluster_meridian};
 use super::{
     CarrierResidual, CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, SurfaceCarrier,
     measure_circular_meridian,
@@ -162,6 +162,27 @@ impl<'a> MeridianStationGraph<'a> {
         axis: Vector3,
         options: MeridianGraphOptions,
     ) -> Option<Self> {
+        Self::build(evidence, origin, axis, options, false)?.1
+    }
+
+    // Discovery needs at least two independently sampled stations before
+    // either a transition or a mixed-support refinement can exist.
+    pub(in crate::mesh_recovery) fn for_discovery(
+        evidence: &'a MeshEvidence,
+        origin: Point3,
+        axis: Vector3,
+        options: MeridianGraphOptions,
+    ) -> Option<(usize, Option<Self>)> {
+        Self::build(evidence, origin, axis, options, true)
+    }
+
+    fn build(
+        evidence: &'a MeshEvidence,
+        origin: Point3,
+        axis: Vector3,
+        options: MeridianGraphOptions,
+        skip_unsampled: bool,
+    ) -> Option<(usize, Option<Self>)> {
         if !options.valid()
             || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
         {
@@ -182,7 +203,29 @@ impl<'a> MeridianStationGraph<'a> {
             return None;
         }
         let clusters = cluster_meridian(&samples, options.station_resolution);
+        let count = clusters.clusters.len();
+        if skip_unsampled
+            && clusters
+                .clusters
+                .iter()
+                .filter(|c| c.members.len() >= 3)
+                .take(2)
+                .count()
+                < 2
+        {
+            return Some((count, None));
+        }
         let (stations, station_by_vertex) = index_stations(evidence, origin, axis, clusters);
+        if skip_unsampled
+            && stations
+                .iter()
+                .filter(|station| station_is_sampled(station, options.station_resolution))
+                .take(2)
+                .count()
+                < 2
+        {
+            return Some((count, None));
+        }
         let (supports, supports_by_station) =
             index_supports(evidence, &station_by_vertex, stations.len())?;
         let transitions = build_transitions(evidence, &stations, &supports, options);
@@ -192,19 +235,22 @@ impl<'a> MeridianStationGraph<'a> {
             adjacency[a].push(b);
             adjacency[b].push(a);
         }
-        Some(Self {
-            evidence,
-            origin,
-            axis,
-            options,
-            samples,
-            stations,
-            station_by_vertex,
-            transitions,
-            supports,
-            supports_by_station,
-            adjacency,
-        })
+        Some((
+            count,
+            Some(Self {
+                evidence,
+                origin,
+                axis,
+                options,
+                samples,
+                stations,
+                station_by_vertex,
+                transitions,
+                supports,
+                supports_by_station,
+                adjacency,
+            }),
+        ))
     }
 
     /// All source stations, including unresolved singleton observations.
@@ -886,18 +932,20 @@ fn index_stations(
     evidence: &MeshEvidence,
     origin: Point3,
     axis: Vector3,
-    clusters: Vec<MeridianCluster>,
+    clusters: MeridianClusters,
 ) -> (Vec<MeridianStation>, Vec<usize>) {
     let mut by_vertex = vec![0; evidence.positions.len()];
     let stations = clusters
+        .clusters
         .into_iter()
         .enumerate()
         .map(|(id, cluster)| {
-            let first = evidence.positions[cluster.members[0]] - origin;
+            let members = &clusters.order[cluster.members];
+            let first = evidence.positions[members[0]] - origin;
             let transverse = first - axis * first.dot(axis);
             let length = transverse.magnitude();
             let mut span = 0.0_f64;
-            for &vertex in &cluster.members {
+            for &vertex in members {
                 by_vertex[vertex] = id;
                 let delta = evidence.positions[vertex] - origin;
                 if length > 0.0 {
@@ -911,7 +959,7 @@ fn index_stations(
             MeridianStation {
                 axial: cluster.center.0,
                 radius: cluster.center.1,
-                vertices: cluster.members,
+                vertices: members.to_vec(),
                 transverse_span: span,
             }
         })
