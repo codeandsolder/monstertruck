@@ -269,8 +269,8 @@ fn trim_summary(
     graph: &RegionContactGraph,
     carriers: &PartitionCarriers,
 ) -> Value {
-    let mut counts = [0_usize; 5];
-    let mut edges = [0_usize; 5];
+    let mut counts = [0_usize; 6];
+    let mut edges = [0_usize; 6];
     let mut path_counts = vec![[0_usize; 2]; graph.paths.len()];
     let mut circle_examples = Vec::new();
     let mut unresolved_examples = Vec::new();
@@ -301,6 +301,7 @@ fn trim_summary(
             }
             SharedTrimGeometry::Conic(_) => 3,
             SharedTrimGeometry::ToroidalSection(_) => 4,
+            SharedTrimGeometry::LinearSection(_) => 5,
             SharedTrimGeometry::Unresolved => {
                 if unresolved_examples.len() < 128 {
                     unresolved_examples.push(json!({"regions":trim.regions,"source_polygon_pairs":pairs(),
@@ -348,7 +349,7 @@ fn trim_summary(
                 .map(|error| json!({"region":region.region,"error":error.to_string()}))
         })
         .collect::<Vec<_>>();
-    json!({"toroidal_section_pieces":counts[4],"toroidal_section_edges":edges[4],"conic_pieces":counts[3],"conic_edges":edges[3],"line_pieces":counts[0],"circle_pieces":counts[1],"unresolved_pieces":counts[2],"line_edges":edges[0],"circle_edges":edges[1],"unresolved_edges":edges[2],
+    json!({"toroidal_section_pieces":counts[4],"toroidal_section_edges":edges[4],"linear_section_pieces":counts[5],"linear_section_edges":edges[5],"conic_pieces":counts[3],"conic_edges":edges[3],"line_pieces":counts[0],"circle_pieces":counts[1],"unresolved_pieces":counts[2],"line_edges":edges[0],"circle_edges":edges[1],"unresolved_edges":edges[2],
         "fully_supported_paths":path_counts.iter().filter(|counts|counts[1]==0).count(),"split_paths":path_counts.iter().filter(|counts|counts[0]>1).count(),"limited_paths":trims.limited_paths,
         "revolution_contact_edges":active_revolution_edges,"unresolved_revolution_edges":unresolved_revolution_edges,
         "circle_examples_first_128":circle_examples,"unresolved_examples_first_128":unresolved_examples,

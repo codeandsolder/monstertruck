@@ -5,9 +5,10 @@
 
 use super::super::super::{planar_domain, sample_fit::normal_basis};
 use super::{
-    ContactToroidalSectionEvidence, MeshEvidence, RegionBoundaryIndex, SharedAnalyticTrim,
-    SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition,
+    MeshEvidence, RegionBoundaryIndex, SharedAnalyticTrim, SharedTrimGeometry, SharedTrimGraph,
+    SurfaceCarrier, SurfaceRegionPartition,
     reconcile::{ReconciliationOptions, reconcile_point},
+    trim::SectionBranch,
 };
 use crate::{
     Curve, Edge, Face, InnerSpace, Invertible, Line, Matrix4, ParametricSurface,
@@ -524,6 +525,11 @@ fn trim_intervals(
                 section.angular_step(a, b)
             })
         }
+        SharedTrimGeometry::LinearSection(section) => {
+            angular_intervals(trim, points, start, section.signed_sweep_radians, |a, b| {
+                section.angular_step(a, b)
+            })
+        }
         SharedTrimGeometry::Circle(circle) => {
             let mut result = Vec::new();
             let mut first = start;
@@ -620,7 +626,9 @@ fn geometry_constraints(trim: &SharedAnalyticTrim) -> Vec<SurfaceCarrier> {
         // A derived bisector plane resolves the branch where the two
         // cylinder gradients become parallel at their intersection.
         SharedTrimGeometry::Conic(conic) => conic.auxiliary_plane().into_iter().collect(),
-        SharedTrimGeometry::ToroidalSection(_) | SharedTrimGeometry::Unresolved => Vec::new(),
+        SharedTrimGeometry::ToroidalSection(_)
+        | SharedTrimGeometry::LinearSection(_)
+        | SharedTrimGeometry::Unresolved => Vec::new(),
     }
 }
 
@@ -637,7 +645,7 @@ fn native_vertices_and_trims(
     options: NativeTrimOptions,
 ) -> Result<NativeEdges, NativeTrimError> {
     let mut constraints = vec![Vec::new(); positions.len()];
-    let mut sections = BTreeMap::<usize, Vec<ContactToroidalSectionEvidence>>::new();
+    let mut sections = BTreeMap::<usize, Vec<SectionBranch>>::new();
     for (trim, intervals) in graph.trims.iter().zip(intervals) {
         let Ok(intervals) = intervals else {
             continue;
@@ -662,7 +670,7 @@ fn native_vertices_and_trims(
                 .get_mut(id)
                 .ok_or(NativeTrimError::InvalidSource)?
                 .extend(carriers.iter().copied());
-            if let SharedTrimGeometry::ToroidalSection(section) = trim.geometry {
+            if let Some(section) = trim.geometry.section() {
                 sections.entry(id).or_default().push(section);
             }
         }
@@ -787,7 +795,7 @@ fn refine_native_junctions(
 fn junction_candidates(
     source: Point3,
     carriers: &[SurfaceCarrier],
-    sections: &[ContactToroidalSectionEvidence],
+    sections: &[SectionBranch],
     options: NativeTrimOptions,
 ) -> (Option<Point3>, Vec<Point3>) {
     let reconciliation = ReconciliationOptions {
@@ -875,6 +883,17 @@ fn native_edge(
             Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)?
         }
         SharedTrimGeometry::ToroidalSection(section) => {
+            let curve = section
+                .native_curve(
+                    front.point(),
+                    back.point(),
+                    interval.sweep,
+                    options.intersection_tolerance,
+                )
+                .ok_or(NativeTrimError::EdgeGeometry)?;
+            Edge::new(front, back, curve).map_err(|_| NativeTrimError::EdgeGeometry)?
+        }
+        SharedTrimGeometry::LinearSection(section) => {
             let curve = section
                 .native_curve(
                     front.point(),
@@ -1055,7 +1074,9 @@ fn compact_sphere_axis(
                         .max_plane_residual
                         .hypot(circle.max_vertex_radial_residual)
             }
-            SharedTrimGeometry::Conic(_) | SharedTrimGeometry::ToroidalSection(_) => return None,
+            SharedTrimGeometry::Conic(_)
+            | SharedTrimGeometry::ToroidalSection(_)
+            | SharedTrimGeometry::LinearSection(_) => return None,
             SharedTrimGeometry::Unresolved => {
                 *chart.lifted_deviations.get(reference.trim)?.as_ref()?
             }

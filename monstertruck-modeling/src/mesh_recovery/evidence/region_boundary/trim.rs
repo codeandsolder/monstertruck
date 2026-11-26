@@ -3,7 +3,7 @@
 
 use super::curve_evidence::{measure_path_curves, measure_placed_circle};
 use super::{
-    ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence,
+    ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence, ContactLinearSectionEvidence,
     ContactToroidalSectionEvidence, RegionContactPath, SurfaceCarrier,
 };
 use crate::{InnerSpace, Point3};
@@ -32,8 +32,35 @@ pub enum SharedTrimGeometry {
     Conic(ContactConicEvidence),
     /// Regular plane/ring-torus section with continuously certified native approximation.
     ToroidalSection(ContactToroidalSectionEvidence),
+    /// Regular shared nonconic section of two affine-radius revolutions.
+    LinearSection(ContactLinearSectionEvidence),
     /// No accepted analytic hypothesis for these original edges.
     Unresolved,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum SectionBranch {
+    Toroidal(ContactToroidalSectionEvidence),
+    Linear(ContactLinearSectionEvidence),
+}
+
+impl SectionBranch {
+    pub(super) fn projected(self, point: Point3) -> Option<Point3> {
+        match self {
+            Self::Toroidal(section) => section.projected(point),
+            Self::Linear(section) => section.projected(point),
+        }
+    }
+}
+
+impl SharedTrimGeometry {
+    pub(super) const fn section(self) -> Option<SectionBranch> {
+        match self {
+            Self::ToroidalSection(section) => Some(SectionBranch::Toroidal(section)),
+            Self::LinearSection(section) => Some(SectionBranch::Linear(section)),
+            _ => None,
+        }
+    }
 }
 
 /// One contiguous piece of a globally shared directed source path.
@@ -198,6 +225,10 @@ fn accepted(
         .or_else(|| {
             super::toroidal_section::supplied_section(points, ids, carriers, tolerance)
                 .map(SharedTrimGeometry::ToroidalSection)
+        })
+        .or_else(|| {
+            super::linear_section::supplied_section(points, ids, carriers, tolerance)
+                .map(SharedTrimGeometry::LinearSection)
         })
 }
 
