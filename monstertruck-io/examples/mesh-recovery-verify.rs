@@ -3,10 +3,10 @@
 //! STEP output is held in memory unless explicitly requested.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use monstertruck_io::step::{
     load::Table,
-    save::{CompleteStepDisplay, StepModel, StepModels},
+    save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel, StepModels},
 };
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_meshing::{
@@ -30,6 +30,22 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum InputKind {
+    #[default]
+    Obj,
+    NativeShell,
+    Step,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+enum VerificationMode {
+    #[default]
+    Full,
+    Topology,
+    Export,
+}
+
 /// Recover native B-rep regions, verify strict tessellation and STEP reload.
 #[derive(Parser, Debug)]
 struct Args {
@@ -48,22 +64,15 @@ struct Args {
     /// First tessellation tolerance in source units; second is four times finer.
     #[arg(long, default_value_t = 0.01)]
     tolerance: f64,
-    /// Read exported compressed native shell JSON instead of recovering OBJ inputs.
-    #[arg(long)]
-    native_shell: bool,
+    /// Input representation: source OBJ, compressed native shell JSON or STEP.
+    #[arg(long, value_enum, default_value_t)]
+    input: InputKind,
     /// Write the STEP exchange to this path (one input only).
     #[arg(long)]
     step_output: Option<PathBuf>,
-    /// Validate STEP topology and endpoints without native or restored tessellation.
-    #[arg(long)]
-    step_topology_only: bool,
-    /// Export shell surfaces without numerical tessellation or internal reimport.
-    /// Use when an independent external verifier will validate the exchange.
-    #[arg(long, requires = "step_output", conflicts_with_all = ["step_input", "step_topology_only"])]
-    export_only: bool,
-    /// Inspect existing STEP files instead of recovering meshes.
-    #[arg(long, conflicts_with_all = ["native_shell", "step_output"])]
-    step_input: bool,
+    /// Full numerical verification, topology-only reload, or export without reload.
+    #[arg(long, value_enum, default_value_t)]
+    verification: VerificationMode,
     /// OBJ, compressed native shell JSON or STEP inputs.
     #[arg(required = true)]
     inputs: Vec<PathBuf>,
@@ -101,7 +110,11 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, args: &Args) -> Result<Va
     let step = if solid_eligible {
         let solid = Solid::new(vec![shell.clone()])?;
         let compressed = solid.compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
-        CompleteStepDisplay::new(StepModel::from(&compressed), Default::default()).to_string()
+        CompleteStepDisplay::new(
+            StepModel::from(&compressed),
+            StepHeaderDescriptor::default(),
+        )
+        .to_string()
     } else {
         // A disconnected collection is not one connected STEP shell.
         let compressed = shell
@@ -110,9 +123,9 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, args: &Args) -> Result<Va
             .map(|component| component.compress_with_parameter_curves(KERNEL_EPSILON * 100.0))
             .collect::<Vec<_>>();
         let models = compressed.iter().collect::<StepModels<_, _, _>>();
-        CompleteStepDisplay::new(models, Default::default()).to_string()
+        CompleteStepDisplay::new(models, StepHeaderDescriptor::default()).to_string()
     };
-    let table = (!args.export_only)
+    let table = (args.verification != VerificationMode::Export)
         .then(|| Table::from_step(&step))
         .transpose()?;
     if let Some(path) = args.step_output.as_deref() {
@@ -128,7 +141,8 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, args: &Args) -> Result<Va
         step.len(),
         Some(shell.len()),
         args.tolerance * 0.25,
-        !args.step_topology_only && shell.shell_condition() == ShellCondition::Closed,
+        args.verification == VerificationMode::Full
+            && shell.shell_condition() == ShellCondition::Closed,
     )
 }
 
@@ -217,7 +231,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         summary["native_faces"] = json!(shell.len());
         summary["shell_condition"] = json!(format!("{condition:?}"));
         summary["shell_components"] = json!(shell.connected_components().len());
-        if condition == ShellCondition::Closed && !args.step_topology_only && !args.export_only {
+        if condition == ShellCondition::Closed && args.verification == VerificationMode::Full {
             let coarse = numerical_volume(&shell, args.tolerance);
             let fine = numerical_volume(&shell, args.tolerance * 0.25);
             let converged = fine["closed_signed_volume"]
@@ -233,8 +247,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         }
         // Do not call a disconnected, open or unmeasurable shell a solid.
         // The numerical checks are still not a global self-intersection proof.
-        let solid_eligible = !args.step_topology_only
-            && !args.export_only
+        let solid_eligible = args.verification == VerificationMode::Full
             && condition == ShellCondition::Closed
             && shell.is_connected()
             && result
@@ -261,7 +274,7 @@ fn verify_native(path: &Path, args: &Args) -> Result<Value> {
     let components = shell.connected_components().len();
     let mut summary = json!({"source":path,"native_faces":shell.len(),"shell_condition":format!("{condition:?}"),
         "shell_components":components});
-    if !args.step_topology_only && !args.export_only {
+    if args.verification == VerificationMode::Full {
         let coarse = numerical_volume(&shell, args.tolerance);
         let fine = numerical_volume(&shell, args.tolerance * 0.25);
         summary["volume"] = json!({"coarse":coarse,"fine":fine});
@@ -280,7 +293,7 @@ fn verify_step_input(path: &Path, args: &Args) -> Result<Value> {
         step.len(),
         None,
         args.tolerance,
-        !args.step_topology_only,
+        args.verification == VerificationMode::Full,
     )?;
     summary["source"] = json!(path);
     Ok(summary)
@@ -296,14 +309,21 @@ fn main() -> Result<()> {
         args.step_output.is_none() || args.inputs.len() == 1,
         "STEP output requires one input"
     );
+    anyhow::ensure!(
+        args.input != InputKind::Step
+            || (args.step_output.is_none() && args.verification != VerificationMode::Export),
+        "STEP input supports full or topology verification only"
+    );
+    anyhow::ensure!(
+        args.verification != VerificationMode::Export || args.step_output.is_some(),
+        "export mode requires STEP output"
+    );
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     for path in &args.inputs {
-        let report = (if args.step_input {
-            verify_step_input(path, &args)
-        } else if args.native_shell {
-            verify_native(path, &args)
-        } else {
-            verify(path, &args)
+        let report = (match args.input {
+            InputKind::Step => verify_step_input(path, &args),
+            InputKind::NativeShell => verify_native(path, &args),
+            InputKind::Obj => verify(path, &args),
         })
         .unwrap_or_else(|error| json!({"source":path,"error":format!("{error:#}")}));
         writeln!(out, "{report}")?;
