@@ -1146,8 +1146,22 @@ fn recover_kernel_topology_normalized_fragment<
             return Ok(None);
         };
         host.model.provenance.clear();
-        return kernel_replay_is_single_solid(kernel, &host)
-            .map(|accepted| accepted.then(|| KernelRecoveryCandidate::structural(host)));
+        // Reuse the evaluated native proposal for its source-boundary
+        // certificate. Otherwise a more expensive certified representation
+        // could outrank the same independently provable native construction
+        // simply because its provider supplied only structural evidence.
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        if !kernel.summarize(&evaluated).is_single_solid() {
+            return Ok(None);
+        }
+        if let Some(proof) = proof
+            && proof
+                .matches_evaluated_boundary(&evaluated)
+                .unwrap_or(false)
+        {
+            return Ok(Some(KernelRecoveryCandidate::certified(host, proof)));
+        }
+        return Ok(Some(KernelRecoveryCandidate::structural(host)));
     }
     let mut journal = native_peels::Journal::default();
     journal.treatment(layers);
@@ -5459,41 +5473,11 @@ END-ISO-10303-21;
                 report.kernel_recovery_failures
             );
             let fragment = selected_unique_source_fragment(&report)?;
-            if !family.matches(&fragment.source, solid_id) {
-                // Independently exercise the historical loft recognizer
-                // even if a cheaper, separately proven construction wins.
-                assert!(
-                    matches!(family, TargetedFamily::Loft),
-                    "{label}: unexpected constructive family {:?}",
-                    fragment.source
-                );
-                let index = crate::step_graph::build_index(&section.entities);
-                let reduced = crate::reduced_brep::ReducedSolid::from_step(
-                    solid_id,
-                    &section.entities,
-                    &index,
-                )
-                .ok_or_else(|| anyhow::anyhow!("{label}: missing source topology"))?;
-                let loft = crate::solid_lofts::detect_sectioned_planar_loft(&reduced).ok_or_else(
-                    || anyhow::anyhow!("{label}: historical loft recognizer regressed"),
-                )?;
-                let evaluated = kernel.evaluate(&loft.model, loft.root)?;
-                assert!(kernel.summarize(&evaluated).is_single_solid(), "{label}");
-                assert!(
-                    rebuilt_kernel_boundary_matches_source(
-                        &kernel,
-                        &evaluated,
-                        solid_id,
-                        &section.entities
-                    )?,
-                    "{label}: historical loft boundary differs"
-                );
-                assert!(
-                    fragment.model.complexity_score(fragment.root)?
-                        <= loft.model.complexity_score(loft.root)?,
-                    "{label}: selected construction is more expensive than the proven loft"
-                );
-            }
+            assert!(
+                family.matches(&fragment.source, solid_id),
+                "{label}: unexpected constructive family {:?}",
+                fragment.source
+            );
             fragment.model.validate()?;
             let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
             assert!(kernel.summarize(&rebuilt).is_single_solid(), "{label}");
@@ -5626,6 +5610,24 @@ END-ISO-10303-21;
                 TargetedFamily::Loft,
             ),
         ])
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_loft_is_source_certified_before_ranking_material_alternatives() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_targeted_530c77f2.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragment = selected_unique_source_fragment(&report)?;
+        assert!(matches!(
+            fragment.source,
+            CadFragmentSource::SolidLoft { solid_id: 38, .. }
+        ));
+        Ok(())
     }
 
     /// Three distinct real JLCPCB solids with long source profiles (including
