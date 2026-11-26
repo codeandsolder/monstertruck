@@ -472,7 +472,18 @@ impl ContactLinearSectionEvidence {
         {
             return None;
         }
-        super::section_curve::section_curve(start, end, |a, b| self.cubic(a, b, tolerance))
+        // Certify the actual assembled B-spline, not just the individual
+        // input cubics. Reserve error budget for the knot-span extraction
+        // and for the global maximum proof's conditioning allowance.
+        let curve = super::section_curve::section_curve(start, end, |a, b| {
+            self.cubic(a, b, tolerance * 0.5)
+        })?;
+        let Curve::BsplineCurve(spline) = &curve else {
+            return None;
+        };
+        (self.frame.first.contains(spline, tolerance)
+            && self.frame.second.contains(spline, tolerance))
+        .then_some(curve)
     }
 }
 

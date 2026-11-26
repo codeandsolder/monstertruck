@@ -234,7 +234,13 @@ pub fn bound_nurbs_cone_deviation(
             slope,
         )?;
         let upper = span_upper(controls, reference_origin, axis, reference_radius, slope)?;
-        Some((first.max(last), upper))
+        let witness = first.max(last);
+        // The exact Bernstein upper bound cannot be smaller than an
+        // endpoint witness. Rounded evaluation of a nearly incident
+        // curve can reverse their order by a few ulps. Including the
+        // witness preserves the upper bound; the existing conditioning
+        // allowance covers both residual evaluations.
+        Some((witness, upper.max(witness)))
     })?;
     let radial_margin = max_margin * crate::usize_to_f64(bracket.max_depth + 1);
     let radial_upper = bracket.upper + radial_margin;
