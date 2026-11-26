@@ -10,7 +10,7 @@ use crate::{
     mesh_recovery::{
         MeshEvidence,
         evidence::{
-            JointFitCandidate, JointFitContext, JointFitOptions, JointFitRejection,
+            JointFitCandidate, JointFitContext, JointFitMethod, JointFitOptions, JointFitRejection,
             fit_neighborhood,
         },
     },
@@ -21,6 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// adjustments, not an inferred tolerance of the original CAD model.
 #[derive(Clone, Debug)]
 pub struct JointFitReport {
+    /// Strategy that produced the accepted reconstruction.
+    pub method: JointFitMethod,
     /// Region IDs participating in the common constraint system.
     pub regions: Vec<usize>,
     /// Number of fitted carrier parameter sets that changed.
@@ -40,8 +42,8 @@ pub struct JointFitReport {
 pub struct JointFitAttempt {
     /// Adjustable carrier region IDs.
     pub regions: Vec<usize>,
-    /// Whether carrier refitting was enabled.
-    pub refit: bool,
+    /// Strategy attempted.
+    pub method: JointFitMethod,
     /// Reason this trial was not committed.
     pub rejection: JointFitRejection,
 }
@@ -193,7 +195,7 @@ fn try_fit(
     regions: &[usize],
     options: AnalyticRecoveryOptions,
     context: &mut JointFitContext,
-    refit: bool,
+    method: JointFitMethod,
 ) -> Result<Result<JointFitReport, JointFitRejection>, AnalyticRecoveryError> {
     let candidate = match fit_neighborhood(
         evidence,
@@ -201,7 +203,7 @@ fn try_fit(
         &assembly.reconciled.positions,
         regions,
         context,
-        refit,
+        method,
     ) {
         Ok(candidate) => candidate,
         Err(reason) => return Ok(Err(reason)),
@@ -268,6 +270,7 @@ fn try_fit(
     context.commit(&candidate.carrier_changes);
     *assembly = next;
     Ok(Ok(JointFitReport {
+        method,
         regions: regions.to_vec(),
         refitted_regions,
         repaired_edges: before.len() - after.len(),
@@ -311,8 +314,12 @@ pub(super) fn repair(
             }
             trials += 1;
             // Reconcile fixed carriers first; record every failed attempt.
-            for refit in [false, true] {
-                match try_fit(evidence, assembly, &regions, options, &mut context, refit)? {
+            for method in [
+                JointFitMethod::FixedCarriers,
+                JointFitMethod::DependentPlanes,
+                JointFitMethod::JointRefit,
+            ] {
+                match try_fit(evidence, assembly, &regions, options, &mut context, method)? {
                     Ok(report) => {
                         reports.push(report);
                         improved = true;
@@ -320,7 +327,7 @@ pub(super) fn repair(
                     }
                     Err(rejection) => rejected.push(JointFitAttempt {
                         regions: regions.clone(),
-                        refit,
+                        method,
                         rejection,
                     }),
                 }

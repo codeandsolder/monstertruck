@@ -8,6 +8,17 @@ use super::{
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
 
+/// Strategy used to resolve a local analytic reconstruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JointFitMethod {
+    /// Move source junctions onto the existing fixed carriers.
+    FixedCarriers,
+    /// Eliminate dependent triangular planes and reconstruct them through shared vertices.
+    DependentPlanes,
+    /// Optimize independent analytic carrier parameters and junctions jointly.
+    JointRefit,
+}
+
 /// Reason a source-aware fit was rejected before committing any geometry.
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum JointFitRejection {
@@ -280,6 +291,210 @@ impl<'a> Neighborhood<'a> {
             .then_some((positions, allowances, max_displacement))
             .ok_or(JointFitRejection::Orientation)
     }
+}
+
+fn satisfies(point: Point3, carriers: &[SurfaceCarrier], tolerance: f64) -> bool {
+    carriers.iter().all(|carrier| {
+        carrier.signed_constraint(point).map_or_else(
+            || {
+                carrier
+                    .measure_segment(point, point)
+                    .is_some_and(|r| r.upper_bound <= tolerance)
+            },
+            |(_, residual)| residual.abs() <= tolerance,
+        )
+    })
+}
+
+fn fixed_sample_position(
+    source: Point3,
+    prior: Point3,
+    carriers: &[SurfaceCarrier],
+    allowance: f64,
+    angular_resolution: f64,
+) -> Option<Point3> {
+    let tolerance = KERNEL_EPSILON * 0.01;
+    if satisfies(source, carriers, tolerance) {
+        return Some(source);
+    }
+    if (prior - source).magnitude() <= allowance && satisfies(prior, carriers, tolerance) {
+        return Some(prior);
+    }
+    reconcile_point(
+        source,
+        carriers,
+        ReconciliationOptions {
+            max_displacement: allowance,
+            parallel_angle_tolerance: angular_resolution,
+            max_normal_angle: angular_resolution * 2.0,
+            intersection_tolerance: tolerance,
+        },
+    )
+}
+
+// A plane supported by three distinct vertices has no independent fitting
+// degrees of freedom after those vertices are placed. Eliminate it from
+// the shared incidence constraints; reconstruct its oriented plane exactly
+// through the accepted junction positions. General multi-vertex planes
+// and curved carriers remain independent constraints.
+fn dependent_plane_regions(
+    partition: &SurfaceRegionPartition,
+    regions: &[usize],
+    context: &JointFitContext,
+) -> Vec<usize> {
+    regions
+        .iter()
+        .copied()
+        .filter(|&id| {
+            matches!(partition.carriers[id], Some(SurfaceCarrier::Plane { .. }))
+                && context.region_vertices[id].len() == 3
+        })
+        .collect()
+}
+
+fn plane_from_junctions(
+    neighborhood: &Neighborhood<'_>,
+    region: usize,
+    positions: &[Point3],
+) -> Result<(SurfaceCarrier, f64), JointFitRejection> {
+    let SurfaceCarrier::Plane { origin, normal } =
+        neighborhood.partition.carriers[region].ok_or(JointFitRejection::Neighborhood)?
+    else {
+        return Err(JointFitRejection::Neighborhood);
+    };
+    let ids = &neighborhood.context.region_vertices[region];
+    let [a, b, c] =
+        <[usize; 3]>::try_from(ids.as_slice()).map_err(|_| JointFitRejection::Neighborhood)?;
+    let original = SurfaceCarrier::Plane { origin, normal };
+    if ids
+        .iter()
+        .all(|&id| satisfies(positions[id], &[original], KERNEL_EPSILON * 0.01))
+    {
+        return Ok((original, 0.0));
+    }
+    let pivot = positions[a];
+    let cross = (positions[b] - pivot).cross(positions[c] - pivot);
+    let magnitude = cross.magnitude();
+    if magnitude == 0.0 || !magnitude.is_finite() {
+        return Err(JointFitRejection::Orientation);
+    }
+    let mut fitted = cross / magnitude;
+    if fitted.dot(normal) < 0.0 {
+        fitted = -fitted;
+    }
+    let carrier = SurfaceCarrier::Plane {
+        origin: pivot,
+        normal: fitted,
+    };
+    // Signed plane residual differences are affine in the sample
+    // coordinates: their absolute maximum over a source triangle occurs
+    // at a vertex. Thus this bounds the entire original source facet,
+    // rather than just the moved junction positions.
+    let mut bound = 0.0_f64;
+    let mut budget = 0.0_f64;
+    for &id in ids {
+        let p = neighborhood.evidence.positions[id];
+        let change = ((p - pivot).dot(fitted) - (p - origin).dot(normal)).abs();
+        if !change.is_finite() {
+            return Err(JointFitRejection::Linearization);
+        }
+        bound = bound.max(change);
+        budget = budget.max(neighborhood.context.samples[id].allowance);
+    }
+    if !bound.is_finite() || bound > (budget - neighborhood.context.carrier_change[region]).max(0.0)
+    {
+        return Err(JointFitRejection::Sample {
+            vertex: a,
+            allowance: budget,
+        });
+    }
+    Ok((carrier, bound))
+}
+
+fn fit_dependent_planes(
+    evidence: &MeshEvidence,
+    partition: &SurfaceRegionPartition,
+    prior: &[Point3],
+    regions: &[usize],
+    context: &JointFitContext,
+) -> Result<JointFitCandidate, JointFitRejection> {
+    let dependent = dependent_plane_regions(partition, regions, context);
+    if dependent.is_empty() {
+        return Err(JointFitRejection::Unchanged);
+    }
+    // Only the vertices of the eliminated planes can move. A fixed large
+    // curved region may have other unrelated unresolved boundaries.
+    let neighborhood = Neighborhood::new(evidence, partition, &dependent, context)
+        .ok_or(JointFitRejection::Neighborhood)?;
+    let mut positions = prior.to_vec();
+    let mut allowances = vec![0.0; prior.len()];
+    let mut maximum_displacement = 0.0_f64;
+    for sample in &neighborhood.samples {
+        let source = evidence.positions[sample.id];
+        let fixed = sample
+            .regions
+            .iter()
+            .filter(|id| !dependent.contains(id))
+            .map(|&id| partition.carriers[id])
+            .collect::<Option<Vec<_>>>()
+            .ok_or(JointFitRejection::Neighborhood)?;
+        let rejection = JointFitRejection::Sample {
+            vertex: sample.id,
+            allowance: sample.allowance,
+        };
+        let point = fixed_sample_position(
+            source,
+            prior[sample.id],
+            &fixed,
+            sample.allowance,
+            context.options.angular_resolution,
+        )
+        .ok_or(rejection)?;
+        let displacement = (point - source).magnitude();
+        if !displacement.is_finite() || displacement > sample.allowance {
+            return Err(rejection);
+        }
+        positions[sample.id] = point;
+        allowances[sample.id] = sample.allowance;
+        maximum_displacement = maximum_displacement.max(displacement);
+    }
+    let mut partition = partition.clone();
+    let mut carrier_changes = Vec::new();
+    let mut max_additional_carrier_residual = 0.0_f64;
+    for &region in &dependent {
+        let (carrier, bound) = plane_from_junctions(&neighborhood, region, &positions)?;
+        partition.carriers[region] = Some(carrier);
+        if bound > 0.0 {
+            carrier_changes.push((region, bound));
+        }
+        max_additional_carrier_residual = max_additional_carrier_residual.max(bound);
+    }
+    for sample in &neighborhood.samples {
+        let local = sample
+            .regions
+            .iter()
+            .map(|&id| partition.carriers[id])
+            .collect::<Option<Vec<_>>>()
+            .ok_or(JointFitRejection::Neighborhood)?;
+        if !satisfies(positions[sample.id], &local, KERNEL_EPSILON * 0.01) {
+            return Err(JointFitRejection::Sample {
+                vertex: sample.id,
+                allowance: sample.allowance,
+            });
+        }
+    }
+    if !preserves_polygon_orientation(evidence, &positions, &neighborhood.supports) {
+        return Err(JointFitRejection::Orientation);
+    }
+    Ok(JointFitCandidate {
+        partition,
+        positions,
+        allowances,
+        maximum_displacement,
+        refitted_regions: carrier_changes.len(),
+        max_additional_carrier_residual,
+        carrier_changes,
+    })
 }
 
 // Rigid carrier placement plus independent meridian parameters. Rotations
@@ -714,15 +929,18 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     prior: &[Point3],
     regions: &[usize],
     context: &JointFitContext,
-    refit: bool,
+    method: JointFitMethod,
 ) -> Result<JointFitCandidate, JointFitRejection> {
+    if method == JointFitMethod::DependentPlanes {
+        return fit_dependent_planes(evidence, partition, prior, regions, context);
+    }
     let neighborhood = Neighborhood::new(evidence, partition, regions, context)
         .ok_or(JointFitRejection::Neighborhood)?;
     let mut partition = partition.clone();
     let mut refitted_regions = 0;
     let mut carrier_changes = Vec::new();
     let mut max_additional_carrier_residual = 0.0_f64;
-    if refit {
+    if method == JointFitMethod::JointRefit {
         // Keep a bounded local system, independent of the total model size.
         let mut models = regions
             .iter()
@@ -788,9 +1006,8 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn jointly_refits_an_overconstrained_pyramid_apex() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::mesh_recovery::{EvidenceOptions, RegionBoundaryIndex, analyze_mesh_evidence};
+    fn pyramid_evidence() -> Result<MeshEvidence, Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{EvidenceOptions, analyze_mesh_evidence};
         use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
         let mesh = PolygonMesh::new(
             StandardAttributes {
@@ -811,7 +1028,13 @@ mod tests {
                 vec![3, 2, 1, 0],
             ]),
         )?;
-        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        Ok(analyze_mesh_evidence(&mesh, EvidenceOptions::default())?)
+    }
+
+    #[test]
+    fn jointly_refits_an_overconstrained_pyramid_apex() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::RegionBoundaryIndex;
+        let evidence = pyramid_evidence()?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let mut partition = index.select_surface_partition(&[], &evidence, 100)?;
         let mut regions = evidence.source_planar_support[..4].to_vec();
@@ -840,17 +1063,28 @@ mod tests {
                 &evidence.positions,
                 &regions,
                 &context,
-                false
+                JointFitMethod::FixedCarriers
             )
             .is_err()
         );
+        let dependent = fit_neighborhood(
+            &evidence,
+            &partition,
+            &evidence.positions,
+            &regions,
+            &context,
+            JointFitMethod::DependentPlanes,
+        )?;
+        assert_eq!(dependent.positions, evidence.positions);
+        assert!(dependent.refitted_regions > 0);
+        assert!(dependent.max_additional_carrier_residual <= options.maximum_adjustment);
         let result = fit_neighborhood(
             &evidence,
             &partition,
             &evidence.positions,
             &regions,
             &context,
-            true,
+            JointFitMethod::JointRefit,
         )?;
         assert!(result.refitted_regions > 0);
         assert!(result.maximum_displacement <= 0.01);

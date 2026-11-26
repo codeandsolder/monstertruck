@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod coplanar_contacts;
 pub use coplanar_contacts::CoplanarSupportReassignment;
 mod joint_recovery;
-pub use super::evidence::JointFitRejection;
+pub use super::evidence::{JointFitMethod, JointFitRejection};
 pub use joint_recovery::{JointFitAttempt, JointFitReport};
 mod native_selection;
 use native_selection::{PartitionAlternative, select_native};
