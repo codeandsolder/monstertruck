@@ -14,7 +14,7 @@ num-traits = "0.2"
 rand_chacha = { version = "0.10", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "1c669eddb7ae16f475912a94f8638f4da5c641ef" }
+occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "e52286aa84cabcfd99594510de6a02fbb5de3aa8" }
 sha2 = "0.11"
 tempfile = "3"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
