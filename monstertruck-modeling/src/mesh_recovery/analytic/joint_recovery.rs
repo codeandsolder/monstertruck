@@ -99,6 +99,77 @@ fn failed_neighborhoods(assembly: &NativeAssembly) -> Vec<Vec<usize>> {
     result
 }
 
+fn dependent_neighborhoods(
+    assembly: &NativeAssembly,
+    context: &JointFitContext,
+) -> Vec<Vec<usize>> {
+    let partition = &assembly.reconciled.partition;
+    let failed = failed_edges(assembly);
+    let mut stars = BTreeMap::<usize, BTreeSet<usize>>::new();
+    for [a, b] in failed {
+        for id in [a, b] {
+            stars
+                .entry(id)
+                .or_insert_with(|| context.dependent_at(id, partition).collect());
+        }
+    }
+    // Merge stars through their shared dependent planes, not through
+    // independent curved carriers that may span a whole component.
+    let mut adjacency = BTreeMap::<usize, BTreeSet<usize>>::new();
+    let mut frequency = BTreeMap::<usize, usize>::new();
+    for star in stars.values() {
+        let Some(&first) = star.first() else {
+            continue;
+        };
+        for &id in star {
+            adjacency.entry(first).or_default().insert(id);
+            adjacency.entry(id).or_default().insert(first);
+            *frequency.entry(id).or_default() += 1;
+        }
+    }
+    let mut groups = Vec::new();
+    let mut seen = BTreeSet::new();
+    for &seed in adjacency.keys() {
+        if !seen.insert(seed) {
+            continue;
+        }
+        let mut group = vec![seed];
+        let mut cursor = 0;
+        while let Some(&id) = group.get(cursor) {
+            for &neighbor in &adjacency[&id] {
+                if seen.insert(neighbor) {
+                    group.push(neighbor);
+                }
+            }
+            cursor += 1;
+        }
+        group.sort_unstable();
+        let score = group.iter().map(|id| frequency[id]).sum::<usize>();
+        groups.push((score, group));
+    }
+    groups.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut result = groups
+        .into_iter()
+        .map(|(_, group)| group)
+        .collect::<Vec<_>>();
+    // A wide dependent component may contain an unrepairable junction.
+    // Retry vertex-local stars instead of repeatedly selecting the same
+    // large independent carrier.
+    let mut local = stars
+        .into_values()
+        .filter(|star| !star.is_empty())
+        .map(|star| star.into_iter().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    local.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+    local.dedup();
+    for star in local {
+        if !result.contains(&star) {
+            result.push(star);
+        }
+    }
+    result
+}
+
 fn native_displacement(
     evidence: &MeshEvidence,
     assembly: &NativeAssembly,
@@ -204,6 +275,7 @@ fn try_fit(
         regions,
         context,
         method,
+        Some(&assembly.native),
     ) {
         Ok(candidate) => candidate,
         Err(reason) => return Ok(Err(reason)),
@@ -258,11 +330,23 @@ fn try_fit(
     if after.len() >= before.len() {
         return Ok(Err(JointFitRejection::NoImprovement));
     }
-    if !after.is_subset(&before)
-        || next.trims.ambiguous_edges != assembly.trims.ambiguous_edges
-        || !valid_regions(assembly).is_subset(&valid_regions(&next))
+    if let Some(&edge) = after.difference(&before).next() {
+        return Ok(Err(JointFitRejection::NewFailedEdge(edge)));
+    }
+    if next.trims.ambiguous_edges != assembly.trims.ambiguous_edges {
+        return Ok(Err(JointFitRejection::AmbiguousIncidence));
+    }
+    if let Some(&region) = valid_regions(assembly)
+        .difference(&valid_regions(&next))
+        .next()
     {
-        return Ok(Err(JointFitRejection::Regression));
+        let error = next
+            .native
+            .regions
+            .iter()
+            .find(|r| r.region == region)
+            .and_then(|r| r.faces.as_ref().err().copied());
+        return Ok(Err(JointFitRejection::InvalidatedRegion { region, error }));
     }
     // Existing plane records describe prior accepted transactions; keep
     // them as provenance, not a claim that the carriers were never refit.
@@ -307,18 +391,39 @@ pub(super) fn repair(
     let mut trials = 0;
     while trials < options.max_joint_fit_trials {
         let neighborhoods = failed_neighborhoods(assembly);
+        let mut plans = neighborhoods
+            .iter()
+            .filter(|regions| regions.len() > 2)
+            .map(|regions| (regions.clone(), false))
+            .collect::<Vec<_>>();
+        plans.extend(
+            dependent_neighborhoods(assembly, &context)
+                .into_iter()
+                .map(|regions| (regions, true)),
+        );
+        plans.extend(
+            neighborhoods
+                .into_iter()
+                .filter(|regions| regions.len() <= 2)
+                .map(|regions| (regions, false)),
+        );
         let mut improved = false;
-        for regions in neighborhoods {
+        for (regions, dependent_only) in plans {
             if trials >= options.max_joint_fit_trials {
                 break;
             }
             trials += 1;
             // Reconcile fixed carriers first; record every failed attempt.
-            for method in [
-                JointFitMethod::FixedCarriers,
-                JointFitMethod::DependentPlanes,
-                JointFitMethod::JointRefit,
-            ] {
+            let methods: &[JointFitMethod] = if dependent_only {
+                &[JointFitMethod::DependentPlanes]
+            } else {
+                &[
+                    JointFitMethod::FixedCarriers,
+                    JointFitMethod::DependentPlanes,
+                    JointFitMethod::JointRefit,
+                ]
+            };
+            for &method in methods {
                 match try_fit(evidence, assembly, &regions, options, &mut context, method)? {
                     Ok(report) => {
                         reports.push(report);

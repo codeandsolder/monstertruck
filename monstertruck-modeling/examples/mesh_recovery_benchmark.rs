@@ -264,6 +264,25 @@ fn evidence_summary(
     })
 }
 
+fn write_shell_output(
+    path: &Path,
+    complete: Option<&monstertruck_modeling::Shell>,
+    result: &mut Value,
+) -> Result<()> {
+    let export_start = Instant::now();
+    let exported = if let Some(shell) = complete {
+        let mut writer = BufWriter::new(File::create_new(path)?);
+        serde_json::to_writer(&mut writer, &shell.compress())?;
+        writer.flush()?;
+        true
+    } else {
+        false
+    };
+    result["shell_exported"] = json!(exported);
+    result["shell_export_seconds"] = json!(export_start.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn benchmark(
     path: &Path,
     evidence_only: bool,
@@ -360,17 +379,7 @@ fn benchmark(
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
     if let Some(path) = shell_output {
-        let export_start = Instant::now();
-        let exported = if let Some(shell) = complete {
-            let mut writer = BufWriter::new(File::create_new(path)?);
-            serde_json::to_writer(&mut writer, &shell.compress())?;
-            writer.flush()?;
-            true
-        } else {
-            false
-        };
-        result["shell_exported"] = json!(exported);
-        result["shell_export_seconds"] = json!(export_start.elapsed().as_secs_f64());
+        write_shell_output(path, complete.as_ref(), &mut result)?;
     }
     Ok(result)
 }

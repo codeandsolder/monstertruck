@@ -56,9 +56,20 @@ pub enum JointFitRejection {
     /// Native reconstruction did not reduce failed source edges.
     #[error("no reduction in failed source edges")]
     NoImprovement,
-    /// New failed source edges, invalid regions or ambiguous incidence.
-    #[error("native reconstruction regression")]
-    Regression,
+    /// A previously accepted source edge became unresolved.
+    #[error("new failed source edge {0:?}")]
+    NewFailedEdge([usize; 2]),
+    /// A previously accepted native region was invalidated.
+    #[error("new invalid region {region}: {error:?}")]
+    InvalidatedRegion {
+        /// Original region identifier.
+        region: usize,
+        /// Native construction error, if present (otherwise pending chart cut).
+        error: Option<super::NativeTrimError>,
+    },
+    /// The reconstructed source incidence changed.
+    #[error("changed ambiguous incidence")]
+    AmbiguousIncidence,
 }
 
 #[derive(Clone, Copy)]
@@ -167,6 +178,21 @@ impl JointFitContext {
             carrier_change: vec![0.0; partition.carriers.len()],
             options,
         })
+    }
+
+    pub(in crate::mesh_recovery) fn dependent_at<'a>(
+        &'a self,
+        vertex: usize,
+        partition: &'a SurfaceRegionPartition,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.samples[vertex]
+            .regions
+            .iter()
+            .copied()
+            .filter(move |&id| {
+                matches!(partition.carriers[id], Some(SurfaceCarrier::Plane { .. }))
+                    && self.region_vertices[id].len() == 3
+            })
     }
 
     pub(in crate::mesh_recovery) fn commit(&mut self, changes: &[(usize, f64)]) {
@@ -309,11 +335,18 @@ fn satisfies(point: Point3, carriers: &[SurfaceCarrier], tolerance: f64) -> bool
 fn fixed_sample_position(
     source: Point3,
     prior: Point3,
+    native: Option<Point3>,
     carriers: &[SurfaceCarrier],
     allowance: f64,
     angular_resolution: f64,
 ) -> Option<Point3> {
     let tolerance = KERNEL_EPSILON * 0.01;
+    if let Some(point) = native
+        && (point - source).magnitude() <= allowance
+        && satisfies(point, carriers, tolerance)
+    {
+        return Some(point);
+    }
     if satisfies(source, carriers, tolerance) {
         return Some(source);
     }
@@ -417,6 +450,7 @@ fn fit_dependent_planes(
     prior: &[Point3],
     regions: &[usize],
     context: &JointFitContext,
+    native: Option<&super::NativeTrimGraph>,
 ) -> Result<JointFitCandidate, JointFitRejection> {
     let dependent = dependent_plane_regions(partition, regions, context);
     if dependent.is_empty() {
@@ -445,6 +479,9 @@ fn fit_dependent_planes(
         let point = fixed_sample_position(
             source,
             prior[sample.id],
+            native
+                .and_then(|graph| graph.vertices[sample.id].as_ref())
+                .map(monstertruck_topology::Vertex::point),
             &fixed,
             sample.allowance,
             context.options.angular_resolution,
@@ -930,9 +967,13 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     regions: &[usize],
     context: &JointFitContext,
     method: JointFitMethod,
+    native: Option<&super::NativeTrimGraph>,
 ) -> Result<JointFitCandidate, JointFitRejection> {
     if method == JointFitMethod::DependentPlanes {
-        return fit_dependent_planes(evidence, partition, prior, regions, context);
+        return fit_dependent_planes(evidence, partition, prior, regions, context, native);
+    }
+    if regions.len() > 6 {
+        return Err(JointFitRejection::Neighborhood);
     }
     let neighborhood = Neighborhood::new(evidence, partition, regions, context)
         .ok_or(JointFitRejection::Neighborhood)?;
@@ -1063,7 +1104,8 @@ mod tests {
                 &evidence.positions,
                 &regions,
                 &context,
-                JointFitMethod::FixedCarriers
+                JointFitMethod::FixedCarriers,
+                None,
             )
             .is_err()
         );
@@ -1074,6 +1116,7 @@ mod tests {
             &regions,
             &context,
             JointFitMethod::DependentPlanes,
+            None,
         )?;
         assert_eq!(dependent.positions, evidence.positions);
         assert!(dependent.refitted_regions > 0);
@@ -1085,6 +1128,7 @@ mod tests {
             &regions,
             &context,
             JointFitMethod::JointRefit,
+            None,
         )?;
         assert!(result.refitted_regions > 0);
         assert!(result.maximum_displacement <= 0.01);
