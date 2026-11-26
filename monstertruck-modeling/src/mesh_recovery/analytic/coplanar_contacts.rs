@@ -236,9 +236,13 @@ mod tests {
                 positions.push(Point3::new(theta.cos(), theta.sin(), z));
             }
         }
+        // Faces stores triangles, quadrangles and larger polygons in
+        // separate buckets. Keep every side polygon triangular so that
+        // the intended source facet IDs are independent of that ordering.
         let mut polygons = (0..n - 1)
-            .map(|i| vec![i, i + 1, i + 1 + n, i + n])
+            .flat_map(|i| [vec![i, i + 1, i + 1 + n], vec![i, i + 1 + n, i + n]])
             .collect::<Vec<_>>();
+        let chord = polygons.len();
         // The closing chord is planar, but the cylinder interpolates all
         // its vertices. Simulate an incorrectly claimed triangle.
         polygons.push(vec![n - 1, 0, n]);
@@ -254,13 +258,19 @@ mod tests {
         )?;
         let options = AnalyticRecoveryOptions::default();
         let original = analyze_mesh_evidence(&mesh, options.evidence)?;
-        let evidence = original.refine_planar_supports(&[original.source_planar_support[n - 1]])?;
-        let wrong = evidence.source_planar_support[n - 1];
-        let plane = evidence.source_planar_support[n];
+        let evidence = original.refine_planar_supports(&[original.source_planar_support[chord]])?;
+        let wrong = evidence.source_planar_support[chord];
+        let plane = evidence.source_planar_support[chord + 1];
         assert_ne!(wrong, plane);
+        assert!(
+            evidence.planar_supports[wrong]
+                .normal
+                .dot(evidence.planar_supports[plane].normal)
+                > 1.0 - 1.0e-12
+        );
         let parent = evidence.source_planar_support[0];
         let mut labels = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
-        for &support in &evidence.source_planar_support[..n] {
+        for &support in &evidence.source_planar_support[..=chord] {
             labels[support] = parent;
         }
         let boundary = RegionBoundaryIndex::new(&evidence)?;
