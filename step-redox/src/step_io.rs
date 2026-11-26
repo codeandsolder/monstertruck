@@ -89,7 +89,7 @@ fn write_param(param: &Parameter, out: &mut String) {
         Parameter::Integer(v) => {
             let _ = write!(out, "{v}");
         }
-        Parameter::Real(v) => out.push_str(&format_real(*v)),
+        Parameter::Real(v) => write_real(*v, out),
         Parameter::String(s) => write_step_string(s, out),
         Parameter::Enumeration(s) => {
             out.push('.');
@@ -155,10 +155,17 @@ pub fn write_step_string(s: &str, out: &mut String) {
     out.push('\'');
 }
 
-pub fn format_real(v: f64) -> String {
-    let mut s = v.to_string();
-    if !s.contains('.') && !s.contains('e') && !s.contains('E') {
-        s.push('.');
+fn write_real(v: f64, out: &mut String) {
+    let start = out.len();
+    let _ = write!(out, "{v}");
+    if !out[start..].contains(['.', 'e', 'E']) {
+        out.push('.');
     }
-    s
+}
+
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub fn format_real(v: f64) -> String {
+    let mut out = String::new();
+    write_real(v, &mut out);
+    out
 }

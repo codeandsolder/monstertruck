@@ -106,7 +106,9 @@ fn step_roundtrip(shell: &Shell, solid_eligible: bool, args: &Args) -> Result<Va
         let models = compressed.iter().collect::<StepModels<_, _, _>>();
         CompleteStepDisplay::new(models, Default::default()).to_string()
     };
-    let table = (!args.export_only).then(|| Table::from_step(&step)).transpose()?;
+    let table = (!args.export_only)
+        .then(|| Table::from_step(&step))
+        .transpose()?;
     if let Some(path) = args.step_output.as_deref() {
         let mut file = File::create_new(path).context("create STEP output")?;
         file.write_all(step.as_bytes())?;

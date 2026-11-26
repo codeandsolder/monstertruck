@@ -557,7 +557,9 @@ pub fn audit_source_spline_cap_precision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "cad-kernel-monstertruck")]
     use crate::brep;
+    #[cfg(feature = "cad-kernel-monstertruck")]
     use monstertruck_io::step::load::ParsedStepSource;
 
     fn curve(points: &[[f64; 3]], degree: usize, weights: Option<Vec<f64>>) -> BSplineSupport {

@@ -10,8 +10,8 @@ use super::SurfaceCarrier;
 use crate::{BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
-    analytic_radial_deviation::bound_nurbs_radial_deviation,
     analytic_curve_incidence::{CurveIncidence, certify_bspline_curve_on_support},
+    analytic_radial_deviation::bound_nurbs_radial_deviation,
 };
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
