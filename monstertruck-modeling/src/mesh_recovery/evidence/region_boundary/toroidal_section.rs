@@ -120,8 +120,8 @@ fn sine_range(a: f64, b: f64) -> Range {
         }
     }
     Range {
-        low: (range.low - 16.0 * f64::EPSILON).max(-1.0),
-        high: (range.high + 16.0 * f64::EPSILON).min(1.0),
+        low: 16.0f64.mul_add(-f64::EPSILON, range.low).max(-1.0),
+        high: 16.0f64.mul_add(f64::EPSILON, range.high).min(1.0),
     }
 }
 
@@ -355,7 +355,7 @@ impl Frame {
                         .add(determinant.scale(a));
                     let denominator = a.mul_add(a, b.abs_max().powi(2));
                     let rho_margin = 256.0 * f64::EPSILON * scale;
-                    numerator.low > tolerance * denominator + rho_margin
+                    numerator.low > tolerance.mul_add(denominator, rho_margin)
                 }
             }
         };

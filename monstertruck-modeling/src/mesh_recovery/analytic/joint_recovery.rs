@@ -107,9 +107,10 @@ fn native_displacement(
             candidate.allowances[id]
         } else {
             // No fresh approximation allowance for unrelated vertices.
-            let old = old
-                .as_ref()
-                .map_or(assembly.reconciled.positions[id], |v| v.point());
+            let old = old.as_ref().map_or(
+                assembly.reconciled.positions[id],
+                monstertruck_topology::Vertex::point,
+            );
             (old - source).magnitude() + numerical_allowance
         };
         if !displacement.is_finite() || displacement > allowed {

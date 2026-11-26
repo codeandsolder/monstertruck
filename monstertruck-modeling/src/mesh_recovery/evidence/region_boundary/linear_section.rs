@@ -147,10 +147,17 @@ struct Generator {
 impl Generator {
     fn coefficients(&self) -> Quadratic {
         Quadratic {
-            a: self.transverse_direction.magnitude2() - self.radius_derivative.powi(2),
-            b: self.transverse.dot(self.transverse_direction)
-                - self.radius * self.radius_derivative,
-            c: self.transverse.magnitude2() - self.radius.powi(2),
+            a: self.radius_derivative.mul_add(
+                -self.radius_derivative,
+                self.transverse_direction.magnitude2(),
+            ),
+            b: self.radius.mul_add(
+                -self.radius_derivative,
+                self.transverse.dot(self.transverse_direction),
+            ),
+            c: self
+                .radius
+                .mul_add(-self.radius, self.transverse.magnitude2()),
         }
     }
 }
@@ -233,41 +240,50 @@ impl Frame {
     // skew and signed affine slopes without a far-away cone apex.
     fn roots(self, start: f64, end: f64, positive: bool, tolerance: f64) -> Option<[Interval; 2]> {
         let (radial, _) = self.direction(start.midpoint(end));
-        let g = self.generator(radial);
-        let Quadratic { a, b, c } = g.coefficients();
+        let generator = self.generator(radial);
+        let Quadratic { a, b, c } = generator.coefficients();
         let angular = (end - start).abs() * 0.5;
         let move_bound = 2.0 * (angular * 0.5).sin().abs();
-        let p = move_bound * self.first.radius.abs();
-        let d = move_bound * self.first.slope.abs();
-        let r = p * self.second.slope.abs();
-        let s = d * self.second.slope.abs();
-        let wp = g.transverse.magnitude();
-        let gp = g.transverse_direction.magnitude();
-        let scale = g
+        let point_motion = move_bound * self.first.radius.abs();
+        let direction_motion = move_bound * self.first.slope.abs();
+        let radius_motion = point_motion * self.second.slope.abs();
+        let slope_motion = direction_motion * self.second.slope.abs();
+        let point_norm = generator.transverse.magnitude();
+        let direction_norm = generator.transverse_direction.magnitude();
+        let scale = generator
             .base
             .magnitude()
-            .max(g.direction.magnitude())
-            .max(g.radius.abs())
-            .max(g.radius_derivative.abs())
+            .max(generator.direction.magnitude())
+            .max(generator.radius.abs())
+            .max(generator.radius_derivative.abs())
             .max(1.0);
         let roundoff = 256.0 * f64::EPSILON * scale * scale;
+        let square_change =
+            |magnitude: f64, delta: f64| delta.mul_add(delta, 2.0 * magnitude * delta);
         let ai = Interval::around(
             a,
-            2.0 * gp * d + d * d + 2.0 * g.radius_derivative.abs() * s + s * s + roundoff,
+            square_change(direction_norm, direction_motion)
+                + square_change(generator.radius_derivative.abs(), slope_motion)
+                + roundoff,
         );
+        let product_change =
+            |left: f64, right: f64, dl: f64, dr: f64| dl.mul_add(dr, left.mul_add(dr, right * dl));
         let bi = Interval::around(
             b,
-            wp * d
-                + gp * p
-                + p * d
-                + g.radius.abs() * s
-                + g.radius_derivative.abs() * r
-                + r * s
+            product_change(point_norm, direction_norm, point_motion, direction_motion)
+                + product_change(
+                    generator.radius.abs(),
+                    generator.radius_derivative.abs(),
+                    radius_motion,
+                    slope_motion,
+                )
                 + roundoff,
         );
         let ci = Interval::around(
             c,
-            2.0 * wp * p + p * p + 2.0 * g.radius.abs() * r + r * r + roundoff,
+            square_change(point_norm, point_motion)
+                + square_change(generator.radius.abs(), radius_motion)
+                + roundoff,
         );
         let disc = bi.square().add(ai.mul(ci).neg());
         if disc.lo <= roundoff || !disc.finite() {
@@ -284,14 +300,16 @@ impl Frame {
         let other = root(!positive);
         let first_radius = Interval::around(self.first.radius, roundoff)
             .add(selected.mul(Interval::around(self.first.slope, roundoff)));
-        let second_radius = Interval::around(g.radius, r + roundoff)
-            .add(selected.mul(Interval::around(g.radius_derivative, s + roundoff)));
+        let second_radius =
+            Interval::around(generator.radius, radius_motion + roundoff).add(selected.mul(
+                Interval::around(generator.radius_derivative, slope_motion + roundoff),
+            ));
         (selected.finite()
             && other.finite()
             && first_radius.lo > tolerance
             && second_radius.lo > tolerance
-            && (selected.hi + 2.0 * tolerance < other.lo
-                || other.hi + 2.0 * tolerance < selected.lo))
+            && (2.0f64.mul_add(tolerance, selected.hi) < other.lo
+                || 2.0f64.mul_add(tolerance, other.hi) < selected.lo))
             .then_some([selected, other])
     }
 
@@ -405,7 +423,7 @@ impl ContactLinearSectionEvidence {
         }
         (sign != 0.0
             && self.signed_sweep_radians.abs()
-                <= TAU + 64.0 * f64::EPSILON * crate::usize_to_f64(ids.len()))
+                <= (64.0 * f64::EPSILON).mul_add(crate::usize_to_f64(ids.len()), TAU))
         .then_some(self)
     }
     fn same_branch(self, other: Self, points: &[Point3], ids: &[usize], tolerance: f64) -> bool {

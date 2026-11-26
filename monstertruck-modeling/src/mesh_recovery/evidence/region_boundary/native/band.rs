@@ -275,7 +275,7 @@ impl BandContext<'_> {
         let roundoff = f64::EPSILON * 128.0 * crate::usize_to_f64(polygon_count) * TAU * TAU;
         polygon_count != 0
             && incidence.values().all(|&(count, _)| count == 2)
-            && (total - TAU * TAU).abs() <= roundoff
+            && TAU.mul_add(-TAU, total).abs() <= roundoff
     }
 
     fn oriented_chart_polygon_area(&self, ids: &[usize]) -> Option<f64> {

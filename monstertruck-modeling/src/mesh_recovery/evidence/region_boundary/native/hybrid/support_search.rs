@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Search limits for local releases around failed source contacts.
 #[derive(Clone, Copy, Debug)]
 pub struct HybridSupportSearchOptions {
-    /// Original geometric policies. Here max_added_polygons is the total
+    /// Original geometric policies. Here `max_added_polygons` is the total
     /// authorized source polygons, including initial contact support seeds.
     pub refinement: HybridRefinementOptions,
     /// Maximum distinct support selection states, including queued states.
@@ -168,23 +168,7 @@ impl CoverSearch {
 }
 
 impl RecoveredAnalyticMesh {
-    /// Try source support releases at failed shared native trims.
-    ///
-    /// Every failed contact must be covered by at least one explicitly
-    /// permitted incident support. Enumerate smallest seed polygon costs
-    /// first, then use the existing witnessed expansion and full hybrid
-    /// certificates. A successful result is a complete closed shell, not
-    /// a material or self-intersection certificate. This bounded search
-    /// does not assert global minimum total released polygons.
-    ///
-    /// # Errors
-    /// Invalid inputs, open or ambiguous source contact incidence, no
-    /// permitted cover, exhausted budgets, or failed geometric transactions.
-    pub fn construct_unresolved_contact_hybrid(
-        &self,
-        permitted_supports: &[usize],
-        options: HybridSupportSearchOptions,
-    ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
+    fn failed_support_contacts(&self) -> Result<BTreeSet<[usize; 2]>, HybridRecoveryError> {
         if !self.trims.ambiguous_edges.is_empty()
             || self.trims.trims.len() != self.native.trims.len()
         {
@@ -215,6 +199,27 @@ impl RecoveredAnalyticMesh {
                 contacts.insert([a.min(b), a.max(b)]);
             }
         }
+        Ok(contacts)
+    }
+
+    /// Try source support releases at failed shared native trims.
+    ///
+    /// Every failed contact must be covered by at least one explicitly
+    /// permitted incident support. Enumerate smallest seed polygon costs
+    /// first, then use the existing witnessed expansion and full hybrid
+    /// certificates. A successful result is a complete closed shell, not
+    /// a material or self-intersection certificate. This bounded search
+    /// does not assert global minimum total released polygons.
+    ///
+    /// # Errors
+    /// Invalid inputs, open or ambiguous source contact incidence, no
+    /// permitted cover, exhausted budgets, or failed geometric transactions.
+    pub fn construct_unresolved_contact_hybrid(
+        &self,
+        permitted_supports: &[usize],
+        options: HybridSupportSearchOptions,
+    ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
+        let contacts = self.failed_support_contacts()?;
         let allowed = permitted_supports.iter().copied().collect::<BTreeSet<_>>();
         let sizes = self
             .evidence

@@ -389,7 +389,7 @@ impl CarrierModel {
                 let rho = (delta - axis * z).magnitude();
                 let pivot_residual = (rho - slope.mul_add(z, radius_at_origin)).abs() / old_norm;
                 let extent = self.scale + motion;
-                let profile = (p[6].abs() + delta_slope.abs() * (extent + z.abs())) / new_norm;
+                let profile = delta_slope.abs().mul_add(extent + z.abs(), p[6].abs()) / new_norm;
                 let normalization = (old_norm / new_norm - 1.0).abs() * (pivot_residual + extent);
                 motion + profile + normalization
             }
@@ -502,9 +502,9 @@ fn accumulate(
     weight: f64,
 ) {
     for (&i, &value) in columns.iter().zip(jacobian) {
-        rhs[i] -= weight * value * error;
+        rhs[i] = (weight * value).mul_add(-error, rhs[i]);
         for (&k, &other) in columns.iter().zip(jacobian) {
-            normal[i][k] += weight * value * other;
+            normal[i][k] = (weight * value).mul_add(other, normal[i][k]);
         }
     }
 }
@@ -654,7 +654,7 @@ fn joint_step(
     for (i, (_, model)) in models.iter().enumerate() {
         for (j, p) in model.parameters.iter().enumerate() {
             let k = i * 8 + j;
-            let damping = (anchor_weight * 0.001 + 1.0e-10) * (1.0 + normal[k][k].abs());
+            let damping = anchor_weight.mul_add(0.001, 1.0e-10) * (1.0 + normal[k][k].abs());
             normal[k][k] += damping;
             rhs[k] -= damping * p;
         }

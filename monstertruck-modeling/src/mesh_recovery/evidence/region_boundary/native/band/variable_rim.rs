@@ -150,6 +150,37 @@ impl RimChart {
     }
 }
 
+fn nonretracing_rim(rim: &[Edge], proofs: &[RimEdge], axis: Vector3) -> bool {
+    // Consecutive generators at one azimuth must not retrace the rim.
+    (0..rim.len()).all(|i| {
+        let j = (i + 1) % rim.len();
+        proofs[i].advance != 0.0
+            || proofs[j].advance != 0.0
+            || (rim[i].back().point() - rim[i].front().point()).dot(axis)
+                * (rim[j].back().point() - rim[j].front().point()).dot(axis)
+                > 0.0
+    })
+}
+
+fn rim_extent(
+    rim: &[Edge],
+    proofs: &[RimEdge],
+    axis: Vector3,
+    angular_resolution: f64,
+) -> Option<[f64; 2]> {
+    let sweep = proofs.iter().map(|proof| proof.advance).sum::<f64>();
+    if (sweep - TAU).abs() > angular_resolution || !nonretracing_rim(rim, proofs, axis) {
+        return None;
+    }
+    Some(
+        proofs
+            .iter()
+            .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], proof| {
+                [lo.min(proof.axial[0]), hi.max(proof.axial[1])]
+            }),
+    )
+}
+
 impl BandContext<'_> {
     pub(super) fn variable_band(
         &self,
@@ -192,28 +223,7 @@ impl BandContext<'_> {
             .iter()
             .map(|edge| chart.edge(edge))
             .collect::<Option<Vec<_>>>()?;
-        let sweep = proofs.iter().map(|proof| proof.advance).sum::<f64>();
-        if (sweep - TAU).abs() > self.options.angular_resolution {
-            return None;
-        }
-        // A chain of generator segments at one azimuth may not reverse
-        // axial direction: that would retrace part of the same boundary.
-        for i in 0..rim.len() {
-            let j = (i + 1) % rim.len();
-            if proofs[i].advance == 0.0
-                && proofs[j].advance == 0.0
-                && (rim[i].back().point() - rim[i].front().point()).dot(axis)
-                    * (rim[j].back().point() - rim[j].front().point()).dot(axis)
-                    <= 0.0
-            {
-                return None;
-            }
-        }
-        let [lo, hi] = proofs
-            .iter()
-            .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], proof| {
-                [lo.min(proof.axial[0]), hi.max(proof.axial[1])]
-            });
+        let [lo, hi] = rim_extent(&rim, &proofs, axis, self.options.angular_resolution)?;
         let ring_lower = ring.positive == self.outward;
         let tol = self.options.intersection_tolerance;
         if (ring_lower && lo <= ring.fixed + tol) || (!ring_lower && hi >= ring.fixed - tol) {
