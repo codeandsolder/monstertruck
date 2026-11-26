@@ -9,7 +9,7 @@ use crate::{
     InnerSpace, KERNEL_EPSILON,
     mesh_recovery::{
         MeshEvidence,
-        evidence::{JointFitCandidate, JointFitOptions, fit_neighborhood},
+        evidence::{JointFitCandidate, JointFitContext, JointFitOptions, fit_neighborhood},
     },
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -174,6 +174,7 @@ fn try_fit(
     assembly: &mut NativeAssembly,
     regions: &[usize],
     options: AnalyticRecoveryOptions,
+    context: &mut JointFitContext,
     refit: bool,
 ) -> Result<Option<JointFitReport>, AnalyticRecoveryError> {
     let Some(candidate) = fit_neighborhood(
@@ -181,11 +182,7 @@ fn try_fit(
         &assembly.reconciled.partition,
         &assembly.reconciled.positions,
         regions,
-        JointFitOptions {
-            maximum_adjustment: options.max_reconstruction_adjustment,
-            declared_uncertainty: options.source_position_uncertainty,
-            angular_resolution: options.axis_relative_resolution,
-        },
+        context,
         refit,
     ) else {
         return Ok(None);
@@ -246,6 +243,7 @@ fn try_fit(
     // Existing plane records describe prior accepted transactions; keep
     // them as provenance, not a claim that the carriers were never refit.
     next.reconciled.planes = std::mem::take(&mut assembly.reconciled.planes);
+    context.commit(&candidate.carrier_changes);
     *assembly = next;
     Ok(Some(JointFitReport {
         regions: regions.to_vec(),
@@ -266,6 +264,20 @@ pub(super) fn repair(
     if options.max_reconstruction_adjustment == 0.0 || options.max_joint_fit_trials == 0 {
         return Ok(reports);
     }
+    if failed_neighborhoods(assembly).is_empty() {
+        return Ok(reports);
+    }
+    let Some(mut context) = JointFitContext::new(
+        evidence,
+        &assembly.reconciled.partition,
+        JointFitOptions {
+            maximum_adjustment: options.max_reconstruction_adjustment,
+            declared_uncertainty: options.source_position_uncertainty,
+            angular_resolution: options.axis_relative_resolution,
+        },
+    ) else {
+        return Ok(reports);
+    };
     let mut trials = 0;
     while trials < options.max_joint_fit_trials {
         let neighborhoods = failed_neighborhoods(assembly);
@@ -276,12 +288,13 @@ pub(super) fn repair(
             }
             trials += 1;
             // Reconcile fixed carriers first; only refit when necessary.
-            let report =
-                if let Some(report) = try_fit(evidence, assembly, &regions, options, false)? {
-                    Some(report)
-                } else {
-                    try_fit(evidence, assembly, &regions, options, true)?
-                };
+            let report = if let Some(report) =
+                try_fit(evidence, assembly, &regions, options, &mut context, false)?
+            {
+                Some(report)
+            } else {
+                try_fit(evidence, assembly, &regions, options, &mut context, true)?
+            };
             if let Some(report) = report {
                 reports.push(report);
                 improved = true;

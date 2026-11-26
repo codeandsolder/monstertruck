@@ -22,6 +22,7 @@ pub(in crate::mesh_recovery) struct JointFitCandidate {
     pub maximum_displacement: f64,
     pub refitted_regions: usize,
     pub max_additional_carrier_residual: f64,
+    pub carrier_changes: Vec<(usize, f64)>,
 }
 
 struct VertexSample {
@@ -31,55 +32,42 @@ struct VertexSample {
     boundary: bool,
 }
 
-struct Neighborhood<'a> {
-    evidence: &'a MeshEvidence,
-    partition: &'a SurfaceRegionPartition,
+// Keep the source allowance and incidence immutable across transactions.
+// A previously accepted refit must not create its own new error budget.
+pub(in crate::mesh_recovery) struct JointFitContext {
     samples: Vec<VertexSample>,
-    supports: BTreeSet<usize>,
+    vertex_supports: Vec<Vec<usize>>,
+    region_vertices: Vec<Vec<usize>>,
+    carrier_change: Vec<f64>,
     options: JointFitOptions,
 }
 
-impl<'a> Neighborhood<'a> {
-    fn new(
-        evidence: &'a MeshEvidence,
-        partition: &'a SurfaceRegionPartition,
-        regions: &[usize],
+impl JointFitContext {
+    pub(in crate::mesh_recovery) fn new(
+        evidence: &MeshEvidence,
+        partition: &SurfaceRegionPartition,
         options: JointFitOptions,
     ) -> Option<Self> {
         let mut incidence = vec![Vec::new(); evidence.positions.len()];
-        let mut active = vec![false; evidence.positions.len()];
+        let mut vertex_supports = vec![Vec::new(); evidence.positions.len()];
+        let mut region_vertices = vec![Vec::new(); partition.carriers.len()];
         let mut allowances = vec![0.0_f64; evidence.positions.len()];
-        let mut supports = BTreeSet::new();
         for (support, source) in evidence.planar_supports.iter().enumerate() {
             let region = *partition.region_by_support.get(support)?;
-            for &polygon in &source.source_face_indices {
-                for &id in evidence.source_polygon_vertices(polygon)? {
-                    incidence[id].push(region);
-                    active[id] |= regions.contains(&region);
-                }
-            }
-        }
-        // Only original edges incident to the affected neighborhood
-        // supply uncertainty. Do not spread a coarse tessellation's
-        // allowance to an unrelated small feature elsewhere in the mesh.
-        for (support, source) in evidence.planar_supports.iter().enumerate() {
-            let region = partition.region_by_support[support];
             let carrier = partition.carriers[region]?;
             for &polygon in &source.source_face_indices {
                 let ids = evidence.source_polygon_vertices(polygon)?;
-                if !ids.iter().any(|&id| active[id]) {
-                    continue;
+                for &id in ids {
+                    incidence[id].push(region);
+                    vertex_supports[id].push(support);
                 }
-                supports.insert(support);
                 for (&a, &b) in ids.iter().zip(ids.iter().cycle().skip(1)) {
                     let (p, q) = (evidence.positions[a], evidence.positions[b]);
-                    let Some(residual) = carrier.measure_segment(p, q) else {
-                        continue;
-                    };
-                    // Use the measured sagitta/fit residual, never a loose
-                    // analytic upper bound, as evidence for an allowance.
-                    for id in [a, b] {
-                        allowances[id] = allowances[id].max(residual.witnessed_max);
+                    if let Some(residual) = carrier.measure_segment(p, q) {
+                        // Use the actual witness, not a loose analytic upper bound.
+                        for id in [a, b] {
+                            allowances[id] = allowances[id].max(residual.witnessed_max);
+                        }
                     }
                 }
             }
@@ -92,34 +80,87 @@ impl<'a> Neighborhood<'a> {
                 }
             }
         }
-        let mut samples = Vec::new();
-        for (id, mut regions) in incidence.into_iter().enumerate() {
-            if !active[id] {
-                continue;
-            }
-            regions.sort_unstable();
-            regions.dedup();
-            let p = evidence.positions[id];
-            let roundoff = 32.0 * f64::EPSILON * p.x.abs().max(p.y.abs()).max(p.z.abs());
-            let allowance = allowances[id]
-                .max(options.declared_uncertainty)
-                .max(roundoff)
-                .max(KERNEL_EPSILON)
-                .min(options.maximum_adjustment);
-            let boundary = boundary_vertices[id] || regions.len() > 1;
-            samples.push(VertexSample {
-                id,
-                regions,
-                allowance,
-                boundary,
-            });
+        let samples = incidence
+            .into_iter()
+            .enumerate()
+            .map(|(id, mut regions)| {
+                regions.sort_unstable();
+                regions.dedup();
+                vertex_supports[id].sort_unstable();
+                vertex_supports[id].dedup();
+                for &region in &regions {
+                    region_vertices[region].push(id);
+                }
+                let p = evidence.positions[id];
+                let roundoff = 32.0 * f64::EPSILON * p.x.abs().max(p.y.abs()).max(p.z.abs());
+                let allowance = allowances[id]
+                    .max(options.declared_uncertainty)
+                    .max(roundoff)
+                    .max(KERNEL_EPSILON)
+                    .min(options.maximum_adjustment);
+                let boundary = boundary_vertices[id] || regions.len() > 1;
+                VertexSample {
+                    id,
+                    regions,
+                    allowance,
+                    boundary,
+                }
+            })
+            .collect();
+        Some(Self {
+            samples,
+            vertex_supports,
+            region_vertices,
+            carrier_change: vec![0.0; partition.carriers.len()],
+            options,
+        })
+    }
+
+    pub(in crate::mesh_recovery) fn commit(&mut self, changes: &[(usize, f64)]) {
+        for &(region, change) in changes {
+            self.carrier_change[region] += change;
         }
-        (!samples.is_empty() && samples.len() <= 4096).then_some(Self {
+    }
+}
+
+struct Neighborhood<'a> {
+    evidence: &'a MeshEvidence,
+    partition: &'a SurfaceRegionPartition,
+    samples: Vec<&'a VertexSample>,
+    supports: BTreeSet<usize>,
+    context: &'a JointFitContext,
+    options: JointFitOptions,
+}
+
+impl<'a> Neighborhood<'a> {
+    fn new(
+        evidence: &'a MeshEvidence,
+        partition: &'a SurfaceRegionPartition,
+        regions: &[usize],
+        context: &'a JointFitContext,
+    ) -> Option<Self> {
+        let mut vertices = BTreeSet::new();
+        for &region in regions {
+            vertices.extend(context.region_vertices.get(region)?.iter().copied());
+        }
+        if vertices.is_empty() || vertices.len() > 4096 {
+            return None;
+        }
+        let supports = vertices
+            .iter()
+            .flat_map(|&id| context.vertex_supports[id].iter().copied())
+            .collect();
+        let samples = vertices
+            .into_iter()
+            .map(|id| &context.samples[id])
+            .collect();
+        Some(Self {
             evidence,
             partition,
             samples,
             supports,
-            options,
+            context,
+            options: context.options,
         })
     }
 
@@ -219,6 +260,7 @@ impl CarrierModel {
             scale = scale.max((neighborhood.evidence.positions[sample.id] - pivot).magnitude());
             allowance = allowance.max(sample.allowance);
         }
+        allowance = (allowance - neighborhood.context.carrier_change[region]).max(0.0);
         let base = match neighborhood.partition.carriers[region]? {
             SurfaceCarrier::LinearRevolution {
                 origin,
@@ -356,14 +398,23 @@ impl CarrierModel {
 
     fn bounded(self) -> bool {
         self.additional_residual_bound() <= self.allowance
-            && match self.carrier() {
-                SurfaceCarrier::CircularRevolution {
-                    radial_center,
-                    profile_radius,
-                    ..
-                } => {
-                    (radial_center == 0.0 || radial_center > KERNEL_EPSILON)
-                        && profile_radius > KERNEL_EPSILON
+            && match (self.base, self.carrier()) {
+                (
+                    SurfaceCarrier::CircularRevolution {
+                        radial_center: original_center,
+                        ..
+                    },
+                    SurfaceCarrier::CircularRevolution {
+                        radial_center,
+                        profile_radius,
+                        ..
+                    },
+                ) => {
+                    (if original_center == 0.0 {
+                        radial_center == 0.0
+                    } else {
+                        radial_center > KERNEL_EPSILON
+                    }) && profile_radius > KERNEL_EPSILON
                 }
                 _ => true,
             }
@@ -616,12 +667,13 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     partition: &SurfaceRegionPartition,
     prior: &[Point3],
     regions: &[usize],
-    options: JointFitOptions,
+    context: &JointFitContext,
     refit: bool,
 ) -> Option<JointFitCandidate> {
-    let neighborhood = Neighborhood::new(evidence, partition, regions, options)?;
+    let neighborhood = Neighborhood::new(evidence, partition, regions, context)?;
     let mut partition = partition.clone();
     let mut refitted_regions = 0;
+    let mut carrier_changes = Vec::new();
     let mut max_additional_carrier_residual = 0.0_f64;
     if refit {
         // Keep a bounded local system, independent of the total model size.
@@ -663,6 +715,7 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
                 partition.carriers[id] = Some(model.carrier());
                 max_additional_carrier_residual =
                     max_additional_carrier_residual.max(model.additional_residual_bound());
+                carrier_changes.push((id, model.additional_residual_bound()));
                 refitted_regions += 1;
             }
         }
@@ -679,6 +732,7 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
         maximum_displacement,
         refitted_regions,
         max_additional_carrier_residual,
+        carrier_changes,
     })
 }
 
@@ -728,13 +782,15 @@ mod tests {
             declared_uncertainty: 0.01,
             angular_resolution: 1.0e-8,
         };
+        let mut context =
+            JointFitContext::new(&evidence, &partition, options).ok_or("source fitting context")?;
         assert!(
             fit_neighborhood(
                 &evidence,
                 &partition,
                 &evidence.positions,
                 &regions,
-                options,
+                &context,
                 false
             )
             .is_none()
@@ -744,7 +800,7 @@ mod tests {
             &partition,
             &evidence.positions,
             &regions,
-            options,
+            &context,
             true,
         )
         .ok_or("joint fit should restore compatible planes")?;
@@ -780,6 +836,17 @@ mod tests {
             monstertruck_topology::shell::ShellCondition::Closed
         );
         assert!(shell.is_geometric_consistent());
+
+        // Accepted changes consume the original region budget. Even if
+        // the changed carrier's new residual would suggest a larger
+        // allowance, a second transaction cannot replenish it.
+        context.commit(&result.carrier_changes);
+        let neighborhood = Neighborhood::new(&evidence, &result.partition, &regions, &context)
+            .ok_or("updated neighborhood")?;
+        for &(region, change) in &result.carrier_changes {
+            let model = CarrierModel::new(&neighborhood, region).ok_or("updated carrier")?;
+            assert!(model.allowance + change <= options.maximum_adjustment + f64::EPSILON);
+        }
         Ok(())
     }
 

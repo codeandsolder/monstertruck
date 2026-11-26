@@ -52,7 +52,7 @@ pub use region_boundary::{
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub(in crate::mesh_recovery) use region_boundary::{
-    JointFitCandidate, JointFitOptions, RimLinearOptions, fit_neighborhood,
+    JointFitCandidate, JointFitContext, JointFitOptions, RimLinearOptions, fit_neighborhood,
 };
 pub use source_collapse::CollapsedSourceFacet;
 pub use source_sectors::SourceSectorPair;
