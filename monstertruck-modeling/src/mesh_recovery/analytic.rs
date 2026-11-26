@@ -18,6 +18,8 @@ use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{BTreeMap, BTreeSet};
+mod coplanar_contacts;
+pub use coplanar_contacts::CoplanarSupportReassignment;
 mod native_selection;
 use native_selection::{PartitionAlternative, select_native};
 
@@ -300,6 +302,8 @@ pub struct RecoveredAnalyticMesh {
     pub trims: SharedTrimGraph,
     /// Kernel-native shared edges and chart faces, with local failures.
     pub native: NativeTrimGraph,
+    /// Exact plane ownership corrections applied after native assembly.
+    pub coplanar_reassignments: Vec<CoplanarSupportReassignment>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -446,7 +450,7 @@ pub fn construct_analytic_recovery(
         mut stats,
         core_alternative,
     } = discovered;
-    let assembly = if let Some(core) = core_alternative {
+    let mut assembly = if let Some(core) = core_alternative {
         let expanded = PartitionAlternative {
             partition,
             selected: std::mem::take(&mut stats.selected),
@@ -466,12 +470,14 @@ pub fn construct_analytic_recovery(
     } else {
         assemble_native(&evidence, partition, options)?
     };
+    let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,
         reconciled: assembly.reconciled,
         trims: assembly.trims,
         native: assembly.native,
+        coplanar_reassignments,
     })
 }
 

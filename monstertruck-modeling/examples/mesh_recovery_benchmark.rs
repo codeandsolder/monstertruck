@@ -268,6 +268,7 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
         "read_seconds":read_seconds,"evidence_seconds":evidence_seconds,
         "total_seconds":start.elapsed().as_secs_f64(),
         "regions":region_info,"region_by_polygon":partition.region_by_polygon,
+        "coplanar_reassignments":recovery.coplanar_reassignments.iter().map(|r|json!({"support":r.support,"old_region":r.old_region,"new_region":r.new_region,"max_plane_residual":r.max_plane_residual})).collect::<Vec<_>>(),
         "original_polygon_ids":recovery.evidence.provenance.original_polygon_ids,
         "collapsed_source_facets":recovery.evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
         "separated_source_vertices":recovery.evidence.provenance.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),

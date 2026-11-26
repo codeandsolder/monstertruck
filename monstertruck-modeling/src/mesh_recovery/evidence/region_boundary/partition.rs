@@ -91,6 +91,58 @@ pub struct SurfaceRegionPartition {
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
+    /// Rebuild connected ownership after a local carrier reassignment.
+    /// Region IDs are the smallest source support in each connected component.
+    pub(in crate::mesh_recovery) fn repartition_connected<L: Copy + Eq>(
+        &self,
+        labels: &[L],
+        carrier: impl Fn(L) -> Option<SurfaceCarrier>,
+    ) -> Result<SurfaceRegionPartition, RegionBoundaryError> {
+        let count = self.evidence.planar_supports.len();
+        if labels.len() != count {
+            return Err(RegionBoundaryError::InvalidPartition);
+        }
+        let mut region_by_support = vec![usize::MAX; count];
+        let mut carriers = vec![None; count];
+        for seed in 0..count {
+            if region_by_support[seed] != usize::MAX {
+                continue;
+            }
+            carriers[seed] =
+                Some(carrier(labels[seed]).ok_or(RegionBoundaryError::InvalidPartition)?);
+            region_by_support[seed] = seed;
+            let mut queue = VecDeque::from([seed]);
+            while let Some(support) = queue.pop_front() {
+                for &id in &self.evidence.support_interface_indices[support] {
+                    let [a, b] = self.evidence.support_interfaces[id].supports;
+                    let other = if a == support { b } else { a };
+                    if region_by_support[other] == usize::MAX && labels[other] == labels[seed] {
+                        region_by_support[other] = seed;
+                        queue.push_back(other);
+                    }
+                }
+            }
+        }
+        let region_by_polygon = self
+            .evidence
+            .source_planar_support
+            .iter()
+            .map(|&support| region_by_support[support])
+            .collect::<Vec<_>>();
+        let contacts = self.partition_contacts(&region_by_polygon)?;
+        let consolidated_supports = count - carriers.iter().flatten().count();
+        Ok(SurfaceRegionPartition {
+            selected_proposals: Vec::new(),
+            region_by_support,
+            region_by_polygon,
+            carriers,
+            contacts,
+            consolidated_supports,
+            exact_components: 0,
+            limited_components: 0,
+        })
+    }
+
     /// Validate one connected complete-support union and its carrier.
     /// No native face labels or family-specific preference enter selection.
     #[must_use = "only admissible measured proposals can enter selection"]

@@ -214,59 +214,31 @@ fn split_partition(
     original: &SurfaceRegionPartition,
     selected: &BTreeSet<usize>,
 ) -> Result<RefinedPartition, RegionBoundaryError> {
-    let count = evidence.planar_supports.len();
-    let mut region_by_support = vec![usize::MAX; count];
-    let mut carriers = vec![None; count];
-    let mut parents = vec![None; count];
+    let labels = original
+        .region_by_support
+        .iter()
+        .enumerate()
+        .map(|(support, &parent)| (parent, selected.contains(&support)))
+        .collect::<Vec<_>>();
+    if labels.len() != evidence.planar_supports.len() {
+        return Err(RegionBoundaryError::InvalidPartition);
+    }
+    let partition = index.repartition_connected(&labels, |(parent, _)| {
+        original.carriers.get(parent).copied().flatten()
+    })?;
+    let mut parents = vec![None; labels.len()];
     let mut selected_regions = Vec::new();
-    for seed in 0..count {
-        if region_by_support[seed] != usize::MAX {
-            continue;
-        }
-        let parent = original.region_by_support[seed];
-        let carrier = original.carriers[parent].ok_or(RegionBoundaryError::InvalidPartition)?;
-        let approximate = selected.contains(&seed);
-        carriers[seed] = Some(carrier);
-        parents[seed] = Some(parent);
-        if approximate {
-            selected_regions.push(seed);
-        }
-        region_by_support[seed] = seed;
-        let mut queue = VecDeque::from([seed]);
-        while let Some(support) = queue.pop_front() {
-            for &id in &evidence.support_interface_indices[support] {
-                let [a, b] = evidence.support_interfaces[id].supports;
-                let other = if a == support { b } else { a };
-                if region_by_support[other] == usize::MAX
-                    && original.region_by_support[other] == parent
-                    && selected.contains(&other) == approximate
-                {
-                    region_by_support[other] = seed;
-                    queue.push_back(other);
-                }
+    for (region, carrier) in partition.carriers.iter().enumerate() {
+        if carrier.is_some() {
+            let (parent, approximate) = labels[region];
+            parents[region] = Some(parent);
+            if approximate {
+                selected_regions.push(region);
             }
         }
     }
-    let region_by_polygon = evidence
-        .source_planar_support
-        .iter()
-        .map(|&support| region_by_support[support])
-        .collect::<Vec<_>>();
-    let contacts = index.partition_contacts(&region_by_polygon)?;
-    let consolidated_supports = count - carriers.iter().flatten().count();
     Ok(RefinedPartition {
-        partition: SurfaceRegionPartition {
-            // This is a refinement of existing ownership, not a second
-            // proposal selection. Parent IDs carry the discovery provenance.
-            selected_proposals: Vec::new(),
-            region_by_support,
-            region_by_polygon,
-            carriers,
-            contacts,
-            consolidated_supports,
-            exact_components: 0,
-            limited_components: 0,
-        },
+        partition,
         parents,
         selected_regions,
     })

@@ -39,9 +39,10 @@ impl Default for PlanarRecoveryOptions {
 mod analytic;
 pub use analytic::{
     AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
-    AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, RecoveredAnalyticMesh,
-    SelectedSurfaceProposal, SupportRefinementPass, construct_analytic_recovery,
-    discover_analytic_regions, recover_analytic_evidence, recover_analytic_mesh,
+    AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
+    RecoveredAnalyticMesh, SelectedSurfaceProposal, SupportRefinementPass,
+    construct_analytic_recovery, discover_analytic_regions, recover_analytic_evidence,
+    recover_analytic_mesh,
 };
 mod boundary_facet;
 pub use boundary_facet::{
