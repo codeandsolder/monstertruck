@@ -29,8 +29,12 @@ mod connectors;
 pub use connectors::{HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease};
 mod refinement;
 mod simplify;
-pub use refinement::{HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery};
+pub use refinement::{
+    HybridRefinementOptions, HybridRefinementSeed, PatchSupportConflict, RefinedHybridRecovery,
+};
+mod support_search;
 pub use simplify::HybridPlanarSimplification;
+pub use support_search::{HybridSupportSearchOptions, HybridSupportSearchRecovery};
 
 /// Provenance of one original polygon in its approximate native region.
 #[derive(Debug, Clone)]
@@ -154,6 +158,33 @@ pub enum HybridRecoveryError {
         /// Number of attempted native transactions.
         trials: usize,
         /// Most recent geometric rejection.
+        last: Box<Self>,
+    },
+    /// No permitted support selection covers every failed source contact.
+    #[error("no admissible source support cover for failed contacts")]
+    NoSupportCandidate,
+    /// A geometrically valid local transaction did not close the entire shell.
+    #[error(
+        "hybrid support transaction incomplete: {failed_regions} failed regions, {failed_trims} failed trims, {chart_cuts} pending chart cuts"
+    )]
+    IncompleteSupportRecovery {
+        /// Remaining failed native region faces.
+        failed_regions: usize,
+        /// Remaining failed shared native trims.
+        failed_trims: usize,
+        /// Remaining unresolved periodic chart cuts.
+        chart_cuts: usize,
+    },
+    /// Bounded support-cover search exhausted its proposals.
+    #[error(
+        "hybrid support search exhausted after {states} states and {trials} transactions: {last}"
+    )]
+    SupportSearch {
+        /// Number of visited candidate states.
+        states: usize,
+        /// Number of attempted full native transactions.
+        trials: usize,
+        /// Most recent geometric rejection or missing admissible cover.
         last: Box<Self>,
     },
     /// A previously valid retained analytic trim would fail.

@@ -24,7 +24,8 @@ mod hybrid;
 pub use hybrid::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, PatchSupportConflict, RefinedHybridRecovery,
+    HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
+    HybridSupportSearchRecovery, PatchSupportConflict, RefinedHybridRecovery,
 };
 
 /// Numerical and displacement policies for native trim vertex reconciliation.

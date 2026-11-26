@@ -35,8 +35,9 @@ pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLin
 pub use native::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
-    PatchSupportConflict, RefinedHybridRecovery,
+    HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
+    HybridSupportSearchRecovery, NativeRegionFace, NativeTrimError, NativeTrimGraph,
+    NativeTrimOptions, PatchSupportConflict, RefinedHybridRecovery,
 };
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
 pub use patch_lift::{LiftedRegionPatch, RegionPatchError, RegionPatchOptions};

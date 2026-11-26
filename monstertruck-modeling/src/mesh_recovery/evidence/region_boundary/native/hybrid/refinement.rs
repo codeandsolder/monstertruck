@@ -41,6 +41,16 @@ pub struct HybridRefinementOptions {
     pub max_added_polygons: usize,
 }
 
+/// Explicit original ownership to approximate before witnessed expansion.
+#[derive(Clone, Copy, Debug)]
+pub enum HybridRefinementSeed<'a> {
+    /// Release every support of the listed original fitted regions.
+    Regions(&'a [usize]),
+    /// Release only the listed original planar source supports, splitting
+    /// their fitted regions when necessary.
+    Supports(&'a [usize]),
+}
+
 /// The original regions are split, never refitted. New region IDs refer to
 /// this partition, not the original discovery graph.
 #[derive(Debug)]
@@ -90,32 +100,53 @@ fn carrier_distance_witness(
 fn expand_supports(
     evidence: &MeshEvidence,
     partition: &SurfaceRegionPartition,
-    required: &[usize],
+    seed: HybridRefinementSeed<'_>,
     permitted: &[usize],
     options: HybridRefinementOptions,
 ) -> Result<SupportSelection, HybridRecoveryError> {
     let count = evidence.planar_supports.len();
-    if required.is_empty()
-        || partition.region_by_support.len() != count
+    if partition.region_by_support.len() != count
         || !options.patch.budget.chord.is_finite()
         || options.patch.budget.chord <= 0.0
         || !options.patch.intersection_tolerance.is_finite()
         || options.patch.intersection_tolerance <= 0.0
-        || required
-            .iter()
-            .any(|&id| partition.carriers.get(id).is_none_or(Option::is_none))
         || permitted.iter().any(|&id| id >= count)
     {
         return Err(HybridRecoveryError::InvalidInput);
     }
-    let required = required.iter().copied().collect::<BTreeSet<_>>();
     let permitted = permitted.iter().copied().collect::<BTreeSet<_>>();
-    let mut selected = partition
-        .region_by_support
-        .iter()
-        .enumerate()
-        .filter_map(|(support, region)| required.contains(region).then_some(support))
-        .collect::<BTreeSet<_>>();
+    let mut selected = match seed {
+        HybridRefinementSeed::Regions(regions) => {
+            if regions
+                .iter()
+                .any(|&id| partition.carriers.get(id).is_none_or(Option::is_none))
+            {
+                return Err(HybridRecoveryError::InvalidInput);
+            }
+            let required = regions.iter().copied().collect::<BTreeSet<_>>();
+            partition
+                .region_by_support
+                .iter()
+                .enumerate()
+                .filter_map(|(support, region)| required.contains(region).then_some(support))
+                .collect::<BTreeSet<_>>()
+        }
+        HybridRefinementSeed::Supports(supports) => {
+            if supports.iter().any(|&id| {
+                partition
+                    .region_by_support
+                    .get(id)
+                    .and_then(|&r| partition.carriers.get(r))
+                    .is_none_or(Option::is_none)
+            }) {
+                return Err(HybridRecoveryError::InvalidInput);
+            }
+            supports.iter().copied().collect::<BTreeSet<_>>()
+        }
+    };
+    if selected.is_empty() {
+        return Err(HybridRecoveryError::InvalidInput);
+    }
     let mut pending = selected.iter().copied().collect::<VecDeque<_>>();
     let mut conflicts = Vec::new();
     let mut added_polygons = 0_usize;
@@ -324,25 +355,34 @@ impl RecoveredAnalyticMesh {
     /// geometry, and regressions of previously valid retained regions/trims.
     pub fn construct_refined_hybrid(
         &self,
-        required_regions: &[usize],
+        seed: HybridRefinementSeed<'_>,
         permitted_supports: &[usize],
         options: HybridRefinementOptions,
     ) -> Result<RefinedHybridRecovery, HybridRecoveryError> {
         let index = RegionBoundaryIndex::new(&self.evidence)?;
         let original = &self.reconciled.partition;
-        let selection = expand_supports(
-            &self.evidence,
-            original,
-            required_regions,
-            permitted_supports,
-            options,
-        )?;
-        if selection.added_polygons == 0 {
+        let selection =
+            expand_supports(&self.evidence, original, seed, permitted_supports, options)?;
+        let selected_parents = selection
+            .selected
+            .iter()
+            .map(|&support| original.region_by_support[support])
+            .collect::<BTreeSet<_>>();
+        let whole_regions =
+            original
+                .region_by_support
+                .iter()
+                .enumerate()
+                .all(|(support, region)| {
+                    !selected_parents.contains(region) || selection.selected.contains(&support)
+                });
+        if selection.added_polygons == 0 && whole_regions {
             // No support ownership changed. Keep the exact existing
             // recognition/trim graph and native baseline; there is no
             // reason to fit all unchanged contacts again.
+            let selected_regions = selected_parents.into_iter().collect::<Vec<_>>();
             let recovery =
-                self.construct_hybrid(required_regions, options.patch, options.strict)?;
+                self.construct_hybrid(&selected_regions, options.patch, options.strict)?;
             return Ok(RefinedHybridRecovery {
                 partition: original.clone(),
                 parent_by_region: original
@@ -351,12 +391,7 @@ impl RecoveredAnalyticMesh {
                     .enumerate()
                     .map(|(id, c)| c.as_ref().map(|_| id))
                     .collect(),
-                selected_regions: required_regions
-                    .iter()
-                    .copied()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect(),
+                selected_regions,
                 conflicts: selection.conflicts,
                 added_polygons: 0,
                 trims: self.trims.clone(),
@@ -459,17 +494,29 @@ mod tests {
             .enumerate()
             .filter_map(|(id, &r)| (r == sphere).then_some(id))
             .collect::<Vec<_>>();
-        let unchanged = expand_supports(&evidence, &partition, &fallback, &[], options(0.1, 0))?;
+        let unchanged = expand_supports(
+            &evidence,
+            &partition,
+            HybridRefinementSeed::Regions(&fallback),
+            &[],
+            options(0.1, 0),
+        )?;
         assert_eq!(unchanged.added_polygons, 0);
         assert!(matches!(
-            expand_supports(&evidence, &partition, &fallback, &[], options(0.02, 4)),
+            expand_supports(
+                &evidence,
+                &partition,
+                HybridRefinementSeed::Regions(&fallback),
+                &[],
+                options(0.02, 4)
+            ),
             Err(HybridRecoveryError::ForbiddenSupport(_))
         ));
         assert!(matches!(
             expand_supports(
                 &evidence,
                 &partition,
-                &fallback,
+                HybridRefinementSeed::Regions(&fallback),
                 &permitted,
                 options(0.02, 0)
             ),
@@ -478,7 +525,7 @@ mod tests {
         let expanded = expand_supports(
             &evidence,
             &partition,
-            &fallback,
+            HybridRefinementSeed::Regions(&fallback),
             &permitted,
             options(0.02, 4),
         )?;
@@ -490,6 +537,34 @@ mod tests {
                 .all(|c| c.parent_region == sphere && c.distance_lower_witness > 0.02)
         );
         assert_eq!(expanded.selected.len(), evidence.planar_supports.len());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_support_seed_does_not_release_entire_parent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, partition, _, sphere) = spherical_fixture()?;
+        let support = evidence.source_planar_support[0];
+        assert_eq!(partition.region_by_support[support], sphere);
+        let selected = expand_supports(
+            &evidence,
+            &partition,
+            HybridRefinementSeed::Supports(&[support]),
+            &[],
+            options(0.5, 0),
+        )?;
+        assert_eq!(selected.selected, BTreeSet::from([support]));
+        assert_eq!(selected.added_polygons, 0);
+        assert!(matches!(
+            expand_supports(
+                &evidence,
+                &partition,
+                HybridRefinementSeed::Supports(&[evidence.planar_supports.len()]),
+                &[],
+                options(0.5, 0)
+            ),
+            Err(HybridRecoveryError::InvalidInput)
+        ));
         Ok(())
     }
 
