@@ -366,30 +366,66 @@ pub(super) fn close_wire(
     })
 }
 
+/// Connect each finite curve to its actual topological vertices, rather
+/// than connecting two independently located curves directly. Opposite
+/// coedges on adjacent faces then share the same spatial boundary chain.
+fn anchor_edge(edge: &mut Vec<Span>, vertices: [Point; 2], tolerance: f64) -> Result<f64> {
+    let start = endpoints(edge.first().context("missing first span")?)?[0];
+    let end = endpoints(edge.last().context("missing last span")?)?[1];
+    let mut before = Vec::new();
+    let mut error = 0.0;
+    connect(&mut before, vertices[0], start, &mut error, tolerance)?;
+    before.append(edge);
+    connect(&mut before, end, vertices[1], &mut error, tolerance)?;
+    *edge = before;
+    Ok(error)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Closure {
+    Direct,
+    NativeVertices,
+}
+
 /// Extract every directed native wire occurrence using topological identity
 /// as well as endpoint proximity. No pcurve or meshing data enters this path.
 pub(super) fn native_wires(
     kernel: &mut OcctKernel,
     face: ShapeHandle,
     center: Point,
-    scale: f64,
+    length: f64,
     tolerance: f64,
+    closure: Closure,
 ) -> Result<Vec<ClosedWire>> {
     ensure!(
-        scale.is_finite() && scale > 0.0 && tolerance.is_finite() && tolerance > 0.0,
+        length.is_finite() && length > 0.0 && tolerance.is_finite() && tolerance > 0.0,
         "invalid spatial normalization"
     );
     let mut wires = Vec::new();
     for wire in kernel.get_sub_shape_occurrences(face, "wire")? {
         let mut edges = Vec::new();
         let mut vertices = Vec::new();
+        let mut anchor_error = 0.0;
         for edge in kernel.get_sub_shape_occurrences(wire, "edge")? {
-            vertices.push(directed_vertices(kernel, edge)?);
-            edges.push(edge_spans(kernel, edge, center, scale, tolerance)?);
+            let ids = directed_vertices(kernel, edge)?;
+            let mut spans = edge_spans(kernel, edge, center, length, tolerance)?;
+            if matches!(closure, Closure::NativeVertices) {
+                let [start, end] = ids.map(|id| -> Result<Point> {
+                    Ok(scale(
+                        sub(array(kernel.vertex_position(id)?, "native vertex")?, center),
+                        length.recip(),
+                    ))
+                });
+                anchor_error += anchor_edge(&mut spans, [start?, end?], tolerance)?;
+            }
+            vertices.push(ids);
+            edges.push(spans);
         }
-        wires.push(close_wire(edges, tolerance, |end, start| {
+        let mut closed = close_wire(edges, tolerance, |end, start| {
             Ok(kernel.is_same(vertices[end][1], vertices[start][0])?)
-        })?);
+        })?;
+        closed.closure_error += anchor_error;
+        wires.push(closed);
     }
     ensure!(!wires.is_empty(), "missing spatial boundary wires");
     Ok(wires)

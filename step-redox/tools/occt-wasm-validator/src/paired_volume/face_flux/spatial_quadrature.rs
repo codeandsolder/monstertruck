@@ -34,6 +34,7 @@ const GAUSS: [f64; 4] = [
 pub(super) struct Integral<const N: usize> {
     pub(super) value: [f64; N],
     pub(super) estimated_error: f64,
+    pub(super) component_errors: [f64; N],
 }
 
 fn rule<const N: usize>(
@@ -59,11 +60,8 @@ fn rule<const N: usize>(
         }
     }
     let value = fine.map(|v| v * half_width);
-    let estimated_error = fine
-        .into_iter()
-        .zip(coarse)
-        .map(|(a, b)| ((a - b) * half_width).abs())
-        .fold(0.0, f64::max);
+    let component_errors = std::array::from_fn(|i| ((fine[i] - coarse[i]) * half_width).abs());
+    let estimated_error = component_errors.into_iter().fold(0.0, f64::max);
     ensure!(
         value.iter().all(|v| v.is_finite()) && estimated_error.is_finite(),
         "nonfinite spatial boundary integral"
@@ -71,6 +69,7 @@ fn rule<const N: usize>(
     Ok(Integral {
         value,
         estimated_error,
+        component_errors,
     })
 }
 
@@ -94,6 +93,9 @@ fn adaptive<const N: usize>(
     Ok(Integral {
         value: std::array::from_fn(|i| left.value[i] + right.value[i]),
         estimated_error: left.estimated_error + right.estimated_error,
+        component_errors: std::array::from_fn(|i| {
+            left.component_errors[i] + right.component_errors[i]
+        }),
     })
 }
 

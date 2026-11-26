@@ -267,7 +267,14 @@ pub(super) fn evaluate(
     } else {
         -1.0
     };
-    let wires = boundary::native_wires(kernel, face, center, radius, RESIDUAL_LIMIT)?;
+    let wires = boundary::native_wires(
+        kernel,
+        face,
+        center,
+        radius,
+        RESIDUAL_LIMIT,
+        boundary::Closure::Direct,
+    )?;
     integrate(center, radius, sense, wires)
 }
 

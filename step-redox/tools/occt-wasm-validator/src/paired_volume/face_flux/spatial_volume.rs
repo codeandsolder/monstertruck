@@ -74,18 +74,29 @@ impl Carrier {
         }
     }
 
-    /// Return signed area and vector-area integrands, with a separate
-    /// angular winding term on a cylinder. The parameterized surface is
-    /// X = O + R(n(theta) + z*a), with oriented area R²*n*dtheta*dz.
-    /// Green's theorem gives int f(theta)dtheta dz = -int z*f(theta)dtheta.
-    /// The formula remains valid across the periodic seam and for holes.
-    fn integrand(self, span: &Span, t: f64) -> Result<[f64; 5]> {
+    /// Return the projected carrier flux integrands and a separate ruled
+    /// ribbon correction to the actual shared spatial boundary.
+    ///
+    /// X(t,s)=P(t)+sD(t), D=Q-P, where Q is the original spatial curve and
+    /// P is its carrier projection. Orient the ribbon as dX/ds × dX/dt:
+    /// its P boundary reverses the carrier boundary and its Q boundary
+    /// has the original direction. Exact integration in s gives the
+    /// vector area A=D×(P'+Q')/2 and local flux moment P·A.
+    fn integrand(self, span: &Span, t: f64) -> Result<[f64; 9]> {
         let (q, dq) = point_derivative(span, t);
-        match self {
+        let (area, vector, angular, projected, displacement, tangent) = match self {
             Self::Plane { normal, .. } => {
                 let area = 0.5 * dot(normal, cross(q, dq));
-                let vector = scale(normal, area);
-                Ok([area, vector[0], vector[1], vector[2], 0.0])
+                let displacement = scale(normal, dot(q, normal));
+                let tangent = sub(dq, scale(normal, dot(dq, normal)));
+                (
+                    area,
+                    scale(normal, area),
+                    0.0,
+                    sub(q, displacement),
+                    displacement,
+                    tangent,
+                )
             }
             Self::Cylinder { axis, .. } => {
                 let height = dot(q, axis);
@@ -95,12 +106,37 @@ impl Carrier {
                     length.is_finite() && length > 0.0,
                     "singular cylindrical boundary"
                 );
+                let normal = scale(radial, length.recip());
                 let angular = dot(axis, cross(radial, dq)) / (length * length);
                 let area = -height * angular;
-                let vector = scale(radial, area / length);
-                Ok([area, vector[0], vector[1], vector[2], angular])
+                let projected = add(scale(axis, height), normal);
+                let displacement = scale(normal, length - 1.0);
+                let tangent = add(
+                    scale(axis, dot(dq, axis)),
+                    scale(cross(axis, normal), angular),
+                );
+                (
+                    area,
+                    scale(normal, area),
+                    angular,
+                    projected,
+                    displacement,
+                    tangent,
+                )
             }
-        }
+        };
+        let ribbon = cross(displacement, scale(add(tangent, dq), 0.5));
+        Ok([
+            area,
+            vector[0],
+            vector[1],
+            vector[2],
+            angular,
+            ribbon[0],
+            ribbon[1],
+            ribbon[2],
+            dot(projected, ribbon),
+        ])
     }
 
     fn sample(
@@ -117,10 +153,12 @@ impl Carrier {
                 quadrature::integrate(&|t| self.integrand(span, t), epsilon / spans.len() as f64)
             })
             .collect::<Result<Vec<_>>>()?;
-        let sums = (0..5)
+        let sums = (0..9)
             .map(|i| accurate_sum(terms.iter().map(|r| r.value[i])))
             .collect::<Result<Vec<_>>>()?;
-        let error = accurate_sum(terms.iter().map(|r| r.estimated_error))?;
+        let errors = (0..9)
+            .map(|i| accurate_sum(terms.iter().map(|r| r.component_errors[i])))
+            .collect::<Result<Vec<_>>>()?;
         let (origin, length) = self.frame();
         ensure!(
             sense * sums[0] > 0.0,
@@ -128,7 +166,7 @@ impl Carrier {
         );
         if matches!(self, Self::Cylinder { .. }) {
             ensure!(
-                sums[4].abs() <= (8.0 * (error + closure)).max(128.0 * f64::EPSILON),
+                sums[4].abs() <= (8.0 * (errors[4] + closure)).max(128.0 * f64::EPSILON),
                 "unbalanced cylindrical angular winding {:e}",
                 sums[4]
             );
@@ -143,10 +181,34 @@ impl Carrier {
             (intrinsic_length * signed_area + dot(sub(origin, reference), vector_area)) / 3.0
         });
         let volume_error = references.map(|reference| {
-            let offset_l1 = sub(origin, reference).iter().map(|x| x.abs()).sum::<f64>();
-            (intrinsic_length + offset_l1) * length * length * error / 3.0
+            let offset = sub(origin, reference).map(f64::abs);
+            (intrinsic_length * errors[0] + dot(offset, [errors[1], errors[2], errors[3]]))
+                * length
+                * length
+                / 3.0
         });
+        let ribbon_vector_area = scale([sums[5], sums[6], sums[7]], length * length);
+        let ribbon_local_moment = sums[8] * length.powi(3);
+        let ribbon_volume = references.map(|reference| {
+            (ribbon_local_moment + dot(sub(origin, reference), ribbon_vector_area)) / 3.0
+        });
+        // Retain the separate embedded error for each integrand component.
+        // Tiny ribbon terms must not inherit the much larger projected-area
+        // quadrature estimate, which would double-count unrelated errors.
+        let closed_volume_error = std::array::from_fn(|i| {
+            let offset = sub(origin, references[i]).map(f64::abs);
+            volume_error[i]
+                + (length * errors[8] + dot(offset, [errors[5], errors[6], errors[7]]))
+                    * length
+                    * length
+                    / 3.0
+        });
+        let closed_volume = std::array::from_fn(|i| volume[i] + ribbon_volume[i]);
         Ok(Sample {
+            ribbon_vector_area,
+            ribbon_volume,
+            closed_volume,
+            closed_volume_error,
             signed_area,
             vector_area,
             angular_winding: sums[4],
@@ -163,6 +225,10 @@ struct Sample {
     angular_winding: f64,
     volume: [f64; 4],
     volume_error: [f64; 4],
+    ribbon_vector_area: Point,
+    ribbon_volume: [f64; 4],
+    closed_volume: [f64; 4],
+    closed_volume_error: [f64; 4],
 }
 
 #[derive(Debug, Serialize)]
@@ -187,8 +253,14 @@ fn elementary(
     references: [Point; 4],
 ) -> Result<ElementaryFlux> {
     let (origin, length) = carrier.frame();
-    let wires =
-        spatial_boundary::native_wires(kernel, face, origin, length, boundary_tolerance / length)?;
+    let wires = spatial_boundary::native_wires(
+        kernel,
+        face,
+        origin,
+        length,
+        boundary_tolerance / length,
+        spatial_boundary::Closure::NativeVertices,
+    )?;
     let wire_count = wires.len();
     let edges = wires.iter().map(|w| w.edges).sum();
     let closure = accurate_sum(wires.iter().map(|w| w.closure_error))?;
@@ -233,18 +305,36 @@ enum Flux {
     },
 }
 
+#[derive(Clone, Copy)]
+enum BoundaryModel {
+    Projected,
+    ClosedWithRibbons,
+}
+
 impl Flux {
-    fn terms(&self, index: usize) -> Option<([f64; 2], [f64; 2])> {
-        match self {
-            Self::Elementary { flux } => Some((
+    fn terms(&self, index: usize, model: BoundaryModel) -> Option<([f64; 2], [f64; 2])> {
+        match (self, model) {
+            (Self::Elementary { flux }, BoundaryModel::ClosedWithRibbons) => Some((
+                [
+                    flux.coarse.closed_volume[index],
+                    flux.fine.closed_volume[index],
+                ],
+                [
+                    flux.coarse.closed_volume_error[index],
+                    flux.fine.closed_volume_error[index],
+                ],
+            )),
+            (Self::Elementary { flux }, BoundaryModel::Projected) => Some((
                 [flux.coarse.volume[index], flux.fine.volume[index]],
                 [
                     flux.coarse.volume_error[index],
                     flux.fine.volume_error[index],
                 ],
             )),
-            Self::Sphere { flux } => Some((flux.volumes(index), flux.quadrature_error(index))),
-            Self::Unsupported { .. } => None,
+            (Self::Sphere { flux }, BoundaryModel::Projected) => {
+                Some((flux.volumes(index), flux.quadrature_error(index)))
+            }
+            _ => None,
         }
     }
 }
@@ -381,11 +471,12 @@ fn compare_sample(
     b: &[Face],
     index: usize,
     reference: Point,
+    model: BoundaryModel,
 ) -> Result<ComparisonSample> {
     let terms = |faces: &[Face]| {
         faces
             .iter()
-            .map(|face| face.flux.terms(index).context("unsupported face"))
+            .map(|face| face.flux.terms(index, model).context("unsupported face"))
             .collect::<Result<Vec<_>>>()
     };
     let a = terms(a)?;
@@ -412,15 +503,15 @@ fn compare_sample(
     })
 }
 
-fn reference_spread(faces: &[Face]) -> Result<f64> {
+fn reference_spread(faces: &[Face], model: BoundaryModel) -> Result<f64> {
     let mut max = 0.0_f64;
     for i in 0..4 {
         for j in 0..i {
             let terms = faces
                 .iter()
                 .map(|face| {
-                    let a = face.flux.terms(i).context("unsupported face")?.0[1];
-                    let b = face.flux.terms(j).context("unsupported face")?.0[1];
+                    let a = face.flux.terms(i, model).context("unsupported face")?.0[1];
+                    let b = face.flux.terms(j, model).context("unsupported face")?.0[1];
                     Ok([a, -b])
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -448,8 +539,62 @@ pub(crate) struct SpatialVolumeReport {
     brep_valid: [bool; 2],
     unsupported_faces: [usize; 2],
     measurement: Option<Measurement>,
+    closed_boundary_measurement: Option<Measurement>,
     a: Vec<Face>,
     b: Vec<Face>,
+}
+
+fn measure(
+    a: &[Face],
+    b: &[Face],
+    references: [Point; 4],
+    valid: [bool; 2],
+    absolute_tolerance: f64,
+    model: BoundaryModel,
+) -> Result<Option<Measurement>> {
+    if !a
+        .iter()
+        .chain(b)
+        .all(|face| face.flux.terms(0, model).is_some())
+    {
+        return Ok(None);
+    }
+    let samples = references
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| compare_sample(a, b, i, r, model))
+        .collect::<Result<Vec<_>>>()?;
+    let reference_spread = [reference_spread(a, model)?, reference_spread(b, model)?];
+    let max_absolute_delta = samples
+        .iter()
+        .map(|s| s.delta.abs().max(s.coarse_delta.abs()))
+        .fold(0.0, f64::max);
+    let max_quadrature_drift = samples
+        .iter()
+        .map(|s| s.quadrature_drift[0].max(s.quadrature_drift[1]))
+        .fold(0.0, f64::max);
+    let max_estimated_quadrature_error = samples
+        .iter()
+        .map(|s| s.estimated_quadrature_error)
+        .fold(0.0, f64::max);
+    // This compares explicitly chosen surface interpretations, not an
+    // interval bound or evidence that off-carrier raw edges were exact.
+    let observed_within_tolerance = valid == [true, true]
+        && samples.iter().all(|s| s.volumes.iter().all(|v| *v > 0.0))
+        && max_absolute_delta
+            .max(max_quadrature_drift)
+            .max(reference_spread[0])
+            .max(reference_spread[1])
+            + max_estimated_quadrature_error
+            <= absolute_tolerance;
+    Ok(Some(Measurement {
+        samples,
+        reference_spread,
+        max_absolute_delta,
+        max_quadrature_drift,
+        max_estimated_quadrature_error,
+        observed_within_tolerance,
+    }))
 }
 
 pub(crate) fn compare(
@@ -479,46 +624,22 @@ pub(crate) fn compare(
             .count()
     };
     let unsupported_faces = [unsupported(&a), unsupported(&b)];
-    let measurement = if unsupported_faces == [0, 0] {
-        let samples = references
-            .into_iter()
-            .enumerate()
-            .map(|(i, r)| compare_sample(&a, &b, i, r))
-            .collect::<Result<Vec<_>>>()?;
-        let reference_spread = [reference_spread(&a)?, reference_spread(&b)?];
-        let max_absolute_delta = samples
-            .iter()
-            .map(|s| s.delta.abs().max(s.coarse_delta.abs()))
-            .fold(0.0, f64::max);
-        let max_quadrature_drift = samples
-            .iter()
-            .map(|s| s.quadrature_drift[0].max(s.quadrature_drift[1]))
-            .fold(0.0, f64::max);
-        let max_estimated_quadrature_error = samples
-            .iter()
-            .map(|s| s.estimated_quadrature_error)
-            .fold(0.0, f64::max);
-        // Empirical integral agreement only; incidence/closure geometry
-        // bounds are reported separately and are not interval volume bounds.
-        let observed_within_tolerance = valid == [true, true]
-            && samples.iter().all(|s| s.volumes.iter().all(|v| *v > 0.0))
-            && max_absolute_delta
-                .max(max_quadrature_drift)
-                .max(reference_spread[0])
-                .max(reference_spread[1])
-                + max_estimated_quadrature_error
-                <= absolute_tolerance;
-        Some(Measurement {
-            samples,
-            reference_spread,
-            max_absolute_delta,
-            max_quadrature_drift,
-            max_estimated_quadrature_error,
-            observed_within_tolerance,
-        })
-    } else {
-        None
-    };
+    let measurement = measure(
+        &a,
+        &b,
+        references,
+        valid,
+        absolute_tolerance,
+        BoundaryModel::Projected,
+    )?;
+    let closed_boundary_measurement = measure(
+        &a,
+        &b,
+        references,
+        valid,
+        absolute_tolerance,
+        BoundaryModel::ClosedWithRibbons,
+    )?;
     Ok(SpatialVolumeReport {
         method: "independent elementary spatial boundary flux; diagnostic only",
         absolute_tolerance_mm3: absolute_tolerance,
@@ -526,6 +647,7 @@ pub(crate) fn compare(
         brep_valid: valid,
         unsupported_faces,
         measurement,
+        closed_boundary_measurement,
         a,
         b,
     })
@@ -543,11 +665,13 @@ mod tests {
         for (shape, expected) in [(cube, 24.0), (cylinder, 12.0 * std::f64::consts::PI)] {
             let report = compare(&mut kernel, shape, shape, 1e-10, 2e-9)?;
             assert_eq!(report.unsupported_faces, [0, 0], "{report:?}");
-            let measured = report.measurement.context("missing spatial volume")?;
-            assert!(measured.observed_within_tolerance, "{measured:?}");
-            for sample in measured.samples {
-                assert!((sample.volumes[0] - expected).abs() < 1e-10, "{sample:?}");
-                assert!(sample.delta.abs() < 1e-13);
+            for measured in [report.measurement, report.closed_boundary_measurement] {
+                let measured = measured.context("missing spatial volume")?;
+                assert!(measured.observed_within_tolerance, "{measured:?}");
+                for sample in measured.samples {
+                    assert!((sample.volumes[0] - expected).abs() < 1e-10, "{sample:?}");
+                    assert!(sample.delta.abs() < 1e-13);
+                }
             }
         }
         Ok(())
@@ -570,10 +694,12 @@ mod tests {
         );
         let altered = kernel.make_box(2.0, 3.0, 4.0 + 1e-8)?;
         let report = compare(&mut kernel, whole, altered, 1e-10, 2e-9)?;
-        let measured = report.measurement.context("missing changed volume")?;
-        assert!(!measured.observed_within_tolerance);
-        for sample in measured.samples {
-            assert!((sample.delta + 6e-8).abs() < 1e-10, "{sample:?}");
+        for measured in [report.measurement, report.closed_boundary_measurement] {
+            let measured = measured.context("missing changed volume")?;
+            assert!(!measured.observed_within_tolerance);
+            for sample in measured.samples {
+                assert!((sample.delta + 6e-8).abs() < 1e-10, "{sample:?}");
+            }
         }
         let outer = kernel.make_cylinder(2.0, 3.0)?;
         let inner = kernel.make_cylinder(1.0, 5.0)?;
@@ -589,6 +715,76 @@ mod tests {
                 (sample.volumes[0] - 9.0 * std::f64::consts::PI).abs() < 1e-10,
                 "{sample:?}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn planar_ribbons_close_a_tilted_triangle_with_known_wedge_volume() -> Result<()> {
+        use spatial_boundary::homogeneous;
+        let vertices = [[0., 0., 0.1], [2., 0., 0.2], [0., 3., 0.3]];
+        let spans = (0..3)
+            .map(|i| {
+                vec![
+                    homogeneous(vertices[i], 1.),
+                    homogeneous(vertices[(i + 1) % 3], 1.),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let carrier = Carrier::Plane {
+            normal: [0., 0., 1.],
+            origin: [0.; 3],
+            length: 1.,
+        };
+        let refs = [[0.; 3], [1., 2., 3.], [-4., 5., -6.], [100., -20., 10.]];
+        let sample = carrier.sample(&spans, 1., 1e-13, 0., refs)?;
+        let raw_area = scale(
+            cross(sub(vertices[1], vertices[0]), sub(vertices[2], vertices[0])),
+            0.5,
+        );
+        assert!(
+            norm(sub(
+                add(sample.vector_area, sample.ribbon_vector_area),
+                raw_area
+            )) < 1e-13
+        );
+        let wedge_volume = 3.0 * (0.1 + 0.2 + 0.3) / 3.0;
+        for (i, reference) in refs.into_iter().enumerate() {
+            let raw_flux = dot(sub(vertices[0], reference), raw_area) / 3.0;
+            assert!((sample.closed_volume[i] - (raw_flux - wedge_volume)).abs() < 1e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn radial_ribbons_close_a_known_annular_volume_difference() -> Result<()> {
+        let carrier = Carrier::Cylinder {
+            axis: [0., 0., 1.],
+            origin: [0.; 3],
+            radius: 2.,
+        };
+        let circle = |z| {
+            spatial_boundary::circle_spans(
+                [0., 0., z],
+                1.1,
+                [0., 0., 1.],
+                [1., 0., 0.],
+                0.,
+                std::f64::consts::TAU,
+            )
+        };
+        let mut top = circle(1.5)?;
+        for span in &mut top {
+            span.reverse();
+        }
+        let spans = [top, circle(0.)?].concat();
+        let references = [[0.; 3], [1., 2., 3.], [-4., 5., -6.], [100., -20., 10.]];
+        let sample = carrier.sample(&spans, 1., 1e-13, 0., references)?;
+        let height = 3.0;
+        let area_difference = std::f64::consts::PI * (2.2_f64.powi(2) - 2.0_f64.powi(2));
+        for volume in sample.closed_volume {
+            let expected = 8. * std::f64::consts::PI - height * area_difference / 3.;
+            assert!((volume - expected).abs() < 1e-10, "{volume} != {expected}");
         }
         Ok(())
     }
