@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
+use futures_util::StreamExt as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader, Read},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
     time::Duration,
 };
@@ -119,26 +120,53 @@ fn install_verified(
     Ok(())
 }
 
-fn download(spec: &Fixture, destination: &Path, expected: Option<&str>) -> Result<()> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
-        .build()
-        .into();
-    let mut errors = Vec::new();
-    for url in std::iter::once(&spec.url).chain(&spec.fallback_urls) {
-        let attempt = (|| -> Result<()> {
-            let response = agent
-                .get(url)
-                .header("User-Agent", "step-redox-validation/0.1")
-                .call()?;
-            install_verified(destination, response.into_body().into_reader(), expected)
-        })();
-        match attempt {
-            Ok(()) => return Ok(()),
-            Err(error) => errors.push(format!("{url}: {error:#}")),
-        }
+async fn download_one(
+    client: &wreq::Client,
+    url: &str,
+    destination: &Path,
+    expected: Option<&str>,
+) -> Result<()> {
+    let response = client
+        .get(url)
+        .header("User-Agent", "step-redox-validation/0.1")
+        .send()
+        .await?
+        .error_for_status()?;
+    let directory = destination
+        .parent()
+        .context("destination has no directory")?;
+    let mut temporary = NamedTempFile::new_in(directory)?;
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    while let Some(chunk) = stream.next().await {
+        temporary.write_all(&chunk?)?;
     }
-    bail!("all fixture download URLs failed: {}", errors.join(" | "))
+    if let Some(expected) = expected {
+        verify(temporary.path(), expected)?;
+    }
+    temporary.persist(destination)?;
+    Ok(())
+}
+
+fn download(spec: &Fixture, destination: &Path, expected: Option<&str>) -> Result<()> {
+    // Only the network acquisition boundary is asynchronous; the validator's
+    // CPU-intensive geometry and cached-file paths remain synchronous.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let client = wreq::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .redirect(wreq::redirect::Policy::limited(10))
+            .build()?;
+        let mut errors = Vec::new();
+        for url in std::iter::once(&spec.url).chain(&spec.fallback_urls) {
+            match download_one(&client, url, destination, expected).await {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(format!("{url}: {error:#}")),
+            }
+        }
+        bail!("all fixture download URLs failed: {}", errors.join(" | "))
+    })
 }
 
 pub fn fetch(name: &str, spec: &Fixture, base: &Path, cache: &Path) -> Result<PathBuf> {
@@ -208,7 +236,6 @@ pub fn fetch(name: &str, spec: &Fixture, base: &Path, cache: &Path) -> Result<Pa
 mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
-    use std::io::Write;
 
     #[test]
     fn verifies_and_repairs_cache_without_partial_publication() -> Result<()> {

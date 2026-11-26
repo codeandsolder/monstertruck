@@ -17,7 +17,9 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "1c669eddb7ae16f475912a94f8638f4da5c641ef" }
 sha2 = "0.11"
 tempfile = "3"
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+wreq = { git = "https://github.com/codeandsolder/wreq-exp.git", rev = "aad8f97d78e40c4c9fc0ddbb0cf88af870f848ac", features = ["stream", "system-proxy"] }
+tokio = { version = "1", features = ["rt", "time", "net"] }
+futures-util = "0.3"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Dedicated nightly / external-OCCT toolchain outside production workspace.
