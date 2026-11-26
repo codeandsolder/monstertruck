@@ -109,7 +109,7 @@ fn proposals(
     selected
 }
 
-fn failed_edges(assembly: &NativeAssembly) -> BTreeSet<[usize; 2]> {
+pub(super) fn failed_edges(assembly: &NativeAssembly) -> BTreeSet<[usize; 2]> {
     assembly
         .trims
         .trims
@@ -126,7 +126,7 @@ fn failed_edges(assembly: &NativeAssembly) -> BTreeSet<[usize; 2]> {
         .collect()
 }
 
-fn valid_regions(assembly: &NativeAssembly) -> BTreeSet<usize> {
+pub(super) fn valid_regions(assembly: &NativeAssembly) -> BTreeSet<usize> {
     assembly
         .native
         .regions

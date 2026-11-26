@@ -36,6 +36,12 @@ struct Args {
     /// Maximum explicitly allowed planar repair displacement in source units.
     #[arg(long, default_value_t = 0.0)]
     max_planar_displacement: f64,
+    /// Maximum additional source adjustment in local joint reconstruction.
+    #[arg(long, default_value_t = 0.01)]
+    max_reconstruction_adjustment: f64,
+    /// Known positional uncertainty of source samples, in source units.
+    #[arg(long, default_value_t = 0.0)]
+    source_position_uncertainty: f64,
     /// Explicitly permit cancellation of proven reverse coincident sheets.
     #[arg(long)]
     normalize_coincident_sheets: bool,
@@ -193,6 +199,8 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         &mesh,
         AnalyticRecoveryOptions {
             max_planar_displacement: args.max_planar_displacement,
+            max_reconstruction_adjustment: args.max_reconstruction_adjustment,
+            source_position_uncertainty: args.source_position_uncertainty,
             normalize_coincident_sheets: args.normalize_coincident_sheets,
             ..Default::default()
         },

@@ -40,7 +40,7 @@ mod analytic;
 pub use analytic::{
     AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
     AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
-    RecoveredAnalyticMesh, SelectedSurfaceProposal, SupportRefinementPass,
+    JointFitReport, RecoveredAnalyticMesh, SelectedSurfaceProposal, SupportRefinementPass,
     construct_analytic_recovery, discover_analytic_regions, recover_analytic_evidence,
     recover_analytic_mesh,
 };

@@ -197,15 +197,19 @@ fn benchmark(
     path: &Path,
     evidence_only: bool,
     normalize: bool,
+    joint_fit: bool,
     shell_output: Option<&Path>,
 ) -> Result<Value> {
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
     let read_seconds = start.elapsed().as_secs_f64();
-    let options = AnalyticRecoveryOptions {
+    let mut options = AnalyticRecoveryOptions {
         normalize_coincident_sheets: normalize,
         ..Default::default()
     };
+    if !joint_fit {
+        options.max_joint_fit_trials = 0;
+    }
     let evidence = analyze_mesh_evidence(&mesh, options.evidence)?;
     let evidence_seconds = start.elapsed().as_secs_f64() - read_seconds;
     if evidence_only {
@@ -275,6 +279,7 @@ fn benchmark(
         "total_seconds":start.elapsed().as_secs_f64(),
         "regions":region_info,"region_by_polygon":partition.region_by_polygon,
         "coplanar_reassignments":recovery.coplanar_reassignments.iter().map(|r|json!({"support":r.support,"old_region":r.old_region,"new_region":r.new_region,"max_plane_residual":r.max_plane_residual})).collect::<Vec<_>>(),
+        "joint_fits":recovery.joint_fits.iter().map(|r|json!({"regions":r.regions,"refitted_regions":r.refitted_regions,"repaired_edges":r.repaired_edges,"max_displacement":r.max_displacement,"max_allowance":r.max_allowance,"max_additional_carrier_residual":r.max_additional_carrier_residual})).collect::<Vec<_>>(),
         "original_polygon_ids":recovery.evidence.provenance.original_polygon_ids,
         "collapsed_source_facets":recovery.evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
         "separated_source_vertices":recovery.evidence.provenance.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),
@@ -338,7 +343,8 @@ fn main() -> Result<()> {
     let first = args.next().context("expected one OBJ path")?;
     let evidence_only = first == "--evidence-only";
     let normalize = first == "--normalize-coincident-sheets";
-    let path = PathBuf::from(if evidence_only || normalize {
+    let joint_fit = first != "--no-joint-fit";
+    let path = PathBuf::from(if evidence_only || normalize || !joint_fit {
         args.next().context("expected OBJ path after option")?
     } else {
         first
@@ -357,14 +363,20 @@ fn main() -> Result<()> {
         .transpose()?;
     anyhow::ensure!(
         args.next().is_none(),
-        "expected [--evidence-only | --normalize-coincident-sheets] OBJ [--shell-output JSON]"
+        "expected [--evidence-only | --normalize-coincident-sheets | --no-joint-fit] OBJ [--shell-output JSON]"
     );
-    let result = benchmark(&path, evidence_only, normalize, shell_output.as_deref())
-        .unwrap_or_else(|error| {
-            json!({
-                "status":"recovery_error","source":path,"error":format!("{error:#}"),
-            })
-        });
+    let result = benchmark(
+        &path,
+        evidence_only,
+        normalize,
+        joint_fit,
+        shell_output.as_deref(),
+    )
+    .unwrap_or_else(|error| {
+        json!({
+            "status":"recovery_error","source":path,"error":format!("{error:#}"),
+        })
+    });
     println!("{result}");
     Ok(())
 }

@@ -16,6 +16,10 @@ mod containment;
 pub use chord_lift::LiftedSourceChord;
 pub use conic::ContactConicEvidence;
 mod curve_evidence;
+mod joint_fit;
+pub(in crate::mesh_recovery) use joint_fit::{
+    JointFitCandidate, JointFitOptions, fit_neighborhood,
+};
 mod linear_section;
 pub use linear_section::ContactLinearSectionEvidence;
 mod native;

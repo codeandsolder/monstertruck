@@ -1,0 +1,296 @@
+//! Bounded transactions on failed analytic contact neighborhoods. Source
+//! ownership is unchanged, and successful analytic regions must stay valid.
+use super::{
+    AnalyticRecoveryError, AnalyticRecoveryOptions, NativeAssembly, NativeTrimOptions,
+    ReconciledPartition, RegionBoundaryIndex,
+    coplanar_contacts::{failed_edges, valid_regions},
+};
+use crate::{
+    InnerSpace, KERNEL_EPSILON,
+    mesh_recovery::{
+        MeshEvidence,
+        evidence::{JointFitCandidate, JointFitOptions, fit_neighborhood},
+    },
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Accepted source-aware joint analytic fit. These are measured source
+/// adjustments, not an inferred tolerance of the original CAD model.
+#[derive(Clone, Debug)]
+pub struct JointFitReport {
+    /// Region IDs participating in the common constraint system.
+    pub regions: Vec<usize>,
+    /// Number of fitted carrier parameter sets that changed.
+    pub refitted_regions: usize,
+    /// Original failed source edges repaired by this transaction.
+    pub repaired_edges: usize,
+    /// Maximum actual displacement of an affected source vertex, including native assembly.
+    pub max_displacement: f64,
+    /// Largest local allowance supplied by sampled chord evidence or caller uncertainty.
+    pub max_allowance: f64,
+    /// Bound on added normalized carrier residual over all original source facets.
+    pub max_additional_carrier_residual: f64,
+}
+
+fn failed_neighborhoods(assembly: &NativeAssembly) -> Vec<Vec<usize>> {
+    let mut pairs = BTreeMap::<[usize; 2], usize>::new();
+    for (trim, native) in assembly.trims.trims.iter().zip(&assembly.native.trims) {
+        let Some(right) = trim.regions.1 else {
+            continue;
+        };
+        if native.is_err() {
+            let mut pair = [trim.regions.0, right];
+            pair.sort_unstable();
+            *pairs.entry(pair).or_default() += trim.source_edges.len();
+        }
+    }
+    let mut weighted = pairs.into_iter().collect::<Vec<_>>();
+    weighted.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut adjacency = BTreeMap::<usize, Vec<usize>>::new();
+    for &(pair, _) in &weighted {
+        adjacency.entry(pair[0]).or_default().push(pair[1]);
+        adjacency.entry(pair[1]).or_default().push(pair[0]);
+    }
+    let mut result = Vec::new();
+    let mut visited = BTreeSet::new();
+    for &(pair, _) in &weighted {
+        if !visited.insert(pair[0]) {
+            continue;
+        }
+        let mut group = vec![pair[0]];
+        let mut cursor = 0;
+        while let Some(&region) = group.get(cursor) {
+            for &neighbor in &adjacency[&region] {
+                if visited.insert(neighbor) {
+                    group.push(neighbor);
+                }
+            }
+            cursor += 1;
+        }
+        if group.len() <= 6 {
+            group.sort_unstable();
+            result.push(group);
+        }
+    }
+    // Large connected failure graphs and rejected whole-neighborhood fits
+    // can still have independently repairable local contacts.
+    for (pair, _) in weighted {
+        let pair = pair.to_vec();
+        if !result.contains(&pair) {
+            result.push(pair);
+        }
+    }
+    result
+}
+
+fn native_displacement(
+    evidence: &MeshEvidence,
+    assembly: &NativeAssembly,
+    candidate: &JointFitCandidate,
+    native: &crate::mesh_recovery::NativeTrimGraph,
+    numerical_allowance: f64,
+) -> Option<f64> {
+    let mut maximum = candidate.maximum_displacement;
+    for (id, (vertex, old)) in native
+        .vertices
+        .iter()
+        .zip(&assembly.native.vertices)
+        .enumerate()
+    {
+        let Some(vertex) = vertex else {
+            continue;
+        };
+        let source = evidence.positions[id];
+        let displacement = (vertex.point() - source).magnitude();
+        let allowed = if candidate.allowances[id] > 0.0 {
+            maximum = maximum.max(displacement);
+            candidate.allowances[id]
+        } else {
+            // No fresh approximation allowance for unrelated vertices.
+            let old = old
+                .as_ref()
+                .map_or(assembly.reconciled.positions[id], |v| v.point());
+            (old - source).magnitude() + numerical_allowance
+        };
+        if !displacement.is_finite() || displacement > allowed {
+            return None;
+        }
+    }
+    Some(maximum)
+}
+
+// A full native rebuild is only useful if at least one previously
+// failed source edge can now have an accepted trim. Check affected paths
+// only; a newly unresolved edge would necessarily reject the transaction.
+fn can_improve_trims(
+    assembly: &NativeAssembly,
+    candidate: &JointFitCandidate,
+    regions: &[usize],
+    options: super::SharedTrimOptions,
+) -> bool {
+    let failed = failed_edges(assembly);
+    let mut possible = false;
+    for path in &candidate.partition.contacts.paths {
+        if !regions.contains(&path.regions.0)
+            && !path.regions.1.is_some_and(|id| regions.contains(&id))
+            && !path
+                .edges
+                .iter()
+                .any(|e| e.vertices.iter().any(|&id| candidate.allowances[id] > 0.0))
+        {
+            continue;
+        }
+        let carriers = std::iter::once(path.regions.0)
+            .chain(path.regions.1)
+            .filter_map(|id| candidate.partition.carriers[id])
+            .collect::<Vec<_>>();
+        let Some(segmentation) =
+            path.segment_analytic_trims(&candidate.positions, &carriers, options)
+        else {
+            continue;
+        };
+        for piece in segmentation.pieces {
+            for offset in 0..piece.edge_count {
+                let mut edge = path.edges[(piece.first_edge + offset) % path.edges.len()].vertices;
+                edge.sort_unstable();
+                if matches!(
+                    piece.geometry,
+                    crate::mesh_recovery::SharedTrimGeometry::Unresolved
+                ) {
+                    if !failed.contains(&edge) {
+                        return false;
+                    }
+                } else if failed.contains(&edge) {
+                    possible = true;
+                }
+            }
+        }
+    }
+    possible
+}
+
+fn try_fit(
+    evidence: &MeshEvidence,
+    assembly: &mut NativeAssembly,
+    regions: &[usize],
+    options: AnalyticRecoveryOptions,
+    refit: bool,
+) -> Result<Option<JointFitReport>, AnalyticRecoveryError> {
+    let Some(candidate) = fit_neighborhood(
+        evidence,
+        &assembly.reconciled.partition,
+        &assembly.reconciled.positions,
+        regions,
+        JointFitOptions {
+            maximum_adjustment: options.max_reconstruction_adjustment,
+            declared_uncertainty: options.source_position_uncertainty,
+            angular_resolution: options.axis_relative_resolution,
+        },
+        refit,
+    ) else {
+        return Ok(None);
+    };
+    if candidate.refitted_regions == 0 && candidate.positions == assembly.reconciled.positions {
+        return Ok(None);
+    }
+    let boundary = RegionBoundaryIndex::new(evidence)?;
+    let trim = options.trim_options(evidence);
+    if !can_improve_trims(assembly, &candidate, regions, trim) {
+        return Ok(None);
+    }
+    let trims = boundary.assemble_shared_trims(&candidate.partition, &candidate.positions, trim)?;
+    let native = boundary.construct_native_trims(
+        &candidate.partition,
+        &trims,
+        &candidate.positions,
+        NativeTrimOptions {
+            max_vertex_displacement: trim.absolute_tolerance,
+            intersection_tolerance: KERNEL_EPSILON * 0.1,
+            angular_resolution: options.axis_relative_resolution,
+        },
+    )?;
+    let Some(max_displacement) = native_displacement(
+        evidence,
+        assembly,
+        &candidate,
+        &native,
+        trim.absolute_tolerance,
+    ) else {
+        return Ok(None);
+    };
+    let refitted_regions = candidate.refitted_regions;
+    let max_additional_carrier_residual = candidate.max_additional_carrier_residual;
+    let max_allowance = candidate.allowances.iter().copied().fold(0.0_f64, f64::max);
+    let mut next = NativeAssembly {
+        reconciled: ReconciledPartition {
+            partition: candidate.partition,
+            positions: candidate.positions,
+            planes: Vec::new(),
+            max_displacement: candidate
+                .maximum_displacement
+                .max(assembly.reconciled.max_displacement),
+            rejected: assembly.reconciled.rejected,
+        },
+        trims,
+        native,
+    };
+    let before = failed_edges(assembly);
+    let after = failed_edges(&next);
+    if after.len() >= before.len()
+        || !after.is_subset(&before)
+        || next.trims.ambiguous_edges != assembly.trims.ambiguous_edges
+        || !valid_regions(assembly).is_subset(&valid_regions(&next))
+    {
+        return Ok(None);
+    }
+    // Existing plane records describe prior accepted transactions; keep
+    // them as provenance, not a claim that the carriers were never refit.
+    next.reconciled.planes = std::mem::take(&mut assembly.reconciled.planes);
+    *assembly = next;
+    Ok(Some(JointFitReport {
+        regions: regions.to_vec(),
+        refitted_regions,
+        repaired_edges: before.len() - after.len(),
+        max_displacement,
+        max_allowance,
+        max_additional_carrier_residual,
+    }))
+}
+
+pub(super) fn repair(
+    evidence: &MeshEvidence,
+    assembly: &mut NativeAssembly,
+    options: AnalyticRecoveryOptions,
+) -> Result<Vec<JointFitReport>, AnalyticRecoveryError> {
+    let mut reports = Vec::new();
+    if options.max_reconstruction_adjustment == 0.0 || options.max_joint_fit_trials == 0 {
+        return Ok(reports);
+    }
+    let mut trials = 0;
+    while trials < options.max_joint_fit_trials {
+        let neighborhoods = failed_neighborhoods(assembly);
+        let mut improved = false;
+        for regions in neighborhoods {
+            if trials >= options.max_joint_fit_trials {
+                break;
+            }
+            trials += 1;
+            // Reconcile fixed carriers first; only refit when necessary.
+            let report =
+                if let Some(report) = try_fit(evidence, assembly, &regions, options, false)? {
+                    Some(report)
+                } else {
+                    try_fit(evidence, assembly, &regions, options, true)?
+                };
+            if let Some(report) = report {
+                reports.push(report);
+                improved = true;
+                break;
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+    Ok(reports)
+}

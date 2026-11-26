@@ -257,6 +257,7 @@ mod tests {
             trims,
             native,
             coplanar_reassignments: Vec::new(),
+            joint_fits: Vec::new(),
         };
         let options = HybridConnectorOptions {
             patch: RegionPatchOptions {

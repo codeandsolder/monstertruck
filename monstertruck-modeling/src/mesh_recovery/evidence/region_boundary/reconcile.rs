@@ -482,7 +482,7 @@ fn polygon_area(points: &[Point3], ids: &[usize]) -> Vector3 {
         })
 }
 
-fn preserves_polygon_orientation(
+pub(super) fn preserves_polygon_orientation(
     evidence: &super::MeshEvidence,
     positions: &[Point3],
     supports: &BTreeSet<usize>,

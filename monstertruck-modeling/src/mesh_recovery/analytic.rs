@@ -20,6 +20,8 @@ use monstertruck_topology::shell::ShellCondition;
 use std::collections::{BTreeMap, BTreeSet};
 mod coplanar_contacts;
 pub use coplanar_contacts::CoplanarSupportReassignment;
+mod joint_recovery;
+pub use joint_recovery::JointFitReport;
 mod native_selection;
 use native_selection::{PartitionAlternative, select_native};
 
@@ -48,6 +50,14 @@ pub struct AnalyticRecoveryOptions {
     pub max_partition_search_nodes: usize,
     /// Maximum source intervals tested by mixed-trim segmentation.
     pub max_trim_interval_edges: usize,
+    /// Maximum additional source-supported displacement in joint reconstruction.
+    /// Zero disables this local recovery stage. Not a native incidence tolerance.
+    pub max_reconstruction_adjustment: f64,
+    /// Known positional uncertainty of the input, when supplied by the caller.
+    /// Zero uses local source evidence alone.
+    pub source_position_uncertainty: f64,
+    /// Maximum failed-contact neighborhood transactions to consider.
+    pub max_joint_fit_trials: usize,
     /// Maximum source displacement for planar reconciliation, in source
     /// coordinate units. Zero disables geometric planar reconciliation.
     pub max_planar_displacement: f64,
@@ -74,6 +84,9 @@ impl Default for AnalyticRecoveryOptions {
             max_circular_relative_chord_error: 1.0 - std::f64::consts::FRAC_1_SQRT_2,
             max_partition_search_nodes: 100_000,
             max_trim_interval_edges: 128,
+            max_reconstruction_adjustment: 0.01,
+            source_position_uncertainty: 0.0,
+            max_joint_fit_trials: 8,
             max_planar_displacement: 0.0,
             max_planar_normal_angle: 0.01,
             normalize_coincident_sheets: false,
@@ -94,6 +107,10 @@ impl AnalyticRecoveryOptions {
         if positive
             .iter()
             .any(|v| !v.is_finite() || *v <= 0.0 || *v >= 1.0)
+            || !self.max_reconstruction_adjustment.is_finite()
+            || self.max_reconstruction_adjustment < 0.0
+            || !self.source_position_uncertainty.is_finite()
+            || self.source_position_uncertainty < 0.0
             || !self.max_planar_displacement.is_finite()
             || self.max_planar_displacement < 0.0
             || !self.max_planar_normal_angle.is_finite()
@@ -304,6 +321,8 @@ pub struct RecoveredAnalyticMesh {
     pub native: NativeTrimGraph,
     /// Exact plane ownership corrections applied after native assembly.
     pub coplanar_reassignments: Vec<CoplanarSupportReassignment>,
+    /// Accepted uncertainty-bounded joint analytic recovery transactions.
+    pub joint_fits: Vec<JointFitReport>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -487,6 +506,7 @@ pub fn construct_analytic_recovery(
         assemble_native(&evidence, partition, options)?
     };
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
+    let joint_fits = joint_recovery::repair(&evidence, &mut assembly, options)?;
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,
@@ -494,6 +514,7 @@ pub fn construct_analytic_recovery(
         trims: assembly.trims,
         native: assembly.native,
         coplanar_reassignments,
+        joint_fits,
     })
 }
 
