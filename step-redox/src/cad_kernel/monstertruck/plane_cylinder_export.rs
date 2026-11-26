@@ -109,27 +109,14 @@ impl Section {
     fn ellipse(&self, points: &[Point3], tolerance: f64) -> Option<NurbsCurve<Vector4>> {
         let (x, sweep) = self.sweep(points, tolerance)?;
         let y = self.axis.cross(x);
-        // At most four rational quadratic pieces for a single revolution.
-        let count = (1..=4)
-            .find(|n| sweep.abs() <= f64::from(*n).mul_add(FRAC_PI_2, tolerance / self.radius))?;
-        let step = sweep / f64::from(count);
-        let w = (step * 0.5).cos();
-        let control = |angle: f64, weight: f64| {
-            let radial = x * angle.cos() + y * angle.sin();
-            let point = self.plane_project(self.origin + radial * (self.radius / weight));
-            point.to_homogeneous() * weight
-        };
-        let mut controls = vec![control(0.0, 1.0)];
-        let mut knots = vec![0.0; 3];
-        for i in 0..count {
-            let start = f64::from(i) * step;
-            controls.push(control(step.mul_add(0.5, start), w));
-            controls.push(control(start + step, 1.0));
-            let knot = f64::from(i + 1) / f64::from(count);
-            knots.extend([knot; 2]);
-        }
-        knots.push(1.0);
-        let curve = NurbsCurve::new(BsplineCurve::new(KnotVector::from(knots), controls).ok()?);
+        let project_vector =
+            |v: Vector3| v - self.axis * (v.dot(self.normal) / self.axis.dot(self.normal));
+        let curve = super::conic::affine_arc(
+            self.plane_project(self.origin),
+            project_vector(x * self.radius),
+            project_vector(y * self.radius),
+            sweep.clamp(-TAU, TAU),
+        )?;
         if (curve.front() - *points.first()?).magnitude() > tolerance
             || (curve.back() - *points.last()?).magnitude() > tolerance
         {
