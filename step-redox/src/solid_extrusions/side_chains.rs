@@ -7,7 +7,7 @@ use super::{
     cross, distance, dot, norm, normalize, raw_loop_is_continuous, side_support_residual, sub,
     translated_profile_edge_residual,
 };
-use crate::brep::{CircleSupport, CurveSupport};
+use crate::brep::{CircleSupport, CurveSupport, CylinderSupport, SurfaceSupport};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,6 +244,97 @@ fn circle_chain(edges: &[&OrientedEdgeUse]) -> Option<CircleChain> {
     })
 }
 
+/// Normalize a rational cap edge using its independently authored cylinder.
+fn cylindrical_cap_edge(
+    edge: &OrientedEdgeUse,
+    cylinder: CylinderSupport,
+) -> Option<OrientedEdgeUse> {
+    use monstertruck_geometry::{
+        analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage},
+        prelude::{BoundedCurve, InnerSpace, ParametricCurve, Point3, Vector3},
+    };
+    let CurveSupport::BSpline(spline) = &edge.support else {
+        return matches!(edge.support, CurveSupport::Circle(_)).then(|| edge.clone());
+    };
+    let curve = spline.rational_curve()?;
+    let axis = normalize(cylinder.axis)?;
+    let front = curve.front();
+    let back = curve.back();
+    let point = |p: Point3| [p.x, p.y, p.z];
+    let (start, end) = if edge.parameter_forward {
+        (front, back)
+    } else {
+        (back, front)
+    };
+    if distance(point(start), edge.start_mm) > GEOM_TOL_MM
+        || distance(point(end), edge.end_mm) > GEOM_TOL_MM
+    {
+        return None;
+    }
+    let height = dot(sub(point(front), cylinder.axis_origin_mm), axis);
+    let center = add(cylinder.axis_origin_mm, crate::math3::mul(axis, height));
+    let center_point = Point3::from(center);
+    let axis_vector = Vector3::from(axis);
+    let frame = CircularArcFrame::new(
+        center_point,
+        axis_vector,
+        cylinder.radius_mm,
+        front,
+        GEOM_TOL_MM,
+    )?;
+    // This proves both the plane and radius polynomial identities and
+    // unambiguous single angular traversal on every positive-weight span.
+    let coverage = certify_circular_arc_coverage(&curve, frame)?;
+    let (lo, hi) = curve.range_tuple();
+    let sign = [0.5, 0.25, 0.75].into_iter().find_map(|fraction| {
+        let parameter = (hi - lo).mul_add(fraction, lo);
+        let tangent = curve.derivative(parameter);
+        let radial = curve.evaluate(parameter) - center_point;
+        let angular = axis_vector.dot(radial.cross(tangent));
+        (angular.is_finite() && angular != 0.0).then_some(angular.is_sign_positive())
+    })?;
+    let circle = CircleSupport {
+        center_mm: center,
+        normal: axis,
+        radius_mm: cylinder.radius_mm,
+        x_direction: normalize(sub(point(front), center))?,
+    };
+    let mut normalized = edge.clone();
+    normalized.support = CurveSupport::Circle(circle);
+    normalized.parameter_forward = sign == edge.parameter_forward;
+    let sweep = circle_edge_sweep(&normalized, circle)?;
+    if (sweep.abs() - coverage.sweep_rad).abs() > ANGLE_TOL_RAD {
+        return None;
+    }
+    Some(normalized)
+}
+
+fn cylindrical_chains(
+    side: &FaceInfo,
+    runs: &SideRuns<'_>,
+    cylinder: CylinderSupport,
+    extrusion: [f64; 3],
+) -> Option<f64> {
+    let normalize = |edges: &[&OrientedEdgeUse]| {
+        edges
+            .iter()
+            .map(|edge| cylindrical_cap_edge(edge, cylinder))
+            .collect::<Option<Vec<_>>>()
+    };
+    let bottom = normalize(&runs.bottom)?;
+    let top = normalize(&runs.top)?;
+    let bottom = bottom.iter().collect::<Vec<_>>();
+    let top = top.iter().collect::<Vec<_>>();
+    let residual = translated_chains(&bottom, &top, extrusion)?;
+    bottom
+        .into_iter()
+        .chain(top)
+        .try_fold(residual, |maximum, edge| {
+            let value = side_support_residual(side, edge, extrusion)?;
+            (value <= GEOM_TOL_MM).then_some(maximum.max(value))
+        })
+}
+
 /// Support-level correspondence. Prefer individually certified arcs when both
 /// authors used identical segmentation; otherwise prove the *whole* line or
 /// circle chain, so different segment counts do not invalidate the same part.
@@ -338,14 +429,15 @@ pub(super) fn prove_side_face(
     {
         return None;
     }
-    let mut residual = translated_chains(&runs.bottom, &runs.top, context.extrusion)?;
-    for edge in &runs.bottom {
-        let on_carrier = side_support_residual(side, edge, context.extrusion)?;
-        if on_carrier > GEOM_TOL_MM {
-            return None;
-        }
-        residual = residual.max(on_carrier);
-    }
+    let mut residual = if let SurfaceSupport::Cylinder(cylinder) = side.surface {
+        cylindrical_chains(side, &runs, cylinder, context.extrusion)?
+    } else {
+        let residual = translated_chains(&runs.bottom, &runs.top, context.extrusion)?;
+        runs.bottom.iter().try_fold(residual, |maximum, edge| {
+            let value = side_support_residual(side, edge, context.extrusion)?;
+            (value <= GEOM_TOL_MM).then_some(maximum.max(value))
+        })?
+    };
     for generator in &runs.generators {
         residual = residual.max(generator_chain(generator, context.extrusion)?);
     }
@@ -366,7 +458,7 @@ pub(super) fn prove_side_face(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::brep::{CylinderSupport, FaceLoop, LineSupport, PlaneSupport, SurfaceSupport};
+    use crate::brep::{BSplineSupport, FaceLoop, LineSupport, PlaneSupport};
 
     fn point_id(p: [f64; 3]) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -576,6 +668,39 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn rational_circular_cap_and_analytic_arc_share_the_cylinder_chain() {
+        let cylinder = CylinderSupport {
+            axis_origin_mm: [0.; 3],
+            axis: [0., 0., 1.],
+            x_direction: [1., 0., 0.],
+            radius_mm: 1.,
+        };
+        let mut edge = circle(1, [1., 0., 0.], [0., 1., 0.], true);
+        let spline = BSplineSupport {
+            degree: 2,
+            control_points_mm: vec![[1., 0., 0.], [1., 1., 0.], [0., 1., 0.]],
+            knots: vec![0., 0., 0., 1., 1., 1.],
+            weights: Some(vec![1., 0.5_f64.sqrt(), 1.]),
+        };
+        edge.support = CurveSupport::BSpline(spline.clone());
+        let normalized = cylindrical_cap_edge(&edge, cylinder).expect("certified rational cap");
+        assert!(normalized.parameter_forward);
+        let upper = circle(2, [0., 1., 1.], [1., 0., 1.], false);
+        assert!(translated_chains(&[&normalized], &[&upper], [0., 0., 1.]).is_some());
+        edge.parameter_forward = false;
+        std::mem::swap(&mut edge.start_mm, &mut edge.end_mm);
+        assert!(
+            !cylindrical_cap_edge(&edge, cylinder)
+                .expect("reversed cap")
+                .parameter_forward
+        );
+        let mut wrong = spline;
+        wrong.control_points_mm[1][0] += 0.01;
+        edge.support = CurveSupport::BSpline(wrong);
+        assert!(cylindrical_cap_edge(&edge, cylinder).is_none());
     }
 
     #[test]
