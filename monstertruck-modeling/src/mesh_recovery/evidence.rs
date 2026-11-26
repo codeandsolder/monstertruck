@@ -17,6 +17,7 @@ mod curvature;
 mod growth;
 mod join;
 mod meridian;
+mod pinched_planar;
 mod region_boundary;
 mod source_collapse;
 mod source_sectors;
@@ -400,7 +401,13 @@ impl MeshEvidence {
                 }
                 *slot = id;
             }
-            supports.push(measure_planar_support(&polygons, &self.positions, group));
+            let seed = &polygons[group[0]];
+            supports.push(measure_planar_support(
+                &polygons,
+                &self.positions,
+                group,
+                seed,
+            ));
         }
         if membership.contains(&usize::MAX) {
             return Err(MeshRecoveryError::InvalidEvidenceOptions);
@@ -905,11 +912,19 @@ fn planar_supports(
     for adjacent in &mut neighbors {
         adjacent.sort_unstable();
     }
-    let (membership, groups) = segment_patches(polygons, positions, &neighbors, options);
-    let supports = groups
-        .into_iter()
-        .map(|group| measure_planar_support(polygons, positions, group))
-        .collect();
+    let (mut membership, groups) = segment_patches(polygons, positions, &neighbors, options);
+    let mut supports = Vec::new();
+    for group in groups {
+        let seed = &polygons[group[0]];
+        // Preserve the original seed carrier for every child, so cutting
+        // a topological pinch never changes the geometric fitting budget.
+        for child in pinched_planar::split(polygons, incidence, &neighbors, group) {
+            for &id in &child {
+                membership[id] = supports.len();
+            }
+            supports.push(measure_planar_support(polygons, positions, child, seed));
+        }
+    }
     (membership, supports)
 }
 
@@ -917,8 +932,8 @@ fn measure_planar_support(
     polygons: &[InputPolygon],
     positions: &[Point3],
     source_face_indices: Vec<usize>,
+    seed: &InputPolygon,
 ) -> PlanarSupport {
-    let seed = &polygons[source_face_indices[0]];
     let mut area = 0.0;
     let mut max_vertex_plane_residual = 0.0_f64;
     let mut max_normal_angle_radians = 0.0_f64;
