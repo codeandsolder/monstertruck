@@ -289,10 +289,6 @@ fn acyclic_aliases(entities: &[EntityInstance], internable: &[bool]) -> Option<H
 
 /// Cyclic value references cannot be evaluated leaf-first. Preserve the
 /// conservative direct-reference fixed-point semantics for those graphs.
-#[expect(
-    clippy::too_many_lines,
-    reason = "fixed-point proof stages are explicit for cyclic references"
-)]
 fn cyclic_aliases(entities: &[EntityInstance], internable: &[bool]) -> HashMap<u64, u64> {
     // Store redirects only. An identity map for a million-entity STEP file is
     // a surprisingly expensive way of spelling "most things survive".
