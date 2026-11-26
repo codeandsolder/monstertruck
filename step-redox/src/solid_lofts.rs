@@ -728,10 +728,10 @@ fn propagate_wall_slopes(
     walls: &[u64],
     previous: &Section,
     stage: &mut Section,
-    axes: [[f64; 3]; 3],
+    frame_basis: [[f64; 3]; 3],
     origin: [f64; 3],
 ) -> Option<()> {
-    let [x, y, axis] = axes;
+    let [x, y, axis] = frame_basis;
     let delta = stage.level - previous.level;
     let mut bounds = [[None; 2]; 2];
     for &wall_id in walls {

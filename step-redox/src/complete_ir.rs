@@ -1308,6 +1308,7 @@ fn recognize_single_healed_host<K: CadKernel>(
     recover_proven_material_fragment(&proof, None)
 }
 
+#[cfg(test)]
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     Ok(kernel.summarize(&evaluated).is_single_solid())
