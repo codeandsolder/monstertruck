@@ -815,22 +815,7 @@ mod tests {
 
     #[test]
     fn empty_proposals_preserve_source_partition() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::Point3;
-        use crate::mesh_recovery::{EvidenceOptions, analyze_mesh_evidence};
-        use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
-        let mesh = PolygonMesh::new(
-            StandardAttributes {
-                positions: vec![
-                    Point3::new(0.0, 0.0, 0.0),
-                    Point3::new(1.0, 0.0, 0.0),
-                    Point3::new(0.0, 1.0, 0.0),
-                    Point3::new(0.0, 0.0, 1.0),
-                ],
-                ..Default::default()
-            },
-            Faces::from_iter([[0, 1, 2], [1, 0, 3]]),
-        )?;
-        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let evidence = super::super::tests::two_faces()?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let partition = index.select_surface_partition(&[], &evidence, 100)?;
         assert_eq!(partition.region_by_polygon, evidence.source_planar_support);

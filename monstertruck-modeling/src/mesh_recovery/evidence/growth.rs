@@ -190,7 +190,7 @@ impl<'a> CurvatureGrowthIndex<'a> {
     }
 
     /// Independently eligible local hypotheses, not source CAD surface count.
-    #[must_use]
+    #[must_use = "the count describes usable curvature hypotheses"]
     pub fn eligible_track_count(&self) -> usize {
         self.fits.iter().filter(|fit| fit.is_some()).count()
     }
@@ -198,7 +198,7 @@ impl<'a> CurvatureGrowthIndex<'a> {
     /// Grow one anchored candidate using cumulative fit at each source contact.
     /// Different seeds preserve competing hypotheses instead of mutating the
     /// source mesh or accepting a connected component via transitive closure.
-    #[must_use]
+    #[must_use = "the growth hypothesis contains the candidate support region"]
     pub fn grow(&self, seed_index: usize) -> Option<CurvatureGrowthHypothesis> {
         let local = self.fits.get(seed_index)?.as_ref()?.clone();
         let supports = self.track_supports.get(seed_index)?.clone();

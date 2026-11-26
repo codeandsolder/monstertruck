@@ -1358,6 +1358,33 @@ mod tests {
             angular_resolution: 1.0e-8,
         }
     }
+
+    fn native_for_carrier(
+        evidence: &MeshEvidence,
+        supports: &[usize],
+        carrier: SurfaceCarrier,
+        chord: f64,
+    ) -> Result<NativeTrimGraph, Box<dyn std::error::Error>> {
+        let index = RegionBoundaryIndex::new(evidence)?;
+        let proposal = index
+            .measure_surface_region(
+                supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1.0e-8,
+                    chord,
+                },
+            )
+            .ok_or("carrier proposal")?;
+        let partition = index.select_surface_partition(&[proposal], evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        Ok(index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?)
+    }
     #[test]
     fn native_cube_owns_each_shared_edge_once() -> Result<(), Box<dyn std::error::Error>> {
         let positions = vec![
@@ -1445,7 +1472,6 @@ mod tests {
             Faces::from_iter(faces),
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
         let mut supports = (0..ring)
             .map(|id| evidence.source_planar_support[id])
             .collect::<Vec<_>>();
@@ -1457,24 +1483,7 @@ mod tests {
             radius_at_origin: 1.0,
             slope: 0.0,
         };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1.0e-8,
-                    chord: 0.25,
-                },
-            )
-            .ok_or("cylinder")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
+        let native = native_for_carrier(&evidence, &supports, carrier, 0.25)?;
         assert_eq!(native.regions.len(), 3);
         assert_eq!(native.trims.len(), 2);
         assert!(
@@ -1544,7 +1553,6 @@ mod tests {
             Faces::from_iter(faces),
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
         let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
@@ -1552,24 +1560,7 @@ mod tests {
             radial_center: 3.0,
             profile_radius: 1.0,
         };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1.0e-8,
-                    chord: 0.5,
-                },
-            )
-            .ok_or("torus")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
+        let native = native_for_carrier(&evidence, &supports, carrier, 0.5)?;
         assert_eq!(native.regions.len(), 1);
         let region = &native.regions[0];
         assert!(!region.requires_chart_cut);
@@ -2022,7 +2013,6 @@ mod tests {
             Faces::from_iter(faces),
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
         let mut supports = evidence.source_planar_support[..sphere_polygons].to_vec();
         supports.sort_unstable();
         supports.dedup();
@@ -2032,24 +2022,7 @@ mod tests {
             radial_center: 0.0,
             profile_radius: 1.0,
         };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1.0e-8,
-                    chord: 0.1,
-                },
-            )
-            .ok_or("sphere patch")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
+        let native = native_for_carrier(&evidence, &supports, carrier, 0.1)?;
         assert_eq!(native.regions.len(), 4);
         assert!(
             native
@@ -2100,7 +2073,6 @@ mod tests {
             Faces::from_iter(faces),
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
         let mut supports = evidence.source_planar_support[..2 * ring].to_vec();
         supports.sort_unstable();
         supports.dedup();
@@ -2110,24 +2082,7 @@ mod tests {
             radial_center: 0.0,
             profile_radius: 1.0,
         };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1.0e-8,
-                    chord: 0.5,
-                },
-            )
-            .ok_or("sphere")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
+        let native = native_for_carrier(&evidence, &supports, carrier, 0.5)?;
         assert_eq!(native.regions.len(), 2);
         assert!(native.regions.iter().all(|r| !r.requires_chart_cut));
         assert_eq!(

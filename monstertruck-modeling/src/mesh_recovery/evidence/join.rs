@@ -89,7 +89,7 @@ pub(super) fn line_distance(
 ///
 /// A failed spatial fit or absence of original contact returns None. All
 /// original tracks and source evidence remain available to other hypotheses.
-#[must_use]
+#[must_use = "the joint fit evidence determines whether the regions can be combined"]
 pub fn measure_curvature_spatial_join(
     evidence: &MeshEvidence,
     first: &CurvatureTrack,

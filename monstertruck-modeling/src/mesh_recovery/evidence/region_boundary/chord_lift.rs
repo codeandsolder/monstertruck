@@ -284,7 +284,7 @@ impl SurfaceCarrier {
     ///
     /// This is explicit approximation evidence, not a claim that the
     /// original CAD edge was the returned path.
-    #[must_use]
+    #[must_use = "the returned curve and bound certify the chord lift"]
     pub fn lift_source_chord(
         self,
         source: [Point3; 2],

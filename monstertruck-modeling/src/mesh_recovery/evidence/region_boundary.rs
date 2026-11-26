@@ -385,7 +385,7 @@ mod tests {
     };
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
 
-    fn two_faces() -> Result<MeshEvidence, Box<dyn std::error::Error>> {
+    pub(super) fn two_faces() -> Result<MeshEvidence, Box<dyn std::error::Error>> {
         let positions = vec![
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),

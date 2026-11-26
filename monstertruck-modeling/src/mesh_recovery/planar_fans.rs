@@ -51,7 +51,7 @@ pub struct PlanarFanOptions<'a> {
 
 impl PlanarFanOptions<'_> {
     /// An unpartitioned shell with no extra protected interior edges.
-    #[must_use]
+    #[must_use = "the constructed options carry the requested approximation budget"]
     pub const fn new(maximum_additional_deviation: f64) -> Self {
         Self {
             maximum_additional_deviation,
@@ -440,7 +440,7 @@ impl<'a> UnionContext<'a> {
 ///
 /// Returns None for malformed options or shell topology, or if the final
 /// transaction cannot preserve its original topology.
-#[must_use]
+#[must_use = "the returned shell contains the simplified faces and their deviation bound"]
 pub fn simplify_planar_fan_shell(
     shell: &Shell,
     options: PlanarFanOptions<'_>,

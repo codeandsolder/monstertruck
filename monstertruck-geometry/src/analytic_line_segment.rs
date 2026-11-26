@@ -157,7 +157,7 @@ impl SegmentEvidence {
 /// admissibility. Positive rational weights, all original positive knot
 /// intervals and endpoint/junction coverage are checked. The numerical
 /// margin is not a directed-rounding interval arithmetic proof.
-#[must_use]
+#[must_use = "the continuous locus bound is needed to accept a geometric approximation"]
 pub fn bound_nurbs_segment_locus(
     curve: &NurbsCurve<Vector4>,
     start: Point3,

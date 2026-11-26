@@ -55,7 +55,7 @@ pub struct BoundaryPatchOptions<'a> {
 
 impl BoundaryPatchOptions<'_> {
     /// Standard bounded search for an unpartitioned source patch.
-    #[must_use]
+    #[must_use = "the constructed options carry the requested approximation budget"]
     pub const fn new(budget: SurfaceRegionBudget) -> Self {
         Self {
             budget,

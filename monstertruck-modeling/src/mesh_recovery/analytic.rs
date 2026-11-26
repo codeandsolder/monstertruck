@@ -127,7 +127,7 @@ impl AnalyticRecoveryOptions {
     /// Shared trim budget derived from the same source extent and relative
     /// accuracy as surface recognition. Kernel intersection accuracy is
     /// separately limited by the kernel's numerical resolution.
-    #[must_use]
+    #[must_use = "the returned options define source trim acceptance"]
     pub fn trim_options(self, evidence: &MeshEvidence) -> SharedTrimOptions {
         let extent = evidence.positions.first().map_or(0.0, |&reference| {
             evidence
@@ -329,7 +329,7 @@ impl RecoveredAnalyticMesh {
     /// Extract a complete, oriented, geometrically consistent native shell.
     /// Disconnected components may remain; closure, positive volume and
     /// absence of self-intersection are separate requirements for a solid.
-    #[must_use]
+    #[must_use = "the returned shell exists only when the native reconstruction is complete"]
     pub fn complete_shell(&self) -> Option<Shell> {
         if !self.trims.ambiguous_edges.is_empty() || self.native.trims.iter().any(Result::is_err) {
             return None;

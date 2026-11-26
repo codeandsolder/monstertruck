@@ -69,7 +69,7 @@ pub struct HybridPatchEvidence {
 
 impl HybridPatchEvidence {
     /// The original immutable vertex and chord budgets of this patch.
-    #[must_use]
+    #[must_use = "the returned budget limits the permitted approximation"]
     pub const fn budget(&self) -> crate::mesh_recovery::SurfaceRegionBudget { self.budget }
 }
 
@@ -89,7 +89,7 @@ pub struct HybridRecovery {
 impl HybridRecovery {
     /// Extract a complete oriented, nonsingular, geometrically consistent
     /// shell. This is not an occupied-volume or self-intersection proof.
-    #[must_use]
+    #[must_use = "the returned shell exists only when the native reconstruction is complete"]
     pub fn complete_shell(&self) -> Option<Shell> {
         if self.ambiguous_edges || self.native.trims.iter().any(Result::is_err) {
             return None;

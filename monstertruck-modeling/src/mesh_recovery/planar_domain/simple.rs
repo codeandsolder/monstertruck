@@ -578,7 +578,7 @@ fn nesting(loops: &[Vec<Piece>]) -> Option<usize> {
 /// at most the reported seam bound; no assertion of exact unsnapped
 /// incidence or 3-D plane containment is made. Exhausted proof work,
 /// ambiguous geometry, or excessive seam uncertainty returns None.
-#[must_use]
+#[must_use = "the domain certificate determines whether the planar wire is admissible"]
 pub fn certify_projected_planar_domain(
     wires: &[Wire],
     origin: Point3,

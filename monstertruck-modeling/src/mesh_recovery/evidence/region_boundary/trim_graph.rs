@@ -353,19 +353,7 @@ mod tests {
     #[test]
     fn adjacent_faces_reference_the_same_trim_in_opposite_directions()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mesh = PolygonMesh::new(
-            StandardAttributes {
-                positions: vec![
-                    Point3::new(0.0, 0.0, 0.0),
-                    Point3::new(1.0, 0.0, 0.0),
-                    Point3::new(0.0, 1.0, 0.0),
-                    Point3::new(0.0, 0.0, 1.0),
-                ],
-                ..Default::default()
-            },
-            Faces::from_iter([[0, 1, 2], [1, 0, 3]]),
-        )?;
-        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let evidence = super::super::tests::two_faces()?;
         let index = RegionBoundaryIndex::new(&evidence)?;
         let partition = index.select_surface_partition(&[], &evidence, 100)?;
         let graph = index.assemble_shared_trims(&partition, &evidence.positions, options())?;

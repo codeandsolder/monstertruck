@@ -170,7 +170,7 @@ pub struct ParallelBundle {
 impl ParallelBundle {
     /// Transverse separation of two members in the bundle's seed plane.
     /// For nearly parallel candidates, it is only a local measurement.
-    #[must_use]
+    #[must_use = "the separation measures the distance between source chains"]
     pub fn transverse_separation(&self, first: usize, second: usize) -> Option<f64> {
         let a = self.placements.get(first)?.transverse_offset;
         let b = self.placements.get(second)?.transverse_offset;
@@ -331,7 +331,7 @@ impl MeshEvidence {
     /// Signed polyhedral volume of a closed, consistently oriented source chain.
     /// Returns none for open, ambiguous, or empty source incidence. This is
     /// a numerical integral, not a non-self-intersection certificate.
-    #[must_use]
+    #[must_use = "the signed source volume establishes orientation and scale"]
     pub fn closed_source_volume(&self) -> Option<f64> {
         if self
             .edges
@@ -350,7 +350,7 @@ impl MeshEvidence {
 
     /// Exact canonical source vertex IDs of an input polygon, including any
     /// collinear points inserted to resolve original T-junctions.
-    #[must_use]
+    #[must_use = "the returned indices identify the original polygon"]
     pub fn source_polygon_vertices(&self, source_polygon: usize) -> Option<&[usize]> {
         let begin = *self.source_polygon_vertex_offsets.get(source_polygon)?;
         let end = *self.source_polygon_vertex_offsets.get(source_polygon + 1)?;
@@ -424,7 +424,7 @@ impl MeshEvidence {
     ///
     /// This does not certify a sharp CAD seam: regions may be chord facets of
     /// a curved surface. Returns None for open or ambiguous source incidence.
-    #[must_use]
+    #[must_use = "the support pair identifies both incident source regions"]
     pub fn edge_planar_support_pair(&self, edge_index: usize) -> Option<[usize; 2]> {
         let edge = self.edges.get(edge_index)?;
         if edge.kind != FeatureEdgeKind::Dihedral {
@@ -446,7 +446,7 @@ impl MeshEvidence {
     /// candidate surface tracks. A match is not evidence that the original
     /// designer used an analytic curved surface: it can also describe a
     /// deliberately faceted design.
-    #[must_use]
+    #[must_use = "the rotation is needed to evaluate curvature evidence"]
     pub fn support_normal_rotation(
         &self,
         center: usize,
@@ -546,7 +546,7 @@ impl MeshEvidence {
     /// Compare the infinite support lines of any two recovered feature
     /// chains, computing geometric relations lazily rather than materializing
     /// a quadratic matrix of all chain pairs.
-    #[must_use]
+    #[must_use = "the pair evidence describes the geometric relationship"]
     pub fn chain_pair(&self, first: usize, second: usize) -> Option<ChainPairEvidence> {
         let a = self.chains.get(first)?;
         let b = self.chains.get(second)?;

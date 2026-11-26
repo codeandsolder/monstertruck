@@ -339,6 +339,35 @@ mod tests {
         }
     }
 
+    fn independent_z_graph(
+        evidence: &MeshEvidence,
+        minimum_stations: usize,
+    ) -> Result<MeridianStationGraph<'_>, Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{CircleAxisOptions, discover_circle_axes};
+        let found = discover_circle_axes(
+            evidence,
+            CircleAxisOptions {
+                vertex_tolerance: 1.0e-9,
+                relative_tolerance: 1.0e-4,
+                axis_position_tolerance: 8.0e-9,
+                axis_angle_tolerance_radians: 1.0e-7,
+            },
+        )
+        .ok_or("source circle axes")?;
+        let placed = found
+            .axes
+            .iter()
+            .find(|axis| {
+                axis.stations.len() >= minimum_stations
+                    && axis.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
+                    && axis.origin.x.hypot(axis.origin.y) < 1.0e-8
+            })
+            .ok_or("independent axis")?;
+        Ok(
+            MeridianStationGraph::new(evidence, placed.origin, placed.axis, graph_options())
+                .ok_or("graph")?,
+        )
+    }
     #[test]
     fn cluster_ranges_preserve_seed_anchored_membership_and_order() {
         let samples = [
@@ -495,9 +524,7 @@ mod tests {
     #[test]
     fn two_station_linear_region_is_recovered_from_independent_circle_axes()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crate::mesh_recovery::{
-            CircleAxisOptions, SurfaceCarrier, SurfaceRegionBudget, discover_circle_axes,
-        };
+        use crate::mesh_recovery::{SurfaceCarrier, SurfaceRegionBudget};
         // Eight azimuth sectors with two different axial radii: a truncated
         // cone, not a cylinder or a planar cap.
         let mut positions = Vec::new();
@@ -523,28 +550,7 @@ mod tests {
         )?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let boundary = RegionBoundaryIndex::new(&evidence)?;
-        let found = discover_circle_axes(
-            &evidence,
-            CircleAxisOptions {
-                vertex_tolerance: 1.0e-9,
-                relative_tolerance: 1.0e-4,
-                axis_position_tolerance: 8.0e-9,
-                axis_angle_tolerance_radians: 1.0e-7,
-            },
-        )
-        .ok_or("source circle axes")?;
-        let placed = found
-            .axes
-            .iter()
-            .find(|axis| {
-                axis.stations.len() >= 2
-                    && axis.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
-                    && axis.origin.x.hypot(axis.origin.y) < 1.0e-8
-            })
-            .ok_or("axis")?;
-        let graph =
-            MeridianStationGraph::new(&evidence, placed.origin, placed.axis, graph_options())
-                .ok_or("graph")?;
+        let graph = independent_z_graph(&evidence, 2)?;
         let candidates = graph.discover_linear(&boundary);
         assert_eq!(candidates.len(), 1);
         let c = &candidates[0];
@@ -724,32 +730,10 @@ mod tests {
     #[test]
     fn repeated_source_circles_supply_an_independent_meridian_axis()
     -> Result<(), Box<dyn std::error::Error>> {
-        use crate::mesh_recovery::{CircleAxisOptions, discover_circle_axes};
         let mesh = mesh(5)?;
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let boundary = RegionBoundaryIndex::new(&evidence)?;
-        let found = discover_circle_axes(
-            &evidence,
-            CircleAxisOptions {
-                vertex_tolerance: 1.0e-9,
-                relative_tolerance: 1.0e-4,
-                axis_position_tolerance: 8.0e-9,
-                axis_angle_tolerance_radians: 1.0e-7,
-            },
-        )
-        .ok_or("circle discovery")?;
-        let placed = found
-            .axes
-            .iter()
-            .find(|a| {
-                a.stations.len() >= 5
-                    && a.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
-                    && a.origin.x.hypot(a.origin.y) < 1.0e-8
-            })
-            .ok_or("missing independent axis")?;
-        let graph =
-            MeridianStationGraph::new(&evidence, placed.origin, placed.axis, graph_options())
-                .ok_or("graph")?;
+        let graph = independent_z_graph(&evidence, 5)?;
         let result = graph.discover_circular(&boundary);
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].source_polygons, 64);

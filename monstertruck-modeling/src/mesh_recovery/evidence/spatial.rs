@@ -427,7 +427,7 @@ pub fn measure_spatial_support_set(
 
 /// Independently fit complete source geometry of one connected curvature
 /// track; original native STEP face IDs and primitive types are never used.
-#[must_use]
+#[must_use = "the fitted carrier evidence must be checked before use"]
 pub fn measure_curvature_spatial(
     evidence: &MeshEvidence,
     track: &CurvatureTrack,
