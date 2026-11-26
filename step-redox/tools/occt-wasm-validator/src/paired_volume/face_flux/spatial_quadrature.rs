@@ -66,7 +66,7 @@ fn rule<const N: usize>(
         .fold(0.0, f64::max);
     ensure!(
         value.iter().all(|v| v.is_finite()) && estimated_error.is_finite(),
-        "nonfinite spherical boundary integral"
+        "nonfinite spatial boundary integral"
     );
     Ok(Integral {
         value,
@@ -87,7 +87,7 @@ fn adaptive<const N: usize>(
     if integral.estimated_error <= tolerance.max(32.0 * f64::EPSILON * scale) {
         return Ok(integral);
     }
-    ensure!(depth < 20, "spherical boundary quadrature did not converge");
+    ensure!(depth < 20, "spatial boundary quadrature did not converge");
     let center = f64::midpoint(start, end);
     let left = adaptive(integrand, start, center, tolerance * 0.5, depth + 1)?;
     let right = adaptive(integrand, center, end, tolerance * 0.5, depth + 1)?;

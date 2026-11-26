@@ -8,16 +8,17 @@
 //! This diagnostic verifies curve incidence over entire rational spans,
 //! uses two independently selected gauges and reports quadrature drift.
 
-mod boundary;
-mod quadrature;
-
-use self::boundary::{ClosedWire, RESIDUAL_LIMIT, Span, cartesian, point_derivative, radial_bound};
 use super::super::accurate_sum;
+use super::{
+    spatial_boundary::{self as boundary, ClosedWire, Span, cartesian, point_derivative},
+    spatial_quadrature as quadrature,
+};
 use crate::vector::{Point, cross, dot, norm, scale, sub};
 use anyhow::{Context, Result, bail, ensure};
 use occt_wasm::{OcctKernel, ShapeHandle, SurfaceData};
 use serde::Serialize;
 
+const RESIDUAL_LIMIT: f64 = 1e-11;
 const FULL_SPHERE: f64 = 2.0 * std::f64::consts::TAU;
 const TOLERANCES: [f64; 2] = [1e-11, 1e-13];
 
@@ -25,6 +26,15 @@ const TOLERANCES: [f64; 2] = [1e-11, 1e-13];
 struct Gauge {
     direction: Point,
     denominator_margin: f64,
+}
+
+fn radial_bound(span: &[super::rational_bezier::Homogeneous]) -> Result<f64> {
+    let residual = super::rational_bezier::normalized_squared_radius_bound(span)?;
+    ensure!(
+        residual.is_finite() && residual <= RESIDUAL_LIMIT,
+        "edge not on sphere: normalized squared-radius residual {residual:e}"
+    );
+    Ok(residual)
 }
 
 fn gauges(spans: &[Span], radial: f64) -> Result<[Gauge; 2]> {
@@ -257,18 +267,7 @@ pub(super) fn evaluate(
     } else {
         -1.0
     };
-    let mut wires = Vec::new();
-    for wire in kernel.get_sub_shape_occurrences(face, "wire")? {
-        let mut edges = Vec::new();
-        let mut vertices = Vec::new();
-        for edge in kernel.get_sub_shape_occurrences(wire, "edge")? {
-            vertices.push(boundary::directed_vertices(kernel, edge)?);
-            edges.push(boundary::edge_spans(kernel, edge, center, radius)?);
-        }
-        wires.push(boundary::close_wire(edges, |end, start| {
-            Ok(kernel.is_same(vertices[end][1], vertices[start][0])?)
-        })?);
-    }
+    let wires = boundary::native_wires(kernel, face, center, radius, RESIDUAL_LIMIT)?;
     integrate(center, radius, sense, wires)
 }
 
@@ -284,7 +283,7 @@ mod tests {
     ) -> Result<SpatialFlux> {
         let wires = wires
             .into_iter()
-            .map(|edges| boundary::close_wire(edges, |_, _| Ok(true)))
+            .map(|edges| boundary::close_wire(edges, RESIDUAL_LIMIT, |_, _| Ok(true)))
             .collect::<Result<Vec<_>>>()?;
         integrate(center, radius, sense, wires)
     }

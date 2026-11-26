@@ -3,6 +3,7 @@ use occt_wasm::{BoundingBox, OcctKernel, ShapeHandle};
 use serde::Serialize;
 
 mod face_flux;
+pub(crate) use face_flux::spatial_volume::compare as spatial_volume;
 use face_flux::{FaceFluxAccumulator, FaceFluxReport};
 
 const EPSILONS: [f64; 2] = [1e-12, 1e-13];
