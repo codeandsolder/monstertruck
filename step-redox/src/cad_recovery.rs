@@ -16,11 +16,14 @@ use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
+mod channel_round_ends;
 mod multi_axis_sheet;
 mod proposal_extent;
 pub(crate) mod sectional;
 mod signed_caps;
 mod solid;
+mod source_incidence;
+mod tapered_lip;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
     recover_radial_slot_revolution_fragment, recover_radial_slot_revolution_fragments,
@@ -112,6 +115,8 @@ pub enum CadFragmentSource {
         solid_id: u64,
         host_cap_face_ids: [u64; 2],
         cutter_cap_face_ids: Vec<[u64; 2]>,
+        round_end_face_ids: Vec<u64>,
+        additive_face_ids: Vec<u64>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
