@@ -33,6 +33,7 @@ type GroupedSplineSegments = BTreeMap<
 struct PhysicalBoundaryGroups {
     linear: GroupedBoundarySegments,
     circular: GroupedCircularSegments,
+    cylinder_sections: BTreeMap<[OrientedSupportKey; 2], Vec<bounded::Arc>>,
     splines: GroupedSplineSegments,
 }
 
@@ -132,6 +133,13 @@ pub enum BoundaryChainKey {
         locus: CircleLocusKey,
         endpoints_mm: Option<[PointKey; 2]>,
     },
+    /// Angular coverage of an oblique plane/cylinder ellipse. The carrier
+    /// pair fixes the ellipse uniquely; endpoints remain physical 3-D points,
+    /// ordered by increasing angle around the canonical cylinder axis.
+    CylinderSection {
+        supports: [OrientedSupportKey; 2],
+        endpoints_mm: Option<[PointKey; 2]>,
+    },
     /// Complete bounded rational spline, certified on both incident carriers.
     Spline {
         supports: [OrientedSupportKey; 2],
@@ -154,7 +162,8 @@ impl AnalyticBoundarySignature {
             .iter()
             .filter_map(|chain| match chain {
                 BoundaryChainKey::Open { endpoints_mm, .. } => Some(*endpoints_mm),
-                BoundaryChainKey::Circular { endpoints_mm, .. } => *endpoints_mm,
+                BoundaryChainKey::Circular { endpoints_mm, .. }
+                | BoundaryChainKey::CylinderSection { endpoints_mm, .. } => *endpoints_mm,
                 BoundaryChainKey::Spline { curve, .. } => curve.ends(),
             })
             .flatten()
@@ -412,6 +421,9 @@ fn analytic_boundary_signature(
                 .map_err(|reason| format!("{reason}: {supports:?}, {locus:?}, {arcs:?}"))?,
         );
     }
+    for (supports, arcs) in groups.cylinder_sections {
+        chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs)?);
+    }
     chains.sort();
 
     let mut supports = component_support.into_values().collect::<Vec<_>>();
@@ -645,12 +657,18 @@ fn group_physical_boundaries(
             .get(edge_id)
             .ok_or_else(|| format!("edge #{edge_id} has no geometry"))?;
         let loci = supports.each_ref().map(support_locus_key);
-        let Some(curve) = resolve_geometric_curve_support(geometry.curve_id, entities, index)
-        else {
-            rejected.push(format!("#{edge_id}: unresolved curve"));
-            continue;
+        let curve = resolve_geometric_curve_support(geometry.curve_id, entities, index);
+        let classified = if let Some(curve) = &curve {
+            bounded::classify(geometry, curve, &loci)
+        } else {
+            // A source exporter can declare an exact elliptical trim
+            // self-intersecting. Keep ordinary recognizers strict; only
+            // accept such geometry through the full angular certificate.
+            let explicit =
+                brep::curve_geometry_for_incidence_proof(geometry.curve_id, entities, index);
+            bounded::certify_flagged_cylinder_section(geometry, &explicit, &loci)
         };
-        match bounded::classify(geometry, &curve, &loci) {
+        match classified {
             Some(bounded::BoundedEdge::Line) => groups
                 .linear
                 .entry(supports)
@@ -661,19 +679,25 @@ fn group_physical_boundaries(
                 .entry((supports, locus))
                 .or_insert_with(Vec::new)
                 .push(arc),
+            Some(bounded::BoundedEdge::CylinderSection(arc)) => groups
+                .cylinder_sections
+                .entry(supports)
+                .or_default()
+                .push(arc),
             Some(bounded::BoundedEdge::Spline(piece)) => groups
                 .splines
                 .entry((supports, piece.profile))
                 .or_default()
                 .push(piece.interval),
+            None if curve.is_none() => rejected.push(format!("#{edge_id}: unresolved curve")),
             None => {
                 rejected.push(format!(
                     "#{edge_id}: {} on {loci:?}",
-                    match &curve {
-                        CurveSupport::Line(_) => "line",
-                        CurveSupport::Circle(_) => "circle",
-                        CurveSupport::BSpline(_) => "spline",
-                        CurveSupport::Other { .. } => "other",
+                    match curve {
+                        Some(CurveSupport::Line(_)) => "line",
+                        Some(CurveSupport::Circle(_)) => "circle",
+                        Some(CurveSupport::BSpline(_)) => "spline",
+                        Some(CurveSupport::Other { .. }) | None => "unresolved curve",
                     }
                 ));
             }
@@ -703,6 +727,7 @@ fn prove_all_supports_are_bounded(
         .flat_map(|chain| match chain {
             BoundaryChainKey::Open { supports, .. }
             | BoundaryChainKey::Circular { supports, .. }
+            | BoundaryChainKey::CylinderSection { supports, .. }
             | BoundaryChainKey::Spline { supports, .. } => supports.iter(),
         })
         .cloned()

@@ -3122,6 +3122,74 @@ pub mod monstertruck {
         }
 
         #[test]
+        fn diagnostic_oblique_cylinder_clip() -> Result<()> {
+            let mut model = CadModel::new();
+            let cylinder = model.add_node(CadNode::Primitive(Primitive::Cylinder {
+                radius_mm: 1.,
+                height_mm: 4.,
+            }));
+            let cylinder = model.add_node(CadNode::Transform {
+                child: cylinder,
+                transform: RigidTransform {
+                    matrix: [
+                        [1., 0., 0., 0.],
+                        [0., 0., -1., 0.],
+                        [0., 1., 0., 0.],
+                        [0., 0., 0., 1.],
+                    ],
+                },
+            });
+            let wedge = model.add_node(CadNode::Extrude {
+                profile: Profile2d::polygon(vec![[-2., -1.], [2., -1.], [2., 2.6], [-2., 1.4]])?,
+                vector_mm: [0., 0., 6.],
+            });
+            let wedge = model.add_node(CadNode::Transform {
+                child: wedge,
+                transform: RigidTransform {
+                    matrix: [
+                        [1., 0., 0., 0.],
+                        [0., 0., -1., 3.],
+                        [0., 1., 0., 0.],
+                        [0., 0., 0., 1.],
+                    ],
+                },
+            });
+            let root = model.add_node(CadNode::Boolean {
+                op: BooleanOp::Intersection,
+                children: vec![cylinder, wedge],
+            });
+            model.add_root(root)?;
+            let kernel = MonstertruckKernel::project_standard();
+            let evaluated = kernel.evaluate(&model, root)?;
+            eprintln!("GEOMETRY {:?}", kernel.summarize(&evaluated));
+            let step = kernel.to_step(&evaluated)?;
+            let exchange =
+                monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange;
+            let data = &exchange.data[0];
+            let solid_id = data
+                .entities
+                .iter()
+                .find_map(|entity| {
+                    let record = crate::step_graph::simple_record(entity)?;
+                    (record.name == "MANIFOLD_SOLID_BREP")
+                        .then(|| crate::step_graph::entity_id(entity))
+                })
+                .context("no solid")?;
+            let diag = crate::boundary_proof::analytic_boundary_diagnostic(
+                solid_id,
+                &data.entities,
+                &crate::step_graph::build_index(&data.entities),
+            );
+            std::fs::write(
+                "/home/jan/audit/monstertruck-oblique-host-20261122/oblique-cylinder-proof/clip-diagnostic/oblique-cylinder.step",
+                step,
+            )?;
+            eprintln!("PROOF {} {:?}", diag.supported, diag.reason);
+            assert!(diag.supported);
+            Ok(())
+        }
+
+        #[test]
         fn evaluates_adjacent_cylinders_union() -> Result<()> {
             let mut model = CadModel::new();
             let first = model.add_node(CadNode::Primitive(Primitive::Cylinder {

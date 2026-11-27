@@ -123,6 +123,7 @@ pub(super) fn compare(
         let supports = match chain {
             BoundaryChainKey::Open { supports, .. }
             | BoundaryChainKey::Circular { supports, .. }
+            | BoundaryChainKey::CylinderSection { supports, .. }
             | BoundaryChainKey::Spline { supports, .. } => supports,
         };
         for key in supports.iter_mut() {
