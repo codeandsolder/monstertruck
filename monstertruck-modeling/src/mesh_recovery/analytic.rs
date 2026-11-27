@@ -257,6 +257,8 @@ pub struct AnalyticDiscoveryStats {
     pub curved_proposals: usize,
     /// Fixed independently measured circular cores expanded over irregular supports.
     pub expanded_circular_proposals: usize,
+    /// Fixed station-linear cores expanded across irregular lateral facets.
+    pub expanded_linear_proposals: usize,
     /// Admissible linear region proposals (direct and grown).
     pub linear_proposals: usize,
     /// Direct station-graph linear proposals.
@@ -299,6 +301,7 @@ struct ProposalSelection {
     selected: Vec<SelectedSurfaceProposal>,
     curved_proposals: usize,
     expanded_circular_proposals: usize,
+    expanded_linear_proposals: usize,
     direct_linear_proposals: usize,
     rim_linear_proposals: usize,
     rim_linear_candidates: Vec<SelectedSurfaceProposal>,
@@ -400,6 +403,7 @@ pub fn discover_analytic_regions(
         linear_candidates: candidates.linear,
         curved_proposals: selection.curved_proposals,
         expanded_circular_proposals: selection.expanded_circular_proposals,
+        expanded_linear_proposals: selection.expanded_linear_proposals,
         linear_proposals: selection.linear_proposals,
         direct_linear_proposals: selection.direct_linear_proposals,
         rim_linear_proposals: selection.rim_linear_proposals,
@@ -925,6 +929,7 @@ fn choose_partition(
         circular_proposals(boundary, &candidates.circular, options, absolute_tolerance);
     let mut seen = BTreeSet::new();
     let curved_count = proposals.len();
+    let mut measured_linear = Vec::new();
     for candidate in &candidates.linear {
         if let Some(proposal) = boundary.measure_surface_region(
             &candidate.supports,
@@ -935,6 +940,7 @@ fn choose_partition(
             },
         ) {
             seen.insert(candidate.supports.clone());
+            measured_linear.push(candidate);
             proposals.push(proposal);
         }
     }
@@ -949,8 +955,24 @@ fn choose_partition(
         &mut proposals,
     );
     let core_count = proposals.len();
-    append_expanded_circular_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
+    append_expanded_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
     let expanded_circular_count = proposals.len() - core_count;
+    let expanded_linear = boundary.expand_station_linear_regions(
+        &measured_linear,
+        RimLinearOptions {
+            absolute_tolerance,
+            relative_tolerance: options.relative_surface_tolerance,
+            angular_tolerance: options.profile_normal_tolerance_radians,
+            chord_fraction: options.max_linear_relative_chord_error,
+        },
+    );
+    append_expanded_proposals(
+        evidence,
+        expanded_linear,
+        absolute_tolerance,
+        &mut proposals,
+    );
+    let expanded_linear_count = proposals.len() - core_count - expanded_circular_count;
     let rim_linear_candidates = append_rim_proposals(
         boundary,
         circles,
@@ -958,7 +980,8 @@ fn choose_partition(
         absolute_tolerance,
         &mut proposals,
     );
-    let rim_linear_count = proposals.len() - core_count - expanded_circular_count;
+    let rim_linear_count =
+        proposals.len() - core_count - expanded_circular_count - expanded_linear_count;
     let partition = boundary.select_surface_partition(
         &proposals,
         planar_baseline,
@@ -999,6 +1022,7 @@ fn choose_partition(
         selected: chosen,
         curved_proposals: curved_count + expanded_circular_count,
         expanded_circular_proposals: expanded_circular_count,
+        expanded_linear_proposals: expanded_linear_count,
         direct_linear_proposals: direct_linear_count,
         rim_linear_proposals: rim_linear_count,
         rim_linear_candidates,
@@ -1042,7 +1066,7 @@ fn circular_proposals<'a>(
     (core, expanded)
 }
 
-fn append_expanded_circular_proposals<'a>(
+fn append_expanded_proposals<'a>(
     evidence: &MeshEvidence,
     expanded: Vec<SurfaceRegionProposal<'a>>,
     tolerance: f64,
