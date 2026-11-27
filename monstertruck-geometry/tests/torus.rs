@@ -299,3 +299,23 @@ fn torus_division_respects_world_chord_for_small_ratios() {
         }
     }
 }
+
+#[test]
+fn exact_inverse_is_conditioned_at_meridian_extrema() {
+    // The source point can differ from a represented carrier by roundoff
+    // after translation or a fitted frame transform. Invert the signed
+    // meridian rather than requiring z/r to fall in asin's exact domain.
+    for (major, minor) in [(0.0762, 0.1778), (2.0, 1.0), (1.0, 1.0)] {
+        let torus = Torus::new_unchecked(Point3::new(41.4274, -8.2296, 3.8608), major, minor);
+        for u in [0.0, 0.37, PI, 5.2] {
+            for v in [-PI * 0.5, PI * 0.5, PI * 0.5 - 1.0e-8] {
+                let point = torus.evaluate(u, v) + Vector3::unit_z() * (v.signum() * 1.0e-11);
+                let (ru, rv) = torus.search_parameter(point, Some((u, v)), 1).unwrap();
+                assert!(torus.evaluate(ru, rv).distance(point) < 1.0e-10);
+                assert!((rv - v).abs() < 1.0e-9);
+                let outside = point + Vector3::unit_z() * (v.signum() * 1.0e-3);
+                assert!(torus.search_parameter(outside, Some((u, v)), 1).is_none());
+            }
+        }
+    }
+}

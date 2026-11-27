@@ -336,58 +336,24 @@ fn choose_parameter_candidate(
 }
 
 impl Torus {
-    /// Exact inverse candidates for the torus parameterisation.
-    ///
-    /// A spindle torus is not one-to-one in the meridian projection: when
-    /// `R + r cos(v)` is negative, the same world-space azimuth is represented
-    /// by `u + pi`. Solving only from `rho = hypot(x, y)` therefore loses the
-    /// inner branch. Enumerating the two sine-compatible `v` values and using
-    /// the signed radial factor recovers both ring and spindle regimes without
-    /// weakening the final point-on-surface check.
+    /// Exact inversion uses the same signed-meridian projection as the
+    /// nearest-point solver, with the existing geometric residual gate.
+    /// Both meridian coordinates determine the angle through `atan2`;
+    /// using only `asin(z / r)` is ill-conditioned at the axial extrema
+    /// and can reject roundoff-sized deviations before the residual test.
     fn exact_parameter_candidates(
         &self,
         point: Point3,
         hint: Option<(f64, f64)>,
     ) -> Vec<(f64, f64, f64)> {
         let relative = point - self.center();
-        let rho = Vector2::new(relative.x, relative.y).magnitude();
         let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
-        let eps = 128.0 * f64::EPSILON * scale;
-        let sine = relative.z / self.small_radius();
-        if !sine.is_finite() || sine < -1.0 - eps || sine > 1.0 + eps {
+        let tolerance2 = (KERNEL_EPSILON * scale).powi(2);
+        if !tolerance2.is_finite() {
             return Vec::new();
         }
-        let alpha = f64::asin(sine.clamp(-1.0, 1.0));
-        let mut v_candidates = vec![
-            alpha.rem_euclid(2.0 * PI),
-            (PI - alpha).rem_euclid(2.0 * PI),
-        ];
-        if (v_candidates[0] - v_candidates[1]).abs() <= eps {
-            v_candidates.truncate(1);
-        }
-        let azimuth = if rho > eps {
-            relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
-        } else {
-            hint.map_or(0.0, |h| h.0)
-        };
-        let mut candidates = Vec::with_capacity(v_candidates.len());
-        for v0 in v_candidates {
-            let signed_radius = self.small_radius().mul_add(v0.cos(), self.large_radius());
-            if (rho - signed_radius.abs()).abs() > eps.max(KERNEL_EPSILON * scale) {
-                continue;
-            }
-            let u0 = if signed_radius < 0.0 {
-                azimuth + PI
-            } else {
-                azimuth
-            };
-            let u = nearest_periodic_angle(u0.rem_euclid(2.0 * PI), hint.map(|h| h.0));
-            let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
-            let distance2 = self.evaluate(u, v).distance2(point);
-            if distance2 <= (KERNEL_EPSILON * scale).powi(2) {
-                candidates.push((u, v, distance2));
-            }
-        }
+        let mut candidates = self.nearest_parameter_candidates(point, hint);
+        candidates.retain(|candidate| candidate.2 <= tolerance2);
         candidates
     }
 
