@@ -44,7 +44,7 @@ pub(super) struct BandPlan {
 }
 
 impl BandPlan {
-    fn unperforated(vertices: [[Vertex; 2]; 2], seams: [Vec<Edge>; 2]) -> Self {
+    const fn unperforated(vertices: [[Vertex; 2]; 2], seams: [Vec<Edge>; 2]) -> Self {
         Self {
             vertices,
             seams,
