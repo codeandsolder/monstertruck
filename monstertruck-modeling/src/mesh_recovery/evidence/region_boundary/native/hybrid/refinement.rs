@@ -407,15 +407,22 @@ impl RecoveredAnalyticMesh {
             });
         }
         let refined = split_partition(&index, &self.evidence, original, &selection.selected)?;
-        let graph = index.assemble_shared_trims(
+        let mut graph = index.assemble_shared_trims(
             &refined.partition,
             &self.reconciled.positions,
             options.trim,
         )?;
-        let baseline = index.construct_native_trims(
+        let mut baseline = index.construct_native_trims(
             &refined.partition,
             &graph,
             &self.reconciled.positions,
+            options.strict,
+        )?;
+        index.repair_planar_crossings(
+            &refined.partition,
+            &self.reconciled.positions,
+            &mut graph,
+            &mut baseline,
             options.strict,
         )?;
         let recovery = HybridInput {

@@ -391,38 +391,44 @@ pub(super) fn repair(
     let mut trials = 0;
     while trials < options.max_joint_fit_trials {
         let neighborhoods = failed_neighborhoods(assembly);
-        let mut plans = neighborhoods
+        let fillets = neighborhoods
             .iter()
-            .filter(|regions| regions.len() > 2)
-            .map(|regions| (regions.clone(), false))
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|&id| context.anchored_fillet_possible(&assembly.reconciled.partition, id));
+        let mut plans = fillets
+            .map(|id| (vec![id], &[JointFitMethod::AnchoredFillet][..]))
             .collect::<Vec<_>>();
+        let general = &[
+            JointFitMethod::FixedCarriers,
+            JointFitMethod::DependentPlanes,
+            JointFitMethod::JointRefit,
+        ][..];
+        plans.extend(
+            neighborhoods
+                .iter()
+                .filter(|r| r.len() > 2)
+                .map(|r| (r.clone(), general)),
+        );
         plans.extend(
             dependent_neighborhoods(assembly, &context)
                 .into_iter()
-                .map(|regions| (regions, true)),
+                .map(|r| (r, &[JointFitMethod::DependentPlanes][..])),
         );
         plans.extend(
             neighborhoods
                 .into_iter()
-                .filter(|regions| regions.len() <= 2)
-                .map(|regions| (regions, false)),
+                .filter(|r| r.len() <= 2)
+                .map(|r| (r, general)),
         );
         let mut improved = false;
-        for (regions, dependent_only) in plans {
+        for (regions, methods) in plans {
             if trials >= options.max_joint_fit_trials {
                 break;
             }
             trials += 1;
-            // Reconcile fixed carriers first; record every failed attempt.
-            let methods: &[JointFitMethod] = if dependent_only {
-                &[JointFitMethod::DependentPlanes]
-            } else {
-                &[
-                    JointFitMethod::FixedCarriers,
-                    JointFitMethod::DependentPlanes,
-                    JointFitMethod::JointRefit,
-                ]
-            };
             for &method in methods {
                 match try_fit(evidence, assembly, &regions, options, &mut context, method)? {
                     Ok(report) => {

@@ -22,6 +22,7 @@ use std::{
 
 mod band;
 mod hybrid;
+mod planar_repair;
 pub use hybrid::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
@@ -103,6 +104,88 @@ pub struct NativeTrimGraph {
     pub regions: Vec<NativeRegionFace>,
     /// Maximum additional displacement introduced at native junctions.
     pub max_vertex_displacement: f64,
+}
+
+/// A witnessed pair of crossing native edge intervals in a planar region.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanarTrimCrossing {
+    /// Region in the current partition.
+    pub region: usize,
+    /// Two (shared trim ID, native edge ordinal) references.
+    pub edges: [(usize, usize); 2],
+}
+
+impl NativeTrimGraph {
+    /// Identify native edge pairs responsible for previously rejected
+    /// planar domains. The same positive transverse proof as face assembly
+    /// is used; absence of a witness is not a simplicity certificate.
+    /// # Errors
+    /// The supplied source graph and partition must describe this native graph.
+    #[must_use = "crossing pairs identify the offending shared native intervals"]
+    pub fn planar_crossings(
+        &self,
+        partition: &SurfaceRegionPartition,
+        graph: &SharedTrimGraph,
+        tolerance: f64,
+    ) -> Result<Vec<PlanarTrimCrossing>, NativeTrimError> {
+        if self.trims.len() != graph.trims.len() || !tolerance.is_finite() || tolerance <= 0.0 {
+            return Err(NativeTrimError::InvalidSource);
+        }
+        let failed = self
+            .regions
+            .iter()
+            .filter_map(|r| {
+                matches!(r.faces, Err(NativeTrimError::PlanarTrimCrossing)).then_some(r.region)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if failed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut crossings = Vec::new();
+        for region in &graph.regions {
+            if !failed.contains(&region.region) {
+                continue;
+            }
+            let Some(Some(SurfaceCarrier::Plane { origin, normal })) =
+                partition.carriers.get(region.region)
+            else {
+                return Err(NativeTrimError::InvalidSource);
+            };
+            let boundary = region
+                .boundary
+                .as_ref()
+                .map_err(|_| NativeTrimError::InvalidBoundary)?;
+            let mut references = Vec::new();
+            for reference in boundary.loops.iter().flatten() {
+                let edges = self
+                    .trims
+                    .get(reference.trim)
+                    .ok_or(NativeTrimError::InvalidSource)?
+                    .as_ref()
+                    .map_err(|&error| error)?;
+                references.extend(
+                    edges
+                        .iter()
+                        .enumerate()
+                        .map(|(ordinal, edge)| ((reference.trim, ordinal), edge)),
+                );
+            }
+            let indexed = references
+                .iter()
+                .enumerate()
+                .map(|(i, (_, edge))| (i, *edge))
+                .collect::<Vec<_>>();
+            for [a, b] in
+                planar_domain::planar_crossing_pairs(&indexed, *origin, *normal, tolerance)
+            {
+                crossings.push(PlanarTrimCrossing {
+                    region: region.region,
+                    edges: [references[a].0, references[b].0],
+                });
+            }
+        }
+        Ok(crossings)
+    }
 }
 
 #[derive(Clone, Copy)]

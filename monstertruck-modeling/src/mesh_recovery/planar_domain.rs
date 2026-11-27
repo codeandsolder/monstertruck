@@ -276,7 +276,27 @@ pub(super) fn has_crossing(
     ) else {
         return false;
     };
-    !crossing_ids(spans, true).is_empty()
+    !crossing_pairs(spans, true).is_empty()
+}
+
+// Keep the pair of original edge IDs: a positive crossing witness
+// constrains alternatives to change at least one of these source curves.
+pub(super) fn planar_crossing_pairs(
+    edges: &[(usize, &Edge)],
+    origin: Point3,
+    normal: Vector3,
+    tolerance: f64,
+) -> Vec<[usize; 2]> {
+    let Some(spans) = projected_spans(
+        edges.iter().copied(),
+        origin,
+        normal_basis(normal).into(),
+        None,
+        tolerance,
+    ) else {
+        return Vec::new();
+    };
+    crossing_pairs(spans, false)
 }
 
 // Orthogonal projection onto axial/tangential coordinates is injective on
@@ -310,18 +330,23 @@ pub(super) fn revolution_crossings(
     ) else {
         return Vec::new();
     };
-    crossing_ids(spans, false)
+    crossing_pairs(spans, false)
+        .into_iter()
+        .flatten()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
-fn crossing_ids(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<usize> {
+fn crossing_pairs(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<[usize; 2]> {
     let mut remaining = MAX_PAIR_VISITS;
     let mut result = std::collections::BTreeSet::new();
     for (id, span) in &spans {
         if self_crossing(span, MAX_SUBDIVISION, &mut remaining) {
             if first_only {
-                return vec![*id];
+                return vec![[*id, *id]];
             }
-            result.insert(*id);
+            result.insert([*id, *id]);
         }
     }
     // Sweep conservative projected hull bounds.
@@ -337,10 +362,12 @@ fn crossing_ids(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<usize> {
                 break;
             }
             if crossing(a, b, MAX_SUBDIVISION, &mut remaining) {
+                let mut pair = [*left, *right];
+                pair.sort_unstable();
                 if first_only {
-                    return vec![*left];
+                    return vec![pair];
                 }
-                result.extend([*left, *right]);
+                result.insert(pair);
             }
         }
     }
