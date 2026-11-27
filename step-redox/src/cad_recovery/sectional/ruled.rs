@@ -70,30 +70,13 @@ impl<'a> PlanarSweep<'a> {
         Some(frame.project(point))
     }
 
-    fn profile(
-        &self,
-        rings: &[Vec<RecoveredProfileCurve>],
-        group: &[usize],
-        frame: Frame,
-        level: f64,
-    ) -> Option<Profile2d> {
-        let loops = group
+    fn profile(&self, rings: &SectionKey, frame: Frame, level: f64) -> Option<Profile2d> {
+        let loops = rings
             .iter()
-            .map(|&index| {
-                let mut points = rings[index]
+            .map(|ring| {
+                let mut points = ring
                     .iter()
-                    .map(|curve| {
-                        let RecoveredProfileCurve::Line {
-                            source_edge_ids, ..
-                        } = curve
-                        else {
-                            return None;
-                        };
-                        let [start, _] = source_edge_ids.as_slice() else {
-                            return None;
-                        };
-                        self.point(*start, frame, level)
-                    })
+                    .map(|&edge| self.point(edge, frame, level))
                     .collect::<Option<Vec<_>>>()?;
                 canonicalize_collapsed_corners(&mut points)?;
                 Some(ProfileLoop {
@@ -142,48 +125,106 @@ fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
     Some(())
 }
 
-fn slab_nodes(
-    model: &mut CadModel,
-    sweep: &PlanarSweep<'_>,
-    solid: &ReducedSolid,
-    frame: Frame,
-    lo: f64,
-    hi: f64,
-) -> Option<Vec<NodeId>> {
-    let rings = slice_rings(solid, frame, lo.midpoint(hi))?;
+/// Complete ordered crossing-edge correspondence of an outer ring and its
+/// holes. An unchanged key across source stations establishes identical
+/// affine generators throughout the interval; no profile fitting or
+/// near-coordinate matching is needed.
+type SectionKey = Vec<Vec<u64>>;
+
+fn slab_sections(solid: &ReducedSolid, frame: Frame, limits: [f64; 2]) -> Option<Vec<SectionKey>> {
+    let rings = slice_rings(solid, frame, limits[0].midpoint(limits[1]))?;
     if rings.is_empty() {
         return Some(Vec::new());
     }
-    let groups = section_groups(&rings)?;
-    groups
+    section_groups(&rings)?
         .iter()
         .map(|group| {
-            let start = sweep.profile(&rings, group, frame, lo)?;
-            let end = sweep.profile(&rings, group, frame, hi)?;
-            // Constant slabs stay ordinary compact extrusions. Preserve
-            // authored cyclic correspondence even when vertex ordering differs
-            // from the section's geometric bounding box.
-            if same_profiles(&start, &end) {
-                return Some(extrusion_node(model, frame, lo, hi, start));
-            }
-            Some(
-                model.add_node(CadNode::Loft {
-                    sections: [(lo, start), (hi, end)]
-                        .into_iter()
-                        .map(|(at, profile)| LoftSection {
-                            profile,
-                            transform: local_frame_transform(
-                                add(frame.origin, mul(frame.axis, at)),
-                                frame.x,
-                                frame.y,
-                                frame.axis,
-                            ),
+            group
+                .iter()
+                .map(|&index| {
+                    rings[index]
+                        .iter()
+                        .map(|curve| {
+                            let RecoveredProfileCurve::Line {
+                                source_edge_ids, ..
+                            } = curve
+                            else {
+                                return None;
+                            };
+                            let [start, _] = source_edge_ids.as_slice() else {
+                                return None;
+                            };
+                            Some(*start)
                         })
-                        .collect(),
-                }),
-            )
+                        .collect()
+                })
+                .collect()
         })
         .collect()
+}
+
+/// Maintain maximal contiguous station intervals for each unchanged
+/// connected section. A different island can start, stop or change shape
+/// without splitting unaffected material into additional Boolean operands.
+#[derive(Default)]
+struct SectionRuns {
+    active: BTreeMap<SectionKey, usize>,
+    completed: Vec<(usize, usize, SectionKey)>,
+}
+
+impl SectionRuns {
+    fn advance(&mut self, station: usize, sections: Vec<SectionKey>) {
+        let next = sections
+            .into_iter()
+            .map(|section| {
+                let start = self.active.remove(&section).unwrap_or(station);
+                (section, start)
+            })
+            .collect();
+        self.completed.extend(
+            std::mem::take(&mut self.active)
+                .into_iter()
+                .map(|(section, start)| (start, station, section)),
+        );
+        self.active = next;
+    }
+
+    fn finish(mut self, station: usize) -> Vec<(usize, usize, SectionKey)> {
+        self.advance(station, Vec::new());
+        self.completed.sort_unstable();
+        self.completed
+    }
+}
+
+fn section_node(
+    model: &mut CadModel,
+    sweep: &PlanarSweep<'_>,
+    section: &SectionKey,
+    frame: Frame,
+    lo: f64,
+    hi: f64,
+) -> Option<NodeId> {
+    let start = sweep.profile(section, frame, lo)?;
+    let end = sweep.profile(section, frame, hi)?;
+    if same_profiles(&start, &end) {
+        return Some(extrusion_node(model, frame, lo, hi, start));
+    }
+    Some(
+        model.add_node(CadNode::Loft {
+            sections: [(lo, start), (hi, end)]
+                .into_iter()
+                .map(|(at, profile)| LoftSection {
+                    profile,
+                    transform: local_frame_transform(
+                        add(frame.origin, mul(frame.axis, at)),
+                        frame.x,
+                        frame.y,
+                        frame.axis,
+                    ),
+                })
+                .collect(),
+        }),
+    )
 }
 
 fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
@@ -216,16 +257,32 @@ pub(super) fn model(
     let Some(sweep) = PlanarSweep::new(solid, frame) else {
         return Ok(None);
     };
-    let mut model = CadModel::new();
-    let mut children = Vec::new();
-    for ab in sweep.levels.windows(2) {
-        let Some(parts) = slab_nodes(&mut model, &sweep, solid, frame, ab[0], ab[1]) else {
+    let mut runs = SectionRuns::default();
+    for (station, ab) in sweep.levels.windows(2).enumerate() {
+        let Some(sections) = slab_sections(solid, frame, [ab[0], ab[1]]) else {
             return Ok(None);
         };
-        if !parts.is_empty() {
-            children.push(add_bounded_union_tree(&mut model, parts));
-        }
+        runs.advance(station, sections);
     }
+    let mut model = CadModel::new();
+    let mut grouped = BTreeMap::<usize, Vec<NodeId>>::new();
+    for (lo, hi, section) in runs.finish(sweep.levels.len() - 1) {
+        let Some(node) = section_node(
+            &mut model,
+            &sweep,
+            &section,
+            frame,
+            sweep.levels[lo],
+            sweep.levels[hi],
+        ) else {
+            return Ok(None);
+        };
+        grouped.entry(lo).or_default().push(node);
+    }
+    let children = grouped
+        .into_values()
+        .map(|parts| add_bounded_union_tree(&mut model, parts))
+        .collect::<Vec<_>>();
     if children.is_empty() {
         return Ok(None);
     }
@@ -238,6 +295,21 @@ pub(super) fn model(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_stations_do_not_split_unchanged_sections() {
+        let first = vec![vec![1, 2, 3, 4]];
+        let second = vec![vec![5, 6, 7]];
+        let mut runs = SectionRuns::default();
+        runs.advance(0, vec![first.clone()]);
+        runs.advance(1, vec![first.clone(), second.clone()]);
+        runs.advance(2, vec![second.clone()]);
+        runs.advance(3, vec![first.clone(), second.clone()]);
+        assert_eq!(
+            runs.finish(4),
+            vec![(0, 2, first.clone()), (1, 4, second), (3, 4, first)]
+        );
+    }
 
     #[test]
     fn collapsed_corners_preserve_cyclic_correspondence() -> Result<()> {
