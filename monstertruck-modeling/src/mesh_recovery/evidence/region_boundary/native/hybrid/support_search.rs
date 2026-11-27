@@ -7,7 +7,7 @@
 use super::{
     HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, HybridSource,
     NativeTrimError, NativeTrimGraph, RefinedHybridRecovery, SurfaceRegionPartition,
-    refinement::support_closure,
+    refinement::ReleaseContext,
 };
 use crate::mesh_recovery::{RecoveredAnalyticMesh, SharedTrimGeometry, SharedTrimGraph};
 use monstertruck_topology::shell::ShellCondition;
@@ -469,6 +469,14 @@ fn incomplete_recovery_error(
             .filter(|r| r.requires_chart_cut)
             .map(|r| (r.region, refined.parent_by_region[r.region]))
             .collect(),
+        chart_obstacles: refined
+            .recovery
+            .native
+            .regions
+            .iter()
+            .filter(|r| r.requires_chart_cut && !r.chart_obstacles.is_empty())
+            .map(|r| (r.region, r.chart_obstacles.clone()))
+            .collect(),
     }
 }
 
@@ -511,7 +519,7 @@ impl HybridSource<'_> {
         &self,
         contacts: &BTreeSet<[usize; 2]>,
         permitted: &[usize],
-        options: HybridRefinementOptions,
+        context: &ReleaseContext<'_>,
     ) -> Result<BTreeMap<usize, BTreeSet<usize>>, HybridRecoveryError> {
         if permitted
             .iter()
@@ -524,13 +532,7 @@ impl HybridSource<'_> {
         let mut closures = BTreeMap::new();
         let mut rejected = BTreeMap::new();
         for id in endpoints.intersection(&allowed).copied() {
-            match support_closure(
-                self.evidence,
-                &self.reconciled.partition,
-                id,
-                permitted,
-                options,
-            ) {
+            match context.closure(id) {
                 Ok(closure) => {
                     closures.insert(id, closure);
                 }
@@ -633,11 +635,52 @@ impl HybridSource<'_> {
         Ok(choices.into_iter().collect())
     }
 
-    // A regular annular torus with a variable rim can be blocked by
-    // plane/torus section curves from dependent faceted neighbors. Releasing
-    // those supports makes the shared rim a bounded exact single-carrier
-    // lift. Retain the alternative of releasing the curved region itself;
-    // the same explicit permission and polygon budget apply to both.
+    // A localized chart proof failure names the actual shared native
+    // intervals that obstruct admission. Try replacing their incident
+    // planar supports before considering an entire dependent rim or region.
+    // These are repair alternatives, not assertions of transverse crossing.
+    fn chart_edge_supports(
+        &self,
+        partition: &SurfaceRegionPartition,
+        graph: &SharedTrimGraph,
+        native: &NativeTrimGraph,
+        region: usize,
+        (id, ordinal): (usize, usize),
+    ) -> [Vec<usize>; 2] {
+        let Some(trim) = graph.trims.get(id) else {
+            return [Vec::new(), Vec::new()];
+        };
+        // Angular sections use one native edge per original source segment.
+        // If another chart already subdivided the trim, fall back to its
+        // complete original interval instead of guessing the ordinal.
+        let one_to_one = matches!(
+            trim.geometry,
+            SharedTrimGeometry::ToroidalSection(_)
+                | SharedTrimGeometry::LinearSection(_)
+                | SharedTrimGeometry::Conic(_)
+        ) && native
+            .trims
+            .get(id)
+            .and_then(|t| t.as_ref().ok())
+            .is_some_and(|edges| edges.len() == trim.source_edges.len());
+        let source_edges = if one_to_one {
+            trim.source_edges
+                .get(ordinal)
+                .map_or(&[][..], std::slice::from_ref)
+        } else {
+            trim.source_edges.as_slice()
+        };
+        let mut result = [BTreeSet::new(), BTreeSet::new()];
+        for edge in source_edges {
+            for polygon in std::iter::once(edge.interior_polygon).chain(edge.exterior_polygon) {
+                let support = self.evidence.source_planar_support[polygon];
+                let owner = partition.region_by_support[support];
+                result[usize::from(owner != region)].insert(support);
+            }
+        }
+        result.map(|side| side.into_iter().collect())
+    }
+
     fn chart_choices(
         &self,
         partition: &SurfaceRegionPartition,
@@ -645,9 +688,9 @@ impl HybridSource<'_> {
         native: &NativeTrimGraph,
     ) -> CrossingChoices {
         use crate::mesh_recovery::SurfaceCarrier;
-        let mut choices = Vec::new();
+        let mut choices = BTreeSet::new();
         for region in native.regions.iter().filter(|r| r.requires_chart_cut) {
-            if !matches!(partition.carriers[region.region],Some(SurfaceCarrier::CircularRevolution {radial_center,..}) if radial_center > crate::KERNEL_EPSILON)
+            if !matches!(partition.carriers[region.region],Some(SurfaceCarrier::CircularRevolution{radial_center,..}) if radial_center>crate::KERNEL_EPSILON)
             {
                 continue;
             }
@@ -662,41 +705,60 @@ impl HybridSource<'_> {
             if boundary.loops.len() != 2 {
                 continue;
             }
+            let whole = partition
+                .region_by_support
+                .iter()
+                .enumerate()
+                .filter_map(|(id, &r)| (r == region.region).then_some(id))
+                .collect::<Vec<_>>();
             let mut adjacent = BTreeSet::new();
             for reference in boundary.loops.iter().flatten() {
                 let trim = &graph.trims[reference.trim];
                 if !matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)) {
                     continue;
                 }
-                for edge in &trim.source_edges {
-                    for polygon in
-                        std::iter::once(edge.interior_polygon).chain(edge.exterior_polygon)
-                    {
-                        let support = self.evidence.source_planar_support[polygon];
-                        let owner = partition.region_by_support[support];
-                        if owner != region.region
-                            && matches!(
-                                partition.carriers[owner],
-                                Some(SurfaceCarrier::Plane { .. })
-                            )
-                        {
-                            adjacent.insert(support);
-                        }
-                    }
+                for (ordinal, _) in trim.source_edges.iter().enumerate() {
+                    let [_, opposite] = self.chart_edge_supports(
+                        partition,
+                        graph,
+                        native,
+                        region.region,
+                        (reference.trim, ordinal),
+                    );
+                    adjacent.extend(opposite);
                 }
             }
-            if adjacent.is_empty() {
-                continue;
+            let adjacent = adjacent.into_iter().collect::<Vec<_>>();
+            let fallback = || {
+                let mut result = vec![whole.clone()];
+                if !adjacent.is_empty() {
+                    result.push(adjacent.clone());
+                }
+                result
+            };
+            let mut localized = false;
+            for obstacle in &region.chart_obstacles {
+                let Some(edges) = obstacle.edges() else {
+                    continue;
+                };
+                let mut alternatives = fallback();
+                for edge in edges {
+                    alternatives.extend(
+                        self.chart_edge_supports(partition, graph, native, region.region, edge)
+                            .into_iter()
+                            .filter(|supports| !supports.is_empty()),
+                    );
+                }
+                alternatives.sort_unstable();
+                alternatives.dedup();
+                localized = true;
+                choices.insert(alternatives);
             }
-            let whole = partition
-                .region_by_support
-                .iter()
-                .enumerate()
-                .filter_map(|(id, &r)| (r == region.region).then_some(id))
-                .collect();
-            choices.push(vec![adjacent.into_iter().collect(), whole]);
+            if !localized && !adjacent.is_empty() {
+                choices.insert(fallback());
+            }
         }
-        choices
+        choices.into_iter().collect()
     }
 
     fn domain_choices(
@@ -712,11 +774,9 @@ impl HybridSource<'_> {
     }
 
     fn ensure_crossing_closures(
-        &self,
         search: &mut CoverSearch,
         supports: &[usize],
-        permitted: &[usize],
-        options: HybridRefinementOptions,
+        context: &ReleaseContext<'_>,
     ) -> bool {
         if supports.iter().map(|&id| search.sizes[id]).sum::<usize>() > search.max_polygons {
             return false;
@@ -725,13 +785,7 @@ impl HybridSource<'_> {
             if let std::collections::btree_map::Entry::Vacant(entry) =
                 search.closures.entry(support)
             {
-                let Ok(closure) = support_closure(
-                    self.evidence,
-                    &self.reconciled.partition,
-                    support,
-                    permitted,
-                    options,
-                ) else {
+                let Ok(closure) = context.closure(support) else {
                     return false;
                 };
                 entry.insert(closure);
@@ -741,16 +795,13 @@ impl HybridSource<'_> {
     }
 
     fn crossing_followup(
-        &self,
         search: &mut CoverSearch,
         candidate: &CoverCandidate,
         choices: &mut [Vec<Vec<usize>>],
-        permitted: &[usize],
-        options: HybridRefinementOptions,
+        context: &ReleaseContext<'_>,
     ) -> Option<CoverCandidate> {
         for alternatives in choices.iter_mut() {
-            alternatives
-                .retain(|set| self.ensure_crossing_closures(search, set, permitted, options));
+            alternatives.retain(|set| Self::ensure_crossing_closures(search, set, context));
         }
         if choices.iter().any(Vec::is_empty) {
             return None;
@@ -763,9 +814,14 @@ impl HybridSource<'_> {
         permitted_supports: &[usize],
         options: HybridSupportSearchOptions,
     ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
+        let context = ReleaseContext::new(
+            self.evidence,
+            &self.reconciled.partition,
+            permitted_supports,
+            options.refinement,
+        )?;
         let contacts = self.failed_support_contacts()?;
-        let closures =
-            self.contact_support_closures(&contacts, permitted_supports, options.refinement)?;
+        let closures = self.contact_support_closures(&contacts, permitted_supports, &context)?;
         let sizes = self
             .evidence
             .planar_supports
@@ -776,7 +832,7 @@ impl HybridSource<'_> {
         let mut last = HybridRecoveryError::NoSupportCandidate;
         let mut trials = 0;
         let mut followup = if search.choices.is_empty() {
-            self.crossing_followup(
+            Self::crossing_followup(
                 &mut search,
                 &CoverCandidate {
                     cost: 0,
@@ -789,8 +845,7 @@ impl HybridSource<'_> {
                     self.native,
                     options.refinement.strict.intersection_tolerance,
                 )?,
-                permitted_supports,
-                options.refinement,
+                &context,
             )
         } else {
             None
@@ -801,14 +856,11 @@ impl HybridSource<'_> {
             };
             trials += 1;
             let seed_cost: usize = candidate.seeds.iter().map(|&id| search.sizes[id]).sum();
-            let refinement = HybridRefinementOptions {
-                max_added_polygons: options.refinement.max_added_polygons - seed_cost,
-                ..options.refinement
-            };
-            match self.construct_refined_hybrid(
+            let limit = options.refinement.max_added_polygons - seed_cost;
+            match self.construct_refined_with_context(
                 HybridRefinementSeed::Supports(&candidate.seeds),
-                permitted_supports,
-                refinement,
+                &context,
+                limit,
             ) {
                 Ok(refined) => {
                     if refined
@@ -833,12 +885,11 @@ impl HybridSource<'_> {
                             options.refinement.strict.intersection_tolerance,
                         ) {
                             Ok(mut choices) => {
-                                followup = self.crossing_followup(
+                                followup = Self::crossing_followup(
                                     &mut search,
                                     &candidate,
                                     &mut choices,
-                                    permitted_supports,
-                                    options.refinement,
+                                    &context,
                                 );
                             }
                             Err(error) => {

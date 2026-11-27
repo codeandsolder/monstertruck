@@ -509,7 +509,7 @@ fn refined_result_report(
     Ok(
         json!({"status":"ok","selected_regions":refined.selected_regions,
         "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
-            "support":c.support,"parent_region":c.parent_region,"edge":c.edge,"distance_lower_witness":c.distance_lower_witness
+            "support":c.support,"parent_region":c.parent_region,"locus":match c.locus { monstertruck_modeling::mesh_recovery::PatchSupportLocus::Chord(edge)=>json!({"edge":edge}),monstertruck_modeling::mesh_recovery::PatchSupportLocus::Vertex(vertex)=>json!({"vertex":vertex}) },"distance_lower_witness":c.distance_lower_witness
         })).collect::<Vec<_>>(),
         "planar_simplification":planar_simplification,"patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
         "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).map(|r|json!({"region":r.region,"error":r.faces.as_ref().err().map(ToString::to_string)})).collect::<Vec<_>>(),

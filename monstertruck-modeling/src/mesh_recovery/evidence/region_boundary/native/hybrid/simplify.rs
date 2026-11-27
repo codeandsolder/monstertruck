@@ -270,6 +270,7 @@ mod tests {
                 region,
                 faces: Ok(patch.shell[range.clone()].to_vec()),
                 requires_chart_cut: false,
+                chart_obstacles: Vec::new(),
                 chart_seams: 0,
             })
             .collect();

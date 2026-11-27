@@ -45,8 +45,9 @@ pub use native::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
     HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
-    HybridSupportSearchRecovery, NativeRegionFace, NativeTrimError, NativeTrimGraph,
-    NativeTrimOptions, PatchSupportConflict, PlanarTrimCrossing, RefinedHybridRecovery,
+    HybridSupportSearchRecovery, NativeChartObstacle, NativeRegionFace, NativeTrimError,
+    NativeTrimGraph, NativeTrimOptions, PatchSupportConflict, PatchSupportLocus,
+    PlanarTrimCrossing, RefinedHybridRecovery,
 };
 pub use partition::{SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal};
 pub use patch_lift::{LiftedRegionPatch, RegionPatchError, RegionPatchOptions};

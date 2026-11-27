@@ -151,6 +151,7 @@ mod tests {
                 region: 0,
                 faces: Ok(vec![source]),
                 requires_chart_cut: false,
+                chart_obstacles: Vec::new(),
                 chart_seams: 0,
             }];
             propagate(&mut regions, &original, &final_trims)?;
