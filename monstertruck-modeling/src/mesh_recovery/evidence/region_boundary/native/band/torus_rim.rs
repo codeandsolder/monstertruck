@@ -6,11 +6,12 @@
 
 use super::{BandContext, BandPlan, Ring, copy_rings, parameter_circle};
 use crate::mesh_recovery::{OrientedTrim, SharedTrimGeometry, SurfaceCarrier};
-use crate::{BoundedCurve, Edge, NurbsCurve, ParametricCurve, Point3};
+use crate::{BoundedCurve, Edge, InnerSpace, NurbsCurve, ParametricCurve, Point3};
 use monstertruck_geometry::analytic_curve_incidence::{
     CircularArcFrame, certify_circular_arc_coverage,
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
+use monstertruck_geometry::proof_bezier_spans;
 use std::f64::consts::{PI, TAU};
 mod simplicity;
 
@@ -148,9 +149,20 @@ impl BandContext<'_> {
         None
     }
 
-    fn torus_path(&self, edge: &Edge, kind: PathKind, ring: Ring, side: f64) -> Option<RimPath> {
-        let start = self.torus_chart(edge.front().point())?;
-        let end = self.torus_chart(edge.back().point())?;
+    fn torus_path(
+        &self,
+        points: [Point3; 2],
+        circle: Option<&Edge>,
+        ring: Ring,
+        side: f64,
+    ) -> Option<RimPath> {
+        let start = self.torus_chart(points[0])?;
+        let end = self.torus_chart(points[1])?;
+        let kind = if circle.is_some() {
+            PathKind::Circle
+        } else {
+            PathKind::Lifted
+        };
         let resolution = self.options.angular_resolution;
         let delta = match kind {
             PathKind::Lifted => {
@@ -160,7 +172,7 @@ impl BandContext<'_> {
                 }
                 delta
             }
-            PathKind::Circle => self.circle_delta(edge, start)?,
+            PathKind::Circle => self.circle_delta(circle?, start)?,
         };
         if (0..2).any(|i| signed_delta(start[i] + delta[i], end[i]).abs() > resolution) {
             return None;
@@ -183,15 +195,60 @@ impl BandContext<'_> {
         })
     }
 
+    // Lift provenance certifies each positive knot span is a complete
+    // tensor-circle path. Extract all original spans without tolerant
+    // knot grouping; a C0 spline is still one shared topological edge.
+    fn torus_spans(
+        &self,
+        edge: &Edge,
+        kind: PathKind,
+        ring: Ring,
+        side: f64,
+    ) -> Option<Vec<(RimPath, Point3)>> {
+        let curve = edge.oriented_curve();
+        let front = edge.front().point();
+        let back = edge.back().point();
+        if matches!(kind, PathKind::Circle) {
+            let (a, b) = curve.range_tuple();
+            return Some(vec![(
+                self.torus_path([front, back], Some(edge), ring, side)?,
+                curve.evaluate(a.midpoint(b)),
+            )]);
+        }
+        let spline = curve.try_into_homogeneous_bspline_curve()?;
+        let spans = proof_bezier_spans(&spline)?;
+        let tol = self.options.intersection_tolerance;
+        let mut previous = front;
+        let mut result = Vec::with_capacity(spans.len());
+        let point = |&[x, y, z, w]: &[f64; 4]| Point3::new(x / w, y / w, z / w);
+        for span in spans {
+            if span.controls.len() != 5 {
+                return None;
+            }
+            let a = point(span.controls.first()?);
+            let b = point(span.controls.last()?);
+            if (a - previous).magnitude() > tol {
+                return None;
+            }
+            result.push((
+                self.torus_path([a, b], None, ring, side)?,
+                curve.evaluate(span.start.midpoint(span.end)),
+            ));
+            previous = b;
+        }
+        ((previous - back).magnitude() <= tol).then_some(result)
+    }
+
     fn torus_cuts(
         &self,
-        rim: &[Edge],
+        first_point: Point3,
         paths: &[RimPath],
+        midpoints: &[Point3],
         ring: Ring,
     ) -> Option<[([f64; 2], Point3); 2]> {
         let resolution = self.options.angular_resolution;
         let direction = if ring.positive { -1.0 } else { 1.0 };
-        let first = self.torus_chart(rim.first()?.front().point())?[ring.axis];
+        let first = self.torus_chart(first_point)?[ring.axis];
         let mut position = 0.0;
         let ranges = paths
             .iter()
@@ -202,13 +259,10 @@ impl BandContext<'_> {
             })
             .collect::<Vec<_>>();
         let mut candidates = Vec::new();
-        for (i, edge) in rim.iter().enumerate() {
+        for (i, &point) in midpoints.iter().enumerate() {
             if paths[i].advance <= 2.0 * resolution {
                 continue;
             }
-            let curve = edge.oriented_curve();
-            let (a, b) = curve.range_tuple();
-            let point = curve.evaluate(a.midpoint(b));
             let uv = self.torus_chart(point)?;
             let phase = (direction * (uv[ring.axis] - first)).rem_euclid(TAU);
             let [lo, hi] = ranges[i];
@@ -264,7 +318,7 @@ impl BandContext<'_> {
             -1.0
         };
         let mut rim = Vec::new();
-        let mut paths = Vec::new();
+        let mut spans = Vec::new();
         for reference in cycles[1 - ring_index] {
             let edges = changed.get(&reference.trim)?;
             let trim = self.graph.trims.get(reference.trim)?;
@@ -288,10 +342,11 @@ impl BandContext<'_> {
                 edges.clone()
             };
             for edge in oriented {
-                paths.push(self.torus_path(&edge, kind, ring, side)?);
+                spans.extend(self.torus_spans(&edge, kind, ring, side)?);
                 rim.push(edge);
             }
         }
+        let (paths, midpoints): (Vec<_>, Vec<_>) = spans.into_iter().unzip();
         let resolution = self.options.angular_resolution;
         if rim
             .iter()
@@ -332,7 +387,7 @@ impl BandContext<'_> {
         {
             return None;
         }
-        let cuts = self.torus_cuts(&rim, &paths, ring)?;
+        let cuts = self.torus_cuts(rim.first()?.front().point(), &paths, &midpoints, ring)?;
         self.finish_variable_band(cycles, ring_index, ring, changed, cuts, trims)
     }
 }
