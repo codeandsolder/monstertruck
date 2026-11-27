@@ -284,6 +284,7 @@ impl RegionAssemblyInput<'_> {
                     supports,
                     positions: self.positions,
                     graph: self.graph,
+                    lifted_deviations: self.lifted_deviations,
                     options: self.options,
                 }
                 .plan(boundary, trims)
@@ -446,6 +447,7 @@ impl FaceAssembly<'_> {
                     supports,
                     positions: self.positions,
                     graph: self.chart.graph,
+                    lifted_deviations: self.chart.lifted_deviations,
                     options: self.options,
                 })
                 .closed_torus()
@@ -1843,6 +1845,7 @@ mod tests {
                 supports: &supports[1..],
                 positions: &evidence.positions,
                 graph: &trims,
+                lifted_deviations: &[],
                 options: native_options(),
             };
             assert!(incomplete.closed_torus().is_none());

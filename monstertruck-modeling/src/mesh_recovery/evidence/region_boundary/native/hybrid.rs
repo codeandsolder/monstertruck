@@ -31,6 +31,7 @@ mod simplify;
 pub use refinement::{
     HybridRefinementOptions, HybridRefinementSeed, PatchSupportConflict, RefinedHybridRecovery,
 };
+mod subdivisions;
 mod support_search;
 pub use simplify::HybridPlanarSimplification;
 pub use support_search::{HybridSupportSearchOptions, HybridSupportSearchRecovery};
@@ -164,15 +165,17 @@ pub enum HybridRecoveryError {
     NoSupportCandidate,
     /// A geometrically valid local transaction did not close the entire shell.
     #[error(
-        "hybrid support transaction incomplete: {failed_regions} failed regions, {failed_trims} failed trims, {chart_cuts} pending chart cuts"
+        "hybrid support transaction with seeds {seed_supports:?} incomplete: failed regions {failed_regions:?}, failed trims {failed_trims:?}, pending chart cuts (region, original parent) {chart_cuts:?}"
     )]
     IncompleteSupportRecovery {
-        /// Remaining failed native region faces.
-        failed_regions: usize,
-        /// Remaining failed shared native trims.
-        failed_trims: usize,
-        /// Remaining unresolved periodic chart cuts.
-        chart_cuts: usize,
+        /// Original supports selected by the cover search.
+        seed_supports: Box<[usize]>,
+        /// Remaining failed refined region IDs and exact errors.
+        failed_regions: Box<[(usize, NativeTrimError)]>,
+        /// Remaining failed refined trim IDs and exact errors.
+        failed_trims: Box<[(usize, NativeTrimError)]>,
+        /// Remaining chart cuts and original parent region IDs.
+        chart_cuts: Box<[(usize, Option<usize>)]>,
     },
     /// Bounded support-cover search exhausted its proposals.
     #[error(
@@ -376,6 +379,10 @@ impl HybridInput<'_> {
             mut trims,
             bounds: lifted_trims,
         } = self.edges(&plan, &vertices)?;
+        let lifted_originals = lifted_trims
+            .keys()
+            .map(|&id| Ok((id, trims[id].as_ref().map_err(|&error| error)?.clone())))
+            .collect::<Result<BTreeMap<_, _>, HybridRecoveryError>>()?;
         let mut points = self.positions.to_vec();
         for &id in &plan.touched {
             points[id] = vertices[id]
@@ -404,7 +411,10 @@ impl HybridInput<'_> {
         }
         .assemble(&mut trims)?;
         self.check_retained(&plan, &trims, &regions)?;
-        let patches = self.assemble_patches(&plan, &trims, &mut regions)?;
+        let mut patch_regions = Vec::new();
+        let patches = self.assemble_patches(&plan, &lifted_originals, &mut patch_regions)?;
+        subdivisions::propagate(&mut patch_regions, &lifted_originals, &trims)?;
+        regions.extend(patch_regions);
         regions.sort_unstable_by_key(|r| r.region);
         let max_vertex_displacement = vertices
             .iter()
@@ -635,7 +645,7 @@ impl HybridInput<'_> {
     fn assemble_patches(
         &self,
         plan: &HybridPlan,
-        trims: &[Result<Vec<Edge>, NativeTrimError>],
+        originals: &BTreeMap<usize, Vec<Edge>>,
         regions: &mut Vec<NativeRegionFace>,
     ) -> Result<Vec<HybridPatchEvidence>, HybridRecoveryError> {
         let groups = self
@@ -686,7 +696,9 @@ impl HybridInput<'_> {
                 .get(&trim.regions.0)
                 .or_else(|| trim.regions.1.and_then(|r| by_region.get(&r)))
                 .ok_or(HybridRecoveryError::InvalidInput)?;
-            let native = trims[id].as_ref().map_err(|&error| error)?;
+            let native = originals
+                .get(&id)
+                .ok_or(HybridRecoveryError::InvalidInput)?;
             if native.len() != trim.source_edges.len() {
                 return Err(HybridRecoveryError::InvalidInput);
             }
@@ -822,6 +834,186 @@ mod tests {
     use super::super::super::patch_lift::tests::spherical_fixture;
     use super::*;
     use crate::mesh_recovery::{RegionBoundaryIndex, SharedTrimOptions, SurfaceRegionBudget};
+
+    fn variable_torus_fixture(
+        varying: usize,
+        major: f64,
+    ) -> Result<(monstertruck_mesh::PolygonMesh, usize), Box<dyn std::error::Error>> {
+        use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+        use std::f64::consts::TAU;
+        let ring = 16_usize;
+        let stations = 5_usize;
+        let mut positions = Vec::new();
+        for i in 0..stations {
+            let fraction = crate::usize_to_f64(i) / crate::usize_to_f64(stations - 1);
+            for j in 0..ring {
+                let angle = TAU * crate::usize_to_f64(j) / crate::usize_to_f64(ring);
+                let fixed = fraction * (1.0 + 0.15 * (3.0 * angle).sin());
+                let [u, v] = if varying == 0 {
+                    [angle, fixed]
+                } else {
+                    [fixed, angle]
+                };
+                positions.push(Point3::new(
+                    (major + v.cos()) * u.cos(),
+                    (major + v.cos()) * u.sin(),
+                    v.sin(),
+                ));
+            }
+        }
+        let mut faces = Vec::new();
+        for i in 0..stations - 1 {
+            for j in 0..ring {
+                let next = (j + 1) % ring;
+                let a = i * ring + j;
+                let b = i * ring + next;
+                let c = (i + 1) * ring + next;
+                let d = (i + 1) * ring + j;
+                let mut pair = [vec![a, b, c], vec![a, c, d]];
+                if varying == 1 {
+                    for face in &mut pair {
+                        face.reverse();
+                    }
+                }
+                faces.extend(pair);
+            }
+        }
+        let torus_faces = faces.len();
+        // The first rim is a strict circular contact. The other cap
+        // relinquishes its planar facet carriers and shares exact
+        // lifted torus chords with the retained band.
+        let mut first: Vec<_> = (0..ring).collect();
+        if varying == 0 {
+            first.reverse();
+        }
+        faces.push(first);
+        let cap = positions.len();
+        positions.push(if varying == 0 {
+            Point3::new(0.0, 0.0, 1.0_f64.sin())
+        } else {
+            Point3::new(major * 1.0_f64.cos(), major * 1.0_f64.sin(), 0.0)
+        });
+        for j in 0..ring {
+            let offset = (stations - 1) * ring;
+            let mut face = vec![offset + j, offset + (j + 1) % ring, cap];
+            if varying == 1 {
+                face.reverse();
+            }
+            faces.push(face);
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        Ok((mesh, torus_faces))
+    }
+
+    #[test]
+    fn hybrid_toroidal_variable_rim_closes_with_shared_seam_subdivisions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::{
+            Vector3,
+            mesh_recovery::{EvidenceOptions, analyze_mesh_evidence},
+        };
+
+        let strict = NativeTrimOptions {
+            max_vertex_displacement: 1.0e-8,
+            intersection_tolerance: 1.0e-10,
+            angular_resolution: 1.0e-8,
+        };
+        let patch = RegionPatchOptions {
+            budget: SurfaceRegionBudget {
+                vertex: 1.0e-8,
+                chord: 0.25,
+            },
+            intersection_tolerance: strict.intersection_tolerance,
+            angular_resolution: strict.angular_resolution,
+        };
+        for (varying, major) in [(0, 3.0), (1, 3.0), (0, 1.0), (0, 0.8)] {
+            let carrier = SurfaceCarrier::CircularRevolution {
+                axial_center: Point3::new(0.0, 0.0, 0.0),
+                axis: Vector3::unit_z(),
+                radial_center: major,
+                profile_radius: 1.0,
+            };
+            let (mesh, torus_faces) = variable_torus_fixture(varying, major)?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let mut supports = evidence.source_planar_support[..torus_faces].to_vec();
+            supports.sort_unstable();
+            supports.dedup();
+            let proposal = index
+                .measure_surface_region(&supports, carrier, patch.budget)
+                .ok_or("torus carrier")?;
+            let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+            let torus = partition.region_by_polygon[0];
+            assert!(
+                partition.region_by_polygon[..torus_faces]
+                    .iter()
+                    .all(|&id| id == torus)
+            );
+            let selected = partition
+                .region_by_polygon
+                .iter()
+                .enumerate()
+                .filter_map(|(id, &region)| {
+                    (region != torus
+                        && evidence
+                            .source_polygon_vertices(id)
+                            .is_some_and(|ids| ids.len() == 3))
+                    .then_some(region)
+                })
+                .collect::<BTreeSet<_>>();
+            assert!(!selected.contains(&torus));
+            let graph = index.assemble_shared_trims(
+                &partition,
+                &evidence.positions,
+                SharedTrimOptions {
+                    absolute_tolerance: 1.0e-8,
+                    relative_tolerance: 1.0e-4,
+                    max_interval_edges: 128,
+                },
+            )?;
+            let baseline =
+                index.construct_native_trims(&partition, &graph, &evidence.positions, strict)?;
+            let input = HybridInput {
+                evidence: &evidence,
+                partition: &partition,
+                graph: &graph,
+                baseline: &baseline,
+                positions: &evidence.positions,
+                selected,
+                patch,
+                strict,
+            };
+            let result = input.assemble()?;
+            let region = result
+                .native
+                .regions
+                .iter()
+                .find(|r| r.region == torus)
+                .ok_or("retained torus")?;
+            assert_eq!(region.chart_seams, 2);
+            assert!(!region.requires_chart_cut);
+            let shell = result.complete_shell().ok_or("closed hybrid torus")?;
+            assert_eq!(shell.shell_condition(), ShellCondition::Closed);
+            assert!(shell.is_geometric_consistent());
+            assert!(result.lifted_trims.keys().any(|&id| {
+                result.native.trims[id]
+                    .as_ref()
+                    .is_ok_and(|edges| edges.len() > graph.trims[id].source_edges.len())
+            }));
+            for &id in result.lifted_trims.keys() {
+                for edge in result.native.trims[id].as_ref().map_err(|&error| error)? {
+                    assert_eq!(shell.edge_iter().filter(|e| e.id() == edge.id()).count(), 2);
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn hybrid_graph_shares_all_native_trims_and_preserves_retained_faces()

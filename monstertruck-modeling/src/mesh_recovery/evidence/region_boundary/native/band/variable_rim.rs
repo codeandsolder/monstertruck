@@ -189,6 +189,9 @@ impl BandContext<'_> {
         ring: Ring,
         trims: &mut [Result<Vec<Edge>, super::NativeTrimError>],
     ) -> Option<BandPlan> {
+        if matches!(self.carrier, SurfaceCarrier::CircularRevolution { .. }) {
+            return self.variable_torus_band(cycles, ring_index, ring, trims);
+        }
         let SurfaceCarrier::LinearRevolution {
             origin,
             axis,
@@ -202,7 +205,7 @@ impl BandContext<'_> {
             return None;
         }
         let other = 1 - ring_index;
-        let mut changed = copy_rings(cycles[0].iter().chain(cycles[1]), trims)?;
+        let changed = copy_rings(cycles[0].iter().chain(cycles[1]), trims)?;
         let mut rim = Vec::new();
         for reference in cycles[other] {
             let edges = changed.get(&reference.trim)?;
@@ -249,25 +252,49 @@ impl BandContext<'_> {
         {
             return None;
         }
-        let [first, second] = self.rim_cuts(&rim, &proofs)?;
+        let cuts = self.rim_cuts(&rim, &proofs)?;
+        self.finish_variable_band(cycles, ring_index, ring, changed, cuts, trims)
+    }
+
+    pub(super) fn finish_variable_band(
+        &self,
+        cycles: [&[OrientedTrim]; 2],
+        ring_index: usize,
+        ring: Ring,
+        mut changed: std::collections::BTreeMap<usize, Vec<Edge>>,
+        cuts: [([f64; 2], Point3); 2],
+        trims: &mut [Result<Vec<Edge>, super::NativeTrimError>],
+    ) -> Option<BandPlan> {
+        let other = 1 - ring_index;
+        let varying = ring.axis;
+        let fixed = 1 - varying;
+        let ring_lower = (ring.positive == (varying == 0)) == self.outward;
+        let side = if ring_lower { 1.0 } else { -1.0 };
+        let tol = self.options.intersection_tolerance;
         let mut vertices = [Vec::<Vertex>::new(), Vec::new()];
         let mut seams = Vec::new();
-        for (uv, rim_point) in [first, second] {
-            let point = world_point(self.carrier, [uv[0], ring.fixed])?;
+        for (uv, rim_point) in cuts {
+            let mut ring_uv = uv;
+            ring_uv[fixed] = ring.fixed;
+            let point = world_point(self.carrier, ring_uv)?;
             let ring_vertex = cut_ring(cycles[ring_index], point, &mut changed, tol)?;
             let rim_vertex = cut_ring(cycles[other], rim_point, &mut changed, tol)?;
             vertices[ring_index].push(ring_vertex);
             vertices[other].push(rim_vertex);
-            let (start, end) = if ring_index == 0 {
-                (ring.fixed, uv[1])
+            let mut sweep = uv[fixed] - ring.fixed;
+            if super::periodic_coordinate(self.carrier, fixed) {
+                sweep = side * (side * sweep).rem_euclid(TAU);
+            }
+            let (start, sweep) = if ring_index == 0 {
+                (ring.fixed, sweep)
             } else {
-                (uv[1], ring.fixed)
+                (uv[fixed], -sweep)
             };
             seams.push(self.seam(
-                0,
-                uv[0],
+                varying,
+                uv[varying],
                 start,
-                end - start,
+                sweep,
                 vertices[0].last()?,
                 vertices[1].last()?,
             )?);
