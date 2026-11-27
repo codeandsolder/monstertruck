@@ -382,7 +382,7 @@ fn benchmark(
         "trim_relative_tolerance":options.trim_options(&recovery.evidence).relative_tolerance,
         "limited_partition_components":partition.limited_components,
         "rim_linear_proposals":recovery.discovery.rim_linear_proposals,
-        "expanded_circular_proposals":recovery.discovery.expanded_circular_proposals,
+        "expanded_circular_proposals":recovery.discovery.expanded_circular_proposals,"expanded_linear_proposals":recovery.discovery.expanded_linear_proposals,
         "compared_native_neighborhoods":recovery.discovery.compared_native_neighborhoods,
         "expanded_native_neighborhoods":recovery.discovery.expanded_native_neighborhoods,
         "shell_condition":complete.as_ref().map(|shell|format!("{:?}",shell.shell_condition())),
