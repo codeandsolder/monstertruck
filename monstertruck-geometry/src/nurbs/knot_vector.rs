@@ -1,10 +1,13 @@
+#![expect(
+    clippy::many_single_char_names,
+    reason = "compact symbols in basis-function recurrences follow the standard B-spline notation"
+)]
+
 use super::{BasisWindow, Deserialize, KnotVector, Result, Tolerance, Zero};
 use crate::errors::Error;
+use smallvec::SmallVec;
 use std::slice::SliceIndex;
 use std::vec::Vec;
-
-mod basis_recurrence;
-use basis_recurrence::{BasisJet, BasisRecurrence};
 
 #[inline]
 fn inv_or_zero_strict(delta: f64) -> f64 { if delta.is_zero() { 0.0 } else { 1.0 / delta } }
@@ -279,15 +282,62 @@ impl KnotVector {
         der_rank: usize,
         t: f64,
     ) -> BasisWindow {
+        let n = self.len() - 1;
         if degree < der_rank {
-            return BasisWindow::empty(self.len() - 1 - degree);
+            return BasisWindow::empty(n - degree);
         }
-        BasisRecurrence::new(self, degree, t).evaluate(der_rank)
-    }
 
-    /// Evaluates consecutive derivative ranks from zero using shared polynomial recurrence prefixes.
-    pub(super) fn bspline_basis_jet<const N: usize>(&self, degree: usize, t: f64) -> BasisJet<N> {
-        BasisRecurrence::new(self, degree, t).jet()
+        let idx = {
+            // For a parameter below the range, use the final occurrence of the
+            // first knot. This is exactly what `floor(self[0])` returned before,
+            // but does not make a second partial lookup on an invariant.
+            let idx = self
+                .floor(t)
+                .unwrap_or_else(|| self.strict_multiplicity(0).saturating_sub(1));
+            if idx == n {
+                n.saturating_sub(self.strict_multiplicity(n))
+            } else {
+                idx
+            }
+        };
+
+        let start = idx.saturating_sub(degree);
+        // The Cox-de Boor recurrence reads `eval[j]` and `eval[j + 1]`; an
+        // extra trailing slot avoids a bounds check on the final iteration.
+        let mut eval: SmallVec<[f64; 32]> = smallvec::smallvec![0.0; degree + 2];
+        eval[idx - start] = 1.0;
+
+        for k in 1..=(degree - der_rank) {
+            let base = idx.saturating_sub(k);
+            let delta = self[base + k] - self[base];
+            let mut a = inv_or_zero_strict(delta) * (t - self[base]);
+            for i in base..=usize::min(idx, n - k - 1) {
+                let delta = self[i + k + 1] - self[i + 1];
+                let b = inv_or_zero_strict(delta) * (self[i + k + 1] - t);
+                let j = i - start;
+                eval[j] = b.mul_add(eval[j + 1], a * eval[j]);
+                a = 1.0 - b;
+            }
+        }
+
+        for k in (degree - der_rank + 1)..=degree {
+            let base = idx.saturating_sub(k);
+            let delta = self[base + k] - self[base];
+            let mut a = inv_or_zero_strict(delta);
+            for i in base..=usize::min(idx, n - k - 1) {
+                let delta = self[i + k + 1] - self[i + 1];
+                let b = inv_or_zero_strict(delta);
+                let j = i - start;
+                eval[j] = b.mul_add(-eval[j + 1], a * eval[j]) * crate::usize_to_f64(k);
+                a = b;
+            }
+        }
+
+        // Drop the trailing sentinel and any tail beyond the active window
+        // when the evaluation lands near the end of the parameter range.
+        eval.truncate(usize::min(degree + 1, (n - degree) - start));
+
+        BasisWindow::new(start, eval, n - degree)
     }
 
     #[doc(hidden)]
