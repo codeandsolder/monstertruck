@@ -7,9 +7,10 @@
 
 use super::super::patch_lift::{junction_roundoff, lift_native_source_edge};
 use super::{
-    NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions, RegionAssemblyInput,
-    SectionBranch, SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition,
-    TrimInterval, build_trim, geometry_constraints, junction_candidates, trim_intervals,
+    NativeChartObstacle, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
+    RegionAssemblyInput, SectionBranch, SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier,
+    SurfaceRegionPartition, TrimInterval, build_trim, geometry_constraints, junction_candidates,
+    trim_intervals,
 };
 use crate::{
     Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
@@ -30,7 +31,8 @@ pub use connectors::{HybridConnectorOptions, HybridConnectorRecovery, HybridConn
 mod refinement;
 mod simplify;
 pub use refinement::{
-    HybridRefinementOptions, HybridRefinementSeed, PatchSupportConflict, RefinedHybridRecovery,
+    HybridRefinementOptions, HybridRefinementSeed, PatchSupportConflict, PatchSupportLocus,
+    RefinedHybridRecovery,
 };
 mod subdivisions;
 mod support_search;
@@ -166,7 +168,7 @@ pub enum HybridRecoveryError {
     NoSupportCandidate,
     /// A geometrically valid local transaction did not close the entire shell.
     #[error(
-        "hybrid support transaction with seeds {seed_supports:?} incomplete: failed regions {failed_regions:?}, failed trims {failed_trims:?}, pending chart cuts (region, original parent) {chart_cuts:?}"
+        "hybrid support transaction with seeds {seed_supports:?} incomplete: failed regions {failed_regions:?}, failed trims {failed_trims:?}, pending chart cuts (region, original parent) {chart_cuts:?}, chart obstacles {chart_obstacles:?}"
     )]
     IncompleteSupportRecovery {
         /// Original supports selected by the cover search.
@@ -177,6 +179,8 @@ pub enum HybridRecoveryError {
         failed_trims: Box<[(usize, NativeTrimError)]>,
         /// Remaining chart cuts and original parent region IDs.
         chart_cuts: Box<[(usize, Option<usize>)]>,
+        /// Remaining localized chart proof failures.
+        chart_obstacles: Box<[(usize, Vec<NativeChartObstacle>)]>,
     },
     /// Bounded support-cover search exhausted its proposals.
     #[error(
@@ -869,6 +873,7 @@ impl HybridInput<'_> {
             region,
             faces: Ok(faces),
             requires_chart_cut: false,
+            chart_obstacles: Vec::new(),
             chart_seams: 0,
         }));
         Ok(HybridPatchEvidence {

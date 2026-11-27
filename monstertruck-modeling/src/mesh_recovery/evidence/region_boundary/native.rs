@@ -27,7 +27,7 @@ pub use hybrid::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
     HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
-    HybridSupportSearchRecovery, PatchSupportConflict, RefinedHybridRecovery,
+    HybridSupportSearchRecovery, PatchSupportConflict, PatchSupportLocus, RefinedHybridRecovery,
 };
 
 /// Numerical and displacement policies for native trim vertex reconciliation.
@@ -77,6 +77,42 @@ pub enum NativeTrimError {
     FaceGeometry,
 }
 
+/// A native toroidal chart proof could not certify a particular condition.
+///
+/// Edge references are (shared trim ID, native edge ordinal) at planning
+/// time. An unproven pair is not an assertion of a transverse crossing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeChartObstacle {
+    /// A complete curve span could not be placed in a regular local chart.
+    Span((usize, usize)),
+    /// The variable rim was not proved disjoint from its reference ring.
+    RingContact((usize, usize)),
+    /// Continuous disjointness of two rim edge intervals was unproven.
+    RimPair([(usize, usize); 2]),
+    /// The required winding or junction continuity could not be established.
+    Winding,
+    /// No pair of unique isoparametric cut coordinates was proved.
+    CutSelection,
+    /// The chart does not certify source support coverage and orientation.
+    Coverage,
+    /// Native shared cuts or seams could not be constructed.
+    SeamConstruction,
+    /// Invalid or unsupported chart evidence.
+    Invalid,
+}
+
+impl NativeChartObstacle {
+    /// Native intervals implicated by a localized proof obstruction.
+    #[must_use]
+    pub const fn edges(self) -> Option<[(usize, usize); 2]> {
+        match self {
+            Self::Span(edge) | Self::RingContact(edge) => Some([edge, edge]),
+            Self::RimPair(edges) => Some(edges),
+            _ => None,
+        }
+    }
+}
+
 /// One native candidate with original region identity and periodic-domain evidence.
 #[derive(Debug)]
 pub struct NativeRegionFace {
@@ -87,6 +123,8 @@ pub struct NativeRegionFace {
     /// A boundary-free domain, noncontractible loop, pole or ambiguous
     /// outer/inner loop ordering requires an explicit chart decomposition.
     pub requires_chart_cut: bool,
+    /// Localized proof obstacles from the attempted chart decomposition.
+    pub chart_obstacles: Vec<NativeChartObstacle>,
     /// Number of applied internal chart seam sequences.
     pub chart_seams: usize,
 }
@@ -325,52 +363,56 @@ impl RegionAssemblyInput<'_> {
             .regions
             .iter()
             .map(|region| {
-                if self.approximated.contains(&region.region) {
-                    return None;
-                }
-                let carrier = self
-                    .partition
-                    .carriers
-                    .get(region.region)
-                    .copied()
-                    .flatten()?;
-                let supports = groups.get(region.region)?;
-                let boundary = region.boundary.as_ref().ok()?;
-                let carrier = chart_carrier(
-                    carrier,
-                    boundary,
-                    ChartTrimEvidence {
+                let mut obstacles = Vec::new();
+                let plan = (|| {
+                    if self.approximated.contains(&region.region) {
+                        return None;
+                    }
+                    let carrier = self
+                        .partition
+                        .carriers
+                        .get(region.region)
+                        .copied()
+                        .flatten()?;
+                    let supports = groups.get(region.region)?;
+                    let boundary = region.boundary.as_ref().ok()?;
+                    let carrier = chart_carrier(
+                        carrier,
+                        boundary,
+                        ChartTrimEvidence {
+                            graph: self.graph,
+                            lifted_deviations: self.lifted_deviations,
+                        },
+                        self.evidence,
+                        supports,
+                        self.positions,
+                        self.options,
+                    );
+                    let (surface, outward) = native_surface(
+                        carrier,
+                        self.evidence,
+                        supports,
+                        self.positions,
+                        self.options,
+                    )
+                    .ok()?;
+                    if !boundary.pinched_vertices.is_empty() {
+                        return None;
+                    }
+                    band::BandContext {
+                        carrier,
+                        surface: &surface,
+                        outward,
+                        evidence: self.evidence,
+                        supports,
+                        positions: self.positions,
                         graph: self.graph,
                         lifted_deviations: self.lifted_deviations,
-                    },
-                    self.evidence,
-                    supports,
-                    self.positions,
-                    self.options,
-                );
-                let (surface, outward) = native_surface(
-                    carrier,
-                    self.evidence,
-                    supports,
-                    self.positions,
-                    self.options,
-                )
-                .ok()?;
-                if !boundary.pinched_vertices.is_empty() {
-                    return None;
-                }
-                band::BandContext {
-                    carrier,
-                    surface: &surface,
-                    outward,
-                    evidence: self.evidence,
-                    supports,
-                    positions: self.positions,
-                    graph: self.graph,
-                    lifted_deviations: self.lifted_deviations,
-                    options: self.options,
-                }
-                .plan(boundary, trims)
+                        options: self.options,
+                    }
+                    .plan(boundary, trims, &mut obstacles)
+                })();
+                (plan, obstacles)
             })
             .collect::<Vec<_>>();
         let assembly = FaceAssembly {
@@ -389,9 +431,9 @@ impl RegionAssemblyInput<'_> {
             .graph
             .regions
             .iter()
-            .zip(&plans)
+            .zip(plans)
             .filter(|(region, _)| !self.approximated.contains(&region.region))
-            .map(|(region, plan)| assembly.region(region, plan.as_ref()))
+            .map(|(region, (plan, obstacles))| assembly.region(region, plan.as_ref(), obstacles))
             .collect();
         Ok(regions)
     }
@@ -483,6 +525,7 @@ impl FaceAssembly<'_> {
         &self,
         region: &super::RegionTrimBoundary,
         plan: Option<&band::BandPlan>,
+        chart_obstacles: Vec<NativeChartObstacle>,
     ) -> NativeRegionFace {
         let mut requires_chart_cut = false;
         let mut chart_seams = 0;
@@ -570,6 +613,11 @@ impl FaceAssembly<'_> {
             region: region.region,
             faces,
             requires_chart_cut,
+            chart_obstacles: if requires_chart_cut {
+                chart_obstacles
+            } else {
+                Vec::new()
+            },
             chart_seams,
         }
     }
@@ -2004,6 +2052,125 @@ mod tests {
             trims[0].as_ref().map_err(|error| *error)?[0].front(),
             &original
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tilted_planar_section_bounds_a_closed_toroidal_band()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let n = 24_usize;
+        let stations = 4_usize;
+        let mut positions = Vec::new();
+        // z = 0.1*x + 0.45 gives a regular noncircular upper rim.
+        for row in 0..stations {
+            for i in 0..n {
+                let azimuth = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                let (sine, cosine) = azimuth.sin_cos();
+                let slope = 0.1 * cosine;
+                let end = slope.atan() + ((0.45 + 3.0 * slope) / 1.0_f64.hypot(slope)).asin();
+                let meridian = end * crate::usize_to_f64(row) / crate::usize_to_f64(stations - 1);
+                let radius = 3.0 + meridian.cos();
+                positions.push(Point3::new(radius * cosine, radius * sine, meridian.sin()));
+            }
+        }
+        let mut faces = Vec::new();
+        for row in 0..stations - 1 {
+            for i in 0..n {
+                let a = row * n + i;
+                let b = row * n + (i + 1) % n;
+                let c = b + n;
+                let d = a + n;
+                faces.extend([vec![a, b, c], vec![a, c, d]]);
+            }
+        }
+        let patch_faces = faces.len();
+        faces.push((0..n).rev().collect());
+        faces.push(((stations - 1) * n..stations * n).collect());
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let supports = evidence
+            .planar_supports
+            .iter()
+            .enumerate()
+            .filter(|(_, support)| {
+                support
+                    .source_face_indices
+                    .iter()
+                    .all(|&id| id < patch_faces)
+            })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: 3.0,
+            profile_radius: 1.0,
+        };
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1e-8,
+                    chord: 0.2,
+                },
+            )
+            .ok_or("torus patch")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        assert!(
+            trims
+                .trims
+                .iter()
+                .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
+        );
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?;
+        assert!(
+            native
+                .regions
+                .iter()
+                .all(|r| r.faces.is_ok() && !r.requires_chart_cut),
+            "{:?}",
+            native
+                .regions
+                .iter()
+                .map(|r| (
+                    r.region,
+                    r.faces.as_ref().map(Vec::len),
+                    r.requires_chart_cut
+                ))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+            2
+        );
+        let shell = native
+            .regions
+            .into_iter()
+            .map(|r| r.faces)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<crate::Shell>();
+        assert_eq!(shell.len(), 4);
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Closed
+        );
+        assert!(shell.is_geometric_consistent());
         Ok(())
     }
 

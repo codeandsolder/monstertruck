@@ -188,9 +188,10 @@ impl BandContext<'_> {
         ring_index: usize,
         ring: Ring,
         trims: &mut [Result<Vec<Edge>, super::NativeTrimError>],
+        obstacles: &mut Vec<super::NativeChartObstacle>,
     ) -> Option<BandPlan> {
         if matches!(self.carrier, SurfaceCarrier::CircularRevolution { .. }) {
-            return self.variable_torus_band(cycles, ring_index, ring, trims);
+            return self.variable_torus_band(cycles, ring_index, ring, trims, obstacles);
         }
         let SurfaceCarrier::LinearRevolution {
             origin,

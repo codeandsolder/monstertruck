@@ -13,6 +13,15 @@ use crate::mesh_recovery::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+/// Original source locus proving an impossible retained carrier constraint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PatchSupportLocus {
+    /// A finite boundary chord cannot fit its permitted continuous deviation.
+    Chord([usize; 2]),
+    /// A shared source junction cannot fit its permitted displacement.
+    Vertex(usize),
+}
+
 /// One necessary reason for enlarging an approximate patch.
 #[derive(Clone, Debug)]
 pub struct PatchSupportConflict {
@@ -20,8 +29,8 @@ pub struct PatchSupportConflict {
     pub support: usize,
     /// Original fitted region containing that support.
     pub parent_region: usize,
-    /// Original source edge whose chord cannot be represented on that carrier.
-    pub edge: [usize; 2],
+    /// Original source locus with an impossible retained constraint.
+    pub locus: PatchSupportLocus,
     /// Numerical lower witness for the maximum distance to the retained
     /// carrier, in source units, after a roundoff allowance.
     pub distance_lower_witness: f64,
@@ -61,7 +70,7 @@ pub struct RefinedHybridRecovery {
     pub parent_by_region: Vec<Option<usize>>,
     /// Refined regions whose carrier constraints were relinquished.
     pub selected_regions: Vec<usize>,
-    /// Source-edge witnesses for additional support releases.
+    /// Source-locus witnesses for additional support releases.
     pub conflicts: Vec<PatchSupportConflict>,
     /// Number of extra original source polygons replaced.
     pub added_polygons: usize,
@@ -97,6 +106,243 @@ fn carrier_distance_witness(
     (normalized.is_finite() && margin.is_finite()).then_some((normalized - margin).max(0.0))
 }
 
+// Independent vertex and chord budgets induce necessary local release
+// dependencies. Index source incidence once per search, rather than scan
+// the complete source mesh for every candidate support or vertex.
+pub(super) struct ReleaseContext<'a> {
+    evidence: &'a MeshEvidence,
+    partition: &'a SurfaceRegionPartition,
+    permitted: BTreeSet<usize>,
+    options: HybridRefinementOptions,
+    support_vertices: Vec<Vec<usize>>,
+    vertex_conflicts: Vec<Vec<PatchSupportConflict>>,
+}
+
+impl<'a> ReleaseContext<'a> {
+    pub(super) fn new(
+        evidence: &'a MeshEvidence,
+        partition: &'a SurfaceRegionPartition,
+        permitted: &[usize],
+        options: HybridRefinementOptions,
+    ) -> Result<Self, HybridRecoveryError> {
+        let count = evidence.planar_supports.len();
+        if partition.region_by_support.len() != count
+            || !options.patch.budget.vertex.is_finite()
+            || options.patch.budget.vertex < 0.0
+            || !options.patch.budget.chord.is_finite()
+            || options.patch.budget.chord <= 0.0
+            || !options.patch.intersection_tolerance.is_finite()
+            || options.patch.intersection_tolerance <= 0.0
+            || permitted.iter().any(|&id| id >= count)
+        {
+            return Err(HybridRecoveryError::InvalidInput);
+        }
+        let mut support_vertices = Vec::with_capacity(count);
+        let mut vertex_conflicts = vec![Vec::new(); evidence.positions.len()];
+        for (support, plane) in evidence.planar_supports.iter().enumerate() {
+            let parent_region = partition.region_by_support[support];
+            let carrier = partition
+                .carriers
+                .get(parent_region)
+                .copied()
+                .flatten()
+                .ok_or(HybridRecoveryError::InvalidInput)?;
+            let mut ids = BTreeSet::new();
+            for &polygon in &plane.source_face_indices {
+                ids.extend(
+                    evidence
+                        .source_polygon_vertices(polygon)
+                        .ok_or(HybridRecoveryError::InvalidInput)?
+                        .iter()
+                        .copied(),
+                );
+            }
+            for &vertex in &ids {
+                let point = *evidence
+                    .positions
+                    .get(vertex)
+                    .ok_or(HybridRecoveryError::InvalidInput)?;
+                if let Some(distance_lower_witness) = vertex_distance_witness(carrier, point)
+                    && distance_lower_witness
+                        > options.patch.budget.vertex + options.patch.intersection_tolerance
+                {
+                    vertex_conflicts[vertex].push(PatchSupportConflict {
+                        support,
+                        parent_region,
+                        locus: PatchSupportLocus::Vertex(vertex),
+                        distance_lower_witness,
+                    });
+                }
+            }
+            support_vertices.push(ids.into_iter().collect());
+        }
+        Ok(Self {
+            evidence,
+            partition,
+            permitted: permitted.iter().copied().collect(),
+            options,
+            support_vertices,
+            vertex_conflicts,
+        })
+    }
+
+    fn initial(
+        &self,
+        seed: HybridRefinementSeed<'_>,
+    ) -> Result<BTreeSet<usize>, HybridRecoveryError> {
+        let partition = self.partition;
+        let selected = match seed {
+            HybridRefinementSeed::Regions(regions) => {
+                if regions
+                    .iter()
+                    .any(|&id| partition.carriers.get(id).is_none_or(Option::is_none))
+                {
+                    return Err(HybridRecoveryError::InvalidInput);
+                }
+                let required = regions.iter().copied().collect::<BTreeSet<_>>();
+                partition
+                    .region_by_support
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(support, region)| required.contains(region).then_some(support))
+                    .collect::<BTreeSet<_>>()
+            }
+            HybridRefinementSeed::Supports(supports) => {
+                if supports.iter().any(|&id| id >= self.support_vertices.len()) {
+                    return Err(HybridRecoveryError::InvalidInput);
+                }
+                supports.iter().copied().collect::<BTreeSet<_>>()
+            }
+        };
+        if selected.is_empty() {
+            return Err(HybridRecoveryError::InvalidInput);
+        }
+        Ok(selected)
+    }
+
+    fn chord_conflicts(
+        &self,
+        support: usize,
+        selected: &BTreeSet<usize>,
+    ) -> Vec<PatchSupportConflict> {
+        self.evidence.support_interface_indices[support]
+            .iter()
+            .filter_map(|&id| {
+                let interface = &self.evidence.support_interfaces[id];
+                let [a, b] = interface.supports;
+                let outside = if a == support { b } else { a };
+                if selected.contains(&outside) {
+                    return None;
+                }
+                let parent_region = self.partition.region_by_support[outside];
+                let carrier = self.partition.carriers[parent_region]?;
+                interface.source_edges.iter().find_map(|&edge| {
+                    let [a, b] = edge.map(|id| self.evidence.positions[id]);
+                    let distance_lower_witness = carrier_distance_witness(carrier, a, b)?;
+                    (distance_lower_witness
+                        > self.options.patch.budget.chord
+                            + self.options.patch.intersection_tolerance)
+                        .then_some(PatchSupportConflict {
+                            support: outside,
+                            parent_region,
+                            locus: PatchSupportLocus::Chord(edge),
+                            distance_lower_witness,
+                        })
+                })
+            })
+            .collect()
+    }
+
+    fn expand(
+        &self,
+        seed: HybridRefinementSeed<'_>,
+        limit: usize,
+    ) -> Result<SupportSelection, HybridRecoveryError> {
+        let mut selected = self.initial(seed)?;
+        let mut pending = selected.iter().copied().collect::<VecDeque<_>>();
+        let mut conflicts = Vec::new();
+        let mut added_polygons = 0_usize;
+        while let Some(support) = pending.pop_front() {
+            // Every retained support incident at an exposed source vertex
+            // is constrained to the same displacement ball, even if it
+            // meets the patch only at a point. Releasing another support
+            // can expose new junctions; compute the transitive closure.
+            let vertex_conflicts = self.support_vertices[support]
+                .iter()
+                .flat_map(|&id| self.vertex_conflicts[id].iter().cloned());
+            let chord_conflicts = self.chord_conflicts(support, &selected);
+            for conflict in vertex_conflicts.chain(chord_conflicts) {
+                let outside = conflict.support;
+                if selected.contains(&outside) {
+                    continue;
+                }
+                if !self.permitted.contains(&outside) {
+                    return Err(HybridRecoveryError::ForbiddenSupport(conflict));
+                }
+                added_polygons = added_polygons
+                    .checked_add(
+                        self.evidence.planar_supports[outside]
+                            .source_face_indices
+                            .len(),
+                    )
+                    .ok_or(HybridRecoveryError::InvalidInput)?;
+                if added_polygons > limit {
+                    return Err(HybridRecoveryError::SupportLimit {
+                        required: added_polygons,
+                        limit,
+                    });
+                }
+                selected.insert(outside);
+                conflicts.push(conflict);
+                pending.push_back(outside);
+            }
+        }
+        Ok(SupportSelection {
+            selected,
+            conflicts,
+            added_polygons,
+        })
+    }
+
+    // Mandatory closure of one seed is contained in the closure of any
+    // seed set containing it. The same index is used for cover costs and
+    // the actual transaction, so it cannot underestimate mandatory work.
+    pub(super) fn closure(&self, support: usize) -> Result<BTreeSet<usize>, HybridRecoveryError> {
+        if !self.permitted.contains(&support) {
+            return Err(HybridRecoveryError::NoSupportCandidate);
+        }
+        let cost = self
+            .evidence
+            .planar_supports
+            .get(support)
+            .ok_or(HybridRecoveryError::InvalidInput)?
+            .source_face_indices
+            .len();
+        let limit = self.options.max_added_polygons;
+        let remaining = limit
+            .checked_sub(cost)
+            .ok_or(HybridRecoveryError::SupportLimit {
+                required: cost,
+                limit,
+            })?;
+        self.expand(HybridRefinementSeed::Supports(&[support]), remaining)
+            .map(|selection| selection.selected)
+    }
+}
+
+fn vertex_distance_witness(carrier: SurfaceCarrier, point: crate::Point3) -> Option<f64> {
+    // The normalized plane/meridian residual is a lower bound on distance
+    // to the retained carrier, also at point-only source contacts.
+    let residual = carrier.signed_constraint(point).map(|(_, r)| r.abs());
+    match residual {
+        Some(distance) if distance.is_finite() => {
+            Some((distance - 8.0 * super::junction_roundoff(point, &[carrier])).max(0.0))
+        }
+        _ => carrier_distance_witness(carrier, point, point),
+    }
+}
+
+#[cfg(test)]
 fn expand_supports(
     evidence: &MeshEvidence,
     partition: &SurfaceRegionPartition,
@@ -104,138 +350,8 @@ fn expand_supports(
     permitted: &[usize],
     options: HybridRefinementOptions,
 ) -> Result<SupportSelection, HybridRecoveryError> {
-    let count = evidence.planar_supports.len();
-    if partition.region_by_support.len() != count
-        || !options.patch.budget.chord.is_finite()
-        || options.patch.budget.chord <= 0.0
-        || !options.patch.intersection_tolerance.is_finite()
-        || options.patch.intersection_tolerance <= 0.0
-        || permitted.iter().any(|&id| id >= count)
-    {
-        return Err(HybridRecoveryError::InvalidInput);
-    }
-    let permitted = permitted.iter().copied().collect::<BTreeSet<_>>();
-    let mut selected = match seed {
-        HybridRefinementSeed::Regions(regions) => {
-            if regions
-                .iter()
-                .any(|&id| partition.carriers.get(id).is_none_or(Option::is_none))
-            {
-                return Err(HybridRecoveryError::InvalidInput);
-            }
-            let required = regions.iter().copied().collect::<BTreeSet<_>>();
-            partition
-                .region_by_support
-                .iter()
-                .enumerate()
-                .filter_map(|(support, region)| required.contains(region).then_some(support))
-                .collect::<BTreeSet<_>>()
-        }
-        HybridRefinementSeed::Supports(supports) => {
-            if supports.iter().any(|&id| {
-                partition
-                    .region_by_support
-                    .get(id)
-                    .and_then(|&r| partition.carriers.get(r))
-                    .is_none_or(Option::is_none)
-            }) {
-                return Err(HybridRecoveryError::InvalidInput);
-            }
-            supports.iter().copied().collect::<BTreeSet<_>>()
-        }
-    };
-    if selected.is_empty() {
-        return Err(HybridRecoveryError::InvalidInput);
-    }
-    let mut pending = selected.iter().copied().collect::<VecDeque<_>>();
-    let mut conflicts = Vec::new();
-    let mut added_polygons = 0_usize;
-    while let Some(support) = pending.pop_front() {
-        for &interface_id in &evidence.support_interface_indices[support] {
-            let interface = &evidence.support_interfaces[interface_id];
-            let [a, b] = interface.supports;
-            let outside = if a == support { b } else { a };
-            if selected.contains(&outside) {
-                continue;
-            }
-            let parent_region = partition.region_by_support[outside];
-            let carrier =
-                partition.carriers[parent_region].ok_or(HybridRecoveryError::InvalidInput)?;
-            let conflict = interface.source_edges.iter().find_map(|&edge| {
-                let [a, b] = edge.map(|id| evidence.positions[id]);
-                let distance_lower_witness = carrier_distance_witness(carrier, a, b)?;
-                // Keep a further numerical incidence allowance before
-                // calling the obstruction unavoidable.
-                (distance_lower_witness
-                    > options.patch.budget.chord + options.patch.intersection_tolerance)
-                    .then_some(PatchSupportConflict {
-                        support: outside,
-                        parent_region,
-                        edge,
-                        distance_lower_witness,
-                    })
-            });
-            let Some(conflict) = conflict else {
-                continue;
-            };
-            if !permitted.contains(&outside) {
-                return Err(HybridRecoveryError::ForbiddenSupport(conflict));
-            }
-            added_polygons = added_polygons
-                .checked_add(evidence.planar_supports[outside].source_face_indices.len())
-                .ok_or(HybridRecoveryError::InvalidInput)?;
-            if added_polygons > options.max_added_polygons {
-                return Err(HybridRecoveryError::SupportLimit {
-                    required: added_polygons,
-                    limit: options.max_added_polygons,
-                });
-            }
-            selected.insert(outside);
-            conflicts.push(conflict);
-            pending.push_back(outside);
-        }
-    }
-    Ok(SupportSelection {
-        selected,
-        conflicts,
-        added_polygons,
-    })
-}
-
-// A single seed's mandatory release closure is a subset of the closure of
-// any seed set containing it. Reuse exactly the transaction's witnesses,
-// permissions and budget; the search must not guess a cheaper expansion.
-pub(super) fn support_closure(
-    evidence: &MeshEvidence,
-    partition: &SurfaceRegionPartition,
-    support: usize,
-    permitted: &[usize],
-    options: HybridRefinementOptions,
-) -> Result<BTreeSet<usize>, HybridRecoveryError> {
-    let cost = evidence
-        .planar_supports
-        .get(support)
-        .ok_or(HybridRecoveryError::InvalidInput)?
-        .source_face_indices
-        .len();
-    let limit = options.max_added_polygons;
-    let remaining = limit
-        .checked_sub(cost)
-        .ok_or(HybridRecoveryError::SupportLimit {
-            required: cost,
-            limit,
-        })?;
-    expand_supports(
-        evidence,
-        partition,
-        HybridRefinementSeed::Supports(&[support]),
-        permitted,
-        HybridRefinementOptions {
-            max_added_polygons: remaining,
-            ..options
-        },
-    )
-    .map(|selection| selection.selected)
+    ReleaseContext::new(evidence, partition, permitted, options)?
+        .expand(seed, options.max_added_polygons)
 }
 
 struct RefinedPartition {
@@ -378,10 +494,25 @@ impl HybridSource<'_> {
         permitted_supports: &[usize],
         options: HybridRefinementOptions,
     ) -> Result<RefinedHybridRecovery, HybridRecoveryError> {
+        let context = ReleaseContext::new(
+            self.evidence,
+            &self.reconciled.partition,
+            permitted_supports,
+            options,
+        )?;
+        self.construct_refined_with_context(seed, &context, options.max_added_polygons)
+    }
+
+    pub(super) fn construct_refined_with_context(
+        &self,
+        seed: HybridRefinementSeed<'_>,
+        context: &ReleaseContext<'_>,
+        limit: usize,
+    ) -> Result<RefinedHybridRecovery, HybridRecoveryError> {
+        let options = context.options;
         let index = RegionBoundaryIndex::new(self.evidence)?;
         let original = &self.reconciled.partition;
-        let selection =
-            expand_supports(self.evidence, original, seed, permitted_supports, options)?;
+        let selection = context.expand(seed, limit)?;
         let selected_parents = selection
             .selected
             .iter()
@@ -563,6 +694,69 @@ mod tests {
                 .all(|c| c.parent_region == sphere && c.distance_lower_witness > 0.02)
         );
         assert_eq!(expanded.selected.len(), evidence.planar_supports.len());
+        Ok(())
+    }
+
+    #[test]
+    fn vertex_budget_conflicts_propagate_independently_of_chord_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, mut partition, fallback, sphere) = spherical_fixture()?;
+        let Some(SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        }) = partition.carriers[sphere]
+        else {
+            return Err("expected sphere carrier".into());
+        };
+        partition.carriers[sphere] = Some(SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius: profile_radius + 1e-4,
+        });
+        let permitted = partition
+            .region_by_support
+            .iter()
+            .enumerate()
+            .filter_map(|(id, &region)| (region == sphere).then_some(id))
+            .collect::<Vec<_>>();
+        let policy = options(0.5, 4);
+        assert!(matches!(
+            expand_supports(
+                &evidence,
+                &partition,
+                HybridRefinementSeed::Regions(&fallback),
+                &[],
+                policy
+            ),
+            Err(HybridRecoveryError::ForbiddenSupport(
+                PatchSupportConflict {
+                    locus: PatchSupportLocus::Vertex(_),
+                    ..
+                }
+            ))
+        ));
+        let context = ReleaseContext::new(&evidence, &partition, &permitted, policy)?;
+        let expanded = context.expand(HybridRefinementSeed::Regions(&fallback), 4)?;
+        assert_eq!(expanded.added_polygons, 4);
+        assert!(
+            expanded
+                .conflicts
+                .iter()
+                .all(|c| matches!(c.locus, PatchSupportLocus::Vertex(_))
+                    && c.distance_lower_witness > policy.patch.budget.vertex)
+        );
+        let unauthorized = partition
+            .region_by_support
+            .iter()
+            .position(|&region| region != sphere)
+            .ok_or("fallback support")?;
+        assert!(matches!(
+            context.closure(unauthorized),
+            Err(HybridRecoveryError::NoSupportCandidate)
+        ));
         Ok(())
     }
 
