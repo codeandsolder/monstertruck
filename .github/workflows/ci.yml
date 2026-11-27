@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   pull_request:
   merge_group:
   workflow_dispatch:
@@ -23,6 +24,7 @@ jobs:
       timeout-minutes: 90
       command: |
         cargo fmt --all -- --check
+        cargo check --locked --manifest-path step-redox/fuzz/Cargo.toml --bins
         cargo test --locked -p step-redox --lib --bin step-validate-semantics --features cad-kernel-monstertruck
         cargo check --locked -p monstertruck-meshing --no-default-features --features analyzers
         cargo check --locked -p monstertruck-meshing --no-default-features --features filters
@@ -37,7 +39,16 @@ jobs:
       checkout-submodules: "true"
       rust-targets: wasm32-unknown-unknown
       rustflags: '--cfg=web_sys_unstable_apis --cfg=getrandom_backend="wasm_js" -D warnings'
-      command: cargo build --locked --target=wasm32-unknown-unknown
+      command: |
+        cargo build --locked --target=wasm32-unknown-unknown
+        cargo build --locked --manifest-path step-redox/web/step-redox-wasm/Cargo.toml --target=wasm32-unknown-unknown
+  release-libs:
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+    with:
+      validation-tier: release
+      checkout-submodules: "true"
+      rustflags: "-D warnings -C target-cpu=x86-64-v2"
+      command: cargo test --locked --workspace --lib
   readme:
     runs-on: ubuntu-24.04
     steps:
@@ -59,9 +70,9 @@ jobs:
   merge-gate:
     name: CI merge gate
     if: ${{ always() }}
-    needs: [native, wasm, readme, source-quality, workflow-policy]
+    needs: [native, wasm, release-libs, readme, source-quality, workflow-policy]
     uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
     with:
       needs-json: ${{ toJSON(needs) }}
       expected-results: |
-        [["native","success"],["wasm","success"],["readme","success"],["source-quality","success"],["workflow-policy","success"]]
+        [["native","success"],["wasm","success"],["release-libs","${{ startsWith(github.ref, 'refs/tags/') && 'success' || 'skipped' }}"],["readme","success"],["source-quality","success"],["workflow-policy","success"]]
