@@ -17,16 +17,21 @@ jobs:
         with:
           persist-credentials: false
       - name: Resolve repository compiler
-        run: rustup show active-toolchain
+        id: compiler
+        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
+        with:
+          toolchain: ${{ steps.compiler.outputs.channel }}
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
         with:
+          rust-toolchain: ${{ steps.compiler.outputs.channel }}
           cache-scope: step-recovery-release
           rustflags: "-D warnings"
       - name: STEP recovery unit tests
-        run: cargo --config 'build.rustflags=["-D","warnings"]' test --release -p step-redox --lib --bin step-validate-semantics --features cad-kernel-monstertruck --target-dir "$RUNNER_TEMP/step-recovery"
+        run: cargo --config 'build.rustflags=["-D","warnings"]' test --locked --release -p step-redox --lib --bin step-validate-semantics --features cad-kernel-monstertruck --target-dir "$RUNNER_TEMP/step-recovery"
       - name: Prepare STEP recovery executables
-        run: cargo --config 'build.rustflags=["-D","warnings"]' build --release -p step-redox --features cad-kernel-monstertruck --bin step-redox --bin step-count-resize --bin step-chain-resize --bin step-validate-semantics --target-dir "$RUNNER_TEMP/step-recovery"
+        run: cargo --config 'build.rustflags=["-D","warnings"]' build --locked --release -p step-redox --features cad-kernel-monstertruck --bin step-redox --bin step-count-resize --bin step-chain-resize --bin step-validate-semantics --target-dir "$RUNNER_TEMP/step-recovery"
       - name: Check independent OCCT kernel and validation invariants
         run: cargo --config 'build.rustflags=["-D","warnings"]' test --release --locked --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator"
       - name: Prepare independent OCCT validator
