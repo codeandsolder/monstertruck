@@ -569,3 +569,30 @@ fn transformed_torus_via_processor_lies_on_surface() {
         }
     }
 }
+
+#[test]
+fn bounded_revolution_net_preserves_nonzero_near_axis_orbits() {
+    let radius = KERNEL_EPSILON * 0.5;
+    let profile = BsplineCurve::new_unchecked(
+        KnotVector::bezier_knot(1),
+        vec![Point3::new(radius, 0.0, 0.0), Point3::new(radius, 0.0, 1.0)],
+    );
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    assert!(surface.homogeneous_net_covers_domain());
+    assert!(!surface.supports_exact_patch_domains());
+    let converted = as_nurbs(
+        surface
+            .try_into_homogeneous_bspline_surface()
+            .expect("bounded orbit"),
+    );
+    for u in [0.0, 0.5, 1.0] {
+        for v in grid_params() {
+            let expected = surface.evaluate(u, full_circle_angle(v));
+            assert!(converted.evaluate(u, v).distance(expected) <= 1.0e-12);
+        }
+    }
+    let line = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0));
+    let cylinder = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    assert!(!cylinder.homogeneous_net_covers_domain());
+    assert!(cylinder.try_into_homogeneous_bspline_surface().is_some());
+}

@@ -44,11 +44,11 @@ pub struct Attribute {
 
 impl Attribute {
     /// Creates a new empty attribute.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new() -> Self { Self::default() }
 
     /// Gets the value for a given element.
-    #[must_use]
+    #[must_use = "The optional get outcome must be inspected to distinguish a value from absence."]
     pub fn get(&self, id: StableId) -> Option<&AttributeValue> { self.values.get(&id) }
 
     /// Sets the value for a given element.
@@ -58,7 +58,7 @@ impl Attribute {
     pub fn remove(&mut self, id: StableId) -> Option<AttributeValue> { self.values.remove(&id) }
 
     /// Returns whether a value exists for the given element.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether a value exists for the given element."]
     pub fn contains(&self, id: StableId) -> bool { self.values.contains_key(&id) }
 
     /// Returns an iterator over all `(StableId, &AttributeValue)` pairs.
@@ -67,11 +67,11 @@ impl Attribute {
     }
 
     /// Returns the number of elements with values.
-    #[must_use]
+    #[must_use = "Ignoring this result discards the number of elements with values."]
     pub fn len(&self) -> usize { self.values.len() }
 
     /// Returns whether no elements have values.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether no elements have values."]
     pub fn is_empty(&self) -> bool { self.values.is_empty() }
 
     /// Removes all values.
@@ -103,11 +103,11 @@ pub struct ElementAttributes {
 
 impl ElementAttributes {
     /// Creates a new empty element attributes container.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new() -> Self { Self::default() }
 
     /// Gets a value for a named attribute on a given element.
-    #[must_use]
+    #[must_use = "The optional get outcome must be inspected to distinguish a value from absence."]
     pub fn get(&self, name: &str, id: StableId) -> Option<&AttributeValue> {
         self.attrs.get(name)?.get(id)
     }
@@ -126,7 +126,7 @@ impl ElementAttributes {
     }
 
     /// Returns a reference to the named attribute, if it exists.
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to the named attribute, if it exists."]
     pub fn attribute(&self, name: &str) -> Option<&Attribute> { self.attrs.get(name) }
 
     /// Returns a mutable reference to the named attribute, creating it if absent.
@@ -141,7 +141,7 @@ impl ElementAttributes {
     pub fn names(&self) -> impl Iterator<Item = &str> { self.attrs.keys().map(String::as_str) }
 
     /// Returns whether there are no named attributes.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether there are no named attributes."]
     pub fn is_empty(&self) -> bool { self.attrs.is_empty() }
 
     pub(crate) fn remove_ids_and_references(
@@ -176,11 +176,11 @@ pub struct SolidAttributes {
 
 impl SolidAttributes {
     /// Creates a new empty attribute store.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new() -> Self { Self::default() }
 
     /// Returns whether all element attribute stores are empty.
-    #[must_use]
+    #[must_use = "The returned boolean reports whether all element attribute stores are empty."]
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty()
             && self.edges.is_empty()

@@ -334,58 +334,13 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Option<Point3> {
     let lhs_curve = lhs.edge.oriented_curve();
     let rhs_curve = rhs.edge.oriented_curve();
-    let (lhs_min, lhs_max) = lhs_curve.range_tuple();
-    let (rhs_min, rhs_max) = rhs_curve.range_tuple();
-    let mut lhs_parameter = lhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    let mut rhs_parameter = rhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    // The operation tolerance admits a crossing; it is not the desired
-    // numerical accuracy of the computed point. Continue refining an
-    // admitted local solution while its residual decreases. Keep the
-    // accepted branch if further refinement is singular or cannot improve.
-    let mut accepted: Option<(Point3, f64)> = None;
-    let mut anchor: Option<Point3> = None;
-    for _ in 0..32 {
-        let (lhs_point, rhs_point) = (
-            lhs_curve.evaluate(lhs_parameter),
-            rhs_curve.evaluate(rhs_parameter),
-        );
-        let gap = lhs_point - rhs_point;
-        let residual = gap.magnitude();
-        if !residual.is_finite() {
-            break;
-        }
-        if residual <= tol {
-            let point = lhs_point.midpoint(rhs_point);
-            let first = *anchor.get_or_insert(point);
-            if point.distance(first) > tol || accepted.is_some_and(|(_, best)| residual >= best) {
-                break;
-            }
-            accepted = Some((point, residual));
-            if residual <= f64::MIN_POSITIVE {
-                break;
-            }
-        } else if accepted.is_some() {
-            break;
-        }
-        let (lhs_derivative, rhs_derivative) = (
-            lhs_curve.derivative(lhs_parameter),
-            rhs_curve.derivative(rhs_parameter),
-        );
-        let diagonal0 = lhs_derivative.dot(lhs_derivative);
-        let diagonal1 = rhs_derivative.dot(rhs_derivative);
-        let mixed = -lhs_derivative.dot(rhs_derivative);
-        let determinant = diagonal0.mul_add(diagonal1, -(mixed * mixed));
-        if !determinant.is_finite() || determinant <= f64::EPSILON * diagonal0 * diagonal1 {
-            break;
-        }
-        let gradient0 = -lhs_derivative.dot(gap);
-        let gradient1 = rhs_derivative.dot(gap);
-        let step0 = gradient0.mul_add(diagonal1, -(gradient1 * mixed)) / determinant;
-        let step1 = diagonal0.mul_add(gradient1, -(mixed * gradient0)) / determinant;
-        lhs_parameter = (lhs_parameter + step0).clamp(lhs_min, lhs_max);
-        rhs_parameter = (rhs_parameter + step1).clamp(rhs_min, rhs_max);
-    }
-    accepted.map(|(point, _)| point)
+    let seeds = [
+        lhs_curve.search_nearest_parameter(approximate, None, 100)?,
+        rhs_curve.search_nearest_parameter(approximate, None, 100)?,
+    ];
+    let [u, v] = super::curve_refinement::crossing_parameters(&lhs_curve, &rhs_curve, seeds, tol)?;
+    let (a, b) = (lhs_curve.evaluate(u), rhs_curve.evaluate(v));
+    (a.distance(b) <= tol).then(|| a.midpoint(b))
 }
 
 /// Gather real curve intersections and existing endpoints lying in another
@@ -845,13 +800,6 @@ fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(boundary)
 }
 
-fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
-    selected_boundary_with(arrangement, |point| covered(&arrangement.polygons, point))
-        .filter(|boundary| !boundary.is_empty())
-}
-
 /// Reconstruct exact-edge loops by choosing clockwise exits at junctions.
 fn trace_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut boundary: Vec<ProjectedEdge<AltCurve<C, S>>>,
@@ -953,15 +901,6 @@ fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 membership(left_probe) == traced(left_probe)
                     && membership(right_probe) == traced(right_probe)
             })
-    })
-}
-
-fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-    loops: &[OverlayLoop<C, S>],
-) -> bool {
-    validates_occupancy_with(arrangement, loops, |point| {
-        covered(&arrangement.polygons, point)
     })
 }
 
@@ -1113,31 +1052,56 @@ pub(super) fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
+    let regions = overlay_occupancy(source, tol, false, covered)?;
+    (!regions.is_empty()).then_some(regions)
+}
+
+/// Select bounded cells from a shared exact-curve arrangement. The caller
+/// supplies occupancy over the ordered input regions; noding and validation
+/// are independent of the material operation.
+fn overlay_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    certified_curved: bool,
+    select: impl Fn(&[Vec<Vec<Point2>>], Point2) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
     let reference = source.first()?;
-    // Separate STEP faces may encode coincident curves with independent IDs.
-    // Canonicalize their exact geometric edge identities before computing
-    // occupancy; otherwise two independently encoded copies would be emitted
-    // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical_regions, tol, false)?;
+    let canonical = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
+    let initial = project_source(&canonical, tol, certified_curved)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, false)?
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
+        project_source(&noded, tol, certified_curved)?
     } else {
         initial
     };
-    let boundary = selected_boundary(&arrangement)?;
-    // Crossings between edges entirely inside the union do not affect the
-    // extracted boundary. Reject only unresolved noding on surviving edges.
+    let membership = |point| select(&arrangement.polygons, point);
+    let boundary = selected_boundary_with(&arrangement, membership)?;
     if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
+    if boundary.is_empty() {
+        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
+    }
     let loops = trace_boundary(boundary)?;
-    if !validates_occupancy(&arrangement, &loops) {
+    if !validates_occupancy_with(&arrangement, &loops, membership) {
         return None;
     }
     assemble_regions(loops, reference, &arrangement.surface)
+}
+
+pub(super) fn overlay_profile_selection<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    select: impl Fn(&[bool]) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
+    overlay_occupancy(source, tol, false, |polygons, point| {
+        let occupied = polygons
+            .iter()
+            .map(|region| covered(std::slice::from_ref(region), point))
+            .collect::<Vec<_>>();
+        select(&occupied)
+    })
 }
 
 /// Verify coplanarity over the actual trimmed geometry, not just at a plane
@@ -1346,32 +1310,10 @@ pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
-    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical, tol, true)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
-        let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, true)?
-    } else {
-        initial
-    };
     let positive_count = positive.len();
-    let membership = |point| {
-        covered(&arrangement.polygons[..positive_count], point)
-            && !covered(&arrangement.polygons[positive_count..], point)
-    };
-    let boundary = selected_boundary_with(&arrangement, membership)?;
-    if needs_exact_noding(&boundary, arrangement.span, tol) {
-        return None;
-    }
-    if boundary.is_empty() {
-        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
-    }
-    let loops = trace_boundary(boundary)?;
-    if !validates_occupancy_with(&arrangement, &loops, membership) {
-        return None;
-    }
-    assemble_regions(loops, &positive[0], &arrangement.surface)
+    overlay_occupancy(&joined, tol, true, |polygons, point| {
+        covered(&polygons[..positive_count], point) && !covered(&polygons[positive_count..], point)
+    })
 }
 
 /// Remove selected cutter patches that share a plane and *original outward
@@ -1828,6 +1770,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_crossing_refines_an_already_admissible_seed() {
+        let mut fixture = PlanarFixture::new(&[[-1., 0.], [1., 0.], [0., -1.], [0., 1.]]);
+        let lhs = ProjectedEdge {
+            edge: fixture.edge(0, 1),
+            uv: Vec::new(),
+        };
+        let rhs = ProjectedEdge {
+            edge: fixture.edge(2, 3),
+            uv: Vec::new(),
+        };
+        let seed = Point3::new(2e-7, -3e-7, 0.);
+        let point = exact_curve_crossing(&lhs, &rhs, seed, 1e-6).expect("crossing");
+        assert!(point.distance(Point3::new(0., 0., 0.)) <= DEFAULT_NUMERICAL_TOLERANCES.structural);
+    }
+
+    #[test]
     fn projected_uv_t_junction_at_shared_world_vertex_does_not_request_noding() {
         let mut fixture = PlanarFixture::new(&[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
         let horizontal = fixture.edge(0, 1);
@@ -1851,22 +1809,6 @@ mod tests {
             !needs_exact_noding(&edges, 1.0, 1.0e-6),
             "inverse-mapping drift at the SAME analytic 3D endpoint is not an interior cut"
         );
-    }
-
-    #[test]
-    fn exact_crossing_refines_an_already_admissible_seed() {
-        let mut fixture = PlanarFixture::new(&[[-1., 0.], [1., 0.], [0., -1.], [0., 1.]]);
-        let lhs = ProjectedEdge {
-            edge: fixture.edge(0, 1),
-            uv: Vec::new(),
-        };
-        let rhs = ProjectedEdge {
-            edge: fixture.edge(2, 3),
-            uv: Vec::new(),
-        };
-        let seed = Point3::new(2e-7, -3e-7, 0.);
-        let point = exact_curve_crossing(&lhs, &rhs, seed, 1e-6).expect("crossing");
-        assert!(point.distance(Point3::new(0., 0., 0.)) <= DEFAULT_NUMERICAL_TOLERANCES.structural);
     }
 
     #[test]
@@ -2528,6 +2470,60 @@ mod tests {
         )
         .unwrap();
         assert!((signed_area(&poly.0) - 7.0).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn cubic_crossings_retain_exact_curve_endpoints_after_welding() {
+        let mut fixture = PlanarFixture::new(&[
+            [0., 0.],
+            [3., 2.],
+            [0., 2.],
+            [1., -1.],
+            [2., -1.],
+            [2., 3.],
+            [1., 3.],
+        ]);
+        // The cubic's x-coordinate is exactly 3t. Its crossing
+        // ordinates at x=1 and x=2 are 8/27 and 28/27.
+        let curve = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![
+                Point3::new(0., 0., 0.),
+                Point3::new(1., 0., 0.),
+                Point3::new(2., 1., 0.),
+                Point3::new(3., 2., 0.),
+            ],
+        ));
+        let edge = Edge::new_unchecked(
+            &fixture.vertices[0],
+            &fixture.vertices[1],
+            Alternative::FirstType(curve),
+        );
+        fixture.edges.insert((0, 1), edge);
+        let left = fixture.region(&[0, 1, 2, 0]);
+        let vertical = fixture.region(&[3, 4, 5, 6, 3]);
+        let regions = overlay_source_regions(vec![left, vertical], 1.0e-6);
+        assert_eq!(regions.len(), 1);
+        let edges = regions[0]
+            .absolute_boundaries()
+            .iter()
+            .flat_map(|wire| wire.iter());
+        let expected = [
+            Point3::new(1., 8. / 27., 0.),
+            Point3::new(2., 28. / 27., 0.),
+        ];
+        let mut found = [false; 2];
+        for edge in edges {
+            let curve = edge.oriented_curve();
+            let front = edge.front().point();
+            let back = edge.back().point();
+            assert!(front.distance(curve.front()) < 1.0e-12);
+            assert!(back.distance(curve.back()) < 1.0e-12);
+            for (flag, expected) in found.iter_mut().zip(expected) {
+                *flag |= front.distance(expected) < 1.0e-12 || back.distance(expected) < 1.0e-12;
+            }
+        }
+        assert!(found.into_iter().all(|flag| flag));
     }
 
     #[test]

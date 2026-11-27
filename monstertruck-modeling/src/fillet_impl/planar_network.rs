@@ -563,36 +563,204 @@ fn retained_endpoint(
     corner.contacts.get(&carrier).cloned()
 }
 
-fn shortened_edges(
+struct RetainedTrim {
+    ends: [Vertex; 2],
+    collapsed: bool,
+}
+
+/// Check the new endpoints against the finite original segment. A zero
+/// limit is permitted only when both contact points actually coincide.
+fn validate_trim(original: &Edge, ends: &[Vertex; 2]) -> Option<bool> {
+    let old_a = original.absolute_front().point();
+    let old_b = original.absolute_back().point();
+    let axis = line_axis(original)?;
+    let length = (old_b - old_a).dot(axis);
+    let [a, b] = ends.each_ref().map(Vertex::point);
+    let ta = (a - old_a).dot(axis);
+    let tb = (b - old_a).dot(axis);
+    if [ta, tb]
+        .into_iter()
+        .any(|t| t < -KERNEL_EPSILON || t > length + KERNEL_EPSILON)
+        || tb < ta - KERNEL_EPSILON
+        || (old_a + axis * ta).distance(a) > KERNEL_EPSILON
+        || (old_a + axis * tb).distance(b) > KERNEL_EPSILON
+    {
+        return None;
+    }
+    let collapsed = tb - ta <= KERNEL_EPSILON;
+    (!collapsed || a.distance(b) <= KERNEL_EPSILON).then_some(collapsed)
+}
+
+fn retained_trims(
     incidence: &Incidence,
     selected: &Map<EdgeId, SelectedEdge>,
     corners: &Map<VertexId, Corner>,
-) -> Option<Map<EdgeId, Edge>> {
+) -> Option<Map<EdgeId, RetainedTrim>> {
+    let mut trims = Map::default();
+    for (&id, original) in &incidence.edges {
+        if selected.contains_key(&id) {
+            continue;
+        }
+        let old = [
+            original.edge.absolute_front(),
+            original.edge.absolute_back(),
+        ];
+        if !old.iter().any(|v| corners.contains_key(&v.id())) {
+            continue;
+        }
+        let ends = [
+            retained_endpoint(original, old[0], corners)?,
+            retained_endpoint(original, old[1], corners)?,
+        ];
+        let collapsed = validate_trim(&original.edge, &ends)?;
+        trims.insert(id, RetainedTrim { ends, collapsed });
+    }
+    Some(trims)
+}
+
+/// Contract connected components of proven zero-length retained segments.
+/// Unlike spatial welding, only a previously shared topological edge can
+/// identify its two proposed contact vertices. A transitive component must
+/// still fit the original numerical coincidence bound.
+fn collapsed_vertex_aliases(
+    incidence: &Incidence,
+    trims: &Map<EdgeId, RetainedTrim>,
+) -> Option<Map<VertexId, Vertex>> {
+    let mut adjacent = Map::<VertexId, Vec<Vertex>>::default();
+    for trim in trims.values().filter(|trim| trim.collapsed) {
+        let [a, b] = &trim.ends;
+        adjacent.entry(a.id()).or_default().push(b.clone());
+        adjacent.entry(b.id()).or_default().push(a.clone());
+    }
+    let mut aliases = Map::default();
+    let mut seen = Set::default();
+    for neighbors in adjacent.values() {
+        let initial = neighbors.first()?;
+        if !seen.insert(initial.id()) {
+            continue;
+        }
+        let mut component = vec![initial.clone()];
+        let mut cursor = 0;
+        while cursor < component.len() {
+            for neighbor in adjacent.get(&component[cursor].id())? {
+                if seen.insert(neighbor.id()) {
+                    component.push(neighbor.clone());
+                }
+            }
+            cursor += 1;
+        }
+        // Preserve an unaffected source vertex when possible; otherwise
+        // select a deterministic geometric representative.
+        let canonical = component
+            .iter()
+            .min_by(|a, b| {
+                let pa = a.point();
+                let pb = b.point();
+                incidence
+                    .at_vertex
+                    .contains_key(&b.id())
+                    .cmp(&incidence.at_vertex.contains_key(&a.id()))
+                    .then_with(|| pa.x.total_cmp(&pb.x))
+                    .then_with(|| pa.y.total_cmp(&pb.y))
+                    .then_with(|| pa.z.total_cmp(&pb.z))
+                    .then_with(|| a.stable_id().cmp(&b.stable_id()))
+            })?
+            .clone();
+        if component
+            .iter()
+            .any(|v| v.point().distance(canonical.point()) > KERNEL_EPSILON)
+        {
+            return None;
+        }
+        for vertex in component {
+            aliases.insert(vertex.id(), canonical.clone());
+        }
+    }
+    Some(aliases)
+}
+
+fn aliased_vertex(vertex: &Vertex, aliases: &Map<VertexId, Vertex>) -> Vertex {
+    aliases
+        .get(&vertex.id())
+        .cloned()
+        .unwrap_or_else(|| vertex.clone())
+}
+
+/// Keep a collapsed coedge as a vertex during face assembly, so its two
+/// neighboring seam incidences still refer to their original junctions.
+enum RebuiltEdge {
+    Live(Edge),
+    Collapsed(Vertex),
+}
+
+impl RebuiltEdge {
+    fn front_id(&self) -> VertexId {
+        match self {
+            Self::Live(edge) => edge.front().id(),
+            Self::Collapsed(vertex) => vertex.id(),
+        }
+    }
+
+    fn back_id(&self) -> VertexId {
+        match self {
+            Self::Live(edge) => edge.back().id(),
+            Self::Collapsed(vertex) => vertex.id(),
+        }
+    }
+
+    fn oriented(&self, forward: bool) -> Self {
+        match self {
+            Self::Live(edge) => Self::Live(orient(edge, forward)),
+            Self::Collapsed(vertex) => Self::Collapsed(vertex.clone()),
+        }
+    }
+}
+
+fn shortened_edges(
+    incidence: &Incidence,
+    selected: &Map<EdgeId, SelectedEdge>,
+    trims: &Map<EdgeId, RetainedTrim>,
+    aliases: &Map<VertexId, Vertex>,
+) -> Option<Map<EdgeId, RebuiltEdge>> {
     let mut retained = Map::default();
     for (&id, original) in &incidence.edges {
         if selected.contains_key(&id) {
             continue;
         }
-        let old_a = original.edge.absolute_front();
-        let old_b = original.edge.absolute_back();
-        if !corners.contains_key(&old_a.id()) && !corners.contains_key(&old_b.id()) {
+        let old = [
+            original.edge.absolute_front(),
+            original.edge.absolute_back(),
+        ];
+        let trim = trims.get(&id);
+        let source = trim.map_or(old, |trim| [&trim.ends[0], &trim.ends[1]]);
+        let ends = source.map(|v| aliased_vertex(v, aliases));
+        let [a, b] = &ends;
+        let replacement = if let Some(trim) = trim {
+            let collapsed = validate_trim(&original.edge, &ends)?;
+            if collapsed != trim.collapsed || (a.id() == b.id()) != collapsed {
+                return None;
+            }
+            if collapsed {
+                RebuiltEdge::Collapsed(a.clone())
+            } else {
+                RebuiltEdge::Live(builder::line(a, b))
+            }
+        } else if a.id() != old[0].id() || b.id() != old[1].id() {
+            // Another edge already incident to an identified source vertex
+            // keeps its geometry and follows the exact topology alias.
+            if a.id() == b.id() {
+                return None;
+            }
+            let mut edge = Edge::new(a, b, original.edge.curve()).ok()?;
+            edge.set_stable_id(original.edge.stable_id());
+            if !edge.is_geometric_consistent() {
+                return None;
+            }
+            RebuiltEdge::Live(edge)
+        } else {
             continue;
-        }
-        let axis = line_axis(&original.edge)?;
-        let a = retained_endpoint(original, old_a, corners)?;
-        let b = retained_endpoint(original, old_b, corners)?;
-        let length = (old_b.point() - old_a.point()).dot(axis);
-        let ta = (a.point() - old_a.point()).dot(axis);
-        let tb = (b.point() - old_a.point()).dot(axis);
-        if ta < -KERNEL_EPSILON
-            || tb > length + KERNEL_EPSILON
-            || tb - ta <= KERNEL_EPSILON
-            || (old_a.point() + axis * ta).distance(a.point()) > KERNEL_EPSILON
-            || (old_a.point() + axis * tb).distance(b.point()) > KERNEL_EPSILON
-        {
-            return None;
-        }
-        retained.insert(id, builder::line(&a, &b));
+        };
+        retained.insert(id, replacement);
     }
     Some(retained)
 }
@@ -625,22 +793,25 @@ fn cap_seams(
 struct ReplacementGeometry<'a> {
     selected: &'a Map<EdgeId, SelectedEdge>,
     rounds: &'a Map<EdgeId, TreatedEdge>,
-    retained: &'a Map<EdgeId, Edge>,
+    retained: &'a Map<EdgeId, RebuiltEdge>,
     cap_seams: &'a Map<(VertexId, usize), Edge>,
 }
 
 impl ReplacementGeometry<'_> {
-    fn edge(&self, face: usize, edge: &Edge) -> Option<Edge> {
+    fn edge(&self, face: usize, edge: &Edge) -> Option<RebuiltEdge> {
         if let Some(round) = self.rounds.get(&edge.id()) {
             let slot = self.selected[&edge.id()]
                 .faces
                 .iter()
                 .position(|u| u.face == face)?;
-            return Some(orient(&round.rails[slot], edge.orientation()));
+            return Some(RebuiltEdge::Live(orient(
+                &round.rails[slot],
+                edge.orientation(),
+            )));
         }
         Some(self.retained.get(&edge.id()).map_or_else(
-            || edge.clone(),
-            |replacement| orient(replacement, edge.orientation()),
+            || RebuiltEdge::Live(edge.clone()),
+            |replacement| replacement.oriented(edge.orientation()),
         ))
     }
 
@@ -655,19 +826,25 @@ impl ReplacementGeometry<'_> {
                 .collect::<Option<Vec<_>>>()?;
             let mut new_wire = Vec::new();
             for (i, edge) in edges.iter().enumerate() {
-                changed |= edge.id() != source[i].id();
-                new_wire.push(edge.clone());
+                match edge {
+                    RebuiltEdge::Live(live) => {
+                        changed |= live.id() != source[i].id();
+                        new_wire.push(live.clone());
+                    }
+                    RebuiltEdge::Collapsed(_) => changed = true,
+                }
                 let next = &edges[(i + 1) % edges.len()];
-                if edge.back().id() != next.front().id() {
+                if edge.back_id() != next.front_id() {
                     let seam = self.cap_seams.get(&(source[i].back().id(), face_index))?;
-                    if seam.front().id() != edge.back().id()
-                        || seam.back().id() != next.front().id()
-                    {
+                    if seam.front().id() != edge.back_id() || seam.back().id() != next.front_id() {
                         return None;
                     }
                     new_wire.push(seam.clone());
                     changed = true;
                 }
+            }
+            if new_wire.is_empty() {
+                return None;
             }
             boundaries.push(Wire::from(new_wire));
         }
@@ -742,10 +919,17 @@ fn planar_network(
             }
         }
     }
-    let corners = vertices
+    let mut corners = vertices
         .iter()
         .map(|v| Some((v.id(), Corner::new(shell, &incidence, &selected, v)?)))
         .collect::<Option<Map<_, _>>>()?;
+    let trims = retained_trims(&incidence, &selected, &corners)?;
+    let aliases = collapsed_vertex_aliases(&incidence, &trims)?;
+    for corner in corners.values_mut() {
+        for contact in corner.contacts.values_mut() {
+            *contact = aliased_vertex(contact, &aliases);
+        }
+    }
     // Both isolated straight rounds and trivalent rolling-ball networks use
     // exactly the same cap/rail assembly; no length heuristic is needed.
     let rounds = selected
@@ -757,7 +941,7 @@ fn planar_network(
             ))
         })
         .collect::<Option<Map<_, _>>>()?;
-    let retained = shortened_edges(&incidence, &selected, &corners)?;
+    let retained = shortened_edges(&incidence, &selected, &trims, &aliases)?;
     let cap_seams = cap_seams(&incidence, &selected, &rounds, &corners)?;
     let replacements = ReplacementGeometry {
         selected: &selected,
@@ -883,6 +1067,52 @@ mod tests {
             })
             .collect();
         Ok((solid, edges))
+    }
+
+    #[test]
+    fn oblique_round_contracts_exact_terminal_shoulder() -> crate::Result<()> {
+        // The incline meets a vertical shoulder exactly at the 0.6 radius
+        // tangency. At that limit one cap/side edge disappears while the
+        // next retained edge and its original endpoint remain.
+        let vertices = [
+            [-4.3, 2.5],
+            [-3.3, 2.5],
+            [-3.3, 7.4],
+            [-3.9, 8.0],
+            [-4.3, 8.0],
+        ]
+        .map(|[y, z]| Vertex::new(Point3::new(0.0, y, z)));
+        let wire = Wire::from(
+            (0..5)
+                .map(|i| builder::line(&vertices[i], &vertices[(i + 1) % 5]))
+                .collect::<Vec<_>>(),
+        );
+        let cap: Face = builder::try_attach_plane([wire])?;
+        let solid: Solid = builder::extrude(&cap, Vector3::new(6.65, 0.0, 0.0));
+        let shell = &solid.boundaries()[0];
+        let edge = shell
+            .edge_iter()
+            .find(|edge| {
+                [edge.front().point(), edge.back().point()].iter().all(|p| {
+                    (p.x - 6.65).abs() <= KERNEL_EPSILON && (p.z - 8.0).abs() <= KERNEL_EPSILON
+                })
+            })
+            .expect("short sharp edge at the incline");
+        for radius in [0.5, 0.6] {
+            let rounded = planar_network(
+                shell,
+                std::slice::from_ref(&edge),
+                &[radius],
+                PlanarTreatment::Round,
+            )
+            .expect("analytic round fits up to and including the exact shoulder limit");
+            rounded.check_solid_boundary()?;
+            assert!(rounded.is_geometric_consistent());
+            assert_eq!(rounded.len(), shell.len() + 1);
+            assert!(rounded.iter().all(certify_generated_face));
+        }
+        assert!(planar_network(shell, &[edge], &[0.7], PlanarTreatment::Round).is_none());
+        Ok(())
     }
 
     #[test]

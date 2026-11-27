@@ -27,7 +27,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     ///     ],
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed surface with normailized knot vectors connecting two curves is returned rather than stored."]
     pub fn homotopy(mut bspcurve0: BsplineCurve<P>, mut bspcurve1: BsplineCurve<P>) -> Self {
         bspcurve0.syncro_degree(&mut bspcurve1);
 
@@ -675,7 +675,7 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// assert_ne!(surface.evaluate(0.0, 0.0), curve0.evaluate(0.0));
     /// assert_eq!(surface.evaluate(0.0, 0.0), curve3.evaluate(1.0));
     /// ```
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn by_boundary(
         mut curve0: BsplineCurve<P>,
         mut curve1: BsplineCurve<P>,

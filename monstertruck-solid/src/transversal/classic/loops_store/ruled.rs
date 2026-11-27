@@ -6,20 +6,12 @@
 //! the same infinite ruled carrier under an affine sweep-coordinate change.
 //! A positive common sweep interval is independently required below.
 
-use monstertruck_core::{
-    cgmath64::{EuclideanSpace, InnerSpace, Point3, Vector3},
-    tolerance::DEFAULT_NUMERICAL_TOLERANCES,
+use monstertruck_core::{cgmath64::InnerSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+pub(in crate::transversal::classic) use monstertruck_geometry::analytic_cylinder_intersection::certified_circular_cylinder;
+use monstertruck_geometry::{
+    analytic_cylinder_intersection::project_positive_homogeneous_point as project,
+    prelude::{BsplineSurface, KnotVector, Vector4},
 };
-use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, Vector4};
-
-fn project(point: Vector4) -> Option<Point3> {
-    if !point.w.is_finite() || point.w <= 0.0 {
-        return None;
-    }
-    let projected = Point3::new(point.x / point.w, point.y / point.w, point.z / point.w);
-    (projected.x.is_finite() && projected.y.is_finite() && projected.z.is_finite())
-        .then_some(projected)
-}
 
 /// Compare the native knot positions in their respective affine parameter
 /// domains. Equal normalized profiles describe the same spline even when a
@@ -188,208 +180,6 @@ pub(in crate::transversal::classic) fn common_ruled_extrusion_strip(
     congruent_ruled_sweeps(net_a, net_b, spatial_tol, direction_tol, weight_tol)
 }
 
-/// Certify a full quadratic rational Bezier span algebraically, not from
-/// sampled points. Every coefficient of the degree-four circle polynomial
-/// must vanish within its accumulated homogeneous roundoff budget.
-/// The single homogeneous circle identity shared by all Bezier knot spans.
-#[derive(Clone, Copy)]
-struct CircleEvidence {
-    origin: Point3,
-    basis_u: Vector3,
-    basis_v: Vector3,
-    cx: f64,
-    cy: f64,
-    radius2: f64,
-    coefficient_eps: f64,
-}
-
-impl CircleEvidence {
-    fn certify_span(
-        &self,
-        segment: &monstertruck_geometry::prelude::BsplineCurve<Vector4>,
-    ) -> Option<()> {
-        let Self {
-            origin,
-            basis_u,
-            basis_v,
-            cx,
-            cy,
-            radius2,
-            coefficient_eps,
-        } = *self;
-        let cp = segment.control_points();
-        if cp.len() != 3 {
-            return None;
-        }
-        let mut x = [0.0; 3];
-        let mut y = [0.0; 3];
-        let mut w = [0.0; 3];
-        for (i, h) in cp.iter().copied().enumerate() {
-            if !h.w.is_finite() || h.w <= 0.0 {
-                return None;
-            }
-            let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
-            x[i] = cx.mul_add(-h.w, relative.dot(basis_u));
-            y[i] = cy.mul_add(-h.w, relative.dot(basis_v));
-            w[i] = h.w;
-        }
-        let power = |c: [f64; 3]| {
-            [
-                c[0],
-                2.0 * (c[1] - c[0]),
-                (-2.0_f64).mul_add(c[1], c[0] + c[2]),
-            ]
-        };
-        let x = power(x);
-        let y = power(y);
-        let w = power(w);
-        let mut residual = [0.0f64; 5];
-        let mut coefficient_scale = [0.0f64; 5];
-        for i in 0..3 {
-            for j in 0..3 {
-                let xx = x[i] * x[j];
-                let yy = y[i] * y[j];
-                let rr = radius2 * w[i] * w[j];
-                residual[i + j] += xx + yy - rr;
-                coefficient_scale[i + j] += xx.abs() + yy.abs() + rr.abs();
-            }
-        }
-        // All five coefficients come from the same polynomial identity.
-        // Zero or near-zero coefficients still accumulate roundoff from
-        // the entire rational circle fit, not just their own cancellation.
-        // Normalize by the maximum *actual squared-length* coefficient
-        // contribution, keeping one dimensionally consistent scale.
-        let scale = coefficient_scale.into_iter().fold(0.0_f64, f64::max);
-        residual
-            .iter()
-            .all(|value| value.abs() <= coefficient_eps * scale)
-            .then_some(())
-    }
-}
-
-/// Algebraically certify a circular-cylinder carrier represented by a
-/// quadratic rational B-spline profile with a linear extruded second axis.
-///
-/// Each nondegenerate knot span is converted to a quadratic Bezier span.
-/// The quadratic circle equation in homogeneous coordinates then has degree
-/// four: checking all five *polynomial coefficients* proves the entire span
-/// lies on the circle, not merely finitely many sampled profile points.
-pub(in crate::transversal::classic) fn certified_circular_cylinder(
-    surface: &BsplineSurface<Vector4>,
-) -> Option<(Point3, Vector3, f64, (f64, f64))> {
-    use monstertruck_geometry::prelude::{BsplineCurve, Cut, ParametricCurve};
-    let policy = DEFAULT_NUMERICAL_TOLERANCES;
-    let spatial_eps = policy.boolean_cylinder_structural_length;
-    let weight_eps = policy.boolean_cylinder_homogeneous_weight;
-    let coefficient_eps = policy.boolean_cylinder_polynomial_relative;
-    let (degree_u, degree_v) = surface.degrees();
-    let net = surface.control_points();
-    if degree_u != 2 || degree_v != 1 || net.len() < 3 || net.iter().any(|row| row.len() != 2) {
-        return None;
-    }
-    let origin = project(net[0][0])?;
-    let end = project(net[0][1])?;
-    let sweep = end - origin;
-    if sweep.magnitude() <= spatial_eps {
-        return None;
-    }
-    let axis = sweep.normalize();
-    for row in net {
-        let start = project(row[0])?;
-        let finish = project(row[1])?;
-        if (finish - start - sweep).magnitude() > spatial_eps
-            || (row[0].w - row[1].w).abs() > weight_eps
-        {
-            return None;
-        }
-    }
-
-    let reference = if axis.x.abs() < policy.boolean_cylinder_reference_axis_component_limit {
-        Vector3::unit_x()
-    } else {
-        Vector3::unit_y()
-    };
-    let basis_u = axis.cross(reference).normalize();
-    let basis_v = axis.cross(basis_u).normalize();
-    let profile = BsplineCurve::new_unchecked(
-        surface.knot_vector_u().clone(),
-        net.iter().map(|row| row[0]).collect(),
-    );
-    let knots = profile.knot_vector().clone();
-    let lo = *knots.first()?;
-    let hi = *knots.last()?;
-    let xy = |h: Vector4| -> Option<(f64, f64)> {
-        let p = project(h)?;
-        let delta = p - origin;
-        Some((delta.dot(basis_u), delta.dot(basis_v)))
-    };
-    // Endpoints of a *closed* circular B-spline coincide. Fitting a center
-    // from (front, middle, back) is then singular, even though every rational
-    // quadratic knot span can be algebraically certified. Prefer the widest
-    // triple for open arcs, then use separated interior samples for closed
-    // profiles. This is only a center proposal; every homogeneous polynomial
-    // coefficient on every span is still required to prove a circle below.
-    let span = hi - lo;
-    let (cx, cy, radius2) = [
-        [0.0, 0.5, 1.0],
-        [0.0, 0.25, 0.5],
-        [0.25, 0.5, 0.75],
-        [0.0, 0.375, 0.75],
-    ]
-    .into_iter()
-    .find_map(|fractions| {
-        let [f0, f1, f2] = fractions;
-        let p0 = xy(profile.evaluate(f64::mul_add(span, f0, lo)))?;
-        let p1 = xy(profile.evaluate(f64::mul_add(span, f1, lo)))?;
-        let p2 = xy(profile.evaluate(f64::mul_add(span, f2, lo)))?;
-        let twice_det = 2.0 * (p2.0 - p0.0).mul_add(-(p1.1 - p0.1), (p1.0 - p0.0) * (p2.1 - p0.1));
-        if !twice_det.is_finite() || twice_det.abs() <= spatial_eps * spatial_eps {
-            return None;
-        }
-        let d1 = p1.0.mul_add(p1.0, p1.1 * p1.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
-        let d2 = p2.0.mul_add(p2.0, p2.1 * p2.1) - p0.0.mul_add(p0.0, p0.1 * p0.1);
-        let cx = d2.mul_add(-(p1.1 - p0.1), d1 * (p2.1 - p0.1)) / twice_det;
-        let cy = (p2.0 - p0.0).mul_add(-d1, (p1.0 - p0.0) * d2) / twice_det;
-        let radius2 = (p0.0 - cx).mul_add(p0.0 - cx, (p0.1 - cy).powi(2));
-        (radius2.is_finite() && radius2 > spatial_eps * spatial_eps).then_some((cx, cy, radius2))
-    })?;
-
-    // Every degree-two homogeneous Bezier span must satisfy
-    // (X - cx W)^2 + (Y - cy W)^2 - r² W² == 0 identically.
-    // Convert this product to power-basis coefficients, not to a collection of
-    // point samples. Nonzero knot intervals are split by exact knot insertion.
-
-    let evidence = CircleEvidence {
-        origin,
-        basis_u,
-        basis_v,
-        cx,
-        cy,
-        radius2,
-        coefficient_eps,
-    };
-    let mut remaining = profile;
-    let knot_slack = (policy.boolean_iso_parameter_roundoff_ulps * f64::EPSILON).mul_add(
-        lo.abs().max(hi.abs()),
-        policy.boolean_cylinder_knot_relative * (hi - lo).abs(),
-    );
-    let mut interior = knots
-        .iter()
-        .copied()
-        .filter(|&k| k > lo + knot_slack && k < hi - knot_slack)
-        .collect::<Vec<_>>();
-    interior.dedup_by(|a, b| (*a - *b).abs() <= knot_slack);
-    for knot in interior {
-        let tail_segment = remaining.cut(knot);
-        evidence.certify_span(&remaining)?;
-        remaining = tail_segment;
-    }
-    evidence.certify_span(&remaining)?;
-    let center = origin + basis_u * cx + basis_v * cy;
-    let axial = (origin.to_vec().dot(axis), end.to_vec().dot(axis));
-    Some((center, axis, radius2.sqrt(), axial))
-}
-
 /// Two distinct rational quadratic spline arcs can encode overlapping pieces
 /// of the SAME exact circular cylinder even when their knot/control nets
 /// differ. Refuse mere proximity: each curve must independently satisfy its
@@ -425,7 +215,7 @@ pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monstertruck_geometry::prelude::KnotVector;
+    use monstertruck_geometry::prelude::{KnotVector, Point3, Vector3};
 
     fn extruded(
         xs: (f64, f64),

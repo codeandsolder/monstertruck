@@ -16,6 +16,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub(super) struct ReplayLayer {
     groups: Vec<TreatmentReplayGroup>,
 }
@@ -56,7 +57,9 @@ impl ReplayLayer {
     }
 }
 
-fn original_face_ids(provenance: &KernelTopologyProvenance) -> Result<BTreeMap<u64, u64>> {
+pub(super) fn original_face_ids(
+    provenance: &KernelTopologyProvenance,
+) -> Result<BTreeMap<u64, u64>> {
     let mut ids = BTreeMap::new();
     for face in &provenance.faces {
         let Some(source) = face.shell_member.or(face.source) else {
@@ -157,41 +160,54 @@ pub(super) fn peel<K: SourceTopologyEditor>(
         }
     }
     if !layers.is_empty() {
-        let original = original_face_ids(provenance)?;
-        loop {
-            let faces = kernel.inspect_edited_source(&edited)?.faces;
-            let current = kernel.edited_source_reduced_brep(&edited)?;
-            let evidence = select_replayable_treatments(detect_native_edge_treatments(&current));
-            let lookup = NativeTreatmentTopology::new(&current);
-            let next = plan_treatment_layer(&current, source.data_section, &evidence, &lookup)
-                .and_then(|planned| {
-                    apply_layer(kernel, &mut edited, planned, |id| {
-                        original.get(&id).copied().with_context(|| {
-                            format!("native treatment face #{id} has no original STEP provenance")
-                        })
-                    })
-                });
-            match next {
-                Ok(Some(layer)) => {
-                    ensure!(
-                        kernel.inspect_edited_source(&edited)?.faces < faces,
-                        "native inverse treatment layer did not decrease face count"
-                    );
-                    layers.push(layer);
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    stop = Some(format!("{error:#}"));
-                    break;
-                }
-            }
-        }
+        let (additional, reason) =
+            peel_native(kernel, &mut edited, source.data_section, provenance)?;
+        layers.extend(additional);
+        stop = reason;
     }
     Ok(PeelOutcome {
         edited,
         layers,
         stop,
     })
+}
+
+/// Continue treatment inversion on an already edited native solid. Its
+/// retained source identities still address the original STEP provenance,
+/// regardless of which outer feature was removed to expose the treatments.
+pub(super) fn peel_native<K: SourceTopologyEditor>(
+    kernel: &K,
+    edited: &mut K::EditedSource,
+    section: usize,
+    provenance: &KernelTopologyProvenance,
+) -> Result<(Vec<ReplayLayer>, Option<String>)> {
+    let original = original_face_ids(provenance)?;
+    let mut layers = Vec::new();
+    loop {
+        let faces = kernel.inspect_edited_source(edited)?.faces;
+        let current = kernel.edited_source_reduced_brep(edited)?;
+        let evidence = select_replayable_treatments(detect_native_edge_treatments(&current));
+        let lookup = NativeTreatmentTopology::new(&current);
+        let next =
+            plan_treatment_layer(&current, section, &evidence, &lookup).and_then(|planned| {
+                apply_layer(kernel, edited, planned, |id| {
+                    original.get(&id).copied().with_context(|| {
+                        format!("native treatment face #{id} has no original STEP provenance")
+                    })
+                })
+            });
+        match next {
+            Ok(Some(layer)) => {
+                ensure!(
+                    kernel.inspect_edited_source(edited)?.faces < faces,
+                    "native inverse treatment layer did not decrease face count"
+                );
+                layers.push(layer);
+            }
+            Ok(None) => return Ok((layers, None)),
+            Err(error) => return Ok((layers, Some(format!("{error:#}")))),
+        }
+    }
 }
 
 pub(super) fn replay(
@@ -392,8 +408,13 @@ mod tests {
         let snapshot = kernel.edited_source_to_step(&edited)?;
         let exchange =
             monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange;
-        let host = super::super::recognize_single_healed_host(&exchange, &kernel)?
-            .context("normalized TE host did not pass analytic boundary proof")?;
+        let host = super::super::recognize_single_healed_host(
+            &exchange,
+            &kernel,
+            None,
+            crate::cad_kernel::ReplayMode::General,
+        )?
+        .context("normalized TE host did not pass analytic boundary proof")?;
         assert!(matches!(
             host.source,
             crate::cad_recovery::CadFragmentSource::SectionalExtrusionUnion { .. }
@@ -420,6 +441,33 @@ mod tests {
             )?,
             "replayed TE differs from the original analytic boundary"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn original_spherical_round_treatments_reconstruct_and_prove_the_whole_body() -> Result<()> {
+        let bytes =
+            include_bytes!("../../validation/fixtures/native_round_treatment_abda7f6d.step");
+        let kernel = MonstertruckKernel::project_standard();
+        let report = crate::complete_ir::recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        let [selected] = report.edge_treatment_composites.as_slice() else {
+            anyhow::bail!("expected fully editable treatment composite");
+        };
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [selected.source_solid]
+        );
+        assert_eq!(report.source_orientation_reconciled_solids, []);
+        let fragment = &selected.fragment;
+        assert!(
+            matches!(&fragment.source, crate::cad_recovery::CadFragmentSource::EdgeTreatmentComposite { treatment_face_ids, .. } if treatment_face_ids.len() == 22)
+        );
+        let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+        let summary = kernel.summarize(&evaluated);
+        assert!(summary.is_single_solid(), "{summary:?}");
+        assert_eq!(summary.faces, 30);
         Ok(())
     }
 

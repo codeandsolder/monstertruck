@@ -1468,6 +1468,27 @@ fn normalize3(vector: [f64; 3]) -> Result<[f64; 3]> {
     Ok([vector[0] / length, vector[1] / length, vector[2] / length])
 }
 
+/// Form a source-derived analytic profile prism in its local orthonormal frame.
+pub(super) fn extrude_profile_in_frame(
+    model: &mut CadModel,
+    profile: Vec<Curve2d>,
+    height: f64,
+    origin: [f64; 3],
+    axes: [[f64; 3]; 3],
+) -> crate::cad_ir::NodeId {
+    let body = model.add_node(CadNode::Extrude {
+        profile: Profile2d {
+            loops: vec![ProfileLoop { curves: profile }],
+        },
+        vector_mm: [0.0, 0.0, height],
+    });
+    let [x, y, z] = axes;
+    model.add_node(CadNode::Transform {
+        child: body,
+        transform: local_frame_transform(origin, x, y, z),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(

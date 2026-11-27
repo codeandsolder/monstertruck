@@ -3,21 +3,22 @@ name = "step-redox"
 version = "0.1.0"
 license = "Apache-2.0"
 edition = "2024"
-rust-version = "1.99"
 
 [features]
 default = []
-cad-kernel-monstertruck = ["dep:monstertruck-modeling", "dep:monstertruck-solid", "dep:monstertruck-fillet", "dep:monstertruck-topology", "dep:tempfile"]
+cad-kernel-monstertruck = ["dep:monstertruck-modeling", "dep:monstertruck-solid", "dep:monstertruck-fillet", "dep:monstertruck-topology"]
 
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 step-p21 = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11"
 hex = "0.4"
-tempfile = { version = "3.27", optional = true, default-features = false }
+tempfile = { version = "3.27", default-features = false }
+csv = "1.4"
+rayon = { workspace = true }
 monstertruck-geometry = { workspace = true }
 monstertruck-modeling = { workspace = true, features = ["fillet"], optional = true }
 monstertruck-io = { workspace = true, features = ["step"] }
@@ -54,3 +55,8 @@ undocumented_unsafe_blocks = "warn"
 missing_safety_doc = "warn"
 await_holding_lock = "warn"
 allow_attributes_without_reason = "warn"
+
+[[bin]]
+name = "step-audit-spline-caps"
+path = "src/bin/step-audit-spline-caps.rs"
+required-features = ["cad-kernel-monstertruck"]

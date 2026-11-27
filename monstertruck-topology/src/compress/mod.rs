@@ -651,7 +651,7 @@ impl<P: Clone, C: Clone> CompressDirector<P, C> {
 
 impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     /// Compresses the shell into the serialized compressed shell.
-    #[must_use]
+    #[must_use = "The serialized shell or solid is returned and must be retained to use the compression."]
     pub fn compress(&self) -> CompressedShell<P, C, S> {
         let mut director = CompressDirector::new();
         let face_stable_ids: Vec<StableId> = self.iter().map(super::Face::stable_id).collect();
@@ -707,7 +707,7 @@ impl<P: Clone, C: Clone, S: Clone> Shell<P, C, S> {
     }
 
     /// Compresses the shell while preserving exact face-local trims carried by the edge curves.
-    #[must_use]
+    #[must_use = "The serialized topology with exact face-local trims is returned, not stored elsewhere."]
     pub fn compress_with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -844,7 +844,7 @@ where
     ///
     /// Vertices and sampled edge curves define the box. Unbounded curves are
     /// skipped rather than panicking.
-    #[must_use]
+    #[must_use = "The geometric bounding box is returned rather than stored in the shell."]
     pub fn bounding_box(&self) -> BoundingBox<P> { self.bounding_box_with(|point| point) }
 
     /// Bounding box of the shell's geometry, with every sampled point passed
@@ -925,7 +925,7 @@ where
     /// # let _ = tolerance;
     /// # }
     /// ```
-    #[must_use]
+    #[must_use = "The computed relative tolerance quantity is reported through this return value."]
     pub fn relative_tolerance(&self, factor: f64) -> f64 {
         let tolerance = self.bounding_box().diameter() * factor;
         if tolerance.is_finite() {
@@ -1151,7 +1151,7 @@ impl<P: Clone, C: Clone, S: Clone> CompressedShell<P, C, S> {
     }
 
     /// Attaches exact face-local trims to each edge-use in this compressed shell.
-    #[must_use]
+    #[must_use = "The returned topology carries exact face-local trims; dropping it discards those trims."]
     pub fn with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedShell<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -1214,7 +1214,7 @@ impl<P: Clone, C: Clone, S: Clone> CompressedSolid<P, C, S> {
     }
 
     /// Attaches exact face-local trims to each edge-use in this compressed solid.
-    #[must_use]
+    #[must_use = "The returned topology carries exact face-local trims; dropping it discards those trims."]
     pub fn with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -1227,7 +1227,7 @@ impl<P: Clone, C: Clone, S: Clone> CompressedSolid<P, C, S> {
 
 impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     /// Compresses the solid into the serialized compressed solid.
-    #[must_use]
+    #[must_use = "The serialized shell or solid is returned and must be retained to use the compression."]
     pub fn compress(&self) -> CompressedSolid<P, C, S> {
         CompressedSolid {
             boundaries: self
@@ -1268,7 +1268,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     }
 
     /// Compresses the solid while preserving exact face-local trims carried by the edge curves.
-    #[must_use]
+    #[must_use = "The serialized topology with exact face-local trims is returned, not stored elsewhere."]
     pub fn compress_with_exact_face_trims(
         &self,
     ) -> CompressedTrimmedSolid<P, C, S, <C as ExactParameterBoundary2D<S>>::BoundaryCurve>
@@ -1375,7 +1375,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     /// This hash is independent of pointer identity, attribute edits, and
     /// geometry content. Two solids with the same connectivity and stable IDs
     /// produce the same hash.
-    #[must_use]
+    #[must_use = "The topology hash must be used to identify the serialized structure."]
     pub fn topology_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();
@@ -1398,7 +1398,7 @@ impl<P: Clone, C: Clone, S: Clone> Solid<P, C, S> {
     ///
     /// Unlike [`topology_hash`](Self::topology_hash), this changes when per-element
     /// attributes (e.g. selection stamps) are modified.
-    #[must_use]
+    #[must_use = "The attribute hash is returned for comparing serialized topology metadata."]
     pub fn topology_attribute_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();
@@ -1430,7 +1430,7 @@ where
     /// Includes canonical topology, stable IDs, sparse attributes, and
     /// analytic geometry. Remains deterministic across runs and independent
     /// of pointer identity.
-    #[must_use]
+    #[must_use = "The content hash must be observed to compare the serialized geometry."]
     pub fn content_hash(&self) -> u64 {
         let compressed = self.compress();
         let mut hasher = ContentHasher::new();

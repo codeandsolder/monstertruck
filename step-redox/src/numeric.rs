@@ -21,7 +21,7 @@ pub const DEFAULT_FEATURE_HEAL_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.fe
 ///
 /// Always compare independent source measurements against this threshold;
 /// do not use it in place of exact topology identity or kernel validation.
-#[must_use]
+#[must_use = "The boolean result of `near_imported_feature_mm` must be observed to use the predicate."]
 pub fn near_imported_feature_mm(residual_mm: f64) -> bool {
     residual_mm.is_finite() && (0.0..=DEFAULT_FEATURE_HEAL_TOL_MM).contains(&residual_mm)
 }

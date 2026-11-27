@@ -1,7 +1,7 @@
 use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, FusedPeriodicChain, IndexedCount, NodeId, ProofStatus, Provenance,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::math3::dot;
 use crate::periodic_chains::PeriodicChainPattern;
 use crate::solid_extrusions::RecoveredSolidExtrusion;
@@ -16,10 +16,14 @@ use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
+mod channel_round_ends;
 mod multi_axis_sheet;
 mod proposal_extent;
 pub(crate) mod sectional;
+mod signed_caps;
 mod solid;
+mod source_incidence;
+mod tapered_lip;
 pub use solid::{
     recover_open_rectangular_sweep_fragment, recover_open_rectangular_sweep_fragments,
     recover_radial_slot_revolution_fragment, recover_radial_slot_revolution_fragments,
@@ -105,6 +109,14 @@ pub enum CadFragmentSource {
         solid_id: u64,
         face_ids: Vec<u64>,
         cap_face_ids: Vec<u64>,
+    },
+    /// A source-proven material prism with translated empty-channel cutters.
+    SignedCapAssembly {
+        solid_id: u64,
+        host_cap_face_ids: [u64; 2],
+        cutter_cap_face_ids: Vec<[u64; 2]>,
+        round_end_face_ids: Vec<u64>,
+        additive_face_ids: Vec<u64>,
     },
     /// Exact ruled end caps added to an extrusion-core union.
     CapExtrusionRuledEnds {
@@ -381,13 +393,36 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
     if !source.supported {
         return Ok(false);
     }
-    let rebuilt_step = kernel.to_step(evaluated)?;
-    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
-    let [data] = rebuilt.data.as_slice() else {
+    let Some((id, entities)) = evaluated_step_solid(kernel, evaluated)? else {
         return Ok(false);
     };
-    let rebuilt_entities = &data.entities;
-    let rebuilt_solid_ids = rebuilt_entities
+    let diagnostic =
+        crate::boundary_proof::analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+    Ok(crate::boundary_proof::compare_diagnostics(
+        source,
+        source_entities,
+        &diagnostic,
+        &entities,
+    ))
+}
+
+/// Parse an actual emitted single STEP solid once for callers needing
+/// either full boundary proof or only its exact authored carrier types.
+fn evaluated_step_solid<K: CadKernel>(
+    kernel: &K,
+    evaluated: &K::Evaluated,
+) -> Result<Option<(u64, Vec<EntityInstance>)>> {
+    let rebuilt_step = kernel.to_step(evaluated)?;
+    let rebuilt = ParsedStepSource::parse(rebuilt_step.as_bytes())?.exchange;
+    let mut sections = rebuilt.data.into_iter();
+    let Some(data) = sections.next() else {
+        return Ok(None);
+    };
+    if sections.next().is_some() {
+        return Ok(None);
+    }
+    let ids = data
+        .entities
         .iter()
         .filter_map(|entity| {
             simple_record(entity)
@@ -395,31 +430,58 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
                 .then_some(entity_id(entity))
         })
         .collect::<Vec<_>>();
-    let [rebuilt_solid_id] = rebuilt_solid_ids.as_slice() else {
-        return Ok(false);
+    let [id] = ids.as_slice() else {
+        return Ok(None);
     };
-    let diagnostic = crate::boundary_proof::analytic_boundary_diagnostic(
-        *rebuilt_solid_id,
-        rebuilt_entities,
-        &build_index(rebuilt_entities),
-    );
-    Ok(crate::boundary_proof::compare_diagnostics(
-        source,
-        source_entities,
-        &diagnostic,
-        rebuilt_entities,
-    ))
+    Ok(Some((*id, data.entities)))
 }
+
+fn has_only_planar_cylindrical_carriers<K: CadKernel>(
+    source: &SourceRecovery<'_, K>,
+    fragment: &CadFragment,
+) -> bool {
+    let kernel = source.kernel;
+    let Ok(evaluated) = kernel.evaluate_replay(&fragment.model, fragment.root, None, source.mode)
+    else {
+        return false;
+    };
+    if !kernel.summarize(&evaluated).is_single_solid() {
+        return false;
+    }
+    let Ok(Some((id, entities))) = evaluated_step_solid(kernel, &evaluated) else {
+        return false;
+    };
+    let index = build_index(&entities);
+    // Only explicitly emitted analytic surfaces count here. A merely
+    // near-planar or near-circular spline fit is not this exclusion proof.
+    crate::brep::solid_face_ids(id, &entities, &index).is_some_and(|faces| {
+        !faces.is_empty()
+            && faces.iter().all(|&face| {
+                crate::brep::face_surface(face, &entities, &index)
+                    .and_then(|id| index.get(&id))
+                    .and_then(|&i| simple_record(&entities[i]))
+                    .is_some_and(|r| matches!(r.name.as_str(), "PLANE" | "CYLINDRICAL_SURFACE"))
+            })
+    })
+}
+
+/// Additional qualification of an independently proven material candidate.
+pub(crate) type CandidateAcceptance<'a, K> = dyn for<'m> Fn(&'m CadModel, NodeId, Option<crate::cad_kernel::EvaluationSeed<'m, K>>) -> bool
+    + 'a;
 
 /// Immutable section-local evidence, shared by every material proposal. A
 /// complexity ceiling may only come from a previously certified candidate.
-pub(crate) struct SourceRecovery<'a, K> {
+pub(crate) struct SourceRecovery<'a, K: CadKernel> {
     solid_id: u64,
     entities: &'a [EntityInstance],
     index: &'a HashMap<u64, usize>,
     kernel: &'a K,
     boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+    reconciled_entities: Option<Vec<EntityInstance>>,
+    strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
     boundary_vertices: Vec<[f64; 3]>,
+    acceptance: Option<&'a CandidateAcceptance<'a, K>>,
+    mode: ReplayMode,
 }
 
 impl<'a, K: CadKernel> SourceRecovery<'a, K> {
@@ -431,6 +493,50 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
     ) -> Option<Self> {
         let boundary =
             crate::boundary_proof::analytic_boundary_diagnostic(solid_id, entities, index);
+        Self::from_evidence(
+            solid_id,
+            entities,
+            index,
+            kernel,
+            boundary,
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// Use a distinct, metadata-only proof view when the strictly authored
+    /// source is unsupported. Geometry proposals still read original entities.
+    pub(crate) fn reconcile_strip_senses(
+        solid_id: u64,
+        entities: &'a [EntityInstance],
+        index: &'a HashMap<u64, usize>,
+        kernel: &'a K,
+    ) -> Option<Self> {
+        let crate::boundary_proof::ReconciledStripBoundary {
+            entities: reconciled,
+            diagnostic,
+            repairs,
+        } = crate::boundary_proof::reconcile_strip_face_senses(solid_id, entities, index)?;
+        Self::from_evidence(
+            solid_id,
+            entities,
+            index,
+            kernel,
+            diagnostic,
+            Some(reconciled),
+            repairs,
+        )
+    }
+
+    fn from_evidence(
+        solid_id: u64,
+        entities: &'a [EntityInstance],
+        index: &'a HashMap<u64, usize>,
+        kernel: &'a K,
+        boundary: crate::boundary_proof::AnalyticBoundaryDiagnostic,
+        reconciled_entities: Option<Vec<EntityInstance>>,
+        strip_face_sense_repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
+    ) -> Option<Self> {
         let boundary_vertices = boundary.signature.as_ref()?.boundary_vertices();
         boundary.supported.then_some(Self {
             solid_id,
@@ -438,8 +544,30 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             index,
             kernel,
             boundary,
+            reconciled_entities,
+            strip_face_sense_repairs,
             boundary_vertices,
+            acceptance: None,
+            mode: ReplayMode::General,
         })
+    }
+
+    /// A peeled host must also support the remaining forward operations.
+    /// Apply the caller's acceptance only after independent host proof.
+    pub(crate) fn requiring(
+        mut self,
+        acceptance: &'a CandidateAcceptance<'a, K>,
+        mode: ReplayMode,
+    ) -> Self {
+        self.acceptance = Some(acceptance);
+        self.mode = mode;
+        self
+    }
+
+    pub(crate) fn strip_face_sense_repairs(
+        &self,
+    ) -> &[crate::boundary_proof::StripFaceSenseRepair] {
+        &self.strip_face_sense_repairs
     }
 
     pub(crate) fn proves(
@@ -461,11 +589,14 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
-        let evaluated = self.kernel.evaluate(model, root)?;
-        if !self.kernel.summarize(&evaluated).is_single_solid() {
+        let seed = self.kernel.evaluate_seed(model, root, self.mode)?;
+        if !self.kernel.summarize(seed.evaluated()).is_single_solid() {
             return Ok(false);
         }
-        self.matches_evaluated_boundary(&evaluated)
+        Ok(self.matches_evaluated_boundary(seed.evaluated())?
+            && self
+                .acceptance
+                .is_none_or(|accept| accept(model, root, Some(seed))))
     }
 
     /// Compare an already evaluated single-solid candidate without repeating
@@ -475,7 +606,7 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
             self.kernel,
             evaluated,
             &self.boundary,
-            self.entities,
+            self.reconciled_entities.as_deref().unwrap_or(self.entities),
         )
     }
 }
@@ -543,10 +674,12 @@ fn canonical_core_pair(core: &RecoveredSolidExtrusion) -> [u64; 2] {
 
 /// The source-derived union context is invariant for all core combinations.
 /// In particular, build and recognize terminal extensions only once.
-struct CoreUnionEvidence<'a, 's, K> {
+struct CoreUnionEvidence<'a, 's, K: CadKernel> {
     source: &'a SourceRecovery<'s, K>,
     face_ids: Vec<u64>,
     extensions: Vec<RuledEndExtension>,
+    requires_polynomial_carrier: bool,
+    analytic_extensions: std::cell::OnceCell<bool>,
 }
 
 impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
@@ -562,10 +695,23 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
             .map_or_else(Vec::new, |solid| {
                 crate::solid_lofts::detect_ruled_end_extensions(&solid)
             });
+        let requires_polynomial_carrier =
+            source.boundary.signature.as_ref().is_some_and(|signature| {
+                signature.supports.iter().any(|key| {
+                    matches!(
+                        key,
+                        crate::boundary_proof::OrientedSupportKey::SplineStrip { .. }
+                    )
+                })
+            }) && crate::boundary_proof::requires_nonplanar_polynomial_carrier(
+                &face_ids, entities, index,
+            );
         Some(Self {
             source,
             face_ids,
             extensions,
+            requires_polynomial_carrier,
+            analytic_extensions: std::cell::OnceCell::new(),
         })
     }
 
@@ -574,6 +720,29 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
         cores: &[&RecoveredSolidExtrusion],
         ceiling: Option<u64>,
     ) -> Result<Option<CadFragment>> {
+        // Boolean union can only trim or remove operand boundary
+        // carriers. A line/circular-arc extrusion has only planar and
+        // affine elliptic-cylinder carriers; verify any auxiliary ruled
+        // ends on their actual evaluated geometry once. Unknown geometry
+        // keeps the proposal eligible for the full source proof.
+        if self.requires_polynomial_carrier
+            && cores.iter().all(|core| {
+                core.profile_loops().flatten().all(|curve| {
+                    matches!(
+                        curve,
+                        crate::profile_curves::RecoveredProfileCurve::Line { .. }
+                            | crate::profile_curves::RecoveredProfileCurve::CircleArc { .. }
+                    )
+                })
+            })
+            && *self.analytic_extensions.get_or_init(|| {
+                self.extensions.iter().all(|extension| {
+                    has_only_planar_cylindrical_carriers(self.source, &extension.fragment)
+                })
+            })
+        {
+            return Ok(None);
+        }
         let solid_id = self.source.solid_id;
         let mut fragments = Vec::with_capacity(cores.len() + self.extensions.len());
         let mut axes = Vec::with_capacity(fragments.capacity());
@@ -785,6 +954,7 @@ enum MaterialFamily {
     Sectional,
     FormedSheet,
     CapCover,
+    SignedCaps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -954,6 +1124,11 @@ pub(crate) fn recover_proven_material_fragment<K: CadKernel>(
     best.consider(
         family,
         cap_cover::recover(source, best.ceiling(ceiling, family)),
+    )?;
+    let family = MaterialFamily::SignedCaps;
+    best.consider(
+        family,
+        signed_caps::recover(source, best.ceiling(ceiling, family)),
     )?;
     // Aggregate unions are often the expensive fallback: only evaluate
     // them after cheaper complete cap/section proposals establish a bound.
@@ -1158,7 +1333,7 @@ fn validate_periodic_chain(chain: &PeriodicChainPattern) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
 #[path = "cad_recovery/mixed_fixture_models.rs"]
 pub(crate) mod mixed_fixture_models;
 
@@ -1342,6 +1517,39 @@ mod tests {
                 kernel.to_step(&body)?,
             )?;
         }
+        Ok(())
+    }
+
+    /// A standalone round-end cutter has two regular crossing-cylinder
+    /// branches. Verify the actual emitted STEP, not just the SSI leader.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn crossing_cylinder_cutter_exports_certified_analytic_chains() -> Result<()> {
+        use crate::{
+            boundary_proof::{BoundaryChainKey, analytic_boundary_diagnostic},
+            cad_kernel::{CadKernel, monstertruck::MonstertruckKernel},
+        };
+        let (model, upper, _) = mixed_fixture_models::rounding_caps()?;
+        let kernel = MonstertruckKernel::standard_mm(1e-5);
+        let body = kernel.evaluate(&model, upper)?;
+        anyhow::ensure!(kernel.summarize(&body).is_single_solid());
+        let (id, entities) = evaluated_step_solid(&kernel, &body)?
+            .ok_or_else(|| anyhow::anyhow!("expected one exported cutter"))?;
+        let diagnostic = analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+        anyhow::ensure!(
+            diagnostic.supported,
+            "unsupported emitted cutter: {:?}",
+            diagnostic.reason
+        );
+        let signature = diagnostic
+            .signature
+            .ok_or_else(|| anyhow::anyhow!("missing cutter boundary signature"))?;
+        let count = signature
+            .chains
+            .iter()
+            .filter(|chain| matches!(chain, BoundaryChainKey::CylinderIntersection { .. }))
+            .count();
+        assert_eq!(count, 2);
         Ok(())
     }
 

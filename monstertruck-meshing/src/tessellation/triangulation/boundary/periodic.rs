@@ -16,20 +16,15 @@ use super::{
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
-fn abs_diff(previous: f64) -> impl Fn(&f64, &f64) -> std::cmp::Ordering {
-    let f = move |x: &f64| f64::abs(x - previous);
-    move |x: &f64, y: &f64| f(x).total_cmp(&f(y))
-}
+// Select the nearest equivalent periodic coordinate without assuming that
+// the solver's original branch is within two periods of the current chart.
 pub(super) fn periodic_min_difference(u: f64, u0: f64, up: f64) -> f64 {
-    let closure = |i| f64::mul_add(f64::from(i), up, u);
-    let mut best = closure(-2);
-    for i in -1..=2 {
-        let candidate = closure(i);
-        if abs_diff(u0)(&candidate, &best).is_lt() {
-            best = candidate;
-        }
+    let delta = u - u0;
+    if delta.abs() <= up * 0.5 {
+        u
+    } else {
+        (-delta / up).round().mul_add(up, u)
     }
-    best
 }
 
 /// Native parameter-space slack that scales with the actual finite domain.
@@ -175,7 +170,6 @@ fn surface_axis_range(
 
 fn normalized_periodic_candidate(
     curve: &[SurfacePoint],
-    surface: &impl PreMeshableSurface,
     axis: usize,
     period: f64,
     range: Option<(f64, f64)>,
@@ -194,7 +188,6 @@ fn normalized_periodic_candidate(
             point[axis] =
                 PolyBoundaryPiece::normalize_axis(point[axis], previous, Some(period), range)?;
             previous = Some(point[axis]);
-            point.point = surface.evaluate(point.x, point.y);
             Some(point)
         })
         .collect::<Option<Vec<_>>>()?;
@@ -239,9 +232,7 @@ pub(super) fn compact_periodic_closed_loop(
         let closed_len = curve.len() - 1;
         let best = (0..closed_len)
             .filter_map(|start| {
-                normalized_periodic_candidate(
-                    curve, surface, axis, period, range, start, closed_len,
-                )
+                normalized_periodic_candidate(curve, axis, period, range, start, closed_len)
             })
             .min_by(|lhs, rhs| lhs.0.total_cmp(&rhs.0));
         if let Some((span, mut candidate)) = best

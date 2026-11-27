@@ -183,6 +183,8 @@ pub struct NumericalTolerances {
     pub boolean_cylinder_knot_relative: f64,
     /// Relative polynomial coefficient residual in rational circle identity proof.
     pub boolean_cylinder_polynomial_relative: f64,
+    /// Maximum cubic segments of a bounded crossing-cylinder intersection leader.
+    pub boolean_cylinder_leader_max_segments: u32,
     /// Axis-component cutoff for choosing a well-conditioned cylinder chart basis.
     pub boolean_cylinder_reference_axis_component_limit: f64,
     /// Fractional endpoint exclusion used by planar overlap sampling.
@@ -209,8 +211,6 @@ pub struct NumericalTolerances {
     pub step_trim_residual_mm: f64,
     /// STEP file uncertainty metadata (current model units).
     pub step_output_distance_accuracy: f64,
-    /// Non-geometric STEP number formatting threshold, dimensionless.
-    pub step_output_scientific_notation_threshold: f64,
     /// Scale multiplying Boolean numeric tolerance when joining near-fragments.
     pub boolean_fragment_stitch_scale: f64,
     /// Scale multiplying Boolean numerical tolerance in coplanar matching.
@@ -324,6 +324,7 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     boolean_cylinder_homogeneous_weight: 2.0e-9,
     boolean_cylinder_knot_relative: 2.0e-9,
     boolean_cylinder_polynomial_relative: 2.0e-9,
+    boolean_cylinder_leader_max_segments: 8192,
     boolean_cylinder_reference_axis_component_limit: 0.8,
     boolean_planar_end_fraction: 1.0e-6,
     boolean_planar_primary_probe_ratios: [1.0e-8, 1.0e-7, 1.0e-6, 1.0e-5],
@@ -337,7 +338,6 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     step_uv_clamp_probe: 1.0e-3,
     step_trim_residual_mm: 1.0e-8,
     step_output_distance_accuracy: 1.0e-6,
-    step_output_scientific_notation_threshold: 1.0e-2,
     boolean_fragment_stitch_scale: 4.0,
     boolean_coplanar_scale: 2.0,
     boolean_classifier_offset_factor: 8.0,

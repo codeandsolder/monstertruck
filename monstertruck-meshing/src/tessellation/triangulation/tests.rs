@@ -535,7 +535,7 @@ fn periodic_full_rings_pair_into_cylinder_strip() {
         0.01,
     );
 
-    assert_eq!(boundary.loops.len(), 1);
+    assert_eq!(boundary.loops().len(), 1);
     assert!(boundary.include(Point2::new(0.5, TAU * 0.5)));
 
     let mesh = trimming_tessellation(
@@ -563,14 +563,14 @@ fn periodic_ring_closed_by_wrap_completes_to_full_period() {
     );
 
     assert!(
-        boundary.uv_max.y - boundary.uv_min.y >= TAU - 0.01,
+        boundary.uv_max().y - boundary.uv_min().y >= TAU - 0.01,
         "wrapped full rings should open to one complete period",
     );
     assert!(
-        boundary.uv_max.y - boundary.uv_min.y <= TAU + 0.01,
+        boundary.uv_max().y - boundary.uv_min().y <= TAU + 0.01,
         "paired wrapped rings should not span multiple periods",
     );
-    let middle_v = (boundary.uv_min.y + boundary.uv_max.y) * 0.5;
+    let middle_v = (boundary.uv_min().y + boundary.uv_max().y) * 0.5;
     assert!(boundary.include(Point2::new(0.5, middle_v)));
 
     let mesh = trimming_tessellation(
@@ -582,6 +582,28 @@ fn periodic_ring_closed_by_wrap_completes_to_full_period() {
     );
 
     assert!(mesh.tri_faces().len() > 16);
+}
+
+fn assert_step_cylinder_boundary(
+    surface: &Processor<RevolutionSurface<Line<Point3>>, Matrix4>,
+    boundary: &PolyBoundary,
+    max_span: f64,
+    message: &str,
+) {
+    assert!(
+        boundary.uv_max().x - boundary.uv_min().x <= max_span + 0.01,
+        "{message}"
+    );
+    let middle_u = boundary.uv_min().x.midpoint(boundary.uv_max().x);
+    assert!(boundary.include(Point2::new(middle_u, 0.5)), "{message}");
+    let mesh = trimming_tessellation(
+        surface,
+        boundary,
+        0.01,
+        TessellationPrimitiveOptions::default(),
+        usize::MAX,
+    );
+    assert!(mesh.tri_faces().len() > 16, "{message}");
 }
 
 #[test]
@@ -596,22 +618,12 @@ fn step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
-        "STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -626,22 +638,12 @@ fn shifted_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
-        "shifted STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "shifted STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -656,22 +658,12 @@ fn seam_crossing_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
-        "seam-crossing STEP-style paired rings should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "seam-crossing STEP-style paired rings should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -686,22 +678,12 @@ fn mismatched_seam_step_cylinder_ring_pair_compacts_to_one_period() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
-        "paired rings with mismatched seam starts should not span multiple angular periods",
-    );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        TAU,
+        "paired rings with mismatched seam starts should not span multiple angular periods",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -713,22 +695,12 @@ fn partial_periodic_loop_crossing_seam_compacts_to_short_arc() {
         0.01,
     );
 
-    assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= FRAC_PI_2 + 0.01,
-        "partial periodic loops crossing the seam should keep the short angular arc",
-    );
-    let middle_u = (boundary.uv_min.x + boundary.uv_max.x) * 0.5;
-    assert!(boundary.include(Point2::new(middle_u, 0.5)));
-
-    let mesh = trimming_tessellation(
+    assert_step_cylinder_boundary(
         &surface,
         &boundary,
-        0.01,
-        TessellationPrimitiveOptions::default(),
-        usize::MAX,
+        FRAC_PI_2,
+        "partial periodic loops crossing the seam should keep the short angular arc",
     );
-
-    assert!(mesh.tri_faces().len() > 16);
 }
 
 #[test]
@@ -741,7 +713,7 @@ fn periodic_cylinder_loop_spanning_two_laps_collapses_to_one_lap() {
     );
 
     assert!(
-        boundary.uv_max.x - boundary.uv_min.x <= TAU + 0.01,
+        boundary.uv_max().x - boundary.uv_min().x <= TAU + 0.01,
         "periodic cylinder trim should not span two angular laps",
     );
     assert!(boundary.include(Point2::new(0.5 * TAU, 0.5)));
@@ -755,6 +727,42 @@ fn periodic_cylinder_loop_spanning_two_laps_collapses_to_one_lap() {
     );
 
     assert!(!mesh.tri_faces().is_empty());
+}
+
+#[test]
+fn winding_contains_thin_interior_without_admitting_boundary_or_hole() {
+    let surface = Plane::xy();
+    let boundary = PolyBoundary::new(
+        vec![
+            square_piece(&surface, 0.0, 1.0, true),
+            square_piece(&surface, 0.25, 0.75, false),
+        ],
+        &surface,
+        0.01,
+    );
+    for point in [
+        Point2::new(0.5, 1e-12),
+        Point2::new(0.5, 1.0 - 1e-12),
+        Point2::new(0.25 - 1e-12, 0.5),
+    ] {
+        assert!(boundary.include(point), "{point:?} is strictly interior");
+        assert!(
+            !boundary.include_grid_sample(point),
+            "{point:?} is too close to an existing trim for a generated grid vertex"
+        );
+    }
+    for point in [
+        Point2::new(0.5, 0.0),
+        Point2::new(1.0, 0.5),
+        Point2::new(0.25, 0.5),
+        Point2::new(0.25 + 1e-12, 0.5),
+        Point2::new(0.5, -1e-12),
+    ] {
+        assert!(
+            !boundary.include(point),
+            "{point:?} is on or outside the domain"
+        );
+    }
 }
 
 #[test]
@@ -837,6 +845,52 @@ fn trimming_tessellation_is_invariant_to_single_loop_winding() {
         reversed_mesh.tri_faces().len()
     );
     assert!(!forward_mesh.tri_faces().is_empty());
+}
+
+#[test]
+fn chart_winding_is_positive_in_every_primitive_mode() {
+    use super::mesh::untrimmed_tessellation;
+
+    let surface = Plane::xy();
+    let boundary = PolyBoundary::new(vec![square_piece(&surface, 0.0, 1.0, true)], &surface, 0.01);
+    let assert_positive = |mesh: &PolygonMesh| {
+        assert!(!mesh.faces().is_empty());
+        for polygon in mesh.face_iter() {
+            let area = polygon
+                .iter()
+                .zip(polygon.iter().cycle().skip(1))
+                .map(|(a, b)| {
+                    let a = mesh.uv_coords()[a.uv.expect("chart UV")];
+                    let b = mesh.uv_coords()[b.uv.expect("chart UV")];
+                    a.x.mul_add(b.y, -a.y * b.x)
+                })
+                .sum::<f64>();
+            assert!(area > 0.0, "nonpositive chart winding {area}");
+        }
+    };
+    for mode in [
+        TessellationPrimitiveMode::Triangles,
+        TessellationPrimitiveMode::PreferQuads,
+        TessellationPrimitiveMode::AllQuads,
+        TessellationPrimitiveMode::IsoQuads,
+    ] {
+        assert_positive(&untrimmed_tessellation(
+            &surface,
+            ((0.0, 1.0), (0.0, 1.0)),
+            0.01,
+            mode,
+        ));
+        assert_positive(&trimming_tessellation(
+            &surface,
+            &boundary,
+            0.01,
+            TessellationPrimitiveOptions {
+                mode,
+                ..Default::default()
+            },
+            usize::MAX,
+        ));
+    }
 }
 
 // --- spec 007 D1: loud tessellation face-drop diagnostic ---------------

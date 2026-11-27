@@ -14,7 +14,7 @@ impl PolygonShaders {
     /// - `tex_fragment_module`: fragment shader module with texture
     /// - `tex_fragment_entry`: entry point of fragment shader module with texture
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(
         vertex_module: Arc<ShaderModule>,
         vertex_entry: &'static str,
@@ -35,7 +35,7 @@ impl PolygonShaders {
 
     /// Creates default polygon shaders.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed default polygon shaders is returned rather than stored."]
     pub fn default(device: &Device) -> Self {
         let source = include_str!("shaders/microfacet-module.wgsl").to_string()
             + include_str!("shaders/polygon.wgsl");
@@ -62,7 +62,7 @@ impl WireShaders {
     /// - `fragment_module`: fragment shader module without texture
     /// - `fragment_entry`: entry point of fragment shader module without texture
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(
         vertex_module: Arc<ShaderModule>,
         vertex_entry: &'static str,

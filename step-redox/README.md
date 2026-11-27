@@ -150,9 +150,10 @@ application to source-feature evidence.
 
 ## Validation and CI
 
-The regression harness under `validation/` downloads public upstream CAD fixtures
-by URL, verifies SHA-256, runs step-redox, and validates results independently with
-OpenCascade. Fixtures are cached in CI and are not redistributed in this repo.
+The regression harness under `validation/` acquires SHA-256-pinned upstream
+CAD fixtures, runs step-redox, and validates the results with an independent
+embedded OCCT-WASM kernel. Compressed fixture bundles and the verified cache
+make the release suite reproducible offline.
 
 Checks include:
 
@@ -167,15 +168,8 @@ The initial CI corpus includes public JLC/EasyEDA models and first-party TE
 Connectivity STEP models. GitHub Actions uploads the numerical report and render
 contact sheets for inspection.
 
-Run locally with:
-
-    cargo build --release --bin step-redox
-    uv sync --frozen
-    uv run --frozen --project ../.github/ci/step-redox python ../.github/ci/step-redox/harness.py run \
-      --manifest validation/fixtures.json \
-      --cache .cache/step-redox-validation \
-      --out validation/out \
-      --step-redox target/release/step-redox
+See [the validation harness guide](validation/README.md) for build and run
+commands and the independent geometry and semantics gates.
 
 The current default/manual pipeline is deliberately conservative unless a profile
 or experimental pass is selected.
@@ -265,7 +259,7 @@ The aggressive output is byte-idempotent under a second cleanup pass.
 
 ### OpenCascade validation
 
-The mapped-item path is independently tested with OpenCascade 8 via the validation scripts under `.github/ci/step-redox/`.
+The mapped-item path was independently qualified against native OpenCascade 8 and is now tested with the embedded OCCT-WASM kernel through the [standalone Rust validator](tools/occt-wasm-validator/README.md). Its typed solid diagnostics reproduce the native mass properties, adaptive integration, directed Boolean cuts and paired absolute face integrals without Python/OCP.
 
 For both QFN and SOP examples, STEP import succeeds; solid count and topology counts are preserved; individual solid volume, surface area, center of mass, and bounding box match; matched-solid boolean overlap is complete to floating-point noise; and bidirectional boolean cuts leave no measurable residual geometry.
 

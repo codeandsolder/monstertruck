@@ -20,7 +20,7 @@ pub struct CircularArcFrame {
 impl CircularArcFrame {
     /// Validate a circle and its angular origin. A starting point may differ
     /// from the exact circle by at most the requested geometric tolerance.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new(
         center: Point3,
         normal: Vector3,
@@ -62,11 +62,11 @@ impl CircularArcFrame {
     }
 
     /// Geometric tolerance expressed in radians on this circle.
-    #[must_use]
+    #[must_use = "The computed angle tolerance quantity is reported through this return value."]
     pub fn angle_tolerance(self) -> f64 { self.tolerance / self.radius }
 
     /// Evaluate a point in the positive angular direction around the axis.
-    #[must_use]
+    #[must_use = "The evaluated point on the circular carrier is returned, not stored."]
     pub fn point(self, angle: f64) -> Point3 {
         self.center + (self.x * angle.cos() + self.y * angle.sin()) * self.radius
     }
@@ -132,7 +132,7 @@ pub struct CircularArcCoverage {
 
 /// Prove every rational span lies on the supplied circle and traverses one
 /// unambiguous angular interval. Supports either curve orientation.
-#[must_use]
+#[must_use = "The optional certify circular arc coverage outcome must be inspected to distinguish a value from absence."]
 pub fn certify_circular_arc_coverage(
     rational: &NurbsCurve<Vector4>,
     frame: CircularArcFrame,
@@ -150,6 +150,36 @@ pub fn certify_circular_arc_coverage(
     }) {
         return None;
     }
+    angular_coverage(rational, frame)
+}
+
+/// Prove continuous, single-turn angular coverage on a cylinder.
+///
+/// The frame
+/// defines the transverse circle and the cylinder axis through its center.
+/// Unlike the circular certificate this makes no claim about axial height:
+/// an oblique planar ellipse additionally requires whole-curve plane incidence.
+#[must_use = "The optional certify cylindrical arc coverage outcome must be inspected to distinguish a value from absence."]
+pub fn certify_cylindrical_arc_coverage(
+    rational: &NurbsCurve<Vector4>,
+    frame: CircularArcFrame,
+) -> Option<CircularArcCoverage> {
+    let cylinder = AnalyticSupport::Cylinder {
+        origin: frame.center,
+        axis: frame.normal,
+        radius: frame.radius,
+    };
+    if certify_nurbs_curve_on_support(rational, cylinder, frame.tolerance) != CurveIncidence::Proven
+    {
+        return None;
+    }
+    angular_coverage(rational, frame)
+}
+
+fn angular_coverage(
+    rational: &NurbsCurve<Vector4>,
+    frame: CircularArcFrame,
+) -> Option<CircularArcCoverage> {
     let spans = proof_bezier_spans(rational.non_rationalized())?;
     let tolerance = frame.angle_tolerance();
     let mut total: f64 = 0.0;

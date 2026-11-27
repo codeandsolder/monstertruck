@@ -1,78 +1,32 @@
-#![expect(
-    clippy::similar_names,
-    reason = "paired U/V range and basis names mirror standard NURBS surface notation"
-)]
-
-use super::{
-    BasisWindow, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
-    ControlPoint, Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve,
-    InnerSpace, Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve,
-    NurbsSurface, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve,
-    ParametricSurface, ParametricSurface3D, Point3, Result, SearchNearestParameter,
-    SearchParameter, SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance,
-    Transformed, Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+#[cfg(test)]
+use super::presearch_grid::{
+    CachedPresearchGrid, MAX_PRESEARCH_GRIDS_PER_THREAD, PRESEARCH_BUILDS, PRESEARCH_GRIDS,
+    SPATIAL_INDEX_MIN_QUERIES,
 };
-use super::{curve_inclusion, presearch_trace, seed_index::SeedSpatialIndex};
+use super::{
+    Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface, ControlPoint,
+    Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace,
+    Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve, NurbsSurface,
+    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed,
+    Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+};
+use super::{curve_inclusion, presearch_trace};
 #[cfg(test)]
 use crate::prelude::Vector2;
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use std::sync::OnceLock;
-use std::{
-    any::Any,
-    cell::{Cell, RefCell},
-};
-
-/// Immutable surface samples that can be shared across inverse searches.
-///
-/// The complete control net and knot vectors are retained for value equality,
-/// not merely a geometry address: a surface edited in place must rebuild the
-/// grid. The lookup bounds each thread to eight entries.
-struct CachedPresearchGrid<V: Homogeneous<Scalar = f64>> {
-    surface: BsplineSurface<V>,
-    range: SurfaceParameterRange,
-    division: usize,
-    samples: Vec<(f64, f64, V::Point)>,
-    seen: Cell<usize>,
-    index: RefCell<Option<SeedSpatialIndex>>,
-}
-
-const MAX_PRESEARCH_GRIDS_PER_THREAD: usize = 8;
-/// Defer building the index until its cost is likely to be recovered by reuse.
-const SPATIAL_INDEX_MIN_QUERIES: usize = 128;
-
-fn spatial_index_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("MONSTERTRUCK_PRESEARCH_LINEAR").is_none())
-}
-
-thread_local! {
-    static PRESEARCH_GRIDS: RefCell<Vec<Box<dyn Any>>> = RefCell::new(Vec::new());
-}
-#[cfg(test)]
-thread_local! {
-    static PRESEARCH_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-const fn identical_parameter_ranges(
-    lhs: SurfaceParameterRange,
-    rhs: SurfaceParameterRange,
-) -> bool {
-    lhs.0.0.to_bits() == rhs.0.0.to_bits()
-        && lhs.0.1.to_bits() == rhs.0.1.to_bits()
-        && lhs.1.0.to_bits() == rhs.1.0.to_bits()
-        && lhs.1.1.to_bits() == rhs.1.1.to_bits()
-}
 
 impl<V> NurbsSurface<V> {
     /// constructor
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new(bspsurface: BsplineSurface<V>) -> Self { Self(bspsurface) }
 
     /// Returns the nurbs surface before rationalized
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the nurbs surface before rationalized."]
     pub const fn non_rationalized(&self) -> &BsplineSurface<V> { &self.0 }
     /// Returns the nurbs surface before rationalized
     #[inline]
@@ -80,35 +34,35 @@ impl<V> NurbsSurface<V> {
 
     /// Returns the reference of the knot vectors.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the knot vectors."]
     pub const fn knot_vectors(&self) -> &(KnotVector, KnotVector) { &self.0.knot_vecs }
 
     /// Returns the u knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the u knot vector."]
     pub const fn knot_vector_u(&self) -> &KnotVector { &self.0.knot_vecs.0 }
     /// Returns the v knot vector.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the v knot vector."]
     pub const fn knot_vector_v(&self) -> &KnotVector { &self.0.knot_vecs.1 }
 
     /// Returns the `idx`th u knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th u knot."]
     pub fn knot_u(&self, idx: usize) -> f64 { self.0.knot_vecs.0[idx] }
     /// returns the `idx`th v knot.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the `idx`th v knot."]
     pub fn knot_v(&self, idx: usize) -> f64 { self.0.knot_vecs.1[idx] }
 
     /// Returns the reference of the vector of the control points
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the vector of the control points."]
     pub const fn control_points(&self) -> &Vec<Vec<V>> { &self.0.control_points }
 
     /// Returns the reference of the control point corresponding to the index `(idx0, idx1)`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the reference of the control point corresponding to the index `(idx0, idx1)`."]
     pub fn control_point(&self, idx0: usize, idx1: usize) -> &V {
         &self.0.control_points[idx0][idx1]
     }
@@ -193,7 +147,7 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.udegree(), 1);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn udegree(&self) -> usize { self.0.udegree() }
 
     /// Returns the degrees of B-spline surface
@@ -211,7 +165,7 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.vdegree(), 2);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn vdegree(&self) -> usize { self.0.vdegree() }
 
     /// Returns the degrees of B-spline surface
@@ -229,11 +183,11 @@ impl<V> NurbsSurface<V> {
     /// assert_eq!(bspsurface.degrees(), (1, 2));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the degrees of B-spline surface."]
     pub fn degrees(&self) -> (usize, usize) { (self.udegree(), self.vdegree()) }
     /// Returns whether the knot vectors are clamped or not.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the knot vectors are clamped or not."]
     pub fn is_clamped(&self) -> bool { self.0.is_clamped() }
     /// Swaps two parameters.
     pub fn swap_axes(&mut self) -> &mut Self
@@ -243,18 +197,18 @@ impl<V> NurbsSurface<V> {
     }
     /// The range of the parameter of the surface.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned parameter bounds define the surface domain and must be observed."]
     pub fn parameter_range(&self) -> (ParameterRange, ParameterRange) { self.0.parameter_range() }
     /// Creates the sectional curve along v, at the given u control-point index.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed sectional curve along v, at the given u control-point index is returned rather than stored."]
     pub fn curve_v(&self, index_u: usize) -> NurbsCurve<V>
     where V: Clone {
         NurbsCurve(self.0.curve_v(index_u))
     }
     /// Creates the sectional curve along u, at the given v control-point index.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed sectional curve along u, at the given v control-point index is returned rather than stored."]
     pub fn curve_u(&self, index_v: usize) -> NurbsCurve<V>
     where V: Clone {
         NurbsCurve(self.0.curve_u(index_v))
@@ -326,7 +280,7 @@ where V::Point: Tolerance
     /// assert!(!surface.is_const());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether constant curve or not, i.e. all control points are same or not."]
     pub fn is_const(&self) -> bool {
         let pt = self.0.control_points[0][0].to_point();
         for vec in self.0.control_points.iter().flat_map(|pts| pts.iter()) {
@@ -358,7 +312,7 @@ where V::Point: Tolerance
     /// assert!(!surface0.near_as_surface(&surface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near_as_surface` must be observed to use the predicate."]
     pub fn near_as_surface(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_surface(&other.0, 2, move |x, y| x.to_point().near(&y.to_point()))
@@ -388,7 +342,7 @@ where V::Point: Tolerance
     /// assert!(!surface0.near2_as_surface(&surface1));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The boolean result of `near2_as_surface` must be observed to use the predicate."]
     pub fn near2_as_surface(&self, other: &Self) -> bool {
         self.0
             .sub_near_as_surface(&other.0, 2, move |x, y| x.to_point().near2(&y.to_point()))
@@ -473,12 +427,12 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Tolerance> Nur
 
     /// Cuts the surface into two surfaces at the parameter `u`
     #[inline]
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_u(&mut self, u: f64) -> Self { Self::new(self.0.cut_u(u)) }
 
     /// Cuts the surface into two surfaces at the parameter `v`
     #[inline]
-    #[must_use]
+    #[must_use = "The other segment of the cut is returned separately from the mutated original."]
     pub fn cut_v(&mut self, v: f64) -> Self { Self::new(self.0.cut_v(v)) }
 
     /// Normalizes the knot vectors
@@ -563,125 +517,38 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + Partia
     NurbsSurface<V>
 where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'static
 {
-    /// Separable-basis presearch: bit-identical to [`algo::surface::presearch`]
-    /// for this surface, but computes each grid row's `u`-direction basis window
-    /// and each grid column's `v`-direction basis window exactly once and reuses
-    /// them across the whole `(division + 1) x (division + 1)` grid. The
-    /// tensor-product B-spline basis is separable, so the generic scan's
-    /// per-point re-evaluation of both bases repeats each window `division + 1`
-    /// times; this hoists that redundant work out of the inner loop.
-    ///
-    /// Everything that affects the result is unchanged: the same grid nodes
-    /// (`u`, `v` computed by the identical expressions), the same evaluation
-    /// kernel ([`BsplineSurface::combine_basis`] + [`Homogeneous::to_point`]),
-    /// the same `distance2` metric, and the same strict-`<` first-minimum
-    /// tie-break. The returned `(u, v)` -- and therefore every downstream Newton
-    /// seed -- is byte-for-byte identical to the generic presearch.
+    fn search_with_hint(
+        &self,
+        point: V::Point,
+        hint: SearchParameterHint2D,
+        trials: usize,
+        refine: impl FnOnce(&Self, V::Point, (f64, f64), usize) -> Option<(f64, f64)>,
+    ) -> Option<(f64, f64)> {
+        let hint = super::presearch_grid::resolve_hint(
+            hint,
+            || self.range_tuple(),
+            |range| self.presearch_separable(point, range, PRESEARCH_DIVISION),
+        );
+        let started = presearch_trace::begin();
+        let result = refine(self, point, hint, trials);
+        presearch_trace::refine(started);
+        result
+    }
+
     fn presearch_separable(
         &self,
         point: V::Point,
-        (urange, vrange): SurfaceParameterRange,
+        range: SurfaceParameterRange,
         division: usize,
     ) -> (f64, f64) {
-        let started = presearch_trace::begin();
-        let bsp = &self.0;
-        let (degree0, degree1) = bsp.degrees();
-        let (knot_u, knot_v) = &bsp.knot_vecs;
-        // The separable kernel reproduces only the non-degenerate branch of
-        // `derivative_mn`; defer any zero-range surface to the generic scan so
-        // the degenerate corner cases stay byte-for-byte unchanged.
-        if knot_u.range_length().is_zero() || knot_v.range_length().is_zero() {
-            return algo::surface::presearch(self, point, (urange, vrange), division);
-        }
-        // Spec 014 W3: the separable fast path scans the SAME grid as
-        // `algo::surface::presearch`, so it charges the same nodes -- otherwise
-        // the unit would read lower purely because a surface took the fast path.
-        // (The degenerate early return above delegates and is charged there.)
-        algo::surface::charge_presearch_nodes(algo::surface::presearch_nodes(division));
-        // Preserve the original u-major/v-minor traversal and strict-<
-        // first-minimum rule, including ties and NaNs.
-        let nearest = |samples: &[(f64, f64, V::Point)]| {
-            let mut res = (0.0, 0.0);
-            let mut min = f64::INFINITY;
-            for &(u, v, position) in samples {
-                let dist = position.distance2(point);
-                if dist < min {
-                    min = dist;
-                    res = (u, v);
-                }
-            }
-            res
-        };
-        if let Some((result, indexed, built)) = PRESEARCH_GRIDS.with(|grids| {
-            grids.borrow().iter().rev().find_map(|entry| {
-                let entry = entry.downcast_ref::<CachedPresearchGrid<V>>()?;
-                (entry.division == division
-                    && identical_parameter_ranges(entry.range, (urange, vrange))
-                    && entry.surface == self.0)
-                    .then(|| {
-                        let count = entry.seen.get().saturating_add(1);
-                        entry.seen.set(count);
-                        let built = count == SPATIAL_INDEX_MIN_QUERIES && spatial_index_enabled();
-                        if built {
-                            *entry.index.borrow_mut() = SeedSpatialIndex::build(&entry.samples);
-                        }
-                        let index = entry
-                            .index
-                            .borrow()
-                            .as_ref()
-                            .and_then(|tree| tree.nearest(&entry.samples, point));
-                        let indexed = index.is_some();
-                        let result = index.map_or_else(
-                            || nearest(&entry.samples),
-                            |i| (entry.samples[i].0, entry.samples[i].1),
-                        );
-                        (result, indexed, built)
-                    })
-            })
-        }) {
-            presearch_trace::seed(true, indexed, built, started);
-            return result;
-        }
-
-        let ((u0, u1), (v0, v1)) = (urange, vrange);
-        let vbasis: Vec<BasisWindow> = (0..=division)
-            .map(|j| {
-                let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
-                let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-                knot_v.bspline_basis_functions_unchecked(degree1, 0, v)
-            })
-            .collect();
-        let mut samples = Vec::new();
-        for i in 0..=division {
-            let p = crate::usize_to_f64(i) / crate::usize_to_f64(division);
-            let u = f64::mul_add(u1, p, u0 * (1.0 - p));
-            let ubasis = knot_u.bspline_basis_functions_unchecked(degree0, 0, u);
-            for (j, vb) in vbasis.iter().enumerate() {
-                let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
-                let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-                let position = V::from_vec(bsp.combine_basis(&ubasis, vb)).to_point();
-                samples.push((u, v, position));
-            }
-        }
-        let result = nearest(&samples);
-        #[cfg(test)]
-        PRESEARCH_BUILDS.with(|count| count.set(count.get() + 1));
-        PRESEARCH_GRIDS.with(|grids| {
-            let mut grids = grids.borrow_mut();
-            if grids.len() == MAX_PRESEARCH_GRIDS_PER_THREAD {
-                grids.remove(0);
-            }
-            grids.push(Box::new(CachedPresearchGrid::<V> {
-                surface: self.0.clone(),
-                range: (urange, vrange),
-                division,
-                samples,
-                seen: Cell::new(1),
-                index: RefCell::new(None),
-            }));
-        });
-        presearch_trace::seed(false, false, false, started);
-        result
+        super::presearch_grid::presearch::<_, _, true>(
+            self,
+            &self.0,
+            point,
+            range,
+            division,
+            Homogeneous::to_point,
+        )
     }
 }
 
@@ -721,19 +588,12 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                self.presearch_separable(point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        let started = presearch_trace::begin();
-        let result = algo::surface::search_nearest_parameter(self, point, hint, trials);
-        presearch_trace::refine(started);
-        result
+        self.search_with_hint(
+            point,
+            hint.into(),
+            trials,
+            algo::surface::search_nearest_parameter,
+        )
     }
 }
 
@@ -742,7 +602,7 @@ where V::Point: Bounded<Scalar = f64>
 {
     /// Returns the bounding box including all control points.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the bounding box including all control points."]
     pub fn roughly_bounding_box(&self) -> BoundingBox<V::Point> {
         self.0
             .control_points
@@ -865,6 +725,21 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
 }
 
 impl ParametricSurface3D for NurbsSurface<Vector4> {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        super::iso_boundary::closed_chart_periods(&self.0, |p| {
+            p.w > 0.0 && [p.x, p.y, p.z, p.w].into_iter().all(f64::is_finite)
+        })
+    }
+
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        super::iso_boundary::collapsed_boundary_parameter(self, point, hint, tolerance)
+    }
+
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         let pt = self.0.evaluate(u, v);
         let ud = self.0.derivative_u(u, v);
@@ -1104,6 +979,10 @@ impl IncludeCurve<BsplineCurve<Point3>> for NurbsSurface<Vector4> {
             curve.front(),
             curve.knot_vector(),
             curve.degree(),
+        ) || super::iso_boundary::includes_clamped_boundary(
+            self,
+            &NurbsCurve::from(curve.clone()),
+            crate::prelude::KERNEL_EPSILON,
         )
     }
 }
@@ -1117,6 +996,10 @@ impl IncludeCurve<NurbsCurve<Vector4>> for NurbsSurface<Vector4> {
             curve.front(),
             curve.knot_vector(),
             curve.degree(),
+        ) || super::iso_boundary::includes_clamped_boundary(
+            self,
+            curve,
+            crate::prelude::KERNEL_EPSILON,
         )
     }
 }
@@ -1170,19 +1053,7 @@ where
         hint: H,
         trials: usize,
     ) -> Option<(f64, f64)> {
-        let hint = match hint.into() {
-            SearchParameterHint2D::Parameter(x, y) => (x, y),
-            SearchParameterHint2D::Range(range0, range1) => {
-                self.presearch_separable(point, (range0, range1), PRESEARCH_DIVISION)
-            }
-            SearchParameterHint2D::None => {
-                self.presearch_separable(point, self.range_tuple(), PRESEARCH_DIVISION)
-            }
-        };
-        let started = presearch_trace::begin();
-        let result = algo::surface::search_parameter(self, point, hint, trials);
-        presearch_trace::refine(started);
-        result
+        self.search_with_hint(point, hint.into(), trials, algo::surface::search_parameter)
     }
 }
 
@@ -1282,13 +1153,15 @@ fn adaptive_index_keeps_exact_generic_presearch_minimum_after_hot_cache_threshol
             "index must reproduce the generic f64 seed and first-minimum tie order",
         );
     }
-    if spatial_index_enabled() {
+    {
         PRESEARCH_GRIDS.with(|grids| {
             let grids = grids.borrow();
             let entry = grids
                 .iter()
                 .rev()
-                .filter_map(|value| value.downcast_ref::<CachedPresearchGrid<Vector4>>())
+                .filter_map(|value| {
+                    value.downcast_ref::<CachedPresearchGrid<Vector4, Point3, true>>()
+                })
                 .find(|value| value.surface == surface.0 && value.range == range)
                 .expect("the same surface remains in the bounded cache");
             assert!(

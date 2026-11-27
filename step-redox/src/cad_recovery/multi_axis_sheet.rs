@@ -263,11 +263,15 @@ pub(super) fn recover<K: CadKernel>(
         index,
         ..
     } = *source;
-    let Some(evidence) =
-        formed_sheet::detect_formed_sheet_evidence_with_min_pairs(entities, index, 2, 1)
-            .into_iter()
-            .find(|e| e.solid_id == solid_id)
-    else {
+    let Some(evidence) = formed_sheet::detect_formed_sheet_evidence_with_min_pairs(
+        entities,
+        index,
+        2,
+        1,
+        &[solid_id],
+    )
+    .into_iter()
+    .find(|e| e.solid_id == solid_id) else {
         return Ok(None);
     };
     let Some(solid) = ReducedSolid::from_step(solid_id, entities, index) else {

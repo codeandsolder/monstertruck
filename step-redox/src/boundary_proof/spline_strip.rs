@@ -2,9 +2,9 @@
 //! matching endpoint pairs establishes a curved edge. Retain complete positive-
 //! weight rational Bernstein control nets, ordered spans, and actual trims.
 use super::{
-    ANALYTIC_BOUNDARY_PROOF_TOL_MM as TOL, BSplineSupport, CurveSupport, DIRECTION_Q, EdgeGeometry,
-    OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded, dequantize_scalar,
-    dequantize_vector, point_key,
+    ANALYTIC_BOUNDARY_PROOF_TOL_MM as TOL, BSplineSupport, CellWitnesses, CurveSupport,
+    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded,
+    dequantize_scalar, dequantize_vector, point_key,
 };
 use crate::{
     brep,
@@ -20,6 +20,10 @@ use serde::Serialize;
 use std::collections::HashMap;
 use step_p21::ast::EntityInstance;
 
+#[cfg(feature = "cad-kernel-monstertruck")]
+mod cap_trim;
+#[cfg(any(test, feature = "cad-kernel-monstertruck"))]
+pub(super) mod coincidence;
 mod embedding;
 mod restriction;
 pub(super) use restriction::{ProfilePosition, complete_profile_cover};
@@ -39,6 +43,12 @@ pub struct SplineCurveKey {
 }
 
 impl SplineCurveKey {
+    pub(super) fn map_points(&mut self, mut map: impl FnMut(&mut PointKey)) {
+        for point in self.spans.iter_mut().flat_map(|span| &mut span.points_mm) {
+            map(point);
+        }
+    }
+
     pub(super) fn ends(&self) -> Option<[PointKey; 2]> {
         Some([
             *self.spans.first()?.points_mm.first()?,
@@ -50,6 +60,14 @@ impl SplineCurveKey {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct SplineStripKey {
     profiles: [SplineCurveKey; 2],
+}
+
+impl SplineStripKey {
+    pub(super) fn map_points(&mut self, mut map: impl FnMut(&mut PointKey)) {
+        for profile in &mut self.profiles {
+            profile.map_points(&mut map);
+        }
+    }
 }
 
 fn decode(p: PointKey) -> Option<[f64; 3]> { dequantize_vector(p, POINT_Q_MM) }
@@ -77,6 +95,14 @@ fn weight_ratios(weights: &[f64]) -> Option<Vec<u64>> {
 /// dehomogenization and rational evaluation. Reject rather than claim a
 /// sub-quantum geometric certificate for very ill-conditioned input.
 fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
+    certified_bspline_extraction_error_mm(spline).map(|_| ())
+}
+
+/// The actual (input-dependent) conservative arithmetic margin for the
+/// polynomial/rational B-spline to homogeneous Bernstein conversion.
+/// The strict key proof only needs to know whether this fits a quarter of
+/// its coordinate quantum; a geometric proximity proof also needs the value.
+fn certified_bspline_extraction_error_mm(spline: &BSplineSupport) -> Option<f64> {
     let (lo, hi) = super::bspline_domain(spline)?;
     let n = spline.control_points_mm.len();
     let order = spline.degree.checked_add(1)?;
@@ -107,7 +133,108 @@ fn well_conditioned(spline: &BSplineSupport) -> Option<()> {
     };
     let operation_error = 16. * order.to_f64()? * f64::EPSILON / min_span;
     let error_mm = 2. * coordinate_scale * operation_error / weight_ratio.powi(2);
-    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(())
+    (error_mm.is_finite() && error_mm <= POINT_Q_MM / 4.).then_some(error_mm)
+}
+
+/// A finite union of planes and elliptic cylinders cannot contain an
+/// open nonplanar polynomial surface patch. Substituting its polynomial
+/// parameterization into a carrier's implicit equation must give the
+/// zero polynomial on an open set. For an elliptic cylinder, the sum of
+/// squares of two transverse coordinate polynomials would be constant,
+/// forcing both to be constant and the patch to have rank at most one.
+/// For a plane, every Bernstein control point must be coplanar.
+fn nonplanar_polynomial_profiles(profiles: &[BSplineSupport; 2]) -> bool {
+    if profiles.iter().any(|profile| {
+        profile.weights.as_ref().is_some_and(|weights| {
+            weights.first().is_none_or(|first| {
+                !first.is_finite()
+                    || *first <= 0.
+                    || weights.iter().any(|w| w.to_bits() != first.to_bits())
+            })
+        })
+    }) {
+        return false;
+    }
+    // Constant weights on each row also permit a common rational linear
+    // reparameterization in the sweep direction; the geometric patch
+    // remains the polynomial homotopy of the two profile rows.
+    let Some(a) = curve_evidence(&profiles[0]) else {
+        return false;
+    };
+    let Some(b) = curve_evidence(&profiles[1]) else {
+        return false;
+    };
+    if a.forward != b.forward || a.controls.len() != b.controls.len() {
+        return false;
+    }
+    a.controls.iter().zip(&b.controls).any(|(first, second)| {
+        let points = first
+            .iter()
+            .chain(second)
+            .map(|p| [p.x / p.w, p.y / p.w, p.z / p.w])
+            .collect::<Vec<_>>();
+        nonplanar_control_net(&points)
+    })
+}
+
+fn nonplanar_control_net(points: &[[f64; 3]]) -> bool {
+    let Some(&origin) = points.first() else {
+        return false;
+    };
+    let vectors = points.iter().map(|&p| sub(p, origin)).collect::<Vec<_>>();
+    let norm = crate::math3::norm;
+    let cross = crate::math3::cross;
+    let Some(&a) = vectors
+        .iter()
+        .max_by(|&&a, &&b| norm(a).total_cmp(&norm(b)))
+    else {
+        return false;
+    };
+    let Some(&b) = vectors
+        .iter()
+        .max_by(|&&b, &&c| norm(cross(a, b)).total_cmp(&norm(cross(a, c))))
+    else {
+        return false;
+    };
+    let normal = cross(a, b);
+    // Reserve the existing source proof length for each control point.
+    // Differences can have twice that error. Bound all terms of the
+    // perturbed scalar triple product, including arithmetic roundoff.
+    let e = 2. * TOL;
+    let (na, nb) = (norm(a), norm(b));
+    vectors.iter().any(|&c| {
+        let nc = norm(c);
+        let pairwise = nb.mul_add(nc, na.mul_add(nc, na * nb));
+        let bound = (e * e).mul_add(na + nb + nc, e.mul_add(pairwise, e.powi(3)));
+        let bound = (32. * f64::EPSILON * na * nb).mul_add(nc, bound);
+        let determinant = dot(normal, c).abs();
+        determinant.is_finite() && determinant > bound
+    })
+}
+
+/// Require a complete certified strip, not just a nonplanar untrimmed
+/// carrier which could have been trimmed to one of its planar spans.
+pub(super) fn has_nonplanar_polynomial_patch(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index).is_some_and(
+        |(profiles, _)| {
+            nonplanar_polynomial_profiles(&profiles)
+                && oriented_key(
+                    face_id,
+                    surface_id,
+                    forward,
+                    entities,
+                    index,
+                    &mut CellWitnesses::default(),
+                )
+                .is_some()
+        },
+    )
 }
 
 /// Canonicalize the whole curve, allowing affine reversal and different
@@ -122,7 +249,7 @@ struct CurveEvidence {
 
 fn curve_evidence(spline: &BSplineSupport) -> Option<CurveEvidence> {
     well_conditioned(spline)?;
-    let rational = bounded::rational(spline)?;
+    let rational = spline.rational_curve()?;
     let mut spans = proof_bezier_spans(rational.non_rationalized())?;
     let start = point_key(*spline.control_points_mm.first()?)?;
     let end = point_key(*spline.control_points_mm.last()?)?;
@@ -214,6 +341,7 @@ type DirectedProfile = (SplineCurveKey, bool);
 
 fn translated_geometry(
     profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
 ) -> Option<([DirectedProfile; 2], [f64; 3], [f64; 3])> {
     let [first, second] = profiles;
     if first.degree != second.degree
@@ -249,13 +377,25 @@ fn translated_geometry(
         *first.control_points_mm.last()?,
         *first.control_points_mm.first()?,
     );
-    let keys = [curve_evidence(first)?, curve_evidence(second)?]
-        .map(|evidence| (evidence.key, evidence.forward));
+    let evidence = [curve_evidence(first)?, curve_evidence(second)?];
+    if cells.enabled() {
+        for profile in &evidence {
+            for (span, controls) in profile.key.spans.iter().zip(&profile.controls) {
+                for (&key, p) in span.points_mm.iter().zip(controls) {
+                    cells.record_point(key, [p.x / p.w, p.y / p.w, p.z / p.w]);
+                }
+            }
+        }
+    }
+    let keys = evidence.map(|evidence| (evidence.key, evidence.forward));
     Some((keys, axis, chord))
 }
 
-fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
-    let (keys, axis, chord) = translated_geometry(profiles)?;
+fn translated_profiles(
+    profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
+) -> Option<[DirectedProfile; 2]> {
+    let (keys, axis, chord) = translated_geometry(profiles, cells)?;
     [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
         .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
@@ -267,9 +407,12 @@ fn translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfil
 /// The global monotonicity check is a cheap certificate for most profiles.
 /// For turning profiles prove each span injective and every projected
 /// span pair separated, rather than weakening the monotonicity inequalities.
-fn embedded_translated_profiles(profiles: &[BSplineSupport; 2]) -> Option<[DirectedProfile; 2]> {
-    translated_profiles(profiles).or_else(|| {
-        let (keys, axis, _) = translated_geometry(profiles)?;
+fn embedded_translated_profiles(
+    profiles: &[BSplineSupport; 2],
+    cells: &mut CellWitnesses,
+) -> Option<[DirectedProfile; 2]> {
+    translated_profiles(profiles, cells).or_else(|| {
+        let (keys, axis, _) = translated_geometry(profiles, cells)?;
         keys.iter()
             .all(|(key, _)| embedding::is_embedded(key, axis))
             .then_some(keys)
@@ -346,7 +489,7 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
                 .then_some(())
         }
         CurveSupport::BSpline(spline) => {
-            let rational = bounded::rational(spline)?;
+            let rational = spline.rational_curve()?;
             if certify_nurbs_segment_locus(
                 &rational,
                 Point3::new(start[0], start[1], start[2]),
@@ -448,16 +591,16 @@ fn full_trim(
     Some(())
 }
 
-pub(super) fn oriented_key(
-    face_id: u64,
+fn canonical_strip(
     surface_id: u64,
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-) -> Option<OrientedSupportKey> {
+    cells: &mut CellWitnesses,
+) -> Option<([SplineCurveKey; 2], bool)> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
-    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles)?;
+    let [(a, u_forward), (b, other_forward)] = embedded_translated_profiles(&profiles, cells)?;
     if u_forward != other_forward || a == b {
         return None;
     }
@@ -466,7 +609,19 @@ pub(super) fn oriented_key(
     if !v_forward {
         profiles.reverse();
     }
-    let outward_positive = forward ^ swapped ^ !u_forward ^ !v_forward;
+    Some((profiles, forward ^ swapped ^ !u_forward ^ !v_forward))
+}
+
+pub(super) fn oriented_key(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
+) -> Option<OrientedSupportKey> {
+    let (profiles, outward_positive) =
+        canonical_strip(surface_id, forward, entities, index, cells)?;
     full_trim(
         &profiles,
         outward_positive,
@@ -476,6 +631,33 @@ pub(super) fn oriented_key(
         strip: Box::new(SplineStripKey { profiles }),
         outward_positive,
     })
+}
+
+/// Check that an already-authored complete trim traverses an embedded strip
+/// in exactly the opposite sense to its declared `FACE_SURFACE.same_sense`.
+/// This does not by itself establish an oriented closed shell; callers must
+/// separately validate the entire reconciled boundary, including coedges.
+pub(super) fn reversed_face_sense_is_proven(
+    face_id: u64,
+    surface_id: u64,
+    forward: bool,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    let Some((profiles, outward_positive)) = canonical_strip(
+        surface_id,
+        forward,
+        entities,
+        index,
+        &mut CellWitnesses::default(),
+    ) else {
+        return false;
+    };
+    let Some(loops) = brep::face_loops(face_id, entities, index) else {
+        return false;
+    };
+    full_trim(&profiles, outward_positive, &loops).is_none()
+        && full_trim(&profiles, !outward_positive, &loops).is_some()
 }
 
 pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey) -> bool {
@@ -590,6 +772,39 @@ mod tests {
     }
 
     #[test]
+    fn polynomial_exclusion_requires_a_single_nonplanar_full_span() {
+        let mut profiles = [profile(0.), profile(0.01)];
+        assert!(nonplanar_polynomial_profiles(&profiles));
+        // Different common weights in the two sweep rows only rechart v.
+        profiles[0].weights = Some(vec![1.; 4]);
+        profiles[1].weights = Some(vec![2.; 4]);
+        assert!(nonplanar_polynomial_profiles(&profiles));
+        // A rational arc is not ruled out by polynomial algebra.
+        profiles[0].weights = Some(vec![1., 0.8, 0.8, 1.]);
+        profiles[1].weights = Some(vec![2., 1.6, 1.6, 2.]);
+        assert!(!nonplanar_polynomial_profiles(&profiles));
+
+        // A bent piecewise-linear profile has a nonplanar complete
+        // control net but each individual swept span is a plane.
+        let bent = |z| BSplineSupport {
+            degree: 1,
+            control_points_mm: vec![[0., 0., z], [1., 1., z], [2., 0., z]],
+            knots: vec![0., 0., 0.5, 1., 1.],
+            weights: None,
+        };
+        assert!(!nonplanar_polynomial_profiles(&[bent(0.), bent(1.)]));
+
+        // A degree-elevated line remains planar.
+        let mut profiles = [profile(0.), profile(0.01)];
+        for p in &mut profiles {
+            for point in &mut p.control_points_mm {
+                point[1] = 0.;
+            }
+        }
+        assert!(!nonplanar_polynomial_profiles(&profiles));
+    }
+
+    #[test]
     fn full_curve_key_retains_all_spans_and_is_reversal_invariant() -> Result<()> {
         let original = profile(0.);
         let CurveEvidence { key, forward, .. } = curve_evidence(&original).context("original")?;
@@ -619,20 +834,20 @@ mod tests {
     #[test]
     fn strip_requires_translated_positive_weight_monotone_profiles() {
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         profiles[0].weights = Some(vec![1., 2., 2., 1.]);
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         profiles[1].weights = Some(vec![2., 4., 3., 2.]);
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
         profiles[1].control_points_mm[1][2] += 0.001;
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
         for p in &mut profiles {
             p.control_points_mm[1] = [2., 0., p.control_points_mm[0][2]];
             p.control_points_mm[2] = [-1., 0., p.control_points_mm[0][2]];
         }
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
     }
 
     #[test]
@@ -652,12 +867,12 @@ mod tests {
             weights: None,
         };
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles).is_some());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
         for p in &mut profiles {
             p.control_points_mm[1][1] = -0.0001;
             p.control_points_mm[5][1] = 1.0001;
         }
-        assert!(translated_profiles(&profiles).is_none());
+        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
     }
 
     fn edge(

@@ -5,12 +5,12 @@ use super::{
     AnalyticSurfaceKind, BoundedSurface, BsplineCurve, BsplineSurface, Curve, Deserialize,
     ExtrusionSurface, From, Homogeneous, HomogeneousSurfaceConversion, HomotopySurface,
     IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
-    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point3,
-    Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterD2,
-    SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains, SurfaceParameter,
-    SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus, Transform, Transformed,
-    TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3,
-    Vector4, algo, env,
+    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point2,
+    Point3, Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterD2, SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains,
+    SurfaceParameter, SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus,
+    Transform, Transformed, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
 };
 use crate::SquareMatrix;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -71,7 +71,7 @@ pub enum Surface {
 /// Spline, T-spline and non-linear revolution carriers are not promoted by
 /// numerical sampling. A spline may be provably coplanar yet lack a proven
 /// globally consistent chart Jacobian, so it is likewise refused here.
-#[must_use]
+#[must_use = "check whether an exact analytic carrier was certified before using it"]
 pub fn analytic_carrier(surface: &Surface) -> Option<AnalyticCarrier> {
     match surface {
         Surface::Plane(plane) => AnalyticCarrier::plane(plane),
@@ -99,7 +99,7 @@ pub fn analytic_carrier(surface: &Surface) -> Option<AnalyticCarrier> {
 /// A successful result certifies *only* untrimmed carrier identity. Topology
 /// proof must additionally establish valid bounded face loops, complete edge
 /// incidence and curve/surface intersection loci.
-#[must_use]
+#[must_use = "check untrimmed support identity before claiming matched analytic surfaces"]
 pub fn same_analytic_surface_domain(
     first: &Surface,
     second: &Surface,
@@ -142,6 +142,25 @@ macro_rules! derive_surface_self_method {
 }
 
 impl ParametricSurface3D for Surface {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        derive_surface_method!(self, ParametricSurface3D::closed_chart_periods,)
+    }
+
+    fn collapsed_boundary_parameter(
+        &self,
+        point: Point3,
+        hint: Point2,
+        tolerance: f64,
+    ) -> Option<Point2> {
+        derive_surface_method!(
+            self,
+            ParametricSurface3D::collapsed_boundary_parameter,
+            point,
+            hint,
+            tolerance
+        )
+    }
+
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         derive_surface_method!(self, ParametricSurface3D::normal, u, v)
@@ -250,6 +269,18 @@ fn revolution_surface_includes_curve(
     }
 }
 
+// Sphere and ring-torus charts cover their complete analytic support.
+// If inverse parameter search misses a point near a periodic seam or pole,
+// a global polynomial incidence certificate is stronger than sampling.
+fn complete_analytic_surface_includes(surface: &Surface, curve: &Curve) -> bool {
+    use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
+    super::analytic_curve_incidence::certify_analytic_curve_on_surface(
+        curve,
+        surface,
+        crate::KERNEL_EPSILON,
+    ) == CurveIncidence::Proven
+}
+
 impl IncludeCurve<Curve> for Surface {
     #[inline]
     fn include(&self, curve: &Curve) -> bool {
@@ -280,8 +311,14 @@ impl IncludeCurve<Curve> for Surface {
                     .search_parameter(control.to_point(), None, 1)
                     .is_some()
             }),
-            Self::Sphere(surface) => analytic_surface_includes_curve(surface, curve),
-            Self::Torus(surface) => analytic_surface_includes_curve(surface, curve),
+            Self::Sphere(surface) => {
+                analytic_surface_includes_curve(surface, curve)
+                    || complete_analytic_surface_includes(self, curve)
+            }
+            Self::Torus(surface) => {
+                analytic_surface_includes_curve(surface, curve)
+                    || complete_analytic_surface_includes(self, curve)
+            }
             Self::Revolution(surface) => revolution_surface_includes_curve(surface, curve),
         }
     }
@@ -511,6 +548,18 @@ impl TryIntoBsplineSurface for Surface {
 }
 
 impl TryIntoHomogeneousBsplineSurface for Surface {
+    fn homogeneous_net_covers_domain(&self) -> bool {
+        match self {
+            Self::Plane(surface) => surface.homogeneous_net_covers_domain(),
+            Self::BsplineSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::NurbsSurface(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Revolution(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Sphere(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Torus(surface) => surface.homogeneous_net_covers_domain(),
+            Self::Tspline(_) => false,
+        }
+    }
+
     fn try_into_homogeneous_bspline_surface(&self) -> Option<BsplineSurface<Vector4>> {
         match self {
             Self::Plane(p) => p.try_into_homogeneous_bspline_surface(),

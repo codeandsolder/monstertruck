@@ -70,6 +70,38 @@ pub struct BSplineSupport {
     pub weights: Option<Vec<f64>>,
 }
 
+impl BSplineSupport {
+    /// Construct the positive-weight homogeneous form used by full-domain
+    /// geometric certificates. Never change the authored control net or knots.
+    pub(crate) fn rational_curve(
+        &self,
+    ) -> Option<monstertruck_geometry::prelude::NurbsCurve<monstertruck_geometry::prelude::Vector4>>
+    {
+        use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, NurbsCurve, Vector4};
+        let count = self.control_points_mm.len();
+        if self.degree == 0
+            || self.degree >= count
+            || self.knots.len() != count.checked_add(self.degree)?.checked_add(1)?
+            || self.knots[self.degree] >= self.knots[count]
+            || self.weights.as_ref().is_some_and(|w| w.len() != count)
+        {
+            return None;
+        }
+        let controls = self
+            .control_points_mm
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let w = self.weights.as_ref().map_or(1.0, |weights| weights[i]);
+                (w.is_finite() && w > 0.0 && p.iter().all(|v| v.is_finite()))
+                    .then(|| Vector4::new(p[0] * w, p[1] * w, p[2] * w, w))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let knots = KnotVector::try_from(self.knots.clone()).ok()?;
+        Some(NurbsCurve::new(BsplineCurve::new(knots, controls).ok()?))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplineExtrusionSupport {
     pub profile: BSplineSupport,
@@ -132,6 +164,17 @@ pub struct FaceLoop {
     pub outer: bool,
     pub orientation: bool,
     pub edges: Vec<OrientedEdgeUse>,
+}
+
+/// Enumerate eligible manifold bodies once in source entity order.
+pub fn manifold_solid_ids(entities: &[EntityInstance]) -> Vec<u64> {
+    entities
+        .iter()
+        .filter_map(|entity| {
+            let record = simple_record(entity)?;
+            (record.name == "MANIFOLD_SOLID_BREP").then_some(crate::step_graph::entity_id(entity))
+        })
+        .collect()
 }
 
 pub fn solid_face_ids(
@@ -420,7 +463,18 @@ pub fn curve_support(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> CurveSupport {
-    curve_support_inner(curve_id, entities, index, 0)
+    curve_support_inner(curve_id, entities, index, 0, true)
+}
+
+/// Read the geometry independently of a STEP author's simplicity flags.
+/// Only for callers that establish the complete bounded locus and traversal;
+/// ordinary feature recognizers must still use `curve_support`.
+pub fn curve_geometry_for_incidence_proof(
+    curve_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> CurveSupport {
+    curve_support_inner(curve_id, entities, index, 0, false)
 }
 
 fn curve_support_inner(
@@ -428,6 +482,7 @@ fn curve_support_inner(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     wrapper_depth: usize,
+    require_simple: bool,
 ) -> CurveSupport {
     if wrapper_depth >= 8 {
         return CurveSupport::Other {
@@ -450,7 +505,13 @@ fn curve_support_inner(
         && let Some(inner_curve) = params.get(1).and_then(entity_ref_value)
         && inner_curve != curve_id
     {
-        return curve_support_inner(inner_curve, entities, index, wrapper_depth + 1);
+        return curve_support_inner(
+            inner_curve,
+            entities,
+            index,
+            wrapper_depth + 1,
+            require_simple,
+        );
     }
 
     if let Some(record) = simple_record(entity)
@@ -503,14 +564,16 @@ fn curve_support_inner(
                     });
             }
             "BEZIER_CURVE" | "B_SPLINE_CURVE_WITH_KNOTS" => {
-                if let Some(spline) = parse_simple_bspline(record, entities, index) {
+                if let Some(spline) = parse_simple_bspline(record, entities, index, require_simple)
+                {
                     return CurveSupport::BSpline(spline);
                 }
             }
             _ => {}
         }
     } else if let EntityInstance::Complex { subsuper, .. } = entity
-        && let Some(spline) = parse_complex_rational_bspline(subsuper, entities, index)
+        && let Some(spline) =
+            parse_complex_rational_bspline(subsuper, entities, index, require_simple)
     {
         return CurveSupport::BSpline(spline);
     }
@@ -524,6 +587,7 @@ fn parse_simple_bspline(
     record: &Record,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    require_simple: bool,
 ) -> Option<BSplineSupport> {
     let Parameter::List(params) = &record.parameter else {
         return None;
@@ -537,8 +601,8 @@ fn parse_simple_bspline(
             let order = degree.checked_add(1)?;
             let control_points_mm = control_points_3d(params.get(2)?, entities, index)?;
             if control_points_mm.len() != order
-                || !not_true_enum(params.get(4)?)
-                || !not_true_enum(params.get(5)?)
+                || !valid_spline_flag(params.get(4)?, require_simple)
+                || !valid_spline_flag(params.get(5)?, require_simple)
             {
                 return None;
             }
@@ -557,7 +621,9 @@ fn parse_simple_bspline(
             }
             let degree = positive_degree(params.get(1)?)?;
             let control_points_mm = control_points_3d(params.get(2)?, entities, index)?;
-            if !not_true_enum(params.get(4)?) || !not_true_enum(params.get(5)?) {
+            if !valid_spline_flag(params.get(4)?, require_simple)
+                || !valid_spline_flag(params.get(5)?, require_simple)
+            {
                 return None;
             }
             let multiplicities = positive_integer_list(params.get(6)?)?;
@@ -583,6 +649,7 @@ fn parse_complex_rational_bspline(
     subsuper: &SubSuperRecord,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    require_simple: bool,
 ) -> Option<BSplineSupport> {
     const REQUIRED: &[&str] = &[
         "BOUNDED_CURVE",
@@ -615,7 +682,9 @@ fn parse_complex_rational_bspline(
     }
     let degree = positive_degree(base.first()?)?;
     let control_points_mm = control_points_3d(base.get(1)?, entities, index)?;
-    if !not_true_enum(base.get(3)?) || !not_true_enum(base.get(4)?) {
+    if !valid_spline_flag(base.get(3)?, require_simple)
+        || !valid_spline_flag(base.get(4)?, require_simple)
+    {
         return None;
     }
 
@@ -667,8 +736,8 @@ fn positive_degree(parameter: &Parameter) -> Option<usize> {
     }
 }
 
-fn not_true_enum(parameter: &Parameter) -> bool {
-    matches!(parameter, Parameter::Enumeration(value) if value == "F" || value == "U")
+fn valid_spline_flag(parameter: &Parameter, require_simple: bool) -> bool {
+    matches!(parameter, Parameter::Enumeration(value) if value == "F" || value == "U" || (!require_simple && value == "T"))
 }
 
 fn control_points_3d(

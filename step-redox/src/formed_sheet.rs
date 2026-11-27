@@ -5,7 +5,7 @@ use crate::math3::{
 use crate::step_entities::{
     cartesian_point, direction_components as direction, number as numeric_value,
 };
-use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -123,7 +123,7 @@ struct PlanePairCandidate {
     separation_mm: f64,
 }
 
-#[must_use]
+#[must_use = "The computed detect formed sheet evidence collection is returned and must be retained or inspected."]
 pub fn detect_formed_sheet_evidence(entities: &[EntityInstance]) -> Vec<FormedSheetEvidence> {
     let index = build_index(entities);
     detect_formed_sheet_evidence_with_index(entities, &index)
@@ -138,6 +138,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_index(
         index,
         MIN_COAXIAL_PAIRS,
         MIN_PARALLEL_PLANE_PAIRS,
+        &crate::brep::manifold_solid_ids(entities),
     )
 }
 
@@ -146,7 +147,7 @@ pub(crate) fn detect_formed_sheet_evidence_with_index(
 /// This keeps the public high-confidence diagnostic policy separate from
 /// constructive recovery, whose own grammar may legitimately prove a body from
 /// a single bend pair plus independent topology/trim evidence.
-#[must_use]
+#[must_use = "The detected formed-sheet evidence is returned for feature recovery, not stored."]
 #[expect(
     clippy::too_many_lines,
     reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
@@ -160,20 +161,14 @@ pub(crate) fn detect_formed_sheet_evidence_with_min_pairs(
     index: &HashMap<u64, usize>,
     min_coaxial_pairs: usize,
     min_parallel_plane_pairs: usize,
+    solid_ids: &[u64],
 ) -> Vec<FormedSheetEvidence> {
     if min_coaxial_pairs == 0 || min_parallel_plane_pairs == 0 {
         return Vec::new();
     }
     let mut out = Vec::new();
 
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "MANIFOLD_SOLID_BREP" {
-            continue;
-        }
-        let solid_id = entity_id(entity);
+    for &solid_id in solid_ids {
         let Some(face_ids) = solid_faces(solid_id, entities, index) else {
             continue;
         };

@@ -274,16 +274,29 @@ fn terminal_runs(
             let point = if let Some(point) = junctions.get(&id) {
                 *point
             } else {
-                let plane = plane(solid, id)?;
-                // The cap is a surviving plane, not another inferred feature.
-                let ends = [start_mm, end_mm]
-                    .into_iter()
-                    .filter(|p| dot(plane.normal, sub(*p, plane.origin_mm)).abs() <= GEOM_TOL_MM)
-                    .collect::<Vec<_>>();
-                let [point] = ends.as_slice() else {
-                    anyhow::bail!("round terminal does not have one sharp endpoint on its cap");
-                };
-                *point
+                let cap = plane(solid, id)?;
+                let cap_normal =
+                    normalize(cap.normal, DIR_TOL).context("degenerate terminal cap")?;
+                ensure!(
+                    super::edges_form_one_cyclic_run(face(solid, id)?, &edges)
+                        && source
+                            .loop_edges()
+                            .filter(|edge| edges.contains(&edge.edge_id))
+                            .all(|edge| {
+                                [edge.start_mm, edge.end_mm].into_iter().all(|point| {
+                                    dot(cap_normal, sub(point, cap.origin_mm)).abs() <= GEOM_TOL_MM
+                                })
+                            }),
+                    "terminal run is not on one surviving cap"
+                );
+                // A drafted rail can meet an oblique cap. The axial midpoint
+                // of the two tangent contacts is not the sharp endpoint.
+                // The actual three planes uniquely determine that endpoint.
+                triple_intersection([
+                    plane(solid, item.carriers[0].face_id)?,
+                    plane(solid, item.carriers[1].face_id)?,
+                    cap,
+                ])?
             };
             let axis = normalize(sub(end_mm, start_mm), DIR_TOL).context("zero inverse segment")?;
             ensure!(
@@ -504,13 +517,6 @@ pub fn plan_round_network(
         // a surviving planar cap. A cap run collapses to one sharp vertex.
         for terminal in &terminals {
             if !removed_faces.contains(&terminal.face_id) {
-                ensure!(
-                    super::edges_form_one_cyclic_run(
-                        face(solid, terminal.face_id)?,
-                        &terminal.edges
-                    ),
-                    "terminal cap run not contiguous"
-                );
                 splices.push(KernelFaceSplice {
                     face: topology_face(provenance, section, terminal.face_id)?,
                     remove_edges: topology_edges(
@@ -551,4 +557,54 @@ pub fn plan_round_network(
         selectors,
         junction_faces,
     })
+}
+
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+mod tests {
+    use super::*;
+    use crate::{
+        cad_kernel::monstertruck::MonstertruckKernel,
+        kernel_source_load::SourceStepLoadInspector,
+        kernel_topology::{SourceTopologyEditor, source_reduced_solid},
+    };
+
+    #[test]
+    fn drafted_round_network_intersects_actual_terminal_cap() -> Result<()> {
+        let bytes =
+            include_bytes!("../../validation/fixtures/native_drafted_round_network_0b5a3544.step");
+        let kernel = MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+        )?;
+        let load = kernel.inspect_source_document(&document)?;
+        let [loaded] = load.solids.as_slice() else {
+            anyhow::bail!("expected one original source solid");
+        };
+        let provenance = loaded
+            .topology_provenance
+            .as_ref()
+            .context("missing original topology provenance")?;
+        let section = &document.as_ref().data[loaded.source.data_section];
+        let index = crate::step_graph::build_index(&section.entities);
+        let evidence = crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+            &section.entities,
+            &index,
+            &std::collections::HashSet::from([loaded.source.id]),
+        );
+        let solid = source_reduced_solid(document.as_ref(), loaded.source)?;
+        let networks = round_networks(&solid, &evidence);
+        let network = networks
+            .iter()
+            .find(|network| network.rounds.len() == 8 && network.junctions.len() == 4)
+            .context("expected eight rails and four spherical junctions")?;
+        let plan = plan_round_network(&solid, network, loaded.source.data_section, provenance)?;
+        assert_eq!(plan.patch.remove_faces.len(), 12);
+        assert_eq!(plan.selectors.len(), 8);
+        assert_eq!(plan.junction_faces.len(), 4);
+        let edited = kernel.edit_source_topology(&document, loaded.source, &[plan.patch])?;
+        let summary = kernel.inspect_edited_source(&edited)?;
+        assert_eq!(summary.boundary_shells, 1);
+        assert_eq!(summary.faces, 171);
+        Ok(())
+    }
 }

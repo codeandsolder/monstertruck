@@ -5,18 +5,18 @@
 //! Split out of the module file so the source stays readable; the module path
 //! is unchanged.
 
+use super::index::BoundaryIndex;
 use super::{
-    Cdt, FixedVertexHandle, HashGen, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools,
-    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
-    SurfacePoint, Tolerance, Triangulation, UvKey, Vector2, align_full_period_open_pair,
-    align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
-    connect_edges, mesh, native_boundary_slack, normalize_range, open_periodic_closed_loop,
-    periodic_axis_full_span, periodic_open_axis_full_span, polyline_on_surface,
-    surface_point_with_cache,
+    Cdt, FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
+    Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2, SurfacePoint,
+    Tolerance, Triangulation, UvKey, align_full_period_open_pair, align_periodic_open_pair,
+    close_open_periodic_curve_to_singular, compact_periodic_closed_loop, connect_edges, mesh,
+    native_boundary_slack, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
+    periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
 };
 use mesh::spade_round;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
-use std::{f64::consts::TAU, iter, mem};
+use std::{iter, mem};
 
 const ISOPARAM_BOUNDARY_SEARCH_ITERATIONS: usize = 32;
 
@@ -24,20 +24,16 @@ const fn end_points<T: Copy>(slice: &[T]) -> (T, T) { (slice[0], slice[slice.len
 
 #[derive(Debug, Clone)]
 pub(in crate::tessellation::triangulation) struct PolyBoundary {
-    pub(in crate::tessellation::triangulation) loops: Vec<Vec<SurfacePoint>>,
-    /// UV-space axis-aligned bounding box for cheap rejection in `include()`.
-    pub(in crate::tessellation::triangulation) uv_min: Point2,
-    pub(in crate::tessellation::triangulation) uv_max: Point2,
+    loops: Vec<Vec<SurfacePoint>>,
+    /// UV-space axis-aligned bounding box for cheap rejection in include.
+    uv_min: Point2,
+    uv_max: Point2,
+    index: Option<BoundaryIndex>,
+    grid_slack: Option<Point2>,
 }
 
 impl Default for PolyBoundary {
-    fn default() -> Self {
-        Self {
-            loops: Vec::new(),
-            uv_min: Point2::new(f64::INFINITY, f64::INFINITY),
-            uv_max: Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
-        }
-    }
+    fn default() -> Self { Self::from_closed_loops(Vec::new()) }
 }
 
 fn loop_signed_area(curve: &[SurfacePoint]) -> f64 {
@@ -369,44 +365,60 @@ impl PolyBoundary {
         }
         add_surface_domain_boundary_if_needed(&mut closed, surface, tolerance, &mut point_cache);
         normalize_closed_loop_winding(&mut closed);
-        let (uv_min, uv_max) = boundary_uv_bounds(&closed);
+        Self::from_closed_loops(closed)
+    }
+
+    pub(in crate::tessellation::triangulation) fn from_closed_loops(
+        loops: Vec<Vec<SurfacePoint>>,
+    ) -> Self {
+        let (uv_min, uv_max) = boundary_uv_bounds(&loops);
+        let relative = DEFAULT_NUMERICAL_TOLERANCES.mesh_projection_parameter_relative;
+        let grid_slack = native_boundary_slack((uv_min.x, uv_max.x), relative)
+            .zip(native_boundary_slack((uv_min.y, uv_max.y), relative))
+            .filter(|&(u, v)| u > 0.0 && v > 0.0)
+            .map(|(u, v)| Point2::new(u, v));
+        let index = BoundaryIndex::new(&loops);
         Self {
-            loops: closed,
+            loops,
             uv_min,
             uv_max,
+            index,
+            grid_slack,
         }
     }
 
-    /// Whether `c` is included in the domain with boundary = `self`.
-    pub(in crate::tessellation::triangulation) fn include(&self, c: Point2) -> bool {
-        // AABB early reject.
-        if c.x < self.uv_min.x || c.x > self.uv_max.x || c.y < self.uv_min.y || c.y > self.uv_max.y
-        {
-            return false;
-        }
-        let t = TAU * HashGen::hash1(c);
-        let r = Vector2::new(f64::cos(t), f64::sin(t));
-        self.loops
-            .iter()
-            .flat_map(|vec| vec.iter().circular_tuple_windows())
-            .try_fold(0_i32, move |counter, (p0, p1)| {
-                let a = **p0 - c;
-                let b = **p1 - c;
-                let s0 = r.y.mul_add(-a.x, r.x * a.y); // v times a.
-                let s1 = r.y.mul_add(-b.x, r.x * b.y); // v times b.
-                let s2 = a.y.mul_add(-b.x, a.x * b.y); // a times b.
-                let x = s2 / (s1 - s0);
-                if x.so_small() && s0 * s1 < 0.0 {
-                    None
-                } else if x > 0.0 && s0 <= 0.0 && s1 > 0.0 {
-                    Some(counter + 1)
-                } else if x > 0.0 && s0 >= 0.0 && s1 < 0.0 {
-                    Some(counter - 1)
-                } else {
-                    Some(counter)
-                }
-            })
-            .is_some_and(|counter| counter > 0)
+    pub(in crate::tessellation::triangulation) fn loops(&self) -> &[Vec<SurfacePoint>] {
+        &self.loops
+    }
+
+    pub(in crate::tessellation::triangulation) const fn uv_min(&self) -> Point2 { self.uv_min }
+
+    pub(in crate::tessellation::triangulation) const fn uv_max(&self) -> Point2 { self.uv_max }
+
+    /// Whether the query is strictly included in the oriented UV domain.
+    /// Exact on-edge classification is retained at every hierarchy leaf.
+    pub(in crate::tessellation::triangulation) fn include(&self, point: Point2) -> bool {
+        point.x.is_finite()
+            && point.y.is_finite()
+            && point.x >= self.uv_min.x
+            && point.x <= self.uv_max.x
+            && point.y >= self.uv_min.y
+            && point.y <= self.uv_max.y
+            && self
+                .index
+                .as_ref()
+                .is_some_and(|index| index.contains(point))
+    }
+
+    /// Generated grid vertices must not compete with the shared boundary
+    /// polyline. This is a sampling clearance, not a domain-membership test.
+    pub(in crate::tessellation::triangulation) fn include_grid_sample(
+        &self,
+        point: Point2,
+    ) -> bool {
+        self.grid_slack
+            .zip(self.index.as_ref())
+            .is_some_and(|(slack, index)| self.include(point) && index.clear(point, slack))
     }
 
     pub(in crate::tessellation::triangulation) fn isoparametric_curves<S: PreMeshableSurface>(

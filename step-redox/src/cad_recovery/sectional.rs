@@ -413,7 +413,7 @@ pub fn recover<K: CadKernel>(
             continue;
         };
         let Some(levels) = stations(&solid, frame) else {
-            if let Some((model, root, slabs)) = ruled::model(&solid, frame)? {
+            for (model, root, slabs) in ruled::models(&solid, frame)? {
                 candidates.push((
                     model.complexity_score(root)?,
                     model,

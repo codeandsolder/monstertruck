@@ -70,7 +70,7 @@ pub mod topo_traits {
         /// curves are mapped by `curve_closure`,
         /// and surfaces are mapped by `surface_closure`.
         #[doc(hidden)]
-        #[must_use]
+        #[must_use = "use the transformed topology because mapping does not mutate the original"]
         fn mapped(&self, trans: T) -> Self;
     }
 
@@ -118,6 +118,8 @@ mod closed_sweep;
 pub mod errors;
 mod geom_impls;
 mod mapped;
+/// Recover native analytic CAD geometry from polygon meshes.
+pub mod mesh_recovery;
 mod multi_sweep;
 mod partition_normalization;
 pub use partition_normalization::normalize_planar_partitions;
@@ -131,7 +133,10 @@ mod topo_impls;
 #[cfg(feature = "fillet")]
 mod fillet_impl;
 #[cfg(feature = "fillet")]
-pub use fillet_impl::{chamfer_carrier_edges, chamfer_planar_edges, fillet_edges};
+pub use fillet_impl::{
+    chamfer_carrier_edges, chamfer_planar_edges, fillet_edges, try_chamfer_planar_edges,
+    try_round_planar_edges,
+};
 
 /// Font outline ingestion and conversion to wires.
 ///

@@ -272,7 +272,7 @@ pub struct StepDesign<Model, Models, Matrix = Matrix4> {
 impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// Builds a `StepDesign` from an explicit assembly.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn new(assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>) -> Self {
         Self {
             assembly,
@@ -284,7 +284,7 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
 
     /// Builds a `StepDesign` with a caller-provided application-context string.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `StepDesign` with a caller-provided application-context string is returned rather than stored."]
     pub fn with_application_context(
         assembly: Assembly<Models, PartAttributes, Matrix, PartAttributes>,
         application_context: String,
@@ -301,7 +301,7 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
     /// representation-context preamble. The default preserves millimetre
     /// lengths and a `1.0E-6` `distance_accuracy_value`.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned writer carries the requested source measurement context; it must be retained."]
     pub const fn with_measurement_context(mut self, context: StepMeasurementContext) -> Self {
         self.measurement_context = context;
         self
@@ -309,7 +309,7 @@ impl<Model, Models, Matrix> StepDesign<Model, Models, Matrix> {
 
     /// Returns the length unit and distance accuracy written into the preamble.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the length unit and distance accuracy written into the preamble."]
     pub const fn measurement_context(&self) -> StepMeasurementContext { self.measurement_context }
 }
 
