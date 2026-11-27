@@ -531,8 +531,48 @@ where
     S: ParametricSurface,
     S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
+    refine_parameter_grid(
+        surface,
+        (vec![urange.0, urange.1], vec![vrange.0, vrange.1]),
+        tol,
+        cell_budget,
+    )
+}
+
+/// Refine a tensor-product grid from caller-specified initial cuts, preserving
+/// every cut (for example exact chart seams) under the same global work budget.
+///
+/// # Panics
+/// Each axis must contain at least two finite nondecreasing coordinates and
+/// tolerance must be greater than or equal to the kernel epsilon.
+pub fn parameter_division_from_grid_with_budget<S>(
+    surface: &S,
+    (udiv, vdiv): (Vec<f64>, Vec<f64>),
+    tol: f64,
+    cell_budget: u64,
+) -> BudgetedDivision
+where
+    S: ParametricSurface,
+    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+{
     nonpositive_tolerance!(tol);
-    let (mut udiv, mut vdiv) = (vec![urange.0, urange.1], vec![vrange.0, vrange.1]);
+    assert!([&udiv, &vdiv].into_iter().all(|axis| axis.len() >= 2
+        && axis.iter().all(|x| x.is_finite())
+        && axis.windows(2).all(|pair| pair[0] <= pair[1])));
+    refine_parameter_grid(surface, (udiv, vdiv), tol, cell_budget)
+}
+
+fn refine_parameter_grid<S>(
+    surface: &S,
+    (mut udiv, mut vdiv): (Vec<f64>, Vec<f64>),
+    tol: f64,
+    cell_budget: u64,
+) -> BudgetedDivision
+where
+    S: ParametricSurface,
+    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+{
+    nonpositive_tolerance!(tol);
     let mut budget = CellBudget {
         remaining: cell_budget,
         exhausted: false,

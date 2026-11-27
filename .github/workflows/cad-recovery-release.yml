@@ -19,7 +19,7 @@ jobs:
       - name: Resolve repository compiler
         run: rustup show active-toolchain
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main
         with:
           cache-scope: step-recovery-release
           rustflags: "-D warnings"
@@ -57,4 +57,4 @@ jobs:
           if-no-files-found: warn
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main

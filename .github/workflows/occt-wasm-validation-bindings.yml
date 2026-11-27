@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - name: External crate release-age quarantine
         if: github.event_name == 'pull_request'
-        uses: codeandsolder/ci-workflows/.github/actions/cargo-release-quarantine@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        uses: codeandsolder/ci-workflows/.github/actions/cargo-release-quarantine@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main
         with:
           base-ref: ${{ github.event.pull_request.base.sha }}
           lockfile: step-redox/tools/occt-wasm-validator/Cargo.lock
@@ -34,7 +34,7 @@ jobs:
       - name: Resolve the repository compiler
         run: rustup show active-toolchain
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main
         with:
           repository-path: step-redox/tools/occt-wasm-validator
           cache-scope: occt-wasm-validation-bindings
@@ -61,4 +61,4 @@ jobs:
           if-no-files-found: error
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@83ceff49d93d152cd95a1c9d6addb5cf03169477 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main

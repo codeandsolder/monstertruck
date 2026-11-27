@@ -19,8 +19,9 @@ font = ["dep:ttf-parser"]
 derive_more = { workspace = true }
 itertools = { workspace = true }
 rustc-hash = { workspace = true }
+robust = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = { workspace = true }
 monstertruck-core = { workspace = true }
 monstertruck-geometry = { workspace = true }

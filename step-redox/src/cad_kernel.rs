@@ -218,6 +218,7 @@ pub mod monstertruck {
 
     mod circular_selection;
     mod cylinder_boundary_export;
+    mod cylinder_surface_export;
     mod parallel_prisms;
     mod planar_boundary_export;
     mod planar_loft;
@@ -519,7 +520,10 @@ pub mod monstertruck {
         let exported = source.try_mapped(
             |point| Some(*point),
             |curve| match corrected_step_curve(curve, tolerance) {
-                Ok(converted) => Some(converted),
+                Ok(converted) => Some(cylinder_surface_export::rechart_intersection(
+                    converted,
+                    tolerance.min(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM),
+                )),
                 Err(error) => {
                     if first_error.borrow().is_none() {
                         *first_error.borrow_mut() = Some(error);
@@ -541,7 +545,16 @@ pub mod monstertruck {
         // the evaluated CAD solid or its original trim data.
         let tolerance = tolerance.min(crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM);
         for face in exported.face_iter() {
-            let Surface::Revolution(revolution) = face.surface() else {
+            let original = face.surface();
+            if let Some(surface) = cylinder_surface_export::rechart_face(
+                &original,
+                face.edge_iter().map(|edge| edge.curve()),
+                tolerance,
+            ) {
+                face.set_surface(surface);
+                continue;
+            }
+            let Surface::Revolution(revolution) = original else {
                 continue;
             };
             let Some(sphere) = revolution.try_certified_sphere(tolerance) else {

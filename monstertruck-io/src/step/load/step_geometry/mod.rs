@@ -433,6 +433,7 @@ pub enum SweepSurface {
     StepLength,
     StepSurface,
 )]
+#[surface_intrinsic_bounds(uv_clamp::reported_range_bounds_the_surface)]
 pub enum Surface {
     Elementary(ElementarySurface),
     Sweep(SweepSurface),

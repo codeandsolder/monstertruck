@@ -247,31 +247,59 @@ impl ParameterKind {
     }
 }
 
-impl<P: Copy, C: Clone> Loops<P, C> {
+/// The inverse solver may return a point just beyond the trimmed domain if
+/// it still classifies as an endpoint. Add the endpoint allowance to the
+/// residual allowance before using a certified enclosure to reject a query.
+fn may_reach_boundary<C: BoundedCurve<Point = Point3>>(
+    curve: &C,
+    point: Point3,
+    residual: f64,
+    tolerances: BooleanTolerance,
+) -> bool {
+    curve.certified_spatial_bounds().is_none_or(|bounds| {
+        super::weld::point_inside_padded_box(bounds, point, residual + tolerances.length)
+    })
+}
+
+fn exact_boundary_kind<C>(
+    curve: &C,
+    point: Point3,
+    tolerances: BooleanTolerance,
+) -> Option<ParameterKind>
+where
+    C: BoundedCurve<Point = Point3> + SearchParameter<CurveParameter, Point = Point3>,
+{
+    if !may_reach_boundary(curve, point, tolerances.length, tolerances) {
+        return None;
+    }
+    let parameter = curve.search_parameter(point, None, 1)?;
+    (curve.evaluate(parameter).distance(point) <= tolerances.length)
+        .then(|| ParameterKind::try_new(parameter, curve, tolerances))
+        .flatten()
+}
+
+impl<C: Clone> Loops<Point3, C> {
     /// An exact trim hit must satisfy the caller's *spatial* budget even when
     /// the individual inverse solver uses a looser global search epsilon.
     fn search_parameter(
         &self,
-        point: P,
+        point: Point3,
         tolerances: BooleanTolerance,
     ) -> Option<(usize, usize, ParameterKind)>
     where
-        P: MetricSpace<Metric = f64>,
-        C: BoundedCurve<Point = P> + SearchParameter<CurveParameter, Point = P>,
+        C: BoundedCurve<Point = Point3> + SearchParameter<CurveParameter, Point = Point3>,
     {
         self.iter()
             .enumerate()
             .flat_map(|(i, wire)| wire.iter().enumerate().map(move |(j, edge)| (i, j, edge)))
             .find_map(|(i, j, edge)| {
                 let curve = edge.curve();
-                let t = curve.search_parameter(point, None, 1)?;
-                if curve.evaluate(t).distance(point) > tolerances.length {
-                    return None;
-                }
-                Some((i, j, ParameterKind::try_new(t, &curve, tolerances)?))
+                Some((i, j, exact_boundary_kind(&curve, point, tolerances)?))
             })
     }
+}
 
+impl<P: Copy, C: Clone> Loops<P, C> {
     fn change_vertex(
         &mut self,
         old_vertex: &Vertex<P>,
@@ -962,10 +990,7 @@ impl<C> LoopsStore<Point3, C> {
             .par_iter()
             .map(|(_, _, edge)| {
                 let curve = edge.curve();
-                let parameter = curve.search_parameter(point, None, 1)?;
-                (curve.evaluate(parameter).distance(point) <= tolerances.length)
-                    .then(|| ParameterKind::try_new(parameter, &curve, tolerances))
-                    .flatten()
+                exact_boundary_kind(&curve, point, tolerances)
             })
             .collect();
         let mut found_exact = false;
@@ -991,6 +1016,9 @@ impl<C> LoopsStore<Point3, C> {
             .par_iter()
             .map(|(_, _, edge)| {
                 let curve = edge.curve();
+                if !may_reach_boundary(&curve, point, nearest_tolerance, tolerances) {
+                    return None;
+                }
                 let parameter = curve.search_nearest_parameter(point, None, 10)?;
                 let projected = curve.evaluate(parameter);
                 if projected.distance(point) > nearest_tolerance {
@@ -1037,17 +1065,7 @@ impl<C> LoopsStore<Point3, C> {
         for wire in self[loops_index].iter() {
             for edge in wire.iter() {
                 let curve = edge.curve();
-                let Some(parameter) = curve.search_parameter(point, None, 1) else {
-                    continue;
-                };
-                // As with exact boundary inverse search, the curve's own
-                // SearchParameter tolerance is not authoritative. Two trims
-                // separated by less than the global epsilon must not be
-                // imprinted onto each other at a tighter operation tolerance.
-                if curve.evaluate(parameter).distance(point) > tolerances.length {
-                    continue;
-                }
-                let Some(kind) = ParameterKind::try_new(parameter, &curve, tolerances) else {
+                let Some(kind) = exact_boundary_kind(&curve, point, tolerances) else {
                     continue;
                 };
                 match kind {
@@ -2386,6 +2404,95 @@ where
 mod projection_tests {
     use super::*;
     use monstertruck_core::tolerance::KERNEL_EPSILON;
+
+    #[derive(Clone)]
+    struct TestTrim {
+        line: Line<Point3>,
+        certified: bool,
+        searches: std::cell::Cell<usize>,
+    }
+
+    impl ParametricCurve for TestTrim {
+        type Point = Point3;
+        type Vector = Vector3;
+        fn evaluate(&self, t: f64) -> Point3 { self.line.evaluate(t) }
+        fn derivative(&self, t: f64) -> Vector3 { self.line.derivative(t) }
+        fn derivative_2(&self, t: f64) -> Vector3 { self.line.derivative_2(t) }
+        fn derivative_n(&self, n: usize, t: f64) -> Vector3 { self.line.derivative_n(n, t) }
+    }
+
+    impl BoundedCurve for TestTrim {
+        fn range_tuple(&self) -> (f64, f64) { self.line.range_tuple() }
+        fn certified_spatial_bounds(&self) -> Option<BoundingBox<Point3>> {
+            self.certified
+                .then(|| [self.line.0, self.line.1].into_iter().collect())
+        }
+    }
+
+    impl SearchParameter<CurveParameter> for TestTrim {
+        type Point = Point3;
+        fn search_parameter<H: Into<SearchParameterHint1D>>(
+            &self,
+            point: Point3,
+            hint: H,
+            trials: usize,
+        ) -> Option<f64> {
+            self.searches.set(self.searches.get() + 1);
+            self.line.search_parameter(point, hint, trials)
+        }
+    }
+
+    #[test]
+    fn certified_trim_rejection_preserves_endpoint_allowance_and_unknown_curves() {
+        let make = |certified| TestTrim {
+            line: Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)),
+            certified,
+            searches: std::cell::Cell::new(0),
+        };
+        let bounded = make(true);
+        let unknown = make(false);
+        let tolerance = BooleanTolerance::new(1.0e-6);
+        for point in [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.5, 0.0, 0.0),
+            Point3::new(1.0 + 0.5 * tolerance.length, 0.0, 0.0),
+            Point3::new(1.0 + 3.0 * tolerance.length, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 10.0),
+        ] {
+            assert_eq!(
+                exact_boundary_kind(&bounded, point, tolerance),
+                exact_boundary_kind(&unknown, point, tolerance)
+            );
+        }
+        assert_eq!(bounded.searches.get(), 3);
+        assert_eq!(unknown.searches.get(), 5);
+        let point = Point3::new(1.0 + 1.5 * tolerance.length, 0.0, 0.0);
+        assert!(may_reach_boundary(
+            &bounded,
+            point,
+            tolerance.length,
+            tolerance
+        ));
+        let point = Point3::new(1.0 + 5.0 * tolerance.length, 0.0, 0.0);
+        assert!(may_reach_boundary(
+            &bounded,
+            point,
+            6.0 * tolerance.length,
+            tolerance
+        ));
+        assert!(!may_reach_boundary(
+            &bounded,
+            point,
+            tolerance.length,
+            tolerance
+        ));
+        assert!(may_reach_boundary(
+            &unknown,
+            point,
+            tolerance.length,
+            tolerance
+        ));
+    }
 
     #[test]
     fn ssi_carrier_normal_orientation_is_independent_of_polyline_direction() {

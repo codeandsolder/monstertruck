@@ -35,6 +35,8 @@ fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
          placeholder axial metre.",
     );
 
+    assert_eq!(surface.parameter_bounds_are_intrinsic(), (true, false));
+
     // The un-inverted orientation swaps the pair -- pinned so a change in
     // `Processor::parameter_range` cannot silently invert the meaning.
     let upright: CylindricalSurface = Processor::new(RevolutionSurface::by_revolution(

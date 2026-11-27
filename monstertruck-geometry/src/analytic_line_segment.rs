@@ -4,7 +4,8 @@
 //! Connected pieces (or pieces with certified small junction gaps) that stay
 //! in a segment's tolerance tube and reach both endpoints cover its locus.
 
-use crate::analytic_bezier_partition::proof_bezier_spans;
+use crate::analytic_bezier_partition::{ProofBezierSpan, proof_bezier_spans};
+use crate::analytic_bezier_refinement::refine_maximum;
 use crate::analytic_curve_incidence::valid;
 use crate::prelude::*;
 
@@ -76,6 +77,114 @@ fn resolution_floor(points: &[[f64; 4]], start: Point3, end: Point3) -> Option<f
     floor.is_finite().then_some(floor)
 }
 
+struct SegmentEvidence {
+    pieces: Vec<ProofBezierSpan>,
+    floor: f64,
+    hull: f64,
+    gap: f64,
+    endpoint_error: f64,
+}
+
+fn span_distance(points: &[[f64; 4]], start: Point3, end: Point3) -> Option<(f64, f64)> {
+    let distance = |point| distance_to_segment(cartesian(point)?, start, end);
+    let witness = distance(*points.first()?)?.max(distance(*points.last()?)?);
+    let upper = points
+        .iter()
+        .try_fold(witness, |bound, &point| Some(bound.max(distance(point)?)))?;
+    Some((witness, upper))
+}
+
+fn segment_evidence(
+    curve: &NurbsCurve<Vector4>,
+    start: Point3,
+    end: Point3,
+) -> Option<SegmentEvidence> {
+    if !finite(start) || !finite(end) || !valid(curve.non_rationalized()) {
+        return None;
+    }
+    let chord = length(start, end);
+    if !chord.is_finite() || chord <= 0.0 {
+        return None;
+    }
+    let pieces = proof_bezier_spans(curve.non_rationalized())?;
+    let mut previous_end = None;
+    let mut floor = 0.0_f64;
+    let mut hull = 0.0_f64;
+    let mut gap = 0.0_f64;
+    for piece in &pieces {
+        let points = &piece.controls;
+        floor = floor.max(resolution_floor(points, start, end)?);
+        let front = cartesian(*points.first()?)?;
+        let back = cartesian(*points.last()?)?;
+        if let Some(previous) = previous_end {
+            gap = gap.max(length(previous, front));
+        }
+        previous_end = Some(back);
+        hull = hull.max(span_distance(points, start, end)?.1);
+    }
+    let front = cartesian(*pieces.first()?.controls.first()?)?;
+    let back = previous_end?;
+    let endpoint_error = length(front, start)
+        .max(length(back, end))
+        .min(length(front, end).max(length(back, start)));
+    [floor, hull, gap, endpoint_error]
+        .into_iter()
+        .all(f64::is_finite)
+        .then_some(SegmentEvidence {
+            pieces,
+            floor,
+            hull,
+            gap,
+            endpoint_error,
+        })
+}
+
+impl SegmentEvidence {
+    fn upper_bound(&self, hull: f64) -> f64 {
+        // Each continuous piece covers its complete projected interval.
+        // A missing interval is bounded by the adjacent junction gap.
+        // Outside the covered endpoint interval, distance to the nearest
+        // actual curve endpoint is bounded by its endpoint error.
+        (hull + self.gap).max(self.endpoint_error) + self.floor
+    }
+}
+
+/// Measure a continuous two-sided geometric deviation upper bound between
+/// a complete rational spline and a finite, nonzero source segment.
+///
+/// Refines the Bernstein control hull if it exceeds the requested accuracy
+/// target. The returned bound can exceed that target; the caller decides
+/// admissibility. Positive rational weights, all original positive knot
+/// intervals and endpoint/junction coverage are checked. The numerical
+/// margin is not a directed-rounding interval arithmetic proof.
+#[must_use = "the continuous locus bound is needed to accept a geometric approximation"]
+pub fn bound_nurbs_segment_locus(
+    curve: &NurbsCurve<Vector4>,
+    start: Point3,
+    end: Point3,
+    target: f64,
+) -> Option<f64> {
+    if !target.is_finite() || target <= 0.0 {
+        return None;
+    }
+    let evidence = segment_evidence(curve, start, end)?;
+    let coarse = evidence.upper_bound(evidence.hull);
+    if !coarse.is_finite() {
+        return None;
+    }
+    if coarse <= target || evidence.endpoint_error + evidence.floor > target {
+        return Some(coarse);
+    }
+    let upper_padding = evidence.gap;
+    let endpoint_error = evidence.endpoint_error;
+    let floor = evidence.floor;
+    let refined = refine_maximum(evidence.pieces, (target * 0.01).max(floor), |points| {
+        span_distance(points, start, end)
+    })?;
+    let bound = (refined.upper + upper_padding).max(endpoint_error) + floor;
+    bound.is_finite().then_some(bound.min(coarse))
+}
+
 /// Certify that a complete rational spline and a line segment have point-set
 /// Hausdorff distance no more than the requested geometric tolerance.
 ///
@@ -95,83 +204,19 @@ pub fn certify_nurbs_segment_locus(
     end: Point3,
     tolerance: f64,
 ) -> SegmentLocus {
-    if !tolerance.is_finite()
-        || tolerance <= 0.0
-        || !finite(start)
-        || !finite(end)
-        || !valid(curve.non_rationalized())
-    {
+    if !tolerance.is_finite() || tolerance <= 0.0 || length(start, end) <= 2.0 * tolerance {
         return SegmentLocus::Unsupported;
     }
-    let chord = length(start, end);
-    if !chord.is_finite() || chord <= 2.0 * tolerance {
-        return SegmentLocus::Unsupported;
-    }
-    let Some(pieces) = proof_bezier_spans(curve.non_rationalized()) else {
+    let Some(evidence) = segment_evidence(curve, start, end) else {
         return SegmentLocus::Unsupported;
     };
-    let mut endpoints = [None, None];
-    let mut previous_end = None;
-    let mut max_floor = 0.0_f64;
-    let mut max_hull_deviation = 0.0_f64;
-    let mut max_junction_gap = 0.0_f64;
-    for (index, piece) in pieces.iter().enumerate() {
-        let points = &piece.controls;
-        let Some(floor) = resolution_floor(points, start, end) else {
-            return SegmentLocus::Unsupported;
-        };
-        if floor >= tolerance {
-            return SegmentLocus::Unsupported;
-        }
-        max_floor = max_floor.max(floor);
-        let Some(front) = points.first().copied().and_then(cartesian) else {
-            return SegmentLocus::Unsupported;
-        };
-        let Some(back) = points.last().copied().and_then(cartesian) else {
-            return SegmentLocus::Unsupported;
-        };
-        if let Some(previous) = previous_end {
-            let gap = length(previous, front);
-            if !gap.is_finite() {
-                return SegmentLocus::Unsupported;
-            }
-            max_junction_gap = max_junction_gap.max(gap);
-        } else {
-            endpoints[0] = Some(front);
-        }
-        previous_end = Some(back);
-        if index + 1 == pieces.len() {
-            endpoints[1] = Some(back);
-        }
-        for &point in points {
-            let Some(point) = cartesian(point) else {
-                return SegmentLocus::Unsupported;
-            };
-            let Some(distance) = distance_to_segment(point, start, end) else {
-                return SegmentLocus::Unsupported;
-            };
-            max_hull_deviation = max_hull_deviation.max(distance);
-        }
-    }
-    // Every piece stays within the segment's convex tolerance tube. Each
-    // connected piece covers all intermediate projected positions; if two
-    // consecutive pieces jump, their projected coverage can miss only a gap
-    // bounded by the actual spatial endpoint distance. Triangle inequality
-    // then bounds any missing target point by hull deviation + junction gap.
-    let total_bound = max_hull_deviation + max_junction_gap + max_floor;
-    if !total_bound.is_finite() {
+    if evidence.floor >= tolerance {
         return SegmentLocus::Unsupported;
     }
-    if total_bound > tolerance {
-        return SegmentLocus::NotProven;
-    }
-    let [Some(front), Some(back)] = endpoints else {
-        return SegmentLocus::Unsupported;
-    };
-    let margin = tolerance - max_floor;
-    let forward = length(front, start) <= margin && length(back, end) <= margin;
-    let reversed = length(front, end) <= margin && length(back, start) <= margin;
-    if forward || reversed {
+    let bound = evidence.upper_bound(evidence.hull);
+    if !bound.is_finite() {
+        SegmentLocus::Unsupported
+    } else if bound <= tolerance {
         SegmentLocus::WithinTolerance
     } else {
         SegmentLocus::NotProven
@@ -199,6 +244,20 @@ mod tests {
 
     fn polynomial(points: Vec<Point3>) -> BsplineCurve<Point3> {
         BsplineCurve::new_unchecked(KnotVector::bezier_knot(points.len() - 1), points)
+    }
+
+    #[test]
+    fn adaptive_bound_resolves_control_hull_overestimate() {
+        let start = p(0.0, 0.0, 0.0);
+        let end = p(2.0, 0.0, 0.0);
+        let curve = NurbsCurve::from(polynomial(vec![start, p(1.0, 0.2, 0.0), end]));
+        let bound = bound_nurbs_segment_locus(&curve, start, end, 0.12).unwrap();
+        assert!((0.1..=0.12).contains(&bound));
+        let tighter = bound_nurbs_segment_locus(&curve, start, end, 0.09).unwrap();
+        assert!(tighter >= 0.1);
+        // Unlike a carrier-identity test, a source approximation may use
+        // a budget greater than half the source segment length.
+        assert!(bound_nurbs_segment_locus(&curve, start, end, 2.0).unwrap() < 2.0);
     }
 
     #[test]

@@ -90,7 +90,7 @@ pub use traits::*;
 #[doc(hidden)]
 pub mod __private {
     pub use monstertruck_core::cgmath64::{
-        CurveDerivatives, Matrix3, Matrix4, Point3, SurfaceDerivatives, Vector3,
+        CurveDerivatives, Matrix3, Matrix4, Point2, Point3, SurfaceDerivatives, Vector3,
     };
 }
 /// Checked continuity requests and capability diagnostics.

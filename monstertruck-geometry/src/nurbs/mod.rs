@@ -44,7 +44,23 @@ pub struct BasisWindow {
     total_length: usize,
 }
 
+/// Borrowed active coefficients; both individual windows and contiguous jets
+/// use the same tensor-product contraction without copying coefficients.
+#[derive(Clone, Copy)]
+pub(in crate::nurbs) struct BasisSlice<'a> {
+    start: usize,
+    values: &'a [f64],
+}
+
 impl BasisWindow {
+    #[inline]
+    fn active(&self) -> BasisSlice<'_> {
+        BasisSlice {
+            start: self.start,
+            values: &self.values,
+        }
+    }
+
     /// Index of the first basis function whose value is stored.
     ///
     /// The basis functions in the index range
@@ -306,6 +322,7 @@ mod bspline_surface;
 /// Full-boundary continuity capability inspection.
 mod continuity;
 mod curve_inclusion;
+pub(crate) mod iso_boundary;
 mod knot_vector;
 mod nurbs_curve;
 mod nurbs_surface;
