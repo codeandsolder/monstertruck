@@ -17,7 +17,7 @@ struct LocalBranch {
 }
 
 impl LocalBranch {
-    fn new(tolerance: f64) -> Self {
+    const fn new(tolerance: f64) -> Self {
         Self {
             anchor: None,
             tolerance,
