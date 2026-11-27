@@ -35,7 +35,7 @@ impl Torus {
         })
     }
 
-    fn carrier(self) -> SurfaceCarrier {
+    const fn carrier(self) -> SurfaceCarrier {
         SurfaceCarrier::CircularRevolution {
             axial_center: self.center,
             axis: self.axis,
@@ -52,8 +52,7 @@ impl Torus {
             .cross(candidate.axis)
             .magnitude()
             .atan2(self.axis.dot(candidate.axis));
-        (self.center - candidate.center).magnitude()
-            + angle * extent
+        angle.mul_add(extent, (self.center - candidate.center).magnitude())
             + (self.major - candidate.major).abs()
             + (self.minor - candidate.minor).abs()
     }
@@ -67,7 +66,7 @@ struct Revolution {
     slope: f64,
 }
 impl Revolution {
-    fn from_carrier(carrier: SurfaceCarrier) -> Option<Self> {
+    const fn from_carrier(carrier: SurfaceCarrier) -> Option<Self> {
         let SurfaceCarrier::LinearRevolution {
             origin,
             axis,
@@ -84,7 +83,7 @@ impl Revolution {
             slope,
         })
     }
-    fn carrier(self) -> SurfaceCarrier {
+    const fn carrier(self) -> SurfaceCarrier {
         SurfaceCarrier::LinearRevolution {
             origin: self.origin,
             axis: self.axis,
