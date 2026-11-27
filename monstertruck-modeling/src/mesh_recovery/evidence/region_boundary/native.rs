@@ -138,6 +138,9 @@ impl NativeTrimGraph {
                 matches!(r.faces, Err(NativeTrimError::PlanarTrimCrossing)).then_some(r.region)
             })
             .collect::<std::collections::BTreeSet<_>>();
+        if failed.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut crossings = Vec::new();
         for region in &graph.regions {
             if !failed.contains(&region.region) {

@@ -135,22 +135,25 @@ impl RegionBoundaryIndex<'_> {
             .iter()
             .flat_map(|w| w.edges.map(|(id, _)| id))
             .collect::<BTreeSet<_>>();
-        let mut candidate = graph.clone();
-        let mut replaced = 0;
-        for id in ids {
-            let Some(chords) = chord_replacement(
-                &graph.trims[id],
-                partition,
-                positions,
-                options.intersection_tolerance,
-            ) else {
-                continue;
-            };
-            replace(&mut candidate, id, chords);
-            replaced += 1;
-        }
+        let replacements = ids
+            .into_iter()
+            .filter_map(|id| {
+                chord_replacement(
+                    &graph.trims[id],
+                    partition,
+                    positions,
+                    options.intersection_tolerance,
+                )
+                .map(|chords| (id, chords))
+            })
+            .collect::<Vec<_>>();
+        let replaced = replacements.len();
         if replaced == 0 {
             return Ok(0);
+        }
+        let mut candidate = graph.clone();
+        for (id, chords) in replacements {
+            replace(&mut candidate, id, chords);
         }
         let rebuilt = self.construct_native_trims(partition, &candidate, positions, options)?;
         let before = valid_regions(native);
