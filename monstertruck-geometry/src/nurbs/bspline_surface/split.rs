@@ -50,15 +50,14 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// }
     /// ```
     #[must_use = "The other segment of the cut is returned separately from the mutated original."]
-    pub fn cut_u(&mut self, mut u: f64) -> Self {
+    pub fn cut_u(&mut self, u: f64) -> Self {
         let degree = self.udegree();
         let u_start = self.knot_vector_u()[0];
         let u_end = self.knot_vector_u()[self.knot_vector_u().len() - 1];
 
-        // Match curve cutting: parameters within tolerance of a domain endpoint
-        // represent that endpoint. If we let such values fall through to the
-        // generic knot-snap path, a full-multiplicity endpoint can yield an
-        // empty control-net half.
+        // Match curve cutting: exterior parameters within tolerance of a
+        // domain endpoint represent that endpoint. Interior parameters
+        // retain their exact nonzero spans.
         if u <= u_start && u.near(&u_start) {
             let right = self.clone();
             let knot_vector_v = self.knot_vector_v().clone();
@@ -85,13 +84,10 @@ impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
             *self = Self::new_unchecked((knot_vector_u, knot_vector_v), control_points);
             return bspline;
         };
-        let candidate_knot = self.knot_vector_u()[idx];
-        let candidate_is_start = candidate_knot.total_cmp(&u_start).is_eq();
-        let candidate_is_end = candidate_knot.total_cmp(&u_end).is_eq();
-        let interior_near_endpoint =
-            (candidate_is_start && u > u_start) || (candidate_is_end && u < u_end);
-        let s = if u.near(&candidate_knot) && !interior_near_endpoint {
-            u = candidate_knot;
+        let s = if u
+            .partial_cmp(&self.knot_vector_u()[idx])
+            .is_some_and(std::cmp::Ordering::is_eq)
+        {
             self.knot_vector_u().multiplicity(idx)
         } else {
             0

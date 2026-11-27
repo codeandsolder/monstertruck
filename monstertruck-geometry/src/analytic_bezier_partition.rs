@@ -1,8 +1,7 @@
 //! Proof-specific rational B-spline knot-span extraction.
 //!
-//! The generic modeling decomposition groups nearby knots with a tolerance.
-//! Algebraic geometry certificates must instead visit EVERY positive input
-//! knot interval, even one narrower than the kernel modeling tolerance.
+//! Algebraic geometry certificates visit EVERY positive input knot interval,
+//! even one narrower than the kernel modeling tolerance.
 //! Bernstein coefficients are obtained by the symmetric B-spline blossom,
 //! without tolerant knot grouping, snapping, or a generic Cut operation.
 
