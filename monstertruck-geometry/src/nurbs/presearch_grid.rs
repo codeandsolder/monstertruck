@@ -157,7 +157,7 @@ where
         for (j, vb) in vbasis.iter().enumerate() {
             let q = crate::usize_to_f64(j) / crate::usize_to_f64(division);
             let v = f64::mul_add(v1, q, v0 * (1.0 - q));
-            let position = convert(C::from_vec(bsp.combine_basis(&ubasis, vb)));
+            let position = convert(C::from_vec(bsp.combine_basis(ubasis.active(), vb.active())));
             samples.push((u, v, position));
         }
     }

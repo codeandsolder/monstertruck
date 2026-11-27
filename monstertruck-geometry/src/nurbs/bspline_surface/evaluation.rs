@@ -1,5 +1,5 @@
 use super::{
-    BasisWindow, BsplineSurface, ControlPoint, ParameterRange, ParametricSurface, Zero, inv_or_zero,
+    BasisSlice, BsplineSurface, ControlPoint, ParameterRange, ParametricSurface, Zero, inv_or_zero,
 };
 
 impl<P: ControlPoint<f64>> BsplineSurface<P> {
@@ -118,15 +118,19 @@ impl<P: ControlPoint<f64>> BsplineSurface<P> {
     /// recomputing the same window per grid point. The summation is byte-for-byte
     /// the same as the inline `derivative_mn` fold, so results are bit-identical.
     #[inline]
-    pub(crate) fn combine_basis(&self, basis0: &BasisWindow, basis1: &BasisWindow) -> P::Diff {
-        let v_start = basis1.start_index();
-        self.control_points[basis0.start_index()..]
+    pub(in crate::nurbs) fn combine_basis(
+        &self,
+        basis0: BasisSlice<'_>,
+        basis1: BasisSlice<'_>,
+    ) -> P::Diff {
+        let v_start = basis1.start;
+        self.control_points[basis0.start..]
             .iter()
-            .zip(basis0.values())
+            .zip(basis0.values)
             .fold(P::Diff::zero(), |sum, (row, &b0)| {
                 let local = row[v_start..]
                     .iter()
-                    .zip(basis1.values())
+                    .zip(basis1.values)
                     .fold(P::Diff::zero(), |sum, (&point, &b1)| {
                         sum + point.to_vec() * (b0 * b1)
                     });
@@ -178,7 +182,7 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
         } else {
             let basis0 = knot_vector_u.bspline_basis_functions_unchecked(degree0, m, u);
             let basis1 = knot_vector_v.bspline_basis_functions_unchecked(degree1, n, v);
-            self.combine_basis(&basis0, &basis1)
+            self.combine_basis(basis0.active(), basis1.active())
         }
     }
     #[inline]
@@ -205,14 +209,14 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 self.derivative_v(u, v),
             );
         }
-        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
-        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
-        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
-        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
+        let jet_u = ku.bspline_basis_jet(degree_u, u);
+        let jet_v = kv.bspline_basis_jet(degree_v, v);
+        let [u0, u1] = jet_u.windows();
+        let [v0, v1] = jet_v.windows();
         (
-            P::from_vec(self.combine_basis(&u0, &v0)),
-            self.combine_basis(&u1, &v0),
-            self.combine_basis(&u0, &v1),
+            P::from_vec(self.combine_basis(u0, v0)),
+            self.combine_basis(u1, v0),
+            self.combine_basis(u0, v1),
         )
     }
 
@@ -234,22 +238,19 @@ impl<P: ControlPoint<f64>> ParametricSurface for BsplineSurface<P> {
                 self.derivative_vv(u, v),
             );
         }
-        // Every U/V derivative window is evaluated once per Newton iteration.
-        // Each tensor-product contraction retains the original summation order
-        // and is exactly equal to the individual derivative_mn call.
-        let u0 = ku.bspline_basis_functions_unchecked(degree_u, 0, u);
-        let u1 = ku.bspline_basis_functions_unchecked(degree_u, 1, u);
-        let u2 = ku.bspline_basis_functions_unchecked(degree_u, 2, u);
-        let v0 = kv.bspline_basis_functions_unchecked(degree_v, 0, v);
-        let v1 = kv.bspline_basis_functions_unchecked(degree_v, 1, v);
-        let v2 = kv.bspline_basis_functions_unchecked(degree_v, 2, v);
+        // Reuse the recurrence prefixes for all ranks in each knot direction.
+        // Every tensor-product contraction retains its original summation order.
+        let jet_u = ku.bspline_basis_jet(degree_u, u);
+        let jet_v = kv.bspline_basis_jet(degree_v, v);
+        let [u0, u1, u2] = jet_u.windows();
+        let [v0, v1, v2] = jet_v.windows();
         (
-            P::from_vec(self.combine_basis(&u0, &v0)),
-            self.combine_basis(&u1, &v0),
-            self.combine_basis(&u0, &v1),
-            self.combine_basis(&u2, &v0),
-            self.combine_basis(&u1, &v1),
-            self.combine_basis(&u0, &v2),
+            P::from_vec(self.combine_basis(u0, v0)),
+            self.combine_basis(u1, v0),
+            self.combine_basis(u0, v1),
+            self.combine_basis(u2, v0),
+            self.combine_basis(u1, v1),
+            self.combine_basis(u0, v2),
         )
     }
     #[inline]

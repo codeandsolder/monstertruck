@@ -4,7 +4,7 @@
 )]
 
 use super::{
-    BasisWindow, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve,
+    BasisSlice, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve,
     BsplineSurface, Concat, ControlPoint, CurveCollector, Deserialize, Error, EuclideanSpace,
     HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible,
     KERNEL_EPSILON, KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin,
