@@ -7,7 +7,7 @@
 
 use super::{DIRECTION_Q, compare_analytic_boundaries, strict_closed_shell_faces};
 use crate::brep::{self, CircleSupport, CurveSupport, SphereSupport, SurfaceSupport};
-use crate::math3::{canonical_direction, cross, dot, mul, norm, normalize, sub};
+use crate::math3::{add, canonical_direction, cross, dot, mul, norm, normalize, sub};
 use crate::step_entities::{entity_ref, named_entity_parameters, push_simple};
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record_mut,
@@ -33,6 +33,8 @@ pub struct SphereChartChange {
     pub new_reference: [f64; 3],
     pub latitude_edge_ids: Vec<u64>,
     pub meridian_edge_ids: Vec<u64>,
+    /// Great-circle-only trimming has no intrinsic latitude/meridian split.
+    pub great_circle_edge_ids: Vec<u64>,
 }
 
 /// A provenance manifest tied to the exact original and revised bytes.
@@ -83,6 +85,7 @@ struct AlignedChart {
     reference: [f64; 3],
     parallels: Vec<u64>,
     meridians: Vec<u64>,
+    great_circles: Vec<u64>,
 }
 
 fn aligned_chart(
@@ -137,6 +140,151 @@ fn aligned_chart(
         reference,
         parallels,
         meridians,
+        great_circles: Vec::new(),
+    })
+}
+
+/// A chart is not a physical sphere change. For all-great-circle trims,
+/// choose an alternate well-conditioned polar axis whose poles are uniformly
+/// away from each authored great-circle plane. Pick the azimuth chart so the
+/// entire *minor-arc polygon* lies in an open hemisphere far from its seam.
+/// The source and recharted solids still undergo full strict boundary proof.
+fn all_great_circle_chart(
+    sphere: SphereSupport,
+    faces: &[u64],
+    circles: &BTreeMap<u64, CircleSupport>,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<AlignedChart> {
+    let radius = sphere.radius_mm;
+    let tolerance = super::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
+    if circles.len() < 3 || !radius.is_finite() || radius <= tolerance {
+        return None;
+    }
+    let mut vertices = Vec::new();
+    let normals = circles
+        .values()
+        .map(|circle| circle.normal)
+        .collect::<Vec<_>>();
+    for &face in faces {
+        let [wire] = brep::face_loops(face, entities, index)?.as_slice() else {
+            return None;
+        };
+        if !wire.outer || wire.edges.len() < 3 {
+            return None;
+        }
+        for edge in &wire.edges {
+            let circle = circles.get(&edge.edge_id)?;
+            if norm(sub(circle.center_mm, sphere.center_mm)) > tolerance
+                || (circle.radius_mm - radius).abs() > tolerance
+            {
+                return None;
+            }
+            let y = normalize(cross(circle.normal, circle.x_direction), DIRECTION_Q)?;
+            let endpoints = [edge.start_mm, edge.end_mm];
+            let mut angles = [0.0; 2];
+            for (i, point) in endpoints.into_iter().enumerate() {
+                let relative = sub(point, sphere.center_mm);
+                if (norm(relative) - radius).abs() > tolerance
+                    || dot(relative, circle.normal).abs() > tolerance
+                {
+                    return None;
+                }
+                let radial = normalize(relative, DIRECTION_Q)?;
+                vertices.push(radial);
+                angles[i] = dot(relative, y).atan2(dot(relative, circle.x_direction));
+            }
+            let sweep = if edge.parameter_forward {
+                (angles[1] - angles[0]).rem_euclid(std::f64::consts::TAU)
+            } else {
+                (angles[0] - angles[1]).rem_euclid(std::f64::consts::TAU)
+            };
+            // A long arc can cross the longitude seam despite its endpoints
+            // being safely positioned. A complete all-great closed sphere is
+            // not a small-polygon chart-normalization candidate.
+            if !sweep.is_finite()
+                || sweep <= DIRECTION_Q
+                || sweep >= std::f64::consts::PI - DIRECTION_Q
+            {
+                return None;
+            }
+        }
+    }
+    let centroid = normalize(vertices.iter().copied().fold([0.; 3], add), DIRECTION_Q)?;
+    // Find the maximally independent triple of authored great-circle planes.
+    // This is deterministic, O(m^3), and independent of face enumeration order.
+    let mut best_det = 0.0_f64;
+    let mut triple = None;
+    for (i, &a) in normals.iter().enumerate() {
+        for (j, &b) in normals.iter().enumerate().skip(i + 1) {
+            for (k, &c) in normals.iter().enumerate().skip(j + 1) {
+                let det = dot(a, cross(b, c)).abs();
+                if det > best_det {
+                    best_det = det;
+                    triple = Some((i, j, k));
+                }
+            }
+        }
+    }
+    if best_det <= DIRECTION_Q {
+        return None;
+    }
+    let (i, j, k) = triple?;
+    let mut best = None::<(f64, [f64; 3], [f64; 3])>;
+    for signs in 0_u8..8 {
+        let a = if signs & 1 == 0 {
+            normals[i]
+        } else {
+            mul(normals[i], -1.)
+        };
+        let b = if signs & 2 == 0 {
+            normals[j]
+        } else {
+            mul(normals[j], -1.)
+        };
+        let c = if signs & 4 == 0 {
+            normals[k]
+        } else {
+            mul(normals[k], -1.)
+        };
+        let Some(axis) = normalize(add(add(a, b), c), DIRECTION_Q) else {
+            continue;
+        };
+        if norm(cross(axis, sphere.axis)) <= DIRECTION_Q {
+            continue;
+        }
+        let pole_margin = normals
+            .iter()
+            .map(|n| dot(*n, axis).abs())
+            .fold(f64::INFINITY, f64::min);
+        if pole_margin <= 0.01 {
+            continue;
+        }
+        let Some(reference) = normalize(sub(centroid, mul(axis, dot(centroid, axis))), DIRECTION_Q)
+        else {
+            continue;
+        };
+        let seam_margin = vertices
+            .iter()
+            .map(|v| dot(*v, reference))
+            .fold(f64::INFINITY, f64::min);
+        // Both endpoints of every minor great-circle arc lie in this positive
+        // hemisphere; by geodesic convexity, the entire arc stays there.
+        if seam_margin <= 0.01 {
+            continue;
+        }
+        let score = pole_margin.min(seam_margin);
+        if best.as_ref().is_none_or(|(prior, _, _)| score > *prior) {
+            best = Some((score, axis, reference));
+        }
+    }
+    let (_, axis, reference) = best?;
+    Some(AlignedChart {
+        axis,
+        reference,
+        parallels: Vec::new(),
+        meridians: Vec::new(),
+        great_circles: circles.keys().copied().collect(),
     })
 }
 
@@ -163,7 +311,8 @@ fn plan_chart(
         return None;
     };
     let circles = circles_for_faces(&faces, entities, index)?;
-    let chart = aligned_chart(sphere, &circles)?;
+    let chart = aligned_chart(sphere, &circles)
+        .or_else(|| all_great_circle_chart(sphere, &faces, &circles, entities, index))?;
     Some(ChartPlan {
         center_id,
         change: SphereChartChange {
@@ -177,6 +326,7 @@ fn plan_chart(
             new_reference: chart.reference,
             latitude_edge_ids: chart.parallels,
             meridian_edge_ids: chart.meridians,
+            great_circle_edge_ids: chart.great_circles,
         },
     })
 }
