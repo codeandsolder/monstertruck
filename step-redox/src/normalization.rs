@@ -2,7 +2,7 @@ use crate::step_graph::visit_entity_refs;
 use crate::step_identity::{
     IndexBucket, hash_parameter_with_alias, parameters_equivalent_with_alias, resolve_alias,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
@@ -26,6 +26,16 @@ pub fn consolidate_presentation(entities: &mut Vec<EntityInstance>) -> Consolida
         ty: &'static str,
     }
 
+    // Most recovered B-reps have no presentation records at all. Avoid
+    // traversing every geometric reference when there cannot be a merge.
+    if !entities.iter().any(|entity| {
+        matches!(entity, EntityInstance::Simple { record, .. }
+            if matches!(record.name.as_str(),
+                "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION"
+                | "PRESENTATION_LAYER_ASSIGNMENT"))
+    }) {
+        return ConsolidateStats::default();
+    }
     let mut refcounts: HashMap<u64, usize> = HashMap::new();
     for entity in entities.iter() {
         visit_entity_refs(entity, &mut |id| *refcounts.entry(id).or_insert(0) += 1);
@@ -194,7 +204,7 @@ pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
     // STEP references acquire a new canonical alias. The old implementation
     // rebuilt every internable key on every fixed-point round even though a key
     // can change only when one of its referenced IDs changes.
-    let internable = entities.iter().map(is_internable).collect::<Vec<_>>();
+    let internable = internable_entities(entities);
     let mut parents_by_ref = HashMap::<u64, Vec<usize>>::new();
     for (index, entity) in entities.iter().enumerate() {
         if !internable[index] {
@@ -296,19 +306,19 @@ pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
     let _ = compress_aliases(&mut alias);
 
     let mut stats = InternStats::default();
-    let original = std::mem::take(entities);
-    entities.reserve(original.len().saturating_sub(alias.len()));
-    for mut entity in original {
-        let id = entity_id(&entity);
-        let root = resolve_alias(&alias, id);
-        if root != id {
-            stats.total += 1;
-            *stats.by_type.entry(entity_type_label(&entity)).or_insert(0) += 1;
-            continue;
-        }
-        rewrite_entity_refs(&mut entity, &alias);
-        entities.push(entity);
+    if alias.is_empty() {
+        return stats;
     }
+    entities.retain_mut(|entity| {
+        if alias.contains_key(&entity_id(entity)) {
+            stats.total += 1;
+            *stats.by_type.entry(entity_type_label(entity)).or_insert(0) += 1;
+            false
+        } else {
+            rewrite_entity_refs(entity, &alias);
+            true
+        }
+    });
     stats
 }
 
@@ -448,11 +458,106 @@ fn rewrite_param_refs(param: &mut Parameter, map: &HashMap<u64, u64>) {
     }
 }
 
+fn internable_entities(entities: &[EntityInstance]) -> Vec<bool> {
+    // A definitional representation is a geometry value when it is used
+    // solely as the parameter-space curve of a PCURVE. Other uses may give
+    // the representation an independent identity (e.g. relationships).
+    let mut curve_definitions = HashSet::new();
+    let mut other_references = HashSet::new();
+    let has_definitions = entities.iter().any(|entity| {
+        matches!(entity, EntityInstance::Simple { record, .. }
+            if record.name == "DEFINITIONAL_REPRESENTATION")
+    });
+    if has_definitions {
+        let definitions = entities
+            .iter()
+            .filter_map(|entity| match entity {
+                EntityInstance::Simple { id, record }
+                    if record.name == "DEFINITIONAL_REPRESENTATION" =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        for entity in entities {
+            let curve_definition = match entity {
+                EntityInstance::Simple { record, .. } if record.name == "PCURVE" => {
+                    match &record.parameter {
+                        Parameter::List(params) if params.len() == 3 => {
+                            match (&params[0], &params[1], &params[2]) {
+                                (
+                                    Parameter::String(_),
+                                    Parameter::Ref(Name::Entity(support)),
+                                    Parameter::Ref(Name::Entity(id)),
+                                ) if support != id => Some(*id),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(id) = curve_definition {
+                curve_definitions.insert(id);
+            }
+            visit_entity_refs(entity, &mut |id| {
+                if definitions.contains(&id) && Some(id) != curve_definition {
+                    other_references.insert(id);
+                }
+            });
+        }
+    }
+    entities
+        .iter()
+        .map(|entity| {
+            if matches!(entity, EntityInstance::Simple { record, .. }
+            if record.name == "DEFINITIONAL_REPRESENTATION")
+            {
+                let id = entity_id(entity);
+                curve_definitions.contains(&id) && !other_references.contains(&id)
+            } else {
+                is_internable(entity)
+            }
+        })
+        .collect()
+}
+
 fn is_internable(entity: &EntityInstance) -> bool {
     match entity {
         EntityInstance::Simple { record, .. } => internable_record(&record.name),
         EntityInstance::Complex { subsuper, .. } => {
-            !subsuper.0.is_empty() && subsuper.0.iter().all(|r| internable_record(&r.name))
+            // External mapping exposes the inherited abstract geometry
+            // records of rational B-splines. Accept these only together with
+            // a concrete allowlisted geometry type; never intern arbitrary
+            // representation items or an unknown/topological subtype.
+            let records = &subsuper.0;
+            let spline = records.iter().any(|record| {
+                matches!(
+                    record.name.as_str(),
+                    "B_SPLINE_CURVE"
+                        | "B_SPLINE_CURVE_WITH_KNOTS"
+                        | "RATIONAL_B_SPLINE_CURVE"
+                        | "B_SPLINE_SURFACE"
+                        | "B_SPLINE_SURFACE_WITH_KNOTS"
+                        | "RATIONAL_B_SPLINE_SURFACE"
+                )
+            });
+            !records.is_empty()
+                && records.iter().all(|record| {
+                    internable_record(&record.name)
+                        || (spline
+                            && matches!(
+                                record.name.as_str(),
+                                "BOUNDED_CURVE"
+                                    | "CURVE"
+                                    | "BOUNDED_SURFACE"
+                                    | "SURFACE"
+                                    | "GEOMETRIC_REPRESENTATION_ITEM"
+                                    | "REPRESENTATION_ITEM"
+                            ))
+                })
         }
     }
 }
@@ -489,6 +594,7 @@ fn internable_record(name: &str) -> bool {
             | "B_SPLINE_SURFACE"
             | "B_SPLINE_SURFACE_WITH_KNOTS"
             | "RATIONAL_B_SPLINE_SURFACE"
+            | "PCURVE"
             // Presentation/style values
             | "COLOUR_RGB"
             | "DRAUGHTING_PRE_DEFINED_COLOUR"
@@ -512,6 +618,7 @@ fn internable_record(name: &str) -> bool {
             | "UNCERTAINTY_MEASURE_WITH_UNIT"
             | "REPRESENTATION_CONTEXT"
             | "GEOMETRIC_REPRESENTATION_CONTEXT"
+            | "PARAMETRIC_REPRESENTATION_CONTEXT"
             | "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT"
             | "GLOBAL_UNIT_ASSIGNED_CONTEXT"
     )
