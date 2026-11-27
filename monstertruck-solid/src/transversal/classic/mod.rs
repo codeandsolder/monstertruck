@@ -372,25 +372,21 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     let label_positive_len = difference0.len();
     difference0.append(&mut difference1);
-    let label_regions = planar_union::overlay_difference_regions(
+    let labeled = materialize_difference_regions(
         difference0,
         label_positive_len,
         &full_positive_regions,
         &full_cutter_regions,
         tol,
-    )
-    .ok_or(ShapeOpsError::RegionMaterializationFailed {
-        operation: "difference_planar_overlay",
-    })?;
-    let mut label_shell =
-        weld_and_convert(&label_regions, "difference", BooleanTolerance::new(tol))?;
-    let _ = orient_regular_shell(&mut label_shell);
-    if label_shell
-        .connected_components()
-        .iter()
-        .all(|component| component.check_solid_boundary().is_ok())
-    {
-        return Ok([label_shell, Shell::default()]);
+    );
+    if let Ok(mut shell) = labeled {
+        let _ = orient_regular_shell(&mut shell);
+        if shell_is_valid(&shell) {
+            return Ok([shell, Shell::default()]);
+        }
+        eprintln!("DIFF_LABEL invalid shell");
+    } else {
+        eprintln!("DIFF_LABEL materialization failed");
     }
 
     let [and0, or0, unknown0] = analysis.cls0.and_or_unknown();
@@ -408,19 +404,29 @@ fn process_difference_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             fallback.push(region);
         }
     }
-    let fallback_regions = planar_union::overlay_difference_regions(
+    let fallback_shell = materialize_difference_regions(
         fallback,
         fallback_positive_len,
         &full_positive_regions,
         &full_cutter_regions,
         tol,
-    )
-    .ok_or(ShapeOpsError::RegionMaterializationFailed {
+    )?;
+    Ok([fallback_shell, Shell::default()])
+}
+
+fn materialize_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    selected: Vec<AltRegion<C,S>>,
+    positive_count: usize,
+    full_positive: &[AltRegion<C,S>],
+    full_cutter: &[AltRegion<C,S>],
+    tol: f64,
+) -> ClassicResult<Shell<Point3,C,S>> {
+    let regions = planar_union::overlay_difference_regions(
+        selected, positive_count, full_positive, full_cutter, tol,
+    ).ok_or(ShapeOpsError::RegionMaterializationFailed {
         operation: "difference_planar_overlay",
     })?;
-    let fallback_shell =
-        weld_and_convert(&fallback_regions, "difference", BooleanTolerance::new(tol))?;
-    Ok([fallback_shell, Shell::default()])
+    weld_and_convert(&regions, "difference", BooleanTolerance::new(tol))
 }
 
 fn process_non_coplanar_analysis<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

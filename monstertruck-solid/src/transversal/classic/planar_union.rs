@@ -1326,12 +1326,12 @@ pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
-    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical, tol, true)?;
+    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol)).or_else(|| {eprintln!("OVERLAY initial node refusal");None})?;
+    let initial = project_source(&canonical, tol, true).or_else(|| {eprintln!("OVERLAY initial project refusal");None})?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
-        let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, true)?
+        let points = exact_node_points(&initial, tol).or_else(|| {eprintln!("OVERLAY node points refusal");None})?;
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol)).or_else(|| {eprintln!("OVERLAY node refusal");None})?;
+        project_source(&noded, tol, true).or_else(|| {eprintln!("OVERLAY noded project refusal");None})?
     } else {
         initial
     };
@@ -1340,18 +1340,27 @@ pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         covered(&arrangement.polygons[..positive_count], point)
             && !covered(&arrangement.polygons[positive_count..], point)
     };
-    let boundary = selected_boundary_with(&arrangement, membership)?;
+    let boundary = selected_boundary_with(&arrangement, membership).or_else(|| {eprintln!("OVERLAY selected boundary refusal");None})?;
     if needs_exact_noding(&boundary, arrangement.span, tol) {
+        eprintln!("OVERLAY unresolved noding");
         return None;
     }
     if boundary.is_empty() {
         return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
     }
-    let loops = trace_boundary(boundary)?;
+    let diagnostic = boundary.iter().map(|e| (e.edge.front().id(),e.edge.back().id(),e.edge.front().point(),e.edge.back().point(),e.uv.clone())).collect::<Vec<_>>();
+    let loops = trace_boundary(boundary).or_else(|| {
+        eprintln!("OVERLAY trace refusal span={} positive={} cutter={}",arrangement.span,positive.len(),cutter.len());
+        eprintln!("OVERLAY selected {:?}",diagnostic);
+        for (i,poly) in arrangement.polygons.iter().enumerate() { eprintln!("OVERLAY polygon {} {:?}",i,poly); }
+        for e in &arrangement.edges { eprintln!("OVERLAY candidate {:?} {:?} {:?} {:?} {:?}",e.edge.front().id(),e.edge.back().id(),e.edge.front().point(),e.edge.back().point(),e.uv); }
+        None
+    })?;
     if !validates_occupancy_with(&arrangement, &loops, membership) {
+        eprintln!("OVERLAY occupancy refusal");
         return None;
     }
-    assemble_regions(loops, &positive[0], &arrangement.surface)
+    assemble_regions(loops, &positive[0], &arrangement.surface).or_else(|| {eprintln!("OVERLAY assemble refusal");None})
 }
 
 /// Remove selected cutter patches that share a plane and *original outward
@@ -1386,7 +1395,7 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
                 region.surface().try_into_analytic_surface_kind(),
                 Some(AnalyticSurfaceKind::Plane(_))
             ) {
-            overlay_one_source(std::slice::from_ref(&region), tol)?
+            overlay_one_source(std::slice::from_ref(&region), tol).or_else(|| { eprintln!("OVERLAY normalization refusal face={}",region.source_face());None})?
         } else {
             vec![region]
         };
@@ -1432,7 +1441,7 @@ pub(super) fn overlay_difference_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface
         if original_clipping.is_empty() {
             result.extend(positive);
         } else {
-            result.extend(overlay_planar_subtract(&positive, &original_clipping, tol)?);
+            result.extend(overlay_planar_subtract(&positive, &original_clipping, tol).or_else(|| {eprintln!("OVERLAY positive face={} positive={} cutter={}",regions[first].source_face(),positive.len(),original_clipping.len());None})?);
         }
         for index in positive_indices {
             taken_positive[index] = true;
