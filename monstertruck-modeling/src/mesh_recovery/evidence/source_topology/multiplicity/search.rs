@@ -21,7 +21,7 @@ struct State {
 }
 
 impl State {
-    fn new(count: usize, constraints: &[Constraint]) -> Option<Self> {
+    fn new(count: usize, constraints: &[Constraint], graph: &ClassGraph) -> Option<Self> {
         if count == 0 || count > MAX_FRAGMENTS {
             return None;
         }
@@ -44,6 +44,17 @@ impl State {
                 for &id in side {
                     conflicts[id] |= mask & !members[id];
                 }
+            }
+        }
+        for (class, instances) in graph.instances.iter().enumerate() {
+            let mut mask = 0;
+            for &other in &graph.excluded[class] {
+                for &id in &graph.instances[other] {
+                    mask |= *members.get(id)?;
+                }
+            }
+            for &id in instances {
+                conflicts[id] |= mask;
             }
         }
         Some(Self {
@@ -182,9 +193,22 @@ pub(super) struct Solution {
     pub(super) states: usize,
 }
 
-pub(super) fn solve(constraints: &[Constraint], classes: &[usize]) -> Option<Solution> {
-    let state = State::new(classes.len(), constraints)?;
-    let graph = ClassGraph::new(constraints, classes)?;
+pub(super) fn solve(
+    constraints: &[Constraint],
+    classes: &[usize],
+    graph: &ClassGraph,
+    joins: &[[usize; 2]],
+) -> Option<Solution> {
+    let mut state = State::new(classes.len(), constraints, graph)?;
+    for &[a, b] in joins {
+        let [a, b] = [state.roots[a], state.roots[b]];
+        if a != b {
+            if !state.compatible(a, b) {
+                return None;
+            }
+            state = state.join([a, b]);
+        }
+    }
     let unique_classes = graph.anchors().map(|id| graph.labels[id]).collect();
     let mut search = Search {
         constraints,
@@ -204,6 +228,11 @@ pub(super) fn solve(constraints: &[Constraint], classes: &[usize]) -> Option<Sol
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn solve(constraints: &[Constraint], classes: &[usize]) -> Option<Solution> {
+        let graph = ClassGraph::new(constraints, classes, &[])?;
+        super::solve(constraints, classes, &graph, &[])
+    }
 
     #[test]
     fn copies_are_interchangeable_but_distinct_caps_are_not() {

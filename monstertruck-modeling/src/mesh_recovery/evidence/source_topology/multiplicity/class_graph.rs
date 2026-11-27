@@ -6,13 +6,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct ClassGraph {
     pub(super) labels: Vec<usize>,
+    pub(super) class_of: Vec<usize>,
     pub(super) instances: Vec<Vec<usize>>,
     pub(super) edges: Vec<[Vec<usize>; 2]>,
     pub(super) profiles: Vec<Vec<(usize, usize)>>,
+    pub(super) excluded: Vec<BTreeSet<usize>>,
 }
 
 impl ClassGraph {
-    pub(super) fn new(constraints: &[Constraint], classes: &[usize]) -> Option<Self> {
+    pub(super) fn new(
+        constraints: &[Constraint],
+        classes: &[usize],
+        exclusions: &[[usize; 2]],
+    ) -> Option<Self> {
         let mut grouped = BTreeMap::<usize, Vec<usize>>::new();
         for (id, &class) in classes.iter().enumerate() {
             grouped.entry(class).or_default().push(id);
@@ -55,11 +61,23 @@ impl ClassGraph {
             }
             edges.push(sides);
         }
+        let mut excluded = vec![BTreeSet::new(); instances.len()];
+        for &[a, b] in exclusions {
+            let a = labels.binary_search(&a).ok()?;
+            let b = labels.binary_search(&b).ok()?;
+            if a == b {
+                return None;
+            }
+            excluded[a].insert(b);
+            excluded[b].insert(a);
+        }
         Some(Self {
             labels,
+            class_of,
             instances,
             edges,
             profiles,
+            excluded,
         })
     }
 

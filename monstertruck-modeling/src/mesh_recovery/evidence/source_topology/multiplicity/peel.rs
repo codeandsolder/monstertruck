@@ -14,6 +14,7 @@ struct Closure<'a> {
     chosen: Vec<usize>,
     used: Vec<[Option<usize>; 2]>,
     pending: BTreeSet<(usize, usize)>,
+    forbidden: Vec<bool>,
 }
 
 enum ClosureResult {
@@ -34,19 +35,28 @@ impl<'a> Closure<'a> {
             chosen: Vec::new(),
             used: vec![[None, None]; graph.edges.len()],
             pending: BTreeSet::new(),
+            forbidden: vec![false; graph.instances.len()],
         }
     }
 
     fn add(&mut self, class: usize, remaining: &mut usize) -> Option<bool> {
         let profile = &self.graph.profiles[class];
-        *remaining = remaining.checked_sub(profile.len())?;
-        if profile
-            .iter()
-            .any(|&(edge, side)| self.used[edge][side].is_some())
+        *remaining = remaining.checked_sub(
+            profile
+                .len()
+                .checked_add(self.graph.excluded[class].len())?,
+        )?;
+        if self.forbidden[class]
+            || profile
+                .iter()
+                .any(|&(edge, side)| self.used[edge][side].is_some())
         {
             return Some(false);
         }
         self.chosen.push(class);
+        for &other in &self.graph.excluded[class] {
+            self.forbidden[other] = true;
+        }
         for &(edge, side) in profile {
             self.used[edge][side] = Some(class);
             self.pending.remove(&(edge, side));
@@ -62,7 +72,7 @@ impl<'a> Closure<'a> {
         for &class in &self.graph.edges[edge][side] {
             let profile = &self.graph.profiles[class];
             *remaining = remaining.checked_sub(profile.len() + 1)?;
-            if profile.iter().any(|&(e, s)| self.used[e][s].is_some()) {
+            if self.forbidden[class] || profile.iter().any(|&(e, s)| self.used[e][s].is_some()) {
                 continue;
             }
             if compatible.replace(class).is_some() {
@@ -175,7 +185,7 @@ mod tests {
         let classes = (0..count)
             .chain(std::iter::repeat_n(count, count))
             .collect::<Vec<_>>();
-        let graph = ClassGraph::new(&[constraint], &classes).expect("valid class graph");
+        let graph = ClassGraph::new(&[constraint], &classes, &[]).expect("valid class graph");
         let result = solve(&graph).expect("all anchored shells forced");
         assert_eq!(result.states, count * 2);
         for id in 0..count {
@@ -185,13 +195,34 @@ mod tests {
     }
 
     #[test]
+    fn opposed_face_witnesses_make_ambiguous_closure_necessary() {
+        let constraints = [Constraint {
+            forward: vec![0, 1],
+            reverse: vec![2, 3],
+        }];
+        let classes = [10, 20, 30, 40];
+        let initial = ClassGraph::new(&constraints, &classes, &[]).expect("valid class graph");
+        assert!(solve(&initial).is_none());
+        let graph = ClassGraph::new(&constraints, &classes, &[[10, 30]]).expect("valid exclusions");
+        let solution = solve(&graph).expect("necessary compatible partition");
+        assert_eq!(solution.roots, [0, 1, 1, 0]);
+        let searched = super::super::search::solve(&constraints, &classes, &graph, &[])
+            .expect("same exhaustive partition");
+        assert_eq!(searched.roots, solution.roots);
+        let impossible = ClassGraph::new(&constraints, &classes, &[[10, 30], [10, 40]])
+            .expect("valid exclusions");
+        assert!(solve(&impossible).is_none());
+        assert!(super::super::search::solve(&constraints, &classes, &impossible, &[]).is_none());
+    }
+
+    #[test]
     fn forced_closure_never_invents_anchors_or_copies() {
         let constraint = Constraint {
             forward: vec![0, 1],
             reverse: vec![2, 3],
         };
         for classes in [[0, 0, 1, 1], [0, 1, 2, 3]] {
-            let graph = ClassGraph::new(std::slice::from_ref(&constraint), &classes)
+            let graph = ClassGraph::new(std::slice::from_ref(&constraint), &classes, &[])
                 .expect("valid class graph");
             assert!(solve(&graph).is_none());
         }

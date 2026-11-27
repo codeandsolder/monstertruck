@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod class_graph;
 mod equivalence;
+mod exclusions;
 mod peel;
+mod propagation;
 mod search;
 mod vertex_links;
 use equivalence::Profile;
@@ -30,6 +32,8 @@ pub struct SourceMultiplicityPair {
 pub enum SourceMultiplicityMethod {
     /// All anchored shells were necessarily closed on exact class incidence.
     ForcedClassClosure,
+    /// Global necessary joins under exact opposed-face constraints.
+    GlobalForcedMatching,
     /// Bounded exhaustive search of distinct geometric partitions.
     QuotientSearch,
 }
@@ -46,6 +50,8 @@ pub struct SourceMultiplicityResolution {
     pub equivalent_fragments: Vec<Vec<Vec<usize>>>,
     /// Selected oriented edge uses, preserving their source multiplicity.
     pub pairs: Vec<SourceMultiplicityPair>,
+    /// Original polygon pairs witnessing exact opposed-face exclusions.
+    pub opposed_faces: Vec<[usize; 2]>,
 }
 
 #[derive(Clone, Copy)]
@@ -170,6 +176,26 @@ impl<'a> ClusterInput<'a> {
         })
     }
 
+    fn solve(
+        &self,
+        classes: &[usize],
+        graph: &class_graph::ClassGraph,
+    ) -> Option<(SourceMultiplicityMethod, search::Solution)> {
+        if let Some(solution) = peel::solve(graph) {
+            Some((SourceMultiplicityMethod::ForcedClassClosure, solution))
+        } else {
+            let joins = propagation::necessary_joins(&self.constraints, &self.edges, graph);
+            if let Some(solution) = propagation::complete(&self.constraints, graph, &joins) {
+                Some((SourceMultiplicityMethod::GlobalForcedMatching, solution))
+            } else {
+                Some((
+                    SourceMultiplicityMethod::QuotientSearch,
+                    search::solve(&self.constraints, classes, graph, &joins)?,
+                ))
+            }
+        }
+    }
+
     fn resolve(
         &self,
         positions: &[Point3],
@@ -182,14 +208,21 @@ impl<'a> ClusterInput<'a> {
             &self.edges,
             &self.profiles,
         );
-        let graph = class_graph::ClassGraph::new(&self.constraints, &classes)?;
-        let (method, solution) = if let Some(solution) = peel::solve(&graph) {
-            (SourceMultiplicityMethod::ForcedClassClosure, solution)
+        let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &[])?;
+        let initial = self.solve(&classes, &graph);
+        let mut opposed_faces = Vec::new();
+        let (method, solution) = if let Some(result) = initial {
+            result
         } else {
-            (
-                SourceMultiplicityMethod::QuotientSearch,
-                search::solve(&self.constraints, &classes)?,
-            )
+            let exclusions =
+                exclusions::opposed_faces(positions, polygons, &self.fragments, &classes);
+            if exclusions.is_empty() {
+                return None;
+            }
+            let labels = exclusions.iter().map(|e| e.classes).collect::<Vec<_>>();
+            let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &labels)?;
+            opposed_faces.extend(exclusions.into_iter().map(|e| e.polygons));
+            self.solve(&classes, &graph)?
         };
         let mut pairs = Vec::new();
         for (&edge, uses) in self.edges.iter().zip(&self.uses) {
@@ -220,11 +253,15 @@ impl<'a> ClusterInput<'a> {
             states: solution.states,
             equivalent_fragments,
             pairs,
+            opposed_faces,
         })
     }
 }
 
 fn original_ids(resolution: &mut SourceMultiplicityResolution, original: &[usize]) {
+    for witness in &mut resolution.opposed_faces {
+        *witness = witness.map(|id| original[id]);
+    }
     for pair in &mut resolution.pairs {
         pair.polygons = pair.polygons.map(|id| original[id]);
     }
