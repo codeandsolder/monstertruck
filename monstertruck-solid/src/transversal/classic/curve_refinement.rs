@@ -8,11 +8,39 @@ use monstertruck_geometry::prelude::*;
 const MAX_REFINEMENTS: usize = 32;
 const MAX_BACKTRACKS: usize = 16;
 
+// Once a solution is within the operation's admission tolerance, keep
+// improving its residual without migrating to another spatial branch.
+// Before admission, the normal bounded line search can reach the branch.
+struct LocalBranch {
+    anchor: Option<Point3>,
+    tolerance: f64,
+}
+
+impl LocalBranch {
+    const fn new(tolerance: f64) -> Self {
+        Self {
+            anchor: None,
+            tolerance,
+        }
+    }
+
+    fn accepts(&mut self, point: Point3, squared_residual: f64) -> bool {
+        if let Some(anchor) = self.anchor {
+            return point.distance(anchor) <= self.tolerance;
+        }
+        if squared_residual.sqrt() <= self.tolerance {
+            self.anchor = Some(point);
+        }
+        true
+    }
+}
+
 fn improve<const N: usize>(
     mut parameters: [f64; N],
     ranges: [(f64, f64); N],
     residual: impl Fn([f64; N]) -> Vector3,
     direction: impl Fn([f64; N], Vector3) -> Option<[f64; N]>,
+    mut admits: impl FnMut([f64; N], f64) -> bool,
 ) -> Option<[f64; N]> {
     if parameters.iter().any(|value| !value.is_finite())
         || ranges
@@ -26,7 +54,7 @@ fn improve<const N: usize>(
     }
     let mut gap = residual(parameters);
     let mut error = gap.magnitude2();
-    if !error.is_finite() {
+    if !error.is_finite() || !admits(parameters, error) {
         return None;
     }
     for _ in 0..MAX_REFINEMENTS {
@@ -58,7 +86,7 @@ fn improve<const N: usize>(
             }
             let trial_gap = residual(trial);
             let trial_error = trial_gap.magnitude2();
-            if trial_error < error {
+            if trial_error < error && admits(trial, trial_error) {
                 parameters = trial;
                 gap = trial_gap;
                 error = trial_error;
@@ -80,7 +108,9 @@ pub(super) fn point_parameter<C: BoundedCurve<Point = Point3, Vector = Vector3>>
     curve: &C,
     point: Point3,
     seed: f64,
+    tolerance: f64,
 ) -> Option<f64> {
+    let mut branch = LocalBranch::new(tolerance);
     let [parameter] = improve(
         [seed],
         [curve.range_tuple()],
@@ -90,6 +120,7 @@ pub(super) fn point_parameter<C: BoundedCurve<Point = Point3, Vector = Vector3>>
             let norm = tangent.magnitude2();
             (norm > 0.).then(|| [-tangent.dot(residual) / norm])
         },
+        |[t], error| branch.accepts(curve.evaluate(t), error),
     )?;
     Some(parameter)
 }
@@ -101,7 +132,9 @@ pub(super) fn crossing_parameters<C: BoundedCurve<Point = Point3, Vector = Vecto
     lhs: &C,
     rhs: &C,
     seeds: [f64; 2],
+    tolerance: f64,
 ) -> Option<[f64; 2]> {
+    let mut branch = LocalBranch::new(tolerance);
     improve(
         seeds,
         [lhs.range_tuple(), rhs.range_tuple()],
@@ -123,6 +156,7 @@ pub(super) fn crossing_parameters<C: BoundedCurve<Point = Point3, Vector = Vecto
                 aa.mul_add(gb, -(ab * ga)) / determinant,
             ])
         },
+        |[u, v], error| branch.accepts(lhs.evaluate(u).midpoint(rhs.evaluate(v)), error),
     )
 }
 
@@ -163,6 +197,7 @@ pub(super) fn curve_surface_parameters<C: ParametricCurve3D, S: ParametricSurfac
             let update = matrix.invert()? * -gap;
             Some([update.x, update.y, update.z])
         },
+        |_, _| true,
     )
 }
 
@@ -189,20 +224,34 @@ mod tests {
         let initial = cubic.evaluate(seed[0]) - line.evaluate(seed[1]);
         assert!(initial.magnitude() < 1.0e-6);
         assert!(initial.magnitude() > 1.0e-8);
-        let [u, v] = crossing_parameters(&cubic, &line, seed).unwrap();
+        let [u, v] = crossing_parameters(&cubic, &line, seed, 1.0e-6).unwrap();
         assert!((u - 1. / 3.).abs() < 1.0e-14);
         assert!(cubic.evaluate(u).distance(line.evaluate(v)) < 1.0e-14);
-        let t = point_parameter(&cubic, cubic.evaluate(u), seed[0]).unwrap();
+        let t = point_parameter(&cubic, cubic.evaluate(u), seed[0], 1.0e-6).unwrap();
         assert!((t - u).abs() < 1.0e-14);
+    }
+
+    #[test]
+    fn admitted_branch_backtracks_without_moving_to_distant_solution() {
+        let mut branch = LocalBranch::new(1.0);
+        let [parameter] = improve(
+            [0.0],
+            [(0.0, 3.0)],
+            |[t]| Vector3::new(0.9 * (1.0 - t / 3.0), 0.0, 0.0),
+            |_, _| Some([3.0]),
+            |[t], error| branch.accepts(Point3::new(t, 0.0, 0.0), error),
+        )
+        .unwrap();
+        assert!(parameter > 0.0 && parameter <= 1.0);
     }
 
     #[test]
     fn clamped_and_singular_steps_keep_best_finite_iterate() {
         let a = Line(Point3::new(0., 0., 0.), Point3::new(1., 0., 0.));
         let b = Line(Point3::new(0., 1., 0.), Point3::new(1., 1., 0.));
-        let [u, v] = crossing_parameters(&a, &b, [0.5, 0.5]).unwrap();
+        let [u, v] = crossing_parameters(&a, &b, [0.5, 0.5], 1.0e-6).unwrap();
         assert!((a.evaluate(u).distance(b.evaluate(v)) - 1.).abs() < f64::EPSILON);
-        let end = point_parameter(&a, Point3::new(2., 0., 0.), 0.5).unwrap();
+        let end = point_parameter(&a, Point3::new(2., 0., 0.), 0.5, 1.0e-6).unwrap();
         assert!(a.evaluate(end).distance(Point3::new(1., 0., 0.)) < f64::EPSILON);
     }
 }
