@@ -12,7 +12,6 @@ use crate::{
         approximate_boundary_patch,
     },
 };
-use monstertruck_geometry::analytic_line_segment::bound_nurbs_segment_locus;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Independent bounds for a source-backed nonanalytic region replacement.
@@ -329,24 +328,15 @@ pub(super) fn lift_native_source_edge(
         return None;
     }
     let (edge, bound) = if let Some(carrier) = carrier {
-        let budget = SurfaceRegionBudget {
-            vertex: options.intersection_tolerance,
-            chord: options.budget.chord + options.budget.vertex,
-        };
-        let lifted = carrier.lift_source_chord([front.point(), back.point()], budget)?;
-        if lifted
-            .endpoints
-            .iter()
-            .zip(source)
-            .any(|(&point, original)| (point - original).magnitude() > options.budget.vertex)
-        {
-            return None;
-        }
-        let bound =
-            bound_nurbs_segment_locus(&lifted.curve, source[0], source[1], options.budget.chord)?;
+        let lifted = carrier.lift_source_chord_from_junctions(
+            source,
+            [front.point(), back.point()],
+            options.budget,
+            options.intersection_tolerance,
+        )?;
         (
             Edge::new(front, back, Curve::NurbsCurve(lifted.curve)).ok()?,
-            bound,
+            lifted.chord_deviation_upper_bound,
         )
     } else {
         (builder::line(front, back), movement)

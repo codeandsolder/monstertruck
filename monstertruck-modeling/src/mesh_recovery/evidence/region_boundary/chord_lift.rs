@@ -275,12 +275,176 @@ fn torus(
     Some(controls)
 }
 
+// A toroidal nearest-projection path generally is not a single tensor
+// product of circle arcs. Subdivision retains exact carrier membership and
+// one topological source edge, while allowing the meridian to vary along
+// the original chord. Every accepted piece has a continuous locus bound.
+struct ToroidalChord {
+    center: Point3,
+    axis: Vector3,
+    major: f64,
+    minor: f64,
+    tolerance: f64,
+    direction: f64,
+    wedge: [Vector3; 2],
+}
+
+impl ToroidalChord {
+    fn new(carrier: SurfaceCarrier, junctions: [Point3; 2], tolerance: f64) -> Option<Self> {
+        let SurfaceCarrier::CircularRevolution {
+            axial_center: center,
+            axis,
+            radial_center: major,
+            profile_radius: minor,
+        } = carrier
+        else {
+            return None;
+        };
+        if major <= 0.0 {
+            return None;
+        }
+        let [a, b] = junctions.map(|p| axial_point(center, axis, p));
+        let wedge = [a?.direction?, b?.direction?];
+        let direction = axis.dot(wedge[0].cross(wedge[1]));
+        if direction.abs() <= 128.0 * f64::EPSILON {
+            return None;
+        }
+        Some(Self {
+            center,
+            axis,
+            major,
+            minor,
+            tolerance,
+            direction: direction.signum(),
+            wedge,
+        })
+    }
+
+    fn piece(
+        &self,
+        source: [Point3; 2],
+        junctions: [Point3; 2],
+        depth: usize,
+        pieces: &mut Vec<Vec<Vector4>>,
+    ) -> Option<()> {
+        let [a, b] = junctions.map(|p| axial_point(self.center, self.axis, p));
+        // All pieces must advance in the same short azimuthal chart. This
+        // makes the entire edge injective, including its new junctions.
+        if self.direction * self.axis.dot(a?.direction?.cross(b?.direction?))
+            <= 128.0 * f64::EPSILON
+        {
+            return None;
+        }
+        let controls = torus(self.center, self.axis, self.major, self.minor, junctions)?;
+        let endpoints = [cartesian(*controls.first()?), cartesian(*controls.last()?)];
+        if endpoints
+            .iter()
+            .zip(source)
+            .any(|(&p, q)| (p - q).magnitude() > self.tolerance)
+        {
+            return None;
+        }
+        let bound = bound_nurbs_segment_locus(
+            &bezier(controls.clone())?,
+            source[0],
+            source[1],
+            self.tolerance,
+        )?;
+        if bound <= self.tolerance {
+            pieces.push(controls);
+            return Some(());
+        }
+        if depth == 0 {
+            return None;
+        }
+        let middle = source[0] + (source[1] - source[0]) * 0.5;
+        let radial = axial_point(self.center, self.axis, middle)?.direction?;
+        // Interior samples must remain inside the original short wedge;
+        // consistently directed subarcs alone would not exclude a wrap.
+        if [self.wedge[0].cross(radial), radial.cross(self.wedge[1])]
+            .iter()
+            .any(|&cross| self.direction * self.axis.dot(cross) <= 128.0 * f64::EPSILON)
+        {
+            return None;
+        }
+        self.piece(
+            [source[0], middle],
+            [junctions[0], middle],
+            depth - 1,
+            pieces,
+        )?;
+        self.piece(
+            [middle, source[1]],
+            [middle, junctions[1]],
+            depth - 1,
+            pieces,
+        )
+    }
+
+    fn curve(&self, source: [Point3; 2], junctions: [Point3; 2]) -> Option<NurbsCurve<Vector4>> {
+        let mut pieces = Vec::new();
+        // Bounded work: at most 32 quartic pieces per source edge.
+        self.piece(source, junctions, 5, &mut pieces)?;
+        let count = pieces.len();
+        let degree = 4;
+        let mut controls = Vec::new();
+        let mut knots = vec![0.0; degree + 1];
+        for (i, piece) in pieces.into_iter().enumerate() {
+            if piece.len() != degree + 1 {
+                return None;
+            }
+            if i == 0 {
+                controls.extend(piece);
+            } else {
+                // The shared endpoint is generated from the same original
+                // sample, with unit weight. Join with C0 knot multiplicity,
+                // not a discontinuous full-multiplicity concatenation.
+                if controls.last() != piece.first() {
+                    return None;
+                }
+                controls.extend(piece.into_iter().skip(1));
+                let knot = crate::usize_to_f64(i) / crate::usize_to_f64(count);
+                knots.extend(std::iter::repeat_n(knot, degree));
+            }
+        }
+        knots.extend(std::iter::repeat_n(1.0, degree + 1));
+        Some(NurbsCurve::new(
+            BsplineCurve::new(KnotVector::from(knots), controls).ok()?,
+        ))
+    }
+}
+
 impl SurfaceCarrier {
-    /// Lift one finite source segment onto this carrier using an exact
-    /// rational chart path. The source endpoints are projected first;
+    fn chord_controls(self, source: [Point3; 2]) -> Option<Vec<Vector4>> {
+        match self {
+            Self::Plane { origin, normal } => plane(origin, normal, source),
+            Self::LinearRevolution {
+                origin,
+                axis,
+                radius_at_origin,
+                slope,
+            } => linear(origin, axis, radius_at_origin, slope, source),
+            Self::CircularRevolution {
+                axial_center,
+                radial_center: 0.0,
+                profile_radius,
+                ..
+            } => sphere(axial_center, profile_radius, source),
+            Self::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                profile_radius,
+            } => torus(axial_center, axis, radial_center, profile_radius, source),
+        }
+    }
+
+    /// Lift one finite source segment onto this carrier using exact
+    /// rational chart paths. The source endpoints are projected first;
     /// each must respect the vertex budget independently of the continuous
     /// chord-deviation budget. Antipodal and singular chart branches that
-    /// the two samples cannot resolve are rejected.
+    /// the two samples cannot resolve are rejected. A regular toroidal
+    /// path may use multiple quartic spans with certified source deviation.
     ///
     /// This is explicit approximation evidence, not a claim that the
     /// original CAD edge was the returned path.
@@ -290,49 +454,52 @@ impl SurfaceCarrier {
         source: [Point3; 2],
         budget: SurfaceRegionBudget,
     ) -> Option<LiftedSourceChord> {
-        if !source.into_iter().all(finite)
+        self.lift_source_chord_from_junctions(source, source, budget, budget.vertex)
+    }
+
+    pub(super) fn lift_source_chord_from_junctions(
+        self,
+        source: [Point3; 2],
+        junctions: [Point3; 2],
+        budget: SurfaceRegionBudget,
+        junction_tolerance: f64,
+    ) -> Option<LiftedSourceChord> {
+        if !source.into_iter().chain(junctions).all(finite)
             || !budget.vertex.is_finite()
             || budget.vertex < 0.0
             || !budget.chord.is_finite()
             || budget.chord <= 0.0
+            || !junction_tolerance.is_finite()
+            || junction_tolerance < 0.0
             || (source[1] - source[0]).magnitude() <= 0.0
         {
             return None;
         }
-        let controls = match self {
-            Self::Plane { origin, normal } => plane(origin, normal, source)?,
-            Self::LinearRevolution {
-                origin,
-                axis,
-                radius_at_origin,
-                slope,
-            } => linear(origin, axis, radius_at_origin, slope, source)?,
-            Self::CircularRevolution {
-                axial_center,
-                radial_center: 0.0,
-                profile_radius,
-                ..
-            } => sphere(axial_center, profile_radius, source)?,
-            Self::CircularRevolution {
-                axial_center,
-                axis,
-                radial_center,
-                profile_radius,
-            } => torus(axial_center, axis, radial_center, profile_radius, source)?,
-        };
+        let controls = self.chord_controls(junctions)?;
         let endpoints = [cartesian(*controls.first()?), cartesian(*controls.last()?)];
         let vertex_displacement = (endpoints[0] - source[0])
             .magnitude()
             .max((endpoints[1] - source[1]).magnitude());
         if !vertex_displacement.is_finite()
             || vertex_displacement > budget.vertex
+            || endpoints
+                .iter()
+                .zip(junctions)
+                .any(|(&p, q)| (p - q).magnitude() > junction_tolerance)
             || (endpoints[1] - endpoints[0]).magnitude() <= 0.0
         {
             return None;
         }
-        let curve = bezier(controls)?;
-        let chord_deviation_upper_bound =
+        let mut curve = bezier(controls)?;
+        let mut chord_deviation_upper_bound =
             bound_nurbs_segment_locus(&curve, source[0], source[1], budget.chord)?;
+        if chord_deviation_upper_bound > budget.chord {
+            curve = ToroidalChord::new(self, junctions, budget.chord)?.curve(source, junctions)?;
+            // Certify the assembled rational spline, not merely its
+            // individual pieces, against the entire original segment.
+            chord_deviation_upper_bound =
+                bound_nurbs_segment_locus(&curve, source[0], source[1], budget.chord)?;
+        }
         (chord_deviation_upper_bound <= budget.chord).then_some(LiftedSourceChord {
             curve,
             endpoints,
@@ -430,6 +597,60 @@ mod tests {
                 4,
             );
         }
+    }
+
+    #[test]
+    fn torus_lift_refines_the_meridian_without_inventing_a_branch() {
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vector3::unit_z();
+        let major = 5.7;
+        let minor = 1.8;
+        let meridian = 1.2_f64;
+        let point = |angle: f64| {
+            let radial = major + minor * meridian.cos();
+            Point3::new(
+                radial * angle.cos(),
+                radial * angle.sin(),
+                minor * meridian.sin(),
+            )
+        };
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: center,
+            axis,
+            radial_center: major,
+            profile_radius: minor,
+        };
+        let source = [point(-0.0875), point(0.0875)];
+        let budget = SurfaceRegionBudget {
+            vertex: 1.0e-8,
+            chord: 0.012,
+        };
+        let single = bezier(torus(center, axis, major, minor, source).unwrap()).unwrap();
+        assert!(
+            bound_nurbs_segment_locus(&single, source[0], source[1], budget.chord).unwrap()
+                > budget.chord
+        );
+        for source in [source, [source[1], source[0]]] {
+            let lifted = carrier.lift_source_chord(source, budget).unwrap();
+            assert!(lifted.curve.control_points().len() > 5);
+            assert!(lifted.chord_deviation_upper_bound <= budget.chord);
+            assert!(lifted.vertex_displacement <= budget.vertex);
+            for i in 0..=100 {
+                let p = lifted.curve.evaluate(f64::from(i) / 100.0);
+                assert!(((p.x.hypot(p.y) - major).hypot(p.z) - minor).abs() < 1.0e-10);
+            }
+        }
+        assert!(
+            carrier
+                .lift_source_chord(
+                    source,
+                    SurfaceRegionBudget {
+                        chord: 0.006,
+                        ..budget
+                    }
+                )
+                .is_none()
+        );
     }
 
     #[test]
