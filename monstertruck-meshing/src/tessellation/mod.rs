@@ -3,7 +3,7 @@ use crate::{
     Invertible, KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D, ParameterDivision1D,
     ParameterDivision2D, ParametricCurve2D, ParametricCurve3D, ParametricSurface3D, Point3,
     PolygonMesh, SearchNearestParameter, SearchParameter, StandardAttributes, StandardVertex,
-    SurfaceParameter, Tolerance, Vector2, Vector3, Zero, algo, nonpositive_tolerance,
+    SurfaceParameter, Tolerance, Vector2, Vector3, algo, nonpositive_tolerance,
 };
 use monstertruck_topology::{
     Edge, Face, Shell, Solid, Wire,
@@ -876,4 +876,6 @@ where
     }
 }
 
+mod stitch;
 mod triangulation;
+pub use stitch::{MeshStitchError, stitch_compressed_shell};

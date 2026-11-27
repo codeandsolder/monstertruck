@@ -5,10 +5,9 @@
 
 use super::{
     Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
-    MetricSpace, ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Torus, UnitCircle, Vector2,
-    Vector3, Zero,
+    MetricSpace, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
+    Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, Torus, Vector2, Vector3, Zero,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::PI;
@@ -494,11 +493,45 @@ impl ParameterDivision2D for Torus {
         (urange, vrange): ((f64, f64), (f64, f64)),
         tol: f64,
     ) -> (Vec<f64>, Vec<f64>) {
-        let circle = UnitCircle::<Point2>::new();
-        let utol = tol / (self.small_radius() + self.large_radius());
-        let (udiv, _) = circle.parameter_division(urange, utol);
-        let vtol = tol / self.small_radius();
-        let (vdiv, _) = circle.parameter_division(vrange, vtol);
-        (udiv, vdiv)
+        // Estimate the complete grid before allocating either axis. An
+        // unwrapped or otherwise huge chart must not allocate an unbounded
+        // circular polyline. Use the common budgeted adaptive divider if
+        // the closed-form grid does not fit.
+        let count = |span: f64, radius: f64| {
+            let ratio = tol / radius;
+            if !ratio.is_finite() || ratio <= 0.0 {
+                return None;
+            }
+            // Stable even when the chord/radius ratio is too small for
+            // subtracting it from one: acos(1-x) = 2 asin(sqrt(x/2)).
+            let step = 4.0 * (ratio.min(0.8) * 0.5).sqrt().asin();
+            crate::strict_segment_count(span, step)
+        };
+        let counts = count(
+            urange.1 - urange.0,
+            self.small_radius() + self.large_radius(),
+        )
+        .zip(count(vrange.1 - vrange.0, self.small_radius()));
+        let max_cells =
+            usize::try_from(monstertruck_traits::algo::surface::MAX_PARAMETER_DIVISION_CELLS)
+                .unwrap_or(usize::MAX);
+        let Some((nu, nv)) =
+            counts.filter(|&(nu, nv)| nu.checked_mul(nv).is_some_and(|n| n <= max_cells))
+        else {
+            return monstertruck_traits::algo::surface::parameter_division(
+                self,
+                (urange, vrange),
+                tol,
+            );
+        };
+        let division = |range: (f64, f64), count: usize| {
+            (0..=count)
+                .map(|i| {
+                    let t = crate::usize_to_f64(i) / crate::usize_to_f64(count);
+                    range.1.mul_add(t, range.0 * (1.0 - t))
+                })
+                .collect()
+        };
+        (division(urange, nu), division(vrange, nv))
     }
 }

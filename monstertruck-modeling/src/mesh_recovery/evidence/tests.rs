@@ -486,6 +486,46 @@ fn connected_planar_supports_recover_cube_planes_with_measured_area() {
 }
 
 #[test]
+fn planar_support_splits_touching_holes_without_fragmenting_facets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let positions = (0..5)
+        .flat_map(|y| (0..5).map(move |x| Point3::new(f64::from(x), f64::from(y), 0.0)))
+        .collect();
+    let polygons = (0..4)
+        .flat_map(|y| {
+            (0..4).filter_map(move |x| {
+                if (x, y) == (1, 1) || (x, y) == (2, 2) {
+                    return None;
+                }
+                let a = y * 5 + x;
+                Some(vec![a, a + 1, a + 6, a + 5])
+            })
+        })
+        .collect::<Vec<_>>();
+    let mesh = PolygonMesh::new(
+        StandardAttributes {
+            positions,
+            ..Default::default()
+        },
+        Faces::from_iter(polygons),
+    )?;
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+    let index = RegionBoundaryIndex::new(&evidence)?;
+    assert!(evidence.planar_supports.len() > 1);
+    assert!(evidence.planar_supports.len() < 14);
+    assert_eq!(evidence.source_planar_support.len(), 14);
+    let mut covered = Vec::new();
+    for (id, support) in evidence.planar_supports.iter().enumerate() {
+        assert!(index.boundary(&[id])?.pinched_vertices.is_empty());
+        covered.extend_from_slice(&support.source_face_indices);
+        assert_eq!(support.max_vertex_plane_residual, 0.0);
+    }
+    covered.sort_unstable();
+    assert_eq!(covered, (0..14).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[test]
 fn planar_supports_do_not_depend_on_dihedral_feature_selection() {
     let source = unit_box_mesh();
     let full = analyze_mesh_evidence(&source, EvidenceOptions::default()).unwrap();

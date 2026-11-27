@@ -251,7 +251,7 @@ fn sampled_parameter_boundary<C>(
 where
     C: ParametricCurve3D + BoundedCurve + ParameterDivision1D<Point = Point3>,
 {
-    let (u_real, v_real) = uv_clamp::reported_range_bounds_the_surface(surface);
+    let (u_real, v_real) = surface.parameter_bounds_are_intrinsic();
     let normalize_uv = |uv: Point2, previous: Option<(f64, f64)>| {
         let (period_u, period_v) = (surface.period_u(), surface.period_v());
         let (horizontal_bounds, vertical_bounds) = surface.try_range_tuple();
@@ -1675,7 +1675,7 @@ fn no_placeholder_axis_carries_a_period() {
     ];
 
     for surface in surfaces {
-        let (u_real, v_real) = uv_clamp::reported_range_bounds_the_surface(&surface);
+        let (u_real, v_real) = surface.parameter_bounds_are_intrinsic();
         assert!(
             u_real || surface.period_u().is_none(),
             "placeholder u axis with a period: {surface:?}",

@@ -4,11 +4,19 @@
 //! Run using managed Cargo, for example:
 //! `cargo run -p monstertruck-modeling --example mesh_recovery_corpus -- mesh.obj`
 
+#[path = "mesh_recovery_corpus/meridian.rs"]
+mod meridian;
+#[path = "mesh_recovery_corpus/station_graph.rs"]
+mod station_graph;
+
 use monstertruck_mesh::{PolygonMesh, obj};
+use monstertruck_modeling::Point3;
 use monstertruck_modeling::mesh_recovery::{
-    CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack,
-    CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence, SpatialTrackEvidence,
-    analyze_mesh_evidence, measure_curvature_spatial, measure_curvature_spatial_join,
+    CarrierCoincidenceEvidence, CarrierResidual, CurvatureGrowthHypothesis, CurvatureGrowthIndex,
+    CurvatureGrowthOptions, CurvatureTrack, CurvatureTrackOptions, EvidenceOptions,
+    FeatureEdgeKind, MeshEvidence, RegionBoundaryGap, RegionBoundaryIndex, RegionContactGraph,
+    SourceProvenance, SpatialTrackEvidence, SurfaceCarrier, analyze_mesh_evidence,
+    measure_curvature_spatial, measure_curvature_spatial_join, measure_spatial_support_set,
     trace_curvature_tracks,
 };
 use serde_json::{Value, json};
@@ -511,7 +519,6 @@ fn growth_track_summary(
     let mut grown = seed_ids
         .into_iter()
         .filter_map(|id| index.grow(id))
-        .take(12)
         .collect::<Vec<_>>();
     let sampled_seed_count = grown.len();
     let expanded_seeds = grown
@@ -533,7 +540,17 @@ fn growth_track_summary(
         .map(|hypothesis| hypothesis.source_polygon_count)
         .max()
         .unwrap_or(0);
-    grown.sort_unstable_by_key(|h| std::cmp::Reverse(h.support_indices.len()));
+    grown.sort_unstable_by(|a, b| {
+        b.support_indices
+            .len()
+            .cmp(&a.support_indices.len())
+            .then_with(|| {
+                a.spatial
+                    .relative_max_sample_radial_residual
+                    .total_cmp(&b.spatial.relative_max_sample_radial_residual)
+            })
+            .then_with(|| a.seed_track_index.cmp(&b.seed_track_index))
+    });
     let top = grown
         .iter()
         .take(6)
@@ -569,7 +586,7 @@ fn growth_track_summary(
     let summary = json!({
         "eligible_source_tracks":index.eligible_track_count(),
         "sampled_independent_seed_count":sampled_seed_count,
-        "seed_policy":"up to 12 locally identifiable seeds, descending original support count, no original STEP metadata",
+        "seed_policy":"all locally identifiable seeds, descending original support count, no original STEP metadata",
         "expanded_seed_count":expanded_seeds,
         "maximum_source_support_count":maximum_source_supports,
         "maximum_tracks_in_one_region":maximum_tracks_merged,
@@ -579,6 +596,381 @@ fn growth_track_summary(
         "samples":top,
     });
     Ok((summary, grown))
+}
+
+/// Test a bounded exterior source fan using the same whole-region spatial
+/// budgets as ordinary source-connected growth, without assuming a CAD type.
+fn boundary_gap_summary(
+    evidence: &MeshEvidence,
+    index: &RegionBoundaryIndex<'_>,
+    hypothesis: &CurvatureGrowthHypothesis,
+    gap: &RegionBoundaryGap,
+    axis_uncertainty: f64,
+) -> Value {
+    let mut union = hypothesis.support_indices.clone();
+    union.extend_from_slice(&gap.added_support_indices);
+    union.sort_unstable();
+    union.dedup();
+    let spatial =
+        measure_spatial_support_set(evidence, &union, hypothesis.spatial.axis, axis_uncertainty);
+    let boundary = index.boundary(&union);
+    let added_polygons = gap
+        .added_support_indices
+        .iter()
+        .flat_map(|&id| {
+            evidence.planar_supports[id]
+                .source_face_indices
+                .iter()
+                .copied()
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "vertex":gap.vertex,
+        "exterior_fan_polygons":gap.source_polygons,
+        "added_supports":gap.added_support_indices,
+        "added_original_polygons":added_polygons,
+        "spatial_fit":spatial.as_ref().map(|fit| json!({
+            "radial_relative_error":fit.relative_max_sample_radial_residual,
+            "support_plane_relative_error":fit.max_support_plane_offset_residual / fit.mean_sample_radius,
+            "normal_latitude_spread":fit.support_normal_axial_projection_spread,
+            "within_growth_budgets":CurvatureGrowthOptions::default().accepts_spatial_fit(fit),
+        })),
+        "boundary":boundary.as_ref().ok().map(|region| json!({
+            "remaining_pinched_vertices":region.pinched_vertices,
+            "loop_edge_counts":region.loops.iter().map(Vec::len).collect::<Vec<_>>(),
+        })),
+        "boundary_error":boundary.err().map(|error| error.to_string()),
+    })
+}
+
+/// Compare shared circular carriers against independently fitted neighboring
+/// surfaces. Bounds and witnessed violations are reported separately.
+#[derive(Default)]
+struct CircleConstraintMetrics {
+    complete: usize,
+    bilateral: usize,
+    one_sided: usize,
+    bounded: [usize; 3],
+    bilateral_bounded: [usize; 3],
+    contradicted: [usize; 3],
+}
+
+impl CircleConstraintMetrics {
+    const RELATIVE_BUDGETS: [f64; 3] = [1.0e-4, 1.0e-3, 1.0e-2];
+
+    fn observe(&mut self, sides: &[Option<CarrierResidual>], radius: f64) {
+        let complete = sides.iter().all(Option::is_some);
+        self.complete += usize::from(complete);
+        self.bilateral += usize::from(complete && sides.len() == 2);
+        self.one_sided += usize::from(complete && sides.len() == 1);
+        for (i, relative) in Self::RELATIVE_BUDGETS.iter().enumerate() {
+            let budget = relative * radius;
+            let bounded = complete
+                && sides.iter().flatten().all(|fit| {
+                    fit.upper_bound <= budget && fit.minimum_profile_radius.is_none_or(|r| r >= 0.0)
+                });
+            self.bounded[i] += usize::from(bounded);
+            self.bilateral_bounded[i] += usize::from(bounded && sides.len() == 2);
+            self.contradicted[i] += usize::from(sides.iter().flatten().any(|fit| {
+                fit.witnessed_max > budget || fit.minimum_profile_radius.is_some_and(|r| r < 0.0)
+            }));
+        }
+    }
+
+    fn summary(&self) -> Value {
+        json!({
+            "all_adjacent_carriers_available":self.complete,
+            "two_sided_carriers_available":self.bilateral,
+            "open_path_carrier_available":self.one_sided,
+            "budgets":Self::RELATIVE_BUDGETS.iter().enumerate().map(|(i, threshold)| json!({
+                "relative_to_trim_radius":threshold,
+                "all_sides_bound_within_budget":self.bounded[i],
+                "two_sides_bound_within_budget":self.bilateral_bounded[i],
+                "at_least_one_side_witness_exceeds_budget":self.contradicted[i],
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Enclose complete source regions with axis-aligned boxes, using each
+/// original source vertex. A shared-reference ball encloses both boxes.
+#[derive(Clone, Copy)]
+struct RegionExtent {
+    min: Point3,
+    max: Point3,
+}
+
+impl RegionExtent {
+    const fn include(&mut self, point: Point3) {
+        self.min.x = self.min.x.min(point.x);
+        self.min.y = self.min.y.min(point.y);
+        self.min.z = self.min.z.min(point.z);
+        self.max.x = self.max.x.max(point.x);
+        self.max.y = self.max.y.max(point.y);
+        self.max.z = self.max.z.max(point.z);
+    }
+
+    fn radius_from(self, reference: Point3) -> f64 {
+        let dx = (reference.x - self.min.x)
+            .abs()
+            .max((reference.x - self.max.x).abs());
+        let dy = (reference.y - self.min.y)
+            .abs()
+            .max((reference.y - self.max.y).abs());
+        let dz = (reference.z - self.min.z)
+            .abs()
+            .max((reference.z - self.max.z).abs());
+        dx.hypot(dy).hypot(dz)
+    }
+}
+
+struct PartitionCarriers {
+    carriers: Vec<Option<SurfaceCarrier>>,
+    extents: Vec<Option<RegionExtent>>,
+}
+
+impl PartitionCarriers {
+    fn new(
+        evidence: &MeshEvidence,
+        carriers: Vec<Option<SurfaceCarrier>>,
+        region_by_polygon: &[usize],
+    ) -> Self {
+        let mut extents = vec![None::<RegionExtent>; carriers.len()];
+        for (polygon, &region) in region_by_polygon.iter().enumerate() {
+            if let Some(vertices) = evidence.source_polygon_vertices(polygon) {
+                for &id in vertices {
+                    let point = evidence.positions[id];
+                    if let Some(bounds) = &mut extents[region] {
+                        bounds.include(point);
+                    } else {
+                        extents[region] = Some(RegionExtent {
+                            min: point,
+                            max: point,
+                        });
+                    }
+                }
+            }
+        }
+        Self { carriers, extents }
+    }
+
+    fn compare(
+        &self,
+        regions: (usize, Option<usize>),
+        reference: Point3,
+    ) -> Option<(f64, CarrierCoincidenceEvidence)> {
+        let (left, right) = (regions.0, regions.1?);
+        let extent = self.extents[left]?
+            .radius_from(reference)
+            .max(self.extents[right]?.radius_from(reference));
+        let fit = self.carriers[left]?.compare_in_ball(self.carriers[right]?, reference, extent)?;
+        Some((extent, fit))
+    }
+}
+
+/// Count globally shared contact paths, rather than fitting a separate
+/// potentially incompatible copy of a trim on each adjacent face.
+fn partition_contact_metrics(
+    graph: &RegionContactGraph,
+    evidence: &MeshEvidence,
+    carriers: Option<&PartitionCarriers>,
+) -> Value {
+    let mut measured = 0;
+    let mut exact_lines = 0;
+    let mut circles = 0;
+    let mut circular_examples = Vec::new();
+    let mut constraints = CircleConstraintMetrics::default();
+    for path in graph.paths.iter().filter(|path| path.edges.len() > 1) {
+        let Some(fit) = path.measure_curves(evidence) else {
+            continue;
+        };
+        measured += 1;
+        exact_lines += usize::from(
+            fit.line
+                .is_some_and(|line| line.exactly_collinear && line.max_reverse_step == 0.0),
+        );
+        let Some(circle) = fit.circle else {
+            continue;
+        };
+        // Exploratory vertex-fit threshold, not an analytic trim certificate.
+        // Three points determine a circle, so require additional evidence.
+        if fit.source_vertex_count < 4
+            || circle.max_plane_residual > 1.0e-4 * circle.radius
+            || circle.max_vertex_radial_residual > 1.0e-4 * circle.radius
+            || circle.unsigned_sweep_radians - circle.signed_sweep_radians.abs() > 1.0e-6
+            || circle.zero_angular_steps > 0
+        {
+            continue;
+        }
+        circles += 1;
+        let side_residuals = carriers.map(|carriers| {
+            let sides = std::iter::once(path.regions.0)
+                .chain(path.regions.1)
+                .map(|id| {
+                    carriers
+                        .carriers
+                        .get(id)
+                        .copied()
+                        .flatten()
+                        .and_then(|carrier| carrier.measure(&fit).circle)
+                })
+                .collect::<Vec<_>>();
+            constraints.observe(&sides, circle.radius);
+            sides
+        });
+        let coincidence =
+            carriers.and_then(|carriers| carriers.compare(path.regions, circle.center));
+        if circular_examples.len() < 64 {
+            circular_examples.push(json!({
+                "regions":path.regions,
+                "source_vertices":fit.source_vertex_count,
+                "source_polygon_pairs":path.edges.iter().map(|edge| [Some(edge.interior_polygon),edge.exterior_polygon]).collect::<Vec<_>>(),
+                "plane_span_strength":circle.plane_span_strength,
+                "closed":fit.closed,
+                "radius":circle.radius,
+                "center":[circle.center.x,circle.center.y,circle.center.z],
+                "normal":[circle.normal.x,circle.normal.y,circle.normal.z],
+                "relative_vertex_error":circle.max_vertex_radial_residual/circle.radius,
+                "relative_plane_error":circle.max_plane_residual/circle.radius,
+                "relative_chord_error":circle.max_chord_radial_residual/circle.radius,
+                "signed_sweep":circle.signed_sweep_radians,
+                "carrier_coincidence":coincidence.map(|(extent,fit)| json!({
+                    "domain_extent":extent,
+                    "direction_angle_radians":fit.direction_angle_radians,
+                    "relative_reference_position_difference":fit.reference_position_difference/circle.radius,
+                    "relative_reference_profile_difference":fit.reference_profile_difference/circle.radius,
+                    "profile_gradient_difference":fit.profile_gradient_difference,
+                    "relative_residual_difference_upper_bound":fit.residual_difference_upper_bound/circle.radius,
+                })),
+                "adjacent_carrier_residuals":side_residuals.map(|sides| sides.iter().map(|side| side.map(|r| json!({
+                    "relative_upper_bound":r.upper_bound/circle.radius,
+                    "relative_witnessed_max":r.witnessed_max/circle.radius,
+                    "minimum_profile_radius":r.minimum_profile_radius,
+                }))).collect::<Vec<_>>()),
+            }));
+        }
+    }
+    json!({
+        "paths": graph.paths.len(),
+        "source_edges": graph.paths.iter().map(|path| path.edges.len()).sum::<usize>(),
+        "multi_edge_paths":graph.paths.iter().filter(|path| path.edges.len()>1).count(),
+        "unanchored_cycles":graph.paths.iter().filter(|path| path.unanchored_cycle).count(),
+        "open_mesh_paths":graph.paths.iter().filter(|path| path.regions.1.is_none()).count(),
+        "longest_source_path":graph.paths.iter().map(|path| path.edges.len()).max().unwrap_or(0),
+        "ambiguous_source_edges":graph.ambiguous_edges.len(),
+        "multi_edge_curve_measurements":measured,
+        "exact_monotone_line_paths":exact_lines,
+        "near_circular_monotone_paths_with_at_least_four_vertices":circles,
+        "circle_examples_first_64":circular_examples,
+        "circle_surface_constraints":carriers.map(|_| constraints.summary()),
+    })
+}
+
+/// Measure actual unsimplified source trim cycles for each sampled region.
+fn region_boundary_summary(
+    evidence: &MeshEvidence,
+    index: &RegionBoundaryIndex<'_>,
+    grown: &[CurvatureGrowthHypothesis],
+    tracks: &[CurvatureTrack],
+    spatial: &[Option<SpatialTrackEvidence>],
+) -> Result<(Value, Value), String> {
+    let mut carriers = evidence
+        .planar_supports
+        .iter()
+        .map(|support| Some(SurfaceCarrier::from_planar_support(support)))
+        .collect::<Vec<_>>();
+    let baseline_carriers =
+        PartitionCarriers::new(evidence, carriers.clone(), &evidence.source_planar_support);
+    let baseline = partition_contact_metrics(
+        &index
+            .partition_contacts(&evidence.source_planar_support)
+            .map_err(|error| error.to_string())?,
+        evidence,
+        Some(&baseline_carriers),
+    );
+    let mut region_by_support = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+    let mut used_supports = HashSet::new();
+    let mut selected_regions = 0;
+    let cases = grown
+        .iter()
+        .map(
+            |hypothesis| match index.boundary(&hypothesis.support_indices) {
+                Ok(region) => {
+                    // A deterministic provisional partition for measurement:
+                    // largest nonoverlapping, unpinched geometric hypotheses
+                    // first; all unassigned supports remain singleton regions.
+                    // This is not a final decision about analytic CAD faces.
+                    if region.pinched_vertices.is_empty()
+                        && region
+                            .support_indices
+                            .iter()
+                            .all(|id| !used_supports.contains(id))
+                        && let Some(&region_id) = region.support_indices.first()
+                    {
+                        selected_regions += 1;
+                        carriers[region_id] = SurfaceCarrier::from_spatial_fit(&hypothesis.spatial);
+                        for &support in &region.support_indices {
+                            used_supports.insert(support);
+                            region_by_support[support] = region_id;
+                        }
+                    }
+                    let edges = region.loops.iter().flatten();
+                    let open_edges = edges
+                        .clone()
+                        .filter(|edge| edge.exterior_polygon.is_none())
+                        .count();
+                    let neighbor_supports = edges
+                        .filter_map(|edge| edge.exterior_polygon)
+                        .map(|polygon| evidence.source_planar_support[polygon])
+                        .collect::<HashSet<_>>();
+                    let uncertainty = hypothesis
+                        .track_indices
+                        .iter()
+                        .map(|&id| tracks[id].max_seed_axis_error_radians)
+                        .fold(hypothesis.max_seed_axis_deviation_radians, f64::max);
+                    let gaps = index
+                        .pinch_gaps(&region)
+                        .iter()
+                        .map(|gap| {
+                            boundary_gap_summary(evidence, index, hypothesis, gap, uncertainty)
+                        })
+                        .collect::<Vec<_>>();
+                    json!({
+                        "seed_track": hypothesis.seed_track_index,
+                        "source_polygons": region.source_polygon_count,
+                        "loop_edge_counts": region.loops.iter().map(Vec::len).collect::<Vec<_>>(),
+                        "pinched_vertices": region.pinched_vertices,
+                        "bounded_gap_candidates":gaps,
+                        "open_mesh_edges": open_edges,
+                        "neighbor_supports": neighbor_supports.len(),
+                    })
+                }
+                Err(error) => {
+                    json!({"seed_track":hypothesis.seed_track_index, "error":error.to_string()})
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    let region_by_polygon = evidence
+        .source_planar_support
+        .iter()
+        .map(|&support| region_by_support[support])
+        .collect::<Vec<_>>();
+    let partition_carriers = PartitionCarriers::new(evidence, carriers, &region_by_polygon);
+    let partition = index
+        .partition_contacts(&region_by_polygon)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        json!(cases),
+        json!({
+            "singleton_support_partition":baseline,
+            "provisional_growth_partition":partition_contact_metrics(&partition, evidence, Some(&partition_carriers)),
+            "selected_nonoverlapping_growth_regions": selected_regions,
+            "selected_source_supports":used_supports.len(),
+            "circular_meridian_proposals":meridian::summarize(evidence,index,&partition_carriers,&partition,&region_by_support)?,
+            "station_graph_meridians":station_graph::summarize(evidence,index,spatial,grown,tracks)?,
+        }),
+    ))
 }
 
 /// Compare a recovered geometric normal-space axis with independently
@@ -1043,8 +1435,9 @@ fn native_spatial_track_reference(
 /// the caller is analyzing an ordinary unlabeled mesh.
 fn read_native_labels(
     path: &Path,
-    polygon_count: usize,
+    provenance: &SourceProvenance,
 ) -> Result<Option<NativeFaceLabels>, String> {
+    let polygon_count = provenance.original_polygon_count;
     let labels_path = path.with_extension("labels");
     if !labels_path.exists() {
         return Ok(None);
@@ -1118,7 +1511,11 @@ fn read_native_labels(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(NativeFaceLabels {
-        polygon_face_ids: labels,
+        polygon_face_ids: provenance
+            .original_polygon_ids
+            .iter()
+            .map(|&id| labels[id])
+            .collect(),
         surface_types: kinds,
         analytic_axes,
         analytic_centers,
@@ -1132,11 +1529,12 @@ fn read_native_labels(
 fn evaluate_native_face_labels(
     path: &Path,
     evidence: &MeshEvidence,
+    boundary_index: &RegionBoundaryIndex<'_>,
     tracks: &[CurvatureTrack],
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
 ) -> Result<Option<Value>, String> {
-    let Some(native) = read_native_labels(path, evidence.source_planar_support.len())? else {
+    let Some(native) = read_native_labels(path, &evidence.provenance)? else {
         return Ok(None);
     };
     let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
@@ -1150,6 +1548,11 @@ fn evaluate_native_face_labels(
         analytic_centers: _,
         native_radii: _,
     } = native;
+    // Independent source labels are used here only as an evaluation oracle.
+    let native_contact_graph = boundary_index
+        .partition_contacts(&labels)
+        .map_err(|error| error.to_string())?;
+    let native_contact_metrics = partition_contact_metrics(&native_contact_graph, evidence, None);
     let mut native_edges = 0;
     let mut changed_surface_types = 0;
     let mut supported_candidates = 0;
@@ -1223,6 +1626,7 @@ fn evaluate_native_face_labels(
         ),
         "spatial_track_reference": spatial_reference,
         "curvature_growth_reference":growth_reference,
+        "native_contact_graph_reference":native_contact_metrics,
         "suspicious_joint_expansions": suspicious_joint_expansions,
         "planar_or_30_degree_union": {
             "selected": union[0],
@@ -1265,6 +1669,8 @@ struct CorpusCurvatureAnalysis {
     tracks: Value,
     spatial: Value,
     growth: Value,
+    boundaries: Value,
+    contact_graph: Value,
     native_ground_truth: Option<Value>,
 }
 
@@ -1293,12 +1699,20 @@ fn discover_and_evaluate_curvature(
         spatial_track_summary(&tracks, &spatial, spatial_start.elapsed().as_secs_f64());
     let (growth, grown) =
         growth_track_summary(evidence, &tracks).map_err(|error| ("growth", error))?;
-    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial, &grown)
-        .map_err(|error| ("ground_truth", error))?;
+    let boundary_index = RegionBoundaryIndex::new(evidence)
+        .map_err(|error| ("region_boundary", error.to_string()))?;
+    let (boundaries, contact_graph) =
+        region_boundary_summary(evidence, &boundary_index, &grown, &tracks, &spatial)
+            .map_err(|error| ("region_boundary", error))?;
+    let ground_truth =
+        evaluate_native_face_labels(path, evidence, &boundary_index, &tracks, &spatial, &grown)
+            .map_err(|error| ("ground_truth", error))?;
     Ok(CorpusCurvatureAnalysis {
         tracks: summary,
         spatial: spatial_summary,
         growth,
+        boundaries,
+        contact_graph,
         native_ground_truth: ground_truth,
     })
 }
@@ -1360,6 +1774,8 @@ fn analyze_file(path: &Path) -> Value {
                 "stage": "ok",
                 "ground_truth": analysis.native_ground_truth,
                 "source_faces": faces,
+                "original_polygon_ids":evidence.provenance.original_polygon_ids,
+                "collapsed_source_facets":evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
                 "source_vertices": vertices,
                 "canonical_vertices": evidence.positions.len(),
                 "feature_edges": evidence.edges.len(),
@@ -1375,6 +1791,8 @@ fn analyze_file(path: &Path) -> Value {
                 "curvature_tracks": analysis.tracks,
                 "spatial_tracks": analysis.spatial,
                 "spatial_growth": analysis.growth,
+                "region_boundaries": analysis.boundaries,
+                "region_contact_graph": analysis.contact_graph,
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),
