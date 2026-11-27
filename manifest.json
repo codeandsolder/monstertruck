@@ -1,0 +1,280 @@
+{
+  "base": "e370cc522320caef1e598abe7a470a11e65aa521",
+  "worktrees": [
+    {
+      "path": "/home/jan/worktrees/monstertruck-boolean-modeling-acer-20261113",
+      "head": "f5f9d231fea849b661f633909de06f23c120aa22",
+      "snapshot": "f5f9d231fea849b661f633909de06f23c120aa22",
+      "changed": [],
+      "unmerged": [
+        "f5f9d231fea849b661f633909de06f23c120aa22",
+        "3ea0c06566714a6494e51f399f6685a02542d0f2",
+        "36885605dc8c1607d637b62dba513251567a68e4",
+        "81cf92e9d9d3b57c1b1d9d964027bb90f0fa99b8"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-boundary-proof-integrity",
+      "head": "36284ef5554a68ceafb2b9baafd2441e075858b2",
+      "snapshot": "49f3fe423a8e5549828454afb49d1f111ee86b99",
+      "changed": [
+        "monstertruck-modeling/src/geometry/analytic_boundary_incidence.rs",
+        "monstertruck-modeling/tests/native_boundary_snapshot.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-bounded-hyperbola-20261120",
+      "head": "eae7c1a633fcab6bbb37ea9361e03f976d8d42a0",
+      "snapshot": "eae7c1a633fcab6bbb37ea9361e03f976d8d42a0",
+      "changed": [],
+      "unmerged": [
+        "eae7c1a633fcab6bbb37ea9361e03f976d8d42a0",
+        "ed06f5ba415021fb14d4b74ff1d43fcfafb8ed73",
+        "e5d913338130eef9b22d3f77c2cbdce885f0d03d"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-connected-component-union",
+      "head": "8808d2db418f0a3c03b8f4df40fa98c62b1b6d02",
+      "snapshot": "8808d2db418f0a3c03b8f4df40fa98c62b1b6d02",
+      "changed": [],
+      "unmerged": [
+        "8808d2db418f0a3c03b8f4df40fa98c62b1b6d02"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-forward-round-networks-20261120",
+      "head": "05bd79ccab330491b6ae4421180db7a7b6eebe1f",
+      "snapshot": "05bd79ccab330491b6ae4421180db7a7b6eebe1f",
+      "changed": [],
+      "unmerged": [
+        "05bd79ccab330491b6ae4421180db7a7b6eebe1f",
+        "b1806ff5a22b74c7aec1dc147856d071b0e272e0",
+        "911da5ddc81674ab17c36279806cb7790bedd8ba",
+        "5cce4650108da9a57231c21030abf26015021198"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-healed-host-core-20261120",
+      "head": "d92e3b75d585adc44e9b558ff79f30b587ff8478",
+      "snapshot": "d92e3b75d585adc44e9b558ff79f30b587ff8478",
+      "changed": [],
+      "unmerged": [
+        "d92e3b75d585adc44e9b558ff79f30b587ff8478",
+        "1d7985310814742c906579c6bf9d5af8048304eb",
+        "d47196796fdd3e1113c20fe8fb15131024d9d4fc",
+        "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+        "2a45453cf02ef545ac59ff612a956a6ed56adc45"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-inverse-ends-diag-20261122",
+      "head": "dabaf73d8f99f21154de422d1bc4d5745a1b943c",
+      "snapshot": "c9bd9ba5c42bd6e09d922318470d0fc9e9bf0765",
+      "changed": [
+        "step-redox/src/complete_ir.rs",
+        "step-redox/src/inverse_edge_treatment.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-local-relief-20261122",
+      "head": "4070ece3f47869b135e80efd865afefd4b38d58d",
+      "snapshot": "4070ece3f47869b135e80efd865afefd4b38d58d",
+      "changed": [],
+      "unmerged": [
+        "4070ece3f47869b135e80efd865afefd4b38d58d",
+        "04731d6eb780f745b578365c24b78a6edb791824",
+        "d92e3b75d585adc44e9b558ff79f30b587ff8478",
+        "1d7985310814742c906579c6bf9d5af8048304eb",
+        "d47196796fdd3e1113c20fe8fb15131024d9d4fc",
+        "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+        "2a45453cf02ef545ac59ff612a956a6ed56adc45"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-meridian-efficiency-20261126",
+      "head": "26e9afe06175c6e5819ec4f92da97da4d44d324d",
+      "snapshot": "f9f7a3b46dacdabbc943b9fc75380810efb8bd59",
+      "changed": [
+        "monstertruck-io/examples/mesh-recovery-verify.rs",
+        "monstertruck-modeling/examples/mesh_recovery_benchmark.rs",
+        "monstertruck-modeling/src/mesh_recovery/analytic.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/meridian.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/region_boundary/partition.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/region_boundary/patch_lift.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/station_graph.rs"
+      ],
+      "unmerged": [
+        "26e9afe06175c6e5819ec4f92da97da4d44d324d"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-mesh-recovery-20261123",
+      "head": "e05ddedfe090889df81f6ade2f76a364157de8cb",
+      "snapshot": "07af505f9be14f522f8545034875566375b92218",
+      "changed": [
+        "monstertruck-modeling/examples/mesh_recovery_corpus.rs",
+        "monstertruck-modeling/src/mesh_recovery.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/normal_gradient.rs",
+        "monstertruck-modeling/src/mesh_recovery/evidence/tests.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-planar-difference-regions-20261122",
+      "head": "d21bd1e0e863aa53cd2ebe0bd25bde8b930ae70b",
+      "snapshot": "e607b3163a40410984db7f7d6bc1079e7bdb664c",
+      "changed": [
+        "monstertruck-solid/src/transversal/classic/mod.rs",
+        "monstertruck-solid/src/transversal/classic/planar_union.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-planar-recess-20261122",
+      "head": "c2e7cd9c797d002053ea69577433befb4327ea2c",
+      "snapshot": "c2e7cd9c797d002053ea69577433befb4327ea2c",
+      "changed": [],
+      "unmerged": [
+        "c2e7cd9c797d002053ea69577433befb4327ea2c",
+        "eb96c93fb4ebc22575c7c8a75b6d0dd80a3cd28a",
+        "4070ece3f47869b135e80efd865afefd4b38d58d",
+        "04731d6eb780f745b578365c24b78a6edb791824",
+        "d92e3b75d585adc44e9b558ff79f30b587ff8478",
+        "1d7985310814742c906579c6bf9d5af8048304eb",
+        "d47196796fdd3e1113c20fe8fb15131024d9d4fc",
+        "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+        "2a45453cf02ef545ac59ff612a956a6ed56adc45"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-raw-spline-trim-incidence-20261122",
+      "head": "0101ac1ae5bdeae05c3ffb03c182f55e9f45aa0d",
+      "snapshot": "c22dfc04766710d02508ca2497808e8d14572a62",
+      "changed": [
+        "step-redox/src/cad_recovery/sectional/ruled.rs"
+      ],
+      "unmerged": [
+        "0101ac1ae5bdeae05c3ffb03c182f55e9f45aa0d",
+        "5f71fdb1c77a5f93ec2b614c2810fe858e540da0"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-refine-planar-curve-crossings-20261122",
+      "head": "307b31d3bc61e78f20cac49b0905e05879ee9319",
+      "snapshot": "307b31d3bc61e78f20cac49b0905e05879ee9319",
+      "changed": [],
+      "unmerged": [
+        "307b31d3bc61e78f20cac49b0905e05879ee9319",
+        "f0fd87594402d1b21835beb1f861e2a1c2ef8edf",
+        "620ead8417cd7d60f791d7101a226fd2981996ac"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-refined-relief-audit-20261122",
+      "head": "ab38c5e93620f30c3a5b7c5fffb7dab403e812cb",
+      "snapshot": "ae10ef12384fbcb5459fff80f8b5bf49d65a5b2b",
+      "changed": [
+        "monstertruck-solid/src/transversal/classic/planar_union.rs",
+        "monstertruck-solid/src/transversal/classic/weld.rs",
+        "step-redox/src/bin/step-refined-relief-audit.rs"
+      ],
+      "unmerged": [
+        "ab38c5e93620f30c3a5b7c5fffb7dab403e812cb"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-relief-attachment-20261120",
+      "head": "1d7985310814742c906579c6bf9d5af8048304eb",
+      "snapshot": "1d7985310814742c906579c6bf9d5af8048304eb",
+      "changed": [],
+      "unmerged": [
+        "1d7985310814742c906579c6bf9d5af8048304eb",
+        "d47196796fdd3e1113c20fe8fb15131024d9d4fc",
+        "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+        "2a45453cf02ef545ac59ff612a956a6ed56adc45"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-retire-native-occt-oracle-20261123",
+      "head": "a3479a6a99b42604364dfda52d1fb0dede6244e1",
+      "snapshot": "a3479a6a99b42604364dfda52d1fb0dede6244e1",
+      "changed": [],
+      "unmerged": [
+        "a3479a6a99b42604364dfda52d1fb0dede6244e1"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-rounding-cutter-20261112",
+      "head": "d04416b6157a36e78147fa36b8418502f43539d3",
+      "snapshot": "d04416b6157a36e78147fa36b8418502f43539d3",
+      "changed": [],
+      "unmerged": [
+        "d04416b6157a36e78147fa36b8418502f43539d3"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-sectional-host-face-assembly-20261120",
+      "head": "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+      "snapshot": "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+      "changed": [],
+      "unmerged": [
+        "ca77cbfe0dc39eeae1555417da2aec4c8c19daf4",
+        "2a45453cf02ef545ac59ff612a956a6ed56adc45"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-sectional-region-coalescing-20261122",
+      "head": "cd5797e76b8a6d0664128d9fb305312e0ee568dd",
+      "snapshot": "15658912faa70a40c18bcd44b5b887768af3cf77",
+      "changed": [
+        "step-redox/src/cad_recovery/sectional/ruled.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-shared-loft-20261122",
+      "head": "9cc75c0dc8f56ac83551098e313f19ab1e9715f7",
+      "snapshot": "9cc75c0dc8f56ac83551098e313f19ab1e9715f7",
+      "changed": [],
+      "unmerged": [
+        "9cc75c0dc8f56ac83551098e313f19ab1e9715f7"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-spatial-elementary-volume-20261126",
+      "head": "52fd7dfc91fb1b88152ff6db7e76fc521794661b",
+      "snapshot": "52fd7dfc91fb1b88152ff6db7e76fc521794661b",
+      "changed": [],
+      "unmerged": [
+        "52fd7dfc91fb1b88152ff6db7e76fc521794661b"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-step-redox-compaction-20261126",
+      "head": "c59533eda049840c39b5c343ef72db2c922bbc65",
+      "snapshot": "6ed30695d22d6ab5a926a02548230d06b063cb35",
+      "changed": [
+        "step-redox/src/boundary_proof/spline_strip/coincidence.rs",
+        "step-redox/src/lib.rs",
+        "step-redox/src/normalization.rs",
+        "step-redox/src/step_io.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-validator-wreq-20261127",
+      "head": "02fe0ec0f90120e1a02b205bbd31d4bc4291265b",
+      "snapshot": "02fe0ec0f90120e1a02b205bbd31d4bc4291265b",
+      "changed": [],
+      "unmerged": [
+        "02fe0ec0f90120e1a02b205bbd31d4bc4291265b",
+        "0c48428b49f0e05ee349c623a8b7800b1827cb5b",
+        "780114f52fe0448a1a1508567aed6b2a61f306c8"
+      ]
+    }
+  ]
+}
