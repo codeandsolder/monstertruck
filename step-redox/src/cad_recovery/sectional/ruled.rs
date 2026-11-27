@@ -296,6 +296,21 @@ mod native_tests {
     use anyhow::Result;
 
     #[test]
+    fn partitioned_spline_relief_retains_raw_vertex_incidence() -> Result<()> {
+        let kernel = MonstertruckKernel::project_standard();
+        let bytes =
+            include_bytes!("../../../validation/fixtures/native_relief_raw_trim_52f96f03.step");
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn inclined_relief_host_recovery_is_source_verified() -> Result<()> {
         let kernel = MonstertruckKernel::project_standard();
         let bytes =
