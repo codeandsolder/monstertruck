@@ -18,6 +18,7 @@ use crate::{
 use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 
+mod holed;
 mod torus_rim;
 mod variable_rim;
 
@@ -38,23 +39,33 @@ struct Circle {
 pub(super) struct BandPlan {
     vertices: [[Vertex; 2]; 2],
     seams: [Vec<Edge>; 2],
+    ring_wires: [usize; 2],
+    holes: [Vec<usize>; 2],
 }
 
 impl BandPlan {
+    fn unperforated(vertices: [[Vertex; 2]; 2], seams: [Vec<Edge>; 2]) -> Self {
+        Self {
+            vertices,
+            seams,
+            ring_wires: [0, 1],
+            holes: [Vec::new(), Vec::new()],
+        }
+    }
     pub(super) fn faces(
         &self,
         wires: &[Wire],
         surface: &Surface,
     ) -> Result<Vec<Face>, NativeTrimError> {
-        let [first, rest @ ..] = wires else {
-            return Err(NativeTrimError::InvalidBoundary);
-        };
+        let first = wires
+            .get(self.ring_wires[0])
+            .ok_or(NativeTrimError::InvalidBoundary)?;
         let [a0, a1] = &self.vertices[0];
         let [b0, b1] = &self.vertices[1];
         let [first_a, first_b] = split_wire(first, a0, a1).ok_or(NativeTrimError::FaceTopology)?;
-        let [second_a, second_b] = match rest {
-            [second] => split_wire(second, b1, b0).ok_or(NativeTrimError::FaceTopology)?,
-            [] if b0 == b1 => [Vec::new(), Vec::new()],
+        let [second_a, second_b] = match wires.get(self.ring_wires[1]) {
+            Some(second) => split_wire(second, b1, b0).ok_or(NativeTrimError::FaceTopology)?,
+            None if b0 == b1 => [Vec::new(), Vec::new()],
             _ => return Err(NativeTrimError::InvalidBoundary),
         };
         let wire_a = first_a
@@ -71,8 +82,18 @@ impl BandPlan {
             .collect::<Wire>();
         [wire_a, wire_b]
             .into_iter()
-            .map(|wire| {
-                let face = Face::new(vec![wire], surface.clone())
+            .zip(&self.holes)
+            .map(|(wire, holes)| {
+                let mut boundaries = vec![wire];
+                for &hole in holes {
+                    boundaries.push(
+                        wires
+                            .get(hole)
+                            .ok_or(NativeTrimError::InvalidBoundary)?
+                            .clone(),
+                    );
+                }
+                let face = Face::new(boundaries, surface.clone())
                     .map_err(|_| NativeTrimError::FaceTopology)?;
                 if !face.is_geometric_consistent() {
                     return Err(NativeTrimError::FaceGeometry);
@@ -103,6 +124,9 @@ impl BandContext<'_> {
         obstacles: &mut Vec<NativeChartObstacle>,
     ) -> Option<BandPlan> {
         let [first, second] = boundary.loops.as_slice() else {
+            if boundary.loops.len() > 2 {
+                return self.holed_band(boundary, trims, obstacles);
+            }
             return self.cap(boundary, trims);
         };
         let rings = match (self.ring(first), self.ring(second)) {
@@ -115,6 +139,20 @@ impl BandContext<'_> {
             }
             (None, None) => return None,
         };
+        let (first_lower, lower, span) = self.ring_domain(rings)?;
+        if !self.covers_band(1 - rings[0].axis, lower, span) {
+            return None;
+        }
+        self.parallel_band(
+            [first, second],
+            rings,
+            [0.0, PI],
+            if first_lower { span } else { -span },
+            trims,
+        )
+    }
+
+    fn ring_domain(&self, rings: [Ring; 2]) -> Option<(bool, f64, f64)> {
         if rings[0].axis != rings[1].axis || rings[0].positive == rings[1].positive {
             return None;
         }
@@ -137,17 +175,25 @@ impl BandContext<'_> {
         if span <= self.coordinate_tolerance(other) {
             return None;
         }
-        if !self.covers_band(other, lower, span) {
-            return None;
-        }
+        Some((first_lower, lower, span))
+    }
+
+    fn parallel_band(
+        &self,
+        [first, second]: [&[OrientedTrim]; 2],
+        rings: [Ring; 2],
+        angles: [f64; 2],
+        signed_span: f64,
+        trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    ) -> Option<BandPlan> {
+        let axis = rings[0].axis;
         let mut changed = copy_rings(first.iter().chain(second), trims)?;
         let mut endpoints = Vec::new();
         for (cycle, ring) in [first, second].into_iter().zip(rings) {
-            endpoints.push(self.ring_vertices(cycle, ring, &mut changed)?);
+            endpoints.push(self.ring_vertices(cycle, ring, angles, &mut changed)?);
         }
         let vertices: [[Vertex; 2]; 2] = endpoints.try_into().ok()?;
-        let signed_span = if first_lower { span } else { -span };
-        let seams = [0.0, PI]
+        let seams = angles
             .into_iter()
             .enumerate()
             .map(|(id, angle)| {
@@ -164,7 +210,7 @@ impl BandContext<'_> {
             .try_into()
             .ok()?;
         commit_rings(changed, trims);
-        Some(BandPlan { vertices, seams })
+        Some(BandPlan::unperforated(vertices, seams))
     }
 
     /// A closed, regular, degree-one source chart covers the complete torus.
@@ -286,6 +332,19 @@ impl BandContext<'_> {
             && TAU.mul_add(-TAU, total).abs() <= roundoff
     }
 
+    fn source_chart_positive(&self) -> bool {
+        self.supports.iter().all(|&support| {
+            self.evidence.planar_supports[support]
+                .source_face_indices
+                .iter()
+                .all(|&polygon| {
+                    self.evidence
+                        .source_polygon_vertices(polygon)
+                        .is_some_and(|ids| self.oriented_chart_polygon_area(ids).is_some())
+                })
+        })
+    }
+
     fn oriented_chart_polygon_area(&self, ids: &[usize]) -> Option<f64> {
         if ids.len() < 3 {
             return None;
@@ -405,7 +464,7 @@ impl BandContext<'_> {
             return None;
         }
         let mut changed = copy_rings(cycle.iter(), trims)?;
-        let endpoints = self.ring_vertices(cycle, ring, &mut changed)?;
+        let endpoints = self.ring_vertices(cycle, ring, [0.0, PI], &mut changed)?;
         let pole = builder::vertex(tip);
         let seams = [0.0, PI]
             .into_iter()
@@ -415,19 +474,20 @@ impl BandContext<'_> {
             .try_into()
             .ok()?;
         commit_rings(changed, trims);
-        Some(BandPlan {
-            vertices: [endpoints, [pole.clone(), pole]],
+        Some(BandPlan::unperforated(
+            [endpoints, [pole.clone(), pole]],
             seams,
-        })
+        ))
     }
 
     fn ring_vertices(
         &self,
         cycle: &[OrientedTrim],
         ring: Ring,
+        angles: [f64; 2],
         changed: &mut BTreeMap<usize, Vec<Edge>>,
     ) -> Option<[Vertex; 2]> {
-        let vertices = [0.0, PI].map(|angle| {
+        let vertices = angles.map(|angle| {
             let mut uv = [0.0; 2];
             uv[ring.axis] = angle;
             uv[1 - ring.axis] = ring.fixed;

@@ -137,24 +137,24 @@ fn sweep_images(pieces: &[Piece]) -> Vec<Image> {
     images
 }
 
-fn junction(i: usize, j: usize, count: usize, shift: f64) -> Option<Junction> {
+fn junction(i: usize, j: usize, count: usize, shift: f64, closing_shift: f64) -> Option<Junction> {
     if j == i + 1 && shift.abs() < TAU * 0.5 {
         Some(Junction::EndStart)
-    } else if i == 0 && j + 1 == count && (shift + TAU).abs() < TAU * 0.5 {
+    } else if i == 0 && j + 1 == count && (shift - closing_shift).abs() < TAU * 0.5 {
         Some(Junction::StartEnd)
     } else {
         None
     }
 }
 
-pub(super) fn cycle(frame: Frame, pieces: &[Piece]) -> Result<(), Vec<[usize; 2]>> {
+pub(super) fn cycle(frame: Frame, pieces: &[Piece], winding: bool) -> Result<(), Vec<[usize; 2]>> {
     if pieces.len() < 2 {
         return Err(Vec::new());
     }
     // The caller has already certified a continuous winding-one lift.
     // Strict monotonicity in its periodic coordinate alone proves a
     // simple cycle, without requiring quadratic pair comparisons.
-    if pieces.iter().all(|p| p.rates[0].lo > 0.0) {
+    if winding && pieces.iter().all(|p| p.rates[0].lo > 0.0) {
         return Ok(());
     }
     let images = sweep_images(pieces);
@@ -175,7 +175,13 @@ pub(super) fn cycle(frame: Frame, pieces: &[Piece]) -> Result<(), Vec<[usize; 2]
             }
             let [a, b] = [&pieces[left.piece], &pieces[right.piece]];
             let shift = right.shift - left.shift;
-            let adjacent = junction(left.piece, right.piece, pieces.len(), shift);
+            let adjacent = junction(
+                left.piece,
+                right.piece,
+                pieces.len(),
+                shift,
+                if winding { -TAU } else { 0.0 },
+            );
             let pair = [a.edge.min(b.edge), a.edge.max(b.edge)];
             if rejected.contains(&pair) {
                 continue;

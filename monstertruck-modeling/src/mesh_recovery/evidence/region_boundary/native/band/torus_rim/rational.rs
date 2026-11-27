@@ -2,6 +2,8 @@
 //! polynomial approximations of regular analytic intersection branches.
 //! No tensor-circle assumption is made for a general section spline.
 mod controls;
+mod holes;
+pub(in super::super) use holes::hole_bounds;
 mod interval;
 mod simplicity;
 #[cfg(test)]
@@ -232,13 +234,36 @@ fn unique_cut(pieces: &[Piece], index: usize, angle: f64, resolution: f64) -> bo
 }
 
 #[derive(Debug)]
-pub(super) enum Rejection {
+pub(in super::super) enum Rejection {
     Span(usize),
     Winding,
     Ring(usize),
     Pair(Vec<[usize; 2]>),
     Cuts,
     Invalid,
+}
+
+fn lift_cycle(
+    frame: Frame,
+    rim: &[Edge],
+    first: [Interval; 2],
+) -> Result<(Vec<Piece>, [Interval; 2]), Rejection> {
+    let mut reference = first;
+    let mut pieces = Vec::new();
+    for (edge_id, edge) in rim.iter().enumerate() {
+        let curve = edge
+            .oriented_curve()
+            .try_into_homogeneous_bspline_curve()
+            .ok_or(Rejection::Span(edge_id))?;
+        for mut span in controls::spans(&curve).ok_or(Rejection::Span(edge_id))? {
+            for control in &mut span.values {
+                *control = frame.local(*control);
+            }
+            reference = append(frame, &span, reference, edge_id, MAX_DEPTH, &mut pieces)
+                .ok_or(Rejection::Span(edge_id))?;
+        }
+    }
+    Ok((pieces, reference))
 }
 
 pub(super) fn prove(
@@ -256,21 +281,7 @@ pub(super) fn prove(
         Interval::point(frame.direction * uv[ring.axis]),
         Interval::point(side.mul_add(ring.fixed, first_height)),
     ];
-    let mut reference = first;
-    let mut pieces = Vec::new();
-    for (edge_id, edge) in rim.iter().enumerate() {
-        let curve = edge
-            .oriented_curve()
-            .try_into_homogeneous_bspline_curve()
-            .ok_or(Rejection::Span(edge_id))?;
-        for mut span in controls::spans(&curve).ok_or(Rejection::Span(edge_id))? {
-            for control in &mut span.values {
-                *control = frame.local(*control);
-            }
-            reference = append(frame, &span, reference, edge_id, MAX_DEPTH, &mut pieces)
-                .ok_or(Rejection::Span(edge_id))?;
-        }
-    }
+    let (pieces, reference) = lift_cycle(frame, rim, first)?;
     let resolution = frame.resolution;
     if reference[0]
         .sub(first[0])
@@ -290,7 +301,7 @@ pub(super) fn prove(
         }
         extent = extent.max(height.hi);
     }
-    simplicity::cycle(frame, &pieces).map_err(Rejection::Pair)?;
+    simplicity::cycle(frame, &pieces, true).map_err(Rejection::Pair)?;
     let mut candidates = Vec::new();
     for (i, piece) in pieces.iter().enumerate() {
         if piece.rates[0].lo <= 0.0 {

@@ -702,7 +702,7 @@ impl HybridSource<'_> {
             else {
                 continue;
             };
-            if boundary.loops.len() != 2 {
+            if boundary.loops.len() < 2 {
                 continue;
             }
             let whole = partition
