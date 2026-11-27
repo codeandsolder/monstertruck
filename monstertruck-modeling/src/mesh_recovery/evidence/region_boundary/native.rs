@@ -103,7 +103,7 @@ pub enum NativeChartObstacle {
 
 impl NativeChartObstacle {
     /// Native intervals implicated by a localized proof obstruction.
-    #[must_use]
+    #[must_use = "the implicated edges identify candidate local repairs"]
     pub const fn edges(self) -> Option<[(usize, usize); 2]> {
         match self {
             Self::Span(edge) | Self::RingContact(edge) => Some([edge, edge]),
@@ -2055,6 +2055,61 @@ mod tests {
         Ok(())
     }
 
+    fn torus_section_fixture(
+        positions: Vec<Point3>,
+        faces: Vec<Vec<usize>>,
+        patch_facets: usize,
+        radii: [f64; 2],
+        chord: f64,
+    ) -> Result<(NativeTrimGraph, SharedTrimGraph), Box<dyn std::error::Error>> {
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let supports = evidence
+            .planar_supports
+            .iter()
+            .enumerate()
+            .filter(|(_, support)| {
+                support
+                    .source_face_indices
+                    .iter()
+                    .all(|&id| id < patch_facets)
+            })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radial_center: radii[0],
+            profile_radius: radii[1],
+        };
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1e-8,
+                    chord,
+                },
+            )
+            .ok_or("torus patch")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            native_options(),
+        )?;
+        Ok((native, trims))
+    }
+
     #[test]
     fn tilted_planar_section_bounds_a_closed_toroidal_band()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2086,57 +2141,14 @@ mod tests {
         let patch_faces = faces.len();
         faces.push((0..n).rev().collect());
         faces.push(((stations - 1) * n..stations * n).collect());
-        let mesh = PolygonMesh::new(
-            StandardAttributes {
-                positions,
-                ..Default::default()
-            },
-            Faces::from_iter(faces),
-        )?;
-        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
-        let supports = evidence
-            .planar_supports
-            .iter()
-            .enumerate()
-            .filter(|(_, support)| {
-                support
-                    .source_face_indices
-                    .iter()
-                    .all(|&id| id < patch_faces)
-            })
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>();
-        let carrier = SurfaceCarrier::CircularRevolution {
-            axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
-            radial_center: 3.0,
-            profile_radius: 1.0,
-        };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1e-8,
-                    chord: 0.2,
-                },
-            )
-            .ok_or("torus patch")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let (native, trims) =
+            torus_section_fixture(positions, faces, patch_faces, [3.0, 1.0], 0.2)?;
         assert!(
             trims
                 .trims
                 .iter()
                 .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
         );
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
         assert!(
             native
                 .regions
@@ -2205,57 +2217,14 @@ mod tests {
         let patch_facets = faces.len();
         // Reverse the boundary traversal along the plane side.
         faces.push((0..=steps).rev().map(|i| i * width + steps).collect());
-        let mesh = PolygonMesh::new(
-            StandardAttributes {
-                positions,
-                ..Default::default()
-            },
-            Faces::from_iter(faces),
-        )?;
-        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
-        let index = RegionBoundaryIndex::new(&evidence)?;
-        let supports = evidence
-            .planar_supports
-            .iter()
-            .enumerate()
-            .filter(|(_, support)| {
-                support
-                    .source_face_indices
-                    .iter()
-                    .all(|&i| i < patch_facets)
-            })
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>();
-        let carrier = SurfaceCarrier::CircularRevolution {
-            axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
-            radial_center: 2.0,
-            profile_radius: 0.5,
-        };
-        let proposal = index
-            .measure_surface_region(
-                &supports,
-                carrier,
-                SurfaceRegionBudget {
-                    vertex: 1.0e-8,
-                    chord: 0.1,
-                },
-            )
-            .ok_or("torus patch")?;
-        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
-        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let (native, trims) =
+            torus_section_fixture(positions, faces, patch_facets, [2.0, 0.5], 0.1)?;
         let section = trims
             .trims
             .iter()
             .position(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
             .ok_or("shared torus-plane trim")?;
         assert!(trims.trims[section].regions.1.is_some());
-        let native = index.construct_native_trims(
-            &partition,
-            &trims,
-            &evidence.positions,
-            native_options(),
-        )?;
         let edges = native.trims[section].as_ref().map_err(|error| *error)?;
         assert_eq!(edges.len(), steps);
         assert_eq!(native.regions.len(), 2);

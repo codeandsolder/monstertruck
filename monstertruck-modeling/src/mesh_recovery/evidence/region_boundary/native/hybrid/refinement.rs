@@ -335,9 +335,11 @@ fn vertex_distance_witness(carrier: SurfaceCarrier, point: crate::Point3) -> Opt
     // to the retained carrier, also at point-only source contacts.
     let residual = carrier.signed_constraint(point).map(|(_, r)| r.abs());
     match residual {
-        Some(distance) if distance.is_finite() => {
-            Some((distance - 8.0 * super::junction_roundoff(point, &[carrier])).max(0.0))
-        }
+        Some(distance) if distance.is_finite() => Some(
+            8.0_f64
+                .mul_add(-super::junction_roundoff(point, &[carrier]), distance)
+                .max(0.0),
+        ),
         _ => carrier_distance_witness(carrier, point, point),
     }
 }
