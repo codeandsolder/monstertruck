@@ -1155,3 +1155,135 @@ fn growth_rejects_disconnected_source_tracks_and_invalid_limits() {
         assert!(CurvatureGrowthIndex::new(&evidence, &tracks, invalid).is_err());
     }
 }
+
+fn source_torus_mesh(major: f64, minor: f64, major_steps: usize, tube_steps: usize) -> PolygonMesh {
+    let mut vertices = Vec::with_capacity(major_steps * tube_steps);
+    for major_index in 0..major_steps {
+        let phi = std::f64::consts::TAU * crate::usize_to_f64(major_index)
+            / crate::usize_to_f64(major_steps);
+        for tube_index in 0..tube_steps {
+            let theta = std::f64::consts::TAU * crate::usize_to_f64(tube_index)
+                / crate::usize_to_f64(tube_steps);
+            let radial = major + minor * theta.cos();
+            vertices.push([radial * phi.cos(), radial * phi.sin(), minor * theta.sin()]);
+        }
+    }
+    let mut triangles = Vec::with_capacity(2 * major_steps * tube_steps);
+    for phi in 0..major_steps {
+        let next_phi = (phi + 1) % major_steps;
+        for theta in 0..tube_steps {
+            let next_theta = (theta + 1) % tube_steps;
+            let a = phi * tube_steps + theta;
+            let b = next_phi * tube_steps + theta;
+            let c = next_phi * tube_steps + next_theta;
+            let d = phi * tube_steps + next_theta;
+            triangles.push([a, b, c]);
+            triangles.push([a, c, d]);
+        }
+    }
+    make_mesh(&vertices, &triangles)
+}
+
+#[test]
+fn source_normal_gradient_identifies_two_independent_toroid_tangent_directions() {
+    let mesh = source_torus_mesh(4.0, 1.0, 32, 20);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let index =
+        SourceNormalGradientIndex::new(&evidence, SourceNormalGradientOptions::default()).unwrap();
+    let measured = (0..evidence.planar_supports.len())
+        .filter_map(|support| index.measure(support))
+        .collect::<Vec<_>>();
+    assert!(
+        measured.len() > 200,
+        "resolved {} of {} source supports",
+        measured.len(),
+        evidence.planar_supports.len()
+    );
+    assert!(
+        measured
+            .iter()
+            .all(|value| value.neighboring_supports.len() >= 2)
+    );
+    assert!(
+        measured
+            .iter()
+            .all(|value| value.transverse_position_rank_ratio > 1.0e-6)
+    );
+    assert!(
+        measured
+            .iter()
+            .all(|value| value.max_normal_change_residual.is_finite())
+    );
+    let nonzero_both = measured
+        .iter()
+        .filter(|value| {
+            value
+                .principal_normal_curvatures
+                .iter()
+                .all(|c| c.abs() > 0.05)
+        })
+        .count();
+    assert!(
+        nonzero_both > 100,
+        "two nonzero directions measured for {nonzero_both} patches"
+    );
+}
+
+#[test]
+fn source_normal_gradient_does_not_invent_unobserved_cylinder_axial_curvature() {
+    let mesh = faceted_radial_profile(&[(0.0, 1.0), (2.0, 1.0)], 32, [1.0, 1.0], [0.0; 3]);
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default()).unwrap();
+    let index =
+        SourceNormalGradientIndex::new(&evidence, SourceNormalGradientOptions::default()).unwrap();
+    assert!((0..evidence.planar_supports.len()).all(|support| index.measure(support).is_none()));
+}
+
+#[test]
+fn source_gradient_keeps_sharp_corner_contacts_separate_from_smooth_samples() {
+    let evidence = analyze_mesh_evidence(&unit_box_mesh(), EvidenceOptions::default()).unwrap();
+    let original_contact_count = evidence.support_interfaces.len();
+    let source_sample =
+        SourceNormalGradientIndex::new(&evidence, SourceNormalGradientOptions::default()).unwrap();
+    assert!((0..evidence.planar_supports.len()).all(|id| source_sample.measure(id).is_none()));
+    // The same original corner interfaces remain available to geometric seam
+    // reconstruction and may be studied under a separate, explicit hypothesis.
+    assert_eq!(evidence.support_interfaces.len(), original_contact_count);
+    let permissive = SourceNormalGradientIndex::new(
+        &evidence,
+        SourceNormalGradientOptions {
+            max_neighbor_normal_turn_radians: 3.0,
+            ..SourceNormalGradientOptions::default()
+        },
+    )
+    .unwrap();
+    assert!((0..evidence.planar_supports.len()).any(|id| permissive.measure(id).is_some()));
+}
+
+#[test]
+fn source_gradient_validates_local_smoothness_and_rank_budgets() {
+    let evidence = analyze_mesh_evidence(&unit_box_mesh(), EvidenceOptions::default()).unwrap();
+    for invalid in [
+        SourceNormalGradientOptions {
+            max_neighbor_normal_turn_radians: -1.0,
+            ..Default::default()
+        },
+        SourceNormalGradientOptions {
+            max_neighbor_normal_turn_radians: f64::NAN,
+            ..Default::default()
+        },
+        SourceNormalGradientOptions {
+            max_neighbor_normal_turn_radians: std::f64::consts::PI,
+            ..Default::default()
+        },
+        SourceNormalGradientOptions {
+            min_tangent_direction_rank_ratio: -1.0,
+            ..Default::default()
+        },
+        SourceNormalGradientOptions {
+            min_tangent_direction_rank_ratio: 1.5,
+            ..Default::default()
+        },
+    ] {
+        assert!(SourceNormalGradientIndex::new(&evidence, invalid).is_err());
+    }
+}

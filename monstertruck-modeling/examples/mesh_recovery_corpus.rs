@@ -7,7 +7,8 @@
 use monstertruck_mesh::{PolygonMesh, obj};
 use monstertruck_modeling::mesh_recovery::{
     CurvatureGrowthHypothesis, CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureTrack,
-    CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence, SpatialTrackEvidence,
+    CurvatureTrackOptions, EvidenceOptions, FeatureEdgeKind, MeshEvidence, SourceNormalGradient,
+    SourceNormalGradientIndex, SourceNormalGradientOptions, SpatialTrackEvidence,
     analyze_mesh_evidence, measure_curvature_spatial, measure_curvature_spatial_join,
     trace_curvature_tracks,
 };
@@ -852,6 +853,125 @@ fn native_curvature_growth_reference(
     })
 }
 
+/// Primitive-independent local two-direction original-support normal evidence.
+fn source_normal_gradient_summary(
+    evidence: &MeshEvidence,
+) -> Result<(Value, Vec<Option<SourceNormalGradient>>), String> {
+    let start = Instant::now();
+    let options = SourceNormalGradientOptions::default();
+    let index =
+        SourceNormalGradientIndex::new(evidence, options).map_err(|error| error.to_string())?;
+    let index_seconds = start.elapsed().as_secs_f64();
+    let gradients = (0..evidence.planar_supports.len())
+        .map(|id| index.measure(id))
+        .collect::<Vec<_>>();
+    let measured = gradients.iter().flatten().count();
+    let two_principal = gradients
+        .iter()
+        .flatten()
+        .filter(|g| {
+            let [a, b] = g.principal_normal_curvatures;
+            let highest = a.abs().max(b.abs());
+            highest > 0.0 && a.abs().min(b.abs()) >= 0.1 * highest
+        })
+        .count();
+    let saddle = gradients
+        .iter()
+        .flatten()
+        .filter(|g| {
+            let [a, b] = g.principal_normal_curvatures;
+            a * b < 0.0
+        })
+        .count();
+    Ok((
+        json!({
+            "source_supports":evidence.planar_supports.len(),
+        "maximum_smooth_neighbor_normal_turn_radians":options.max_neighbor_normal_turn_radians,
+        "minimum_tangent_rank_ratio":options.min_tangent_direction_rank_ratio,
+            "two_direction_identifiable":measured,
+            "underdetermined":evidence.planar_supports.len()-measured,
+            "both_curvatures_at_least_10pct_of_larger":two_principal,
+            "opposite_sign_principal_curvatures":saddle,
+            "centroid_index_seconds":index_seconds,
+            "total_source_normal_gradient_seconds":start.elapsed().as_secs_f64(),
+            "samples":gradients.iter().flatten().take(8).map(|g| json!({
+                "support_id":g.support_index,
+                "neighboring_support_count":g.neighboring_supports.len(),
+                "tangent_direction_rank_ratio":g.transverse_position_rank_ratio,
+                "signed_principal_normal_curvatures":g.principal_normal_curvatures,
+                "maximum_normal_fit_residual":g.max_normal_change_residual,
+            })).collect::<Vec<_>>(),
+        }),
+        gradients,
+    ))
+}
+
+/// Original STEP face family is used only after geometric inference.
+fn native_normal_gradient_reference(
+    evidence: &MeshEvidence,
+    gradients: &[Option<SourceNormalGradient>],
+    native: &NativeFaceLabels,
+) -> Value {
+    // Raw opposite signs can be numerical near-zero artifacts. Keep
+    // independent magnitude and first-order residual confidence counts.
+    let mut family_counts = std::collections::BTreeMap::<String, [usize; 8]>::new();
+    let mut examples = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for (id, gradient) in gradients.iter().enumerate() {
+        let mut names = evidence.planar_supports[id]
+            .source_face_indices
+            .iter()
+            .map(|&polygon| native.surface_types[native.polygon_face_ids[polygon]].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let family = if names.len() == 1 {
+            names.pop_first().unwrap_or("Unknown").to_owned()
+        } else {
+            "MixedNativeSurfaceFamilies".to_owned()
+        };
+        let counts = family_counts.entry(family.clone()).or_default();
+        counts[0] += 1;
+        let Some(observation) = gradient else {
+            continue;
+        };
+        counts[1] += 1;
+        let [a, b] = observation.principal_normal_curvatures;
+        let highest = a.abs().max(b.abs());
+        let well_resolved_magnitudes = highest > 0.0 && a.abs().min(b.abs()) / highest >= 0.1;
+        let opposite_sign = a * b < 0.0;
+        let low_residual = observation.max_normal_change_residual <= 0.1;
+        let very_low_residual = observation.max_normal_change_residual <= 0.05;
+        counts[2] += usize::from(well_resolved_magnitudes);
+        counts[3] += usize::from(opposite_sign);
+        counts[4] += usize::from(opposite_sign && well_resolved_magnitudes);
+        counts[5] += usize::from(low_residual);
+        counts[6] += usize::from(opposite_sign && well_resolved_magnitudes && low_residual);
+        counts[7] += usize::from(opposite_sign && well_resolved_magnitudes && very_low_residual);
+        let samples = examples.entry(family).or_default();
+        if samples.len() < 6 {
+            samples.push(json!({
+                "support_id":id,
+                "neighbors":observation.neighboring_supports.len(),
+                "rank":observation.transverse_position_rank_ratio,
+                "signed_principal_curvatures":observation.principal_normal_curvatures,
+                "maximum_normal_fit_residual":observation.max_normal_change_residual,
+            }));
+        }
+    }
+    json!({
+        "original_source_surface_family_counts":family_counts.into_iter()
+            .map(|(name,stats)| (name,json!({
+                "source_supports":stats[0],
+                "two_direction_identifiable":stats[1],
+                "both_curvatures_at_least_10pct":stats[2],
+                "opposite_signed":stats[3],
+                "opposite_sign_with_two_curvature_magnitudes_ge_10pct":stats[4],
+                "normal_change_fit_max_residual_le_0_1":stats[5],
+                "saddle_ratio_ge_10pct_and_residual_le_0_1":stats[6],
+                "saddle_ratio_ge_10pct_and_residual_le_0_05":stats[7],
+            }))).collect::<std::collections::BTreeMap<_,_>>(),
+        "native_family_samples":examples,
+    })
+}
+
 /// CAD surface-family provenance of an entire original source-support track.
 /// Identical original families can still represent different actual faces.
 fn native_track_surface_family(
@@ -1135,10 +1255,12 @@ fn evaluate_native_face_labels(
     tracks: &[CurvatureTrack],
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
+    gradients: &[Option<SourceNormalGradient>],
 ) -> Result<Option<Value>, String> {
     let Some(native) = read_native_labels(path, evidence.source_planar_support.len())? else {
         return Ok(None);
     };
+    let normal_gradient_reference = native_normal_gradient_reference(evidence, gradients, &native);
     let spatial_reference = native_spatial_track_reference(evidence, tracks, spatial, &native);
     let growth_reference = native_curvature_growth_reference(evidence, grown, &native);
     let suspicious_joint_expansions =
@@ -1223,6 +1345,7 @@ fn evaluate_native_face_labels(
         ),
         "spatial_track_reference": spatial_reference,
         "curvature_growth_reference":growth_reference,
+        "source_normal_gradient_reference":normal_gradient_reference,
         "suspicious_joint_expansions": suspicious_joint_expansions,
         "planar_or_30_degree_union": {
             "selected": union[0],
@@ -1265,6 +1388,7 @@ struct CorpusCurvatureAnalysis {
     tracks: Value,
     spatial: Value,
     growth: Value,
+    normal_gradients: Value,
     native_ground_truth: Option<Value>,
 }
 
@@ -1293,12 +1417,22 @@ fn discover_and_evaluate_curvature(
         spatial_track_summary(&tracks, &spatial, spatial_start.elapsed().as_secs_f64());
     let (growth, grown) =
         growth_track_summary(evidence, &tracks).map_err(|error| ("growth", error))?;
-    let ground_truth = evaluate_native_face_labels(path, evidence, &tracks, &spatial, &grown)
-        .map_err(|error| ("ground_truth", error))?;
+    let (normal_gradients, source_gradient_rows) =
+        source_normal_gradient_summary(evidence).map_err(|error| ("normal_gradient", error))?;
+    let ground_truth = evaluate_native_face_labels(
+        path,
+        evidence,
+        &tracks,
+        &spatial,
+        &grown,
+        &source_gradient_rows,
+    )
+    .map_err(|error| ("ground_truth", error))?;
     Ok(CorpusCurvatureAnalysis {
         tracks: summary,
         spatial: spatial_summary,
         growth,
+        normal_gradients,
         native_ground_truth: ground_truth,
     })
 }
@@ -1375,6 +1509,7 @@ fn analyze_file(path: &Path) -> Value {
                 "curvature_tracks": analysis.tracks,
                 "spatial_tracks": analysis.spatial,
                 "spatial_growth": analysis.growth,
+                "source_normal_gradients": analysis.normal_gradients,
                 "planar_regions": evidence.planar_supports.len(),
                 "planar_regions_multi_facet": evidence
                     .planar_supports.iter().filter(|region| region.source_face_indices.len() >= 3).count(),
