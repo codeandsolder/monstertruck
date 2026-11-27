@@ -72,3 +72,49 @@ fn exactly_zero_knot_range_is_still_rejected() {
         Err(Error::ZeroRange)
     ));
 }
+
+#[test]
+fn exact_multiplicity_and_compression_preserve_close_distinct_knots() {
+    let a = 0.25_f64;
+    let b = a + 1.0e-12;
+    let c = b + 1.0e-12;
+    let original = vec![a, a, a, b, c, 0.75, 1.0, 1.0, 1.0];
+    let knots = KnotVector::from(original.clone());
+    assert_eq!(knots.multiplicity(0), 3);
+    assert_eq!(knots.multiplicity(3), 1);
+    assert_eq!(knots.multiplicity(4), 1);
+    let (distinct, counts) = knots.to_single_multi();
+    assert_eq!(counts, vec![3, 1, 1, 1, 3]);
+    let restored = KnotVector::from_single_multi(distinct, counts).unwrap();
+    assert!(
+        restored
+            .iter()
+            .map(|knot| knot.to_bits())
+            .eq(original.iter().map(|knot| knot.to_bits()))
+    );
+    let zero = KnotVector::from(vec![-0.0, 0.0, 1.0]);
+    assert_eq!(zero.multiplicity(0), 2);
+    assert_eq!(zero.to_single_multi().1, vec![2, 1]);
+}
+
+#[test]
+fn short_parameter_span_knot_insertion_and_cut_preserve_geometry() {
+    let curve = tiny_curve();
+    let (a, b) = curve.range_tuple();
+    let first = a + (b - a) * 0.25;
+    let second = a + (b - a) * 0.5;
+    let mut left = curve.clone();
+    left.add_knot(first);
+    left.add_knot(second);
+    let right = left.cut(second);
+    assert_eq!(left.range_tuple().1.to_bits(), second.to_bits());
+    assert_eq!(right.range_tuple().0.to_bits(), second.to_bits());
+    for i in 0..=32 {
+        let t = a + (b - a) * f64::from(i) / 32.0;
+        let split = if t <= second { &left } else { &right };
+        assert!(
+            curve.evaluate(t).distance(split.evaluate(t)) < 1.0e-8,
+            "{t:?}"
+        );
+    }
+}

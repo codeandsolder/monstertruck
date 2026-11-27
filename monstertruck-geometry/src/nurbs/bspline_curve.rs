@@ -1134,14 +1134,14 @@ impl<P: ControlPoint<f64>> ParameterTransform for BsplineCurve<P> {
 }
 
 impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
-    fn cut(&mut self, mut t: f64) -> Self {
+    fn cut(&mut self, t: f64) -> Self {
         let degree = self.degree();
         let knot_start = self.knot_vec[0];
         let knot_end = self.knot_vec[self.knot_vec.len() - 1];
 
         // Snap cuts within `KERNEL_EPSILON` of the domain ends onto the ends themselves.
-        // Otherwise the near-knot snapping below lands on the full-multiplicity end
-        // knot blocks and produces invalid empty halves.
+        // Preserve nonzero interior spans exactly; an exterior parameter
+        // within tolerance of an endpoint may be treated as that endpoint.
         if t <= knot_start && t.near(&knot_start) {
             let point = self.evaluate(knot_start);
             let right = self.clone();
@@ -1160,13 +1160,10 @@ impl<P: ControlPoint<f64> + Tolerance> Cut for BsplineCurve<P> {
             *self = Self::new_unchecked(knot_vec, control_points);
             return bspline;
         };
-        let candidate_knot = self.knot_vec[idx];
-        let candidate_is_start = candidate_knot.total_cmp(&knot_start).is_eq();
-        let candidate_is_end = candidate_knot.total_cmp(&knot_end).is_eq();
-        let interior_near_endpoint =
-            (candidate_is_start && t > knot_start) || (candidate_is_end && t < knot_end);
-        let s = if t.near(&candidate_knot) && !interior_near_endpoint {
-            t = candidate_knot;
+        let s = if t
+            .partial_cmp(&self.knot_vec[idx])
+            .is_some_and(std::cmp::Ordering::is_eq)
+        {
             self.knot_vec.multiplicity(idx)
         } else {
             0

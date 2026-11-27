@@ -317,13 +317,7 @@ mod seed_index;
 #[doc(hidden)]
 #[inline]
 #[must_use = "The computed inv or zero quantity is reported through this return value."]
-pub const fn inv_or_zero(delta: f64) -> f64 {
-    if delta.abs() <= KERNEL_EPSILON {
-        0.0
-    } else {
-        1.0 / delta
-    }
-}
+pub const fn inv_or_zero(delta: f64) -> f64 { if delta == 0.0 { 0.0 } else { 1.0 / delta } }
 
 // This code is modified version of https://the-algorithms.com/algorithm/gaussian-elimination?lang=rust
 mod gaussian_elimination {

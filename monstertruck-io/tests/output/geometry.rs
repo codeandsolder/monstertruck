@@ -474,3 +474,26 @@ fn cylinder_export_preserves_uv_and_oriented_normal() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn spline_step_output_preserves_close_distinct_knots() {
+    let a = 0.25_f64;
+    let b = a + 1.0e-12;
+    let knots = KnotVector::from(vec![a, a, a, b, 0.5, 0.75, 1.0, 1.0, 1.0]);
+    let points = (0..6)
+        .map(|i| Point3::new(f64::from(i), 0.0, 0.0))
+        .collect::<Vec<_>>();
+    let curve = BsplineCurve::new(knots.clone(), points.clone()).unwrap();
+    let rational: NurbsCurve<Vector4> = NurbsCurve::new(
+        BsplineCurve::new(knots, points.iter().map(|p| p.to_homogeneous()).collect()).unwrap(),
+    );
+    let expected = format!(
+        "(3, 1, 1, 1, 3), ({}, {}, 0.5, 0.75, 1.0)",
+        FloatDisplay(a),
+        FloatDisplay(b)
+    );
+    let polynomial_step = StepDisplay::new(&curve, 1).to_string();
+    let rational_step = StepDisplay::new(&rational, 1).to_string();
+    assert!(polynomial_step.contains(&expected), "{polynomial_step}");
+    assert!(rational_step.contains(&expected), "{rational_step}");
+}
