@@ -1075,6 +1075,7 @@ fn plan_segment_carrier(
                     <= GEOM_TOL_MM
         })
         .with_context(|| {
+            eprintln!("INV_FAIL face={} virtual={:?} {:?} previous={:?} next={:?}",face.id,virtual_start,virtual_end,previous,next);
             format!(
                 "proven inverse segment does not meet retained neighbors on carrier face #{}",
                 face.id

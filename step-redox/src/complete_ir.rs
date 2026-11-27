@@ -941,6 +941,10 @@ fn finish_native_boundary_feature_replay<
     replay: &[RecoveredBoundaryFeatureFamily],
     proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    if let Some(path) = std::env::var_os("MT_DIAGNOSTIC_HEALED_HOST") {
+        eprintln!("RELIEF_HOST faces={:?}",kernel.inspect_edited_source(edited)?.faces);
+        std::fs::write(path,kernel.edited_source_to_step(edited)?.as_bytes())?;
+    }
     let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
         // Rare non-native analytic families still use one final snapshot, not
         // a serialization/reimport on every feature-peeling round.
@@ -1012,6 +1016,10 @@ fn recover_kernel_topology_normalized_fragment<
         .context("peel dependency-ordered native edge treatments")?;
     if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
+    }
+    if let Some(path) = std::env::var_os("MT_DIAGNOSTIC_TREATMENT_HOST") {
+        eprintln!("TREATMENT_HOST layers={} faces={:?} stop={:?}",layers.len(),kernel.inspect_edited_source(&edited)?.faces,stop);
+        std::fs::write(path, kernel.edited_source_to_step(&edited)?.as_bytes())?;
     }
     let same_domain_merges = kernel
         .normalize_edited_source(&mut edited)
