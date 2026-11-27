@@ -333,6 +333,7 @@ fn complete_bspline_edge_with_index(
 
 /// Construct the same full-domain, monotone, positive-weight spline from
 /// an already resolved source edge (e.g. the native topology planner).
+#[cfg(feature = "cad-kernel-monstertruck")]
 pub(crate) fn complete_bspline_support(
     spline: brep::BSplineSupport,
     [start, end]: [[f64; 3]; 2],

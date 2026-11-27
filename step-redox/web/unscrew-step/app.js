@@ -4,7 +4,6 @@ let wasmReady = null;
 let sourceFile = null;
 let currentBytes = null;
 let currentName = "optimized.step";
-let currentReport = null;
 
 const $ = (id) => document.getElementById(id);
 const drop = $("drop");
@@ -29,7 +28,6 @@ function setStatus(text, error = false) {
 function setFile(file) {
   sourceFile = file;
   currentBytes = null;
-  currentReport = null;
   result.hidden = true;
   run.disabled = !file;
   $("fileMeta").textContent = file ? `${file.name} · ${humanBytes(file.size)}` : "No file selected";
@@ -143,7 +141,6 @@ function renderPatterns(patterns, coupledPatternIndices = new Set()) {
 }
 
 function renderReport(report, inputSize, outputSize) {
-  currentReport = report;
   $("inputBytes").textContent = humanBytes(inputSize);
   $("outputBytes").textContent = humanBytes(outputSize);
   $("ratio").textContent = `${(100 * outputSize / inputSize).toFixed(2)}%`;

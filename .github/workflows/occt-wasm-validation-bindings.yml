@@ -2,11 +2,9 @@ name: OCCT WASM validation bindings
 
 on:
   pull_request:
-    paths:
-      - step-redox/tools/occt-wasm-validator/**
-      - step-redox/validation/fixtures.json
-      - step-redox/validation/fixtures/bundled/**
-      - .github/workflows/occt-wasm-validation-bindings.yml
+  push:
+    branches: [master]
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -24,18 +22,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: External crate release-age quarantine
-        if: github.event_name == 'pull_request'
-        uses: codeandsolder/ci-workflows/.github/actions/cargo-release-quarantine@9c14ef2d72423958c56944febc620ec50f01d65a # main
+      - name: Resolve repository compiler
+        id: compiler
+        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@9c14ef2d72423958c56944febc620ec50f01d65a # main
+      - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
-          base-ref: ${{ github.event.pull_request.base.sha }}
-          lockfile: step-redox/tools/occt-wasm-validator/Cargo.lock
-          hours: "72"
-      - name: Resolve the repository compiler
-        run: rustup show active-toolchain
+          toolchain: ${{ steps.compiler.outputs.channel }}
+          components: clippy
       - name: Setup mandatory sccache
         uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
         with:
+          rust-toolchain: ${{ steps.compiler.outputs.channel }}
           repository-path: step-redox/tools/occt-wasm-validator
           cache-scope: occt-wasm-validation-bindings
       - name: Exercise the fork's embedded kernel directly
@@ -62,3 +59,11 @@ jobs:
       - name: Finalize mandatory sccache
         if: always()
         uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
+  merge-gate:
+    name: OCCT validator merge gate
+    if: ${{ always() }}
+    needs: [validate]
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
+    with:
+      needs-json: ${{ toJSON(needs) }}
+      expected-results: '[["validate","success"]]'
