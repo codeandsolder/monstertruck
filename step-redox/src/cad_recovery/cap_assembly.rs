@@ -3,7 +3,7 @@ use super::{
     SourceRecovery, compose_union_models,
     solid::{local_frame_transform, recover_source_cap_extrusion_model},
 };
-use crate::cad_ir::{CadModel, CadNode, NodeId};
+use crate::cad_ir::{CadModel, CadNode, NodeId, Profile2d};
 use crate::math3::{add, dot, mul, sub};
 use crate::solid_extrusions::RecoveredSourceCapExtrusion;
 use anyhow::Result;
@@ -58,14 +58,28 @@ impl AssemblyFrame {
 fn compose_caps(
     caps: &[RecoveredSourceCapExtrusion],
     frame: Option<AssemblyFrame>,
+    replacement: Option<(usize, &Profile2d)>,
 ) -> Result<(CadModel, NodeId)> {
     let models = caps
         .iter()
-        .map(|cap| {
-            frame.map_or_else(
+        .enumerate()
+        .map(|(index, cap)| {
+            let (mut model, root) = frame.map_or_else(
                 || recover_source_cap_extrusion_model(cap),
                 |frame| recover_source_cap_extrusion_model(&frame.cap(cap)),
-            )
+            )?;
+            if let Some((target, profile)) = replacement
+                && index == target
+            {
+                let Some(CadNode::Extrude {
+                    profile: original, ..
+                }) = model.nodes.first_mut()
+                else {
+                    anyhow::bail!("cap model must start with an extrusion");
+                };
+                *original = profile.clone();
+            }
+            Ok((model, root))
         })
         .collect::<Result<Vec<_>>>()?;
     let parts = models
@@ -92,9 +106,27 @@ pub(super) fn proven_cap_assembly<K: crate::cad_kernel::CadKernel>(
     source: &SourceRecovery<'_, K>,
     ceiling: Option<u64>,
 ) -> Result<Option<(CadModel, NodeId)>> {
-    let (model, root) = compose_caps(caps, frame)?;
+    let (model, root) = compose_caps(caps, frame, None)?;
     if !source.proves(&model, root, ceiling).unwrap_or(false) {
         return Ok(None);
     }
     Ok(Some((model, root)))
+}
+
+/// Try plane-separated variants of the same cap cover. The replacement
+/// profile is constructive CAD, not a claim that its new closing line
+/// was an authored source edge. Complete source proof is mandatory.
+pub(super) fn proven_separated_cap_assembly<K: crate::cad_kernel::CadKernel>(
+    caps: &[RecoveredSourceCapExtrusion],
+    frame: Option<AssemblyFrame>,
+    source: &SourceRecovery<'_, K>,
+    ceiling: Option<u64>,
+) -> Result<Option<(CadModel, NodeId)>> {
+    for (index, profile) in super::cap_separation::proposals(caps) {
+        let (model, root) = compose_caps(caps, frame, Some((index, &profile)))?;
+        if source.proves(&model, root, ceiling).unwrap_or(false) {
+            return Ok(Some((model, root)));
+        }
+    }
+    Ok(None)
 }

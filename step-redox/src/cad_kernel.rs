@@ -212,11 +212,12 @@ pub mod monstertruck {
         BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
         NurbsCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Rad,
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
-        Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, primitive, profile,
+        Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, profile,
     };
     use std::collections::HashMap;
 
     mod circular_selection;
+    mod conic;
     mod cylinder_boundary_export;
     mod cylinder_surface_export;
     mod parallel_prisms;
@@ -1126,17 +1127,24 @@ pub mod monstertruck {
             && ((end_angle_rad - start_angle_rad).abs() - std::f64::consts::TAU).abs()
                 <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
         {
-            let start = Point3::new(
-                center_mm[0] + radius_mm * start_angle_rad.cos(),
-                center_mm[1] + radius_mm * start_angle_rad.sin(),
-                0.0,
-            );
-            return Ok(primitive::circle(
-                start,
-                Point3::new(center_mm[0], center_mm[1], 0.0),
-                Vector3::new(0.0, 0.0, 1.0),
-                2,
-            ));
+            // One closed analytic curve is represented by two distinct
+            // directed topological edges. Preserve the authored orientation,
+            // center and radius rather than infer a radius from a 3-D point.
+            let middle = f64::midpoint(*start_angle_rad, *end_angle_rad);
+            return profile_wire(&[
+                Curve2d::CircleArc {
+                    center_mm: *center_mm,
+                    radius_mm: *radius_mm,
+                    start_angle_rad: *start_angle_rad,
+                    end_angle_rad: middle,
+                },
+                Curve2d::CircleArc {
+                    center_mm: *center_mm,
+                    radius_mm: *radius_mm,
+                    start_angle_rad: middle,
+                    end_angle_rad: *end_angle_rad,
+                },
+            ]);
         }
         profile_wire(curves)
     }
@@ -1150,20 +1158,38 @@ pub mod monstertruck {
             .iter()
             .map(curve_start_point)
             .collect::<Result<Vec<_>>>()?;
+        let ends = curves
+            .iter()
+            .map(curve_end_point)
+            .collect::<Result<Vec<_>>>()?;
+        // A line can meet a neighboring authored curved endpoint without
+        // refitting that curve. At curve/curve joints, retain both carriers
+        // and the original trim intervals; a shared topological vertex is
+        // valid only within the existing, explicitly checked join budget.
         let vertices = starts
             .iter()
-            .map(|[x, y]| builder::vertex(Point3::new(*x, *y, 0.0)))
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(i, &start)| {
+                let previous = (i + curves.len() - 1) % curves.len();
+                let end = ends[previous];
+                let gap = point2_distance(start, end);
+                if !gap.is_finite() || gap > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_profile_join_mm {
+                    bail!("profile curve endpoints are not topologically continuous");
+                }
+                let [x, y] = if matches!(curves[i], Curve2d::Line { .. })
+                    && !matches!(curves[previous], Curve2d::Line { .. })
+                {
+                    end
+                } else {
+                    start
+                };
+                Ok(builder::vertex(Point3::new(x, y, 0.0)))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut edges = Vec::with_capacity(curves.len());
 
         for (index, curve) in curves.iter().enumerate() {
             let next = (index + 1) % curves.len();
-            let expected_end = curve_end_point(curve)?;
-            if point2_distance(expected_end, starts[next])
-                > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_profile_join_mm
-            {
-                bail!("profile curve endpoints are not topologically continuous");
-            }
             match curve {
                 Curve2d::Line { .. } => {
                     edges.push(builder::line(&vertices[index], &vertices[next]));
@@ -1175,7 +1201,9 @@ pub mod monstertruck {
                     end_angle_rad,
                 } => {
                     let sweep = end_angle_rad - start_angle_rad;
-                    if !sweep.is_finite()
+                    if !radius_mm.is_finite()
+                        || *radius_mm <= 0.0
+                        || !sweep.is_finite()
                         || sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
                     {
                         bail!("circle arc sweep must be finite and nonzero");
@@ -1186,31 +1214,35 @@ pub mod monstertruck {
                     {
                         bail!("full circles must be represented by one profile curve");
                     }
-                    let midpoint = f64::midpoint(*start_angle_rad, *end_angle_rad);
-                    let transit = Point3::new(
-                        center_mm[0] + radius_mm * midpoint.cos(),
-                        center_mm[1] + radius_mm * midpoint.sin(),
-                        0.0,
-                    );
-                    edges.push(builder::circle_arc(
+                    let (sin, cos) = start_angle_rad.sin_cos();
+                    let x = Vector3::new(radius_mm * cos, radius_mm * sin, 0.0);
+                    let y = Vector3::new(-radius_mm * sin, radius_mm * cos, 0.0);
+                    let origin = Point3::new(center_mm[0], center_mm[1], 0.0);
+                    let exact = conic::affine_arc(origin, x, y, sweep)
+                        .context("invalid authored circle arc")?;
+                    edges.push(Edge::new(
                         &vertices[index],
                         &vertices[next],
-                        transit,
+                        Curve::NurbsCurve(exact),
                     )?);
                 }
                 Curve2d::Bezier { control_points_mm } => {
                     if control_points_mm.len() < 2 {
                         bail!("Bezier profile curve needs at least two control points");
                     }
-                    let inter_points = control_points_mm[1..control_points_mm.len() - 1]
+                    let controls = control_points_mm
                         .iter()
                         .map(|[x, y]| Point3::new(*x, *y, 0.0))
-                        .collect::<Vec<_>>();
-                    edges.push(builder::bezier(
+                        .collect();
+                    let geometry = BsplineCurve::new(
+                        KnotVector::bezier_knot(control_points_mm.len() - 1),
+                        controls,
+                    )?;
+                    edges.push(Edge::new(
                         &vertices[index],
                         &vertices[next],
-                        inter_points,
-                    ));
+                        Curve::BsplineCurve(geometry),
+                    )?);
                 }
                 Curve2d::BSpline {
                     degree,
@@ -3748,6 +3780,64 @@ pub mod monstertruck {
                 },
                 "RATIONAL_B_SPLINE_CURVE",
             )
+        }
+
+        #[test]
+        fn authored_circle_carrier_survives_rounded_neighbor_endpoints() -> Result<()> {
+            use monstertruck_geometry::analytic_carrier::AnalyticSupport;
+            use monstertruck_geometry::analytic_curve_incidence::{
+                CircularArcFrame, CurveIncidence, certify_circular_arc_coverage,
+                certify_nurbs_curve_on_support,
+            };
+            let radius = 0.551_889_220_358_49;
+            let center = [1.616_007_509_500_927_4, -5.851_435_633_455_710_5];
+            for sweep in [
+                std::f64::consts::FRAC_PI_4,
+                -std::f64::consts::FRAC_PI_4,
+                4.7,
+                -4.7,
+                0.01,
+            ] {
+                let arc = Curve2d::CircleArc {
+                    center_mm: center,
+                    radius_mm: radius,
+                    start_angle_rad: 0.,
+                    end_angle_rad: sweep,
+                };
+                let start = curve_start_point(&arc)?;
+                let end = curve_end_point(&arc)?;
+                let rounded = [end[0] + 6e-10, end[1] - 3e-10];
+                let wire = profile_wire(&[
+                    arc,
+                    Curve2d::Line {
+                        start_mm: rounded,
+                        end_mm: start,
+                    },
+                ])?;
+                assert!(wire.is_geometric_consistent());
+                let Curve::NurbsCurve(curve) = wire[0].curve() else {
+                    bail!("expected exact rational arc");
+                };
+                let origin = Point3::new(center[0], center[1], 0.);
+                let support = AnalyticSupport::Cylinder {
+                    origin,
+                    axis: Vector3::unit_z(),
+                    radius,
+                };
+                assert_eq!(
+                    certify_nurbs_curve_on_support(&curve, support, 1e-11),
+                    CurveIncidence::Proven
+                );
+                let frame =
+                    CircularArcFrame::new(origin, Vector3::unit_z(), radius, curve.front(), 1e-11)
+                        .context("circle frame")?;
+                let coverage = certify_circular_arc_coverage(&curve, frame).context("whole arc")?;
+                assert!((coverage.sweep_rad - sweep.abs()).abs() < 1e-12);
+                assert!((curve.front() - Point3::new(start[0], start[1], 0.)).magnitude() < 1e-12);
+                assert!((curve.back() - Point3::new(end[0], end[1], 0.)).magnitude() < 1e-12);
+                assert!((wire[0].back().point() - curve.back()).magnitude() < 1e-12);
+            }
+            Ok(())
         }
 
         #[test]
