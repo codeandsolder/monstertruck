@@ -6,7 +6,7 @@
 
 use super::super::super::EdgeIncidence;
 use rustc_hash::FxHashSet as HashSet;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 /// A necessary join certified by component incidence and perfect matching,
 /// accepted only as part of a closed, nonzero-volume source component.
@@ -18,20 +18,62 @@ pub struct SourceForcedPair {
     pub polygons: [usize; 2],
 }
 
+/// Additional necessary incompatibilities between exact geometry classes.
+#[derive(Clone, Copy)]
+pub(super) struct GeometryExclusions<'a> {
+    pub(super) classes: &'a [usize],
+    pub(super) excluded: &'a [BTreeSet<usize>],
+}
+
+struct ComponentGeometry {
+    classes: Vec<HashSet<usize>>,
+    excluded: Vec<HashSet<usize>>,
+}
+
+impl ComponentGeometry {
+    fn new(input: GeometryExclusions<'_>) -> Self {
+        Self {
+            classes: input
+                .classes
+                .iter()
+                .map(|&class| std::iter::once(class).collect())
+                .collect(),
+            excluded: input
+                .classes
+                .iter()
+                .map(|&class| input.excluded[class].iter().copied().collect())
+                .collect(),
+        }
+    }
+
+    fn compatible(&self, a: usize, b: usize) -> bool {
+        self.classes[a].is_disjoint(&self.excluded[b])
+    }
+
+    fn join(&mut self, a: usize, b: usize) {
+        let classes = std::mem::take(&mut self.classes[b]);
+        self.classes[a].extend(classes);
+        let excluded = std::mem::take(&mut self.excluded[b]);
+        self.excluded[a].extend(excluded);
+    }
+}
+
 struct Components {
     parent: Vec<usize>,
     size: Vec<usize>,
     uses: Vec<HashSet<(usize, bool)>>,
     valid: Vec<bool>,
+    geometry: Option<ComponentGeometry>,
 }
 
 impl Components {
-    fn new(count: usize) -> Self {
+    fn new(count: usize, geometry: Option<GeometryExclusions<'_>>) -> Self {
         Self {
             parent: (0..count).collect(),
             size: vec![1; count],
             uses: vec![HashSet::default(); count],
             valid: vec![true; count],
+            geometry: geometry.map(ComponentGeometry::new),
         }
     }
 
@@ -44,7 +86,11 @@ impl Components {
     }
 
     fn compatible(&self, a: usize, b: usize) -> bool {
-        self.valid[a] && self.valid[b] && (a == b || self.uses[a].is_disjoint(&self.uses[b]))
+        self.valid[a]
+            && self.valid[b]
+            && (a == b
+                || (self.uses[a].is_disjoint(&self.uses[b])
+                    && self.geometry.as_ref().is_none_or(|g| g.compatible(a, b))))
     }
 
     fn join(&mut self, mut a: usize, mut b: usize) -> usize {
@@ -53,6 +99,11 @@ impl Components {
         }
         if self.size[a] < self.size[b] {
             std::mem::swap(&mut a, &mut b);
+        }
+        self.valid[a] &= self.valid[b];
+        if let Some(geometry) = &mut self.geometry {
+            self.valid[a] &= geometry.compatible(a, b);
+            geometry.join(a, b);
         }
         self.parent[b] = a;
         self.size[a] += self.size[b];
@@ -176,7 +227,11 @@ fn forced_join(
     None
 }
 
-pub(super) fn necessary_joins(count: usize, incidence: &EdgeIncidence) -> Vec<SourceForcedPair> {
+pub(super) fn necessary_joins(
+    count: usize,
+    incidence: &EdgeIncidence,
+    geometry: Option<GeometryExclusions<'_>>,
+) -> Vec<SourceForcedPair> {
     let mut ambiguous = incidence
         .iter()
         .filter(|(_, uses)| !matches!(uses.as_slice(), [a, b] if a.1 != b.1))
@@ -185,7 +240,7 @@ pub(super) fn necessary_joins(count: usize, incidence: &EdgeIncidence) -> Vec<So
         return Vec::new();
     }
     ambiguous.sort_unstable_by_key(|&(&edge, _)| edge);
-    let mut components = Components::new(count);
+    let mut components = Components::new(count, geometry);
     for uses in incidence.values() {
         if let [a, b] = uses.as_slice()
             && a.1 != b.1
@@ -299,7 +354,7 @@ mod tests {
     fn symmetric_incidence_remains_ambiguous() {
         let mut incidence = EdgeIncidence::default();
         incidence.insert([0, 1], vec![(0, true), (1, true), (2, false), (3, false)]);
-        assert!(necessary_joins(4, &incidence).is_empty());
+        assert!(necessary_joins(4, &incidence, None).is_empty());
     }
 
     #[test]
@@ -314,7 +369,7 @@ mod tests {
         // Components 0/1 and 2/3 share a forward use at [6,7];
         // component 4 cannot join 5 because both use [6,7] in reverse.
         // Thus the groups {0,1,5} and {2,3,4} are forced.
-        let result = necessary_joins(6, &incidence);
+        let result = necessary_joins(6, &incidence, None);
         assert_eq!(result.len(), 2);
         assert!(result.iter().any(|p| p.polygons == [0, 5]));
         assert!(
