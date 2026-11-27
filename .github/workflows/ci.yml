@@ -91,10 +91,10 @@ jobs:
         with:
           rust-toolchain: "nightly-2026-11-19"
           rustflags: "-D warnings"
-      - uses: taiki-e/install-action@2b545d4fd42fdd72ed2a44eab8fedd1850e8f731 # nextest
+      - uses: taiki-e/install-action@9ac8eb8524181110c3ce1b7e409e8fee720b6427 # nextest
       # Pinned: cargo-rdme's output is not stable across major versions, so an
       # unpinned `@latest` would fail `readme-check` the day it majors.
-      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2
         with:
           tool: cargo-rdme@2.1.0
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
