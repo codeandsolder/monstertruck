@@ -337,24 +337,28 @@ impl RecoveredAnalyticMesh {
     /// absence of self-intersection are separate requirements for a solid.
     #[must_use = "the returned shell exists only when the native reconstruction is complete"]
     pub fn complete_shell(&self) -> Option<Shell> {
-        if !self.trims.ambiguous_edges.is_empty() || self.native.trims.iter().any(Result::is_err) {
+        native_complete_shell(&self.trims, &self.native)
+    }
+}
+
+fn native_complete_shell(trims: &SharedTrimGraph, native: &NativeTrimGraph) -> Option<Shell> {
+    if !trims.ambiguous_edges.is_empty() || native.trims.iter().any(Result::is_err) {
+        return None;
+    }
+    let mut shell = Shell::new();
+    for region in &native.regions {
+        if region.requires_chart_cut {
             return None;
         }
-        let mut shell = Shell::new();
-        for region in &self.native.regions {
-            if region.requires_chart_cut {
-                return None;
-            }
-            shell.extend(region.faces.as_ref().ok()?.iter().cloned());
-        }
-        (!shell.is_empty()
-            && matches!(
-                shell.shell_condition(),
-                ShellCondition::Closed | ShellCondition::Oriented
-            )
-            && shell.is_geometric_consistent())
-        .then_some(shell)
+        shell.extend(region.faces.as_ref().ok()?.iter().cloned());
     }
+    (!shell.is_empty()
+        && matches!(
+            shell.shell_condition(),
+            ShellCondition::Closed | ShellCondition::Oriented
+        )
+        && shell.is_geometric_consistent())
+    .then_some(shell)
 }
 
 /// Discover a region partition from already measured track and growth
@@ -492,6 +496,8 @@ pub fn construct_analytic_recovery(
         mut stats,
         core_alternative,
     } = discovered;
+    let mut ownership = None;
+    let mut ownership_rejection = None;
     let mut assembly = if let Some(core) = core_alternative {
         let expanded = PartitionAlternative {
             partition,
@@ -508,13 +514,25 @@ pub fn construct_analytic_recovery(
                 matches!(proposal.carrier, SurfaceCarrier::CircularRevolution { .. })
             })
             .count();
+        ownership = selection.ownership;
+        ownership_rejection = selection.ownership_rejection;
         selection.assembly
     } else {
         assemble_native(&evidence, partition, options)?
     };
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
-    let (joint_fits, joint_fit_rejections) =
-        joint_recovery::repair(&evidence, &mut assembly, options)?;
+    let (mut joint_fits, mut joint_fit_rejections) = joint_recovery::repair(
+        &evidence,
+        &mut assembly,
+        options,
+        ownership.as_ref().map(|fit| &fit.frozen),
+    )?;
+    if let Some(fit) = ownership {
+        joint_fits.insert(0, fit.report);
+    }
+    if let Some(rejection) = ownership_rejection {
+        joint_fit_rejections.insert(0, rejection);
+    }
     let trim = options.trim_options(&evidence);
     RegionBoundaryIndex::new(&evidence)?.repair_planar_crossings(
         &assembly.reconciled.partition,
