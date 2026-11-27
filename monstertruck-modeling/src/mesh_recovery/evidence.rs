@@ -53,13 +53,17 @@ pub use region_boundary::{
     SurfaceRegionPartition, SurfaceRegionProposal,
 };
 pub(in crate::mesh_recovery) use region_boundary::{
-    JointFitCandidate, JointFitContext, JointFitOptions, RimLinearOptions, fit_neighborhood,
+    FrozenSourceFit, JointFitCandidate, JointFitContext, JointFitOptions, OwnershipGrowthOptions,
+    RimLinearOptions, fit_neighborhood, fit_ownership_junctions, support_claim,
 };
 pub use region_boundary::{JointFitMethod, JointFitRejection};
 pub use source_collapse::CollapsedSourceFacet;
 pub use source_sectors::SourceSectorPair;
 pub use source_sheet::CanceledSourceSheet;
-pub use source_topology::{SeparatedSourceVertex, SourceForcedPair};
+pub use source_topology::{
+    SeparatedSourceVertex, SourceForcedPair, SourceMultiplicityMethod, SourceMultiplicityPair,
+    SourceMultiplicityResolution, SourceTransverseCrossing,
+};
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,
     measure_spatial_support_set,
@@ -286,6 +290,8 @@ pub struct SourceProvenance {
     pub sector_pairs: Vec<SourceSectorPair>,
     /// Necessary component joins certified by incidence and matching.
     pub forced_pairs: Vec<SourceForcedPair>,
+    /// Geometrically unique source partitions modulo interchangeable fragments.
+    pub multiplicity_resolutions: Vec<SourceMultiplicityResolution>,
     /// Opt-in canceled opposite source sheets, using original polygon IDs.
     pub canceled_sheets: Vec<CanceledSourceSheet>,
 }
@@ -1000,6 +1006,7 @@ pub fn analyze_mesh_evidence(
         separated_vertices: Vec::new(),
         sector_pairs: Vec::new(),
         forced_pairs: Vec::new(),
+        multiplicity_resolutions: Vec::new(),
         canceled_sheets: Vec::new(),
     };
     let mut polygons = Vec::with_capacity(source.len());

@@ -2,8 +2,10 @@
 //! circles, including irregular end trims and zero-radius cone tips.
 
 use super::super::super::sample_fit::normal_basis;
-use super::super::SourceCircleObservation;
-use super::{MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionProposal};
+use super::super::{SourceCircleObservation, StationLinearCandidate};
+use super::{
+    MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
+};
 use crate::{InnerSpace, Point3, Vector3};
 use std::collections::{BTreeSet, VecDeque};
 
@@ -621,6 +623,64 @@ fn independent_profile_rank(
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
+    // A placed station profile has two independently repeated sections.
+    // Extend it through irregularly triangulated lateral strips without
+    // refitting its axis or radius. As with fixed circular growth, use
+    // the declared relative source-fit envelope on the independently
+    // observed core scale, not the station-identification resolution.
+    // The original continuous chord budget remains a separate bound.
+    pub(in crate::mesh_recovery) fn expand_station_linear_regions(
+        &self,
+        candidates: &[&StationLinearCandidate],
+        options: RimLinearOptions,
+    ) -> Vec<SurfaceRegionProposal<'a>> {
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let Some(growth) = LocalGrowth::new(self, options) else {
+            return Vec::new();
+        };
+        candidates
+            .iter()
+            .filter_map(|candidate| {
+                let profile = Profile::from_carrier(candidate.carrier)?;
+                let seed = *candidate.supports.first()?;
+                let (low, high, radius) = candidate
+                    .supports
+                    .iter()
+                    .flat_map(|&id| &growth.support_vertices[id])
+                    .map(|&id| profile.sample(self.evidence.positions[id]))
+                    .fold(
+                        (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY),
+                        |(low, high, radius), (z, radial)| {
+                            (low.min(z), high.max(z), radius.min(radial.magnitude()))
+                        },
+                    );
+                let tolerance = options.relative_tolerance * radius.min(high - low);
+                if !tolerance.is_finite() || tolerance <= 0.0 {
+                    return None;
+                }
+                let supports = growth.grow(profile, seed, tolerance);
+                if supports.len() <= candidate.supports.len()
+                    || !candidate
+                        .supports
+                        .iter()
+                        .all(|id| supports.binary_search(id).is_ok())
+                {
+                    return None;
+                }
+                self.measure_surface_region(
+                    &supports,
+                    candidate.carrier,
+                    SurfaceRegionBudget {
+                        vertex: tolerance,
+                        chord: candidate.chord_tolerance,
+                    },
+                )
+            })
+            .collect()
+    }
+
     pub(in crate::mesh_recovery) fn discover_rim_linear_regions(
         &self,
         circles: &[SourceCircleObservation],
@@ -733,6 +793,138 @@ mod tests {
         assert!((radius_at_origin - 1.0).abs() < 1.0e-9);
         assert!(axis.cross(Vector3::unit_z()).magnitude() < 1.0e-9);
         assert!(slope.abs() < 1.0e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn station_linear_core_extends_to_irregular_strip_without_refitting()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = cylinder_mesh(12)?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let carrier = SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let mut supports = vec![
+            evidence.source_planar_support[0],
+            evidence.source_planar_support[2],
+        ];
+        supports.sort_unstable();
+        supports.dedup();
+        let chord_tolerance = 0.25;
+        let candidate = StationLinearCandidate {
+            source_chords: carrier
+                .measure_source_chords(&evidence, &supports, chord_tolerance)
+                .ok_or("missing chord evidence")?,
+            source_polygons: index.boundary(&supports)?.source_polygon_count,
+            supports,
+            carrier,
+            repeated_stations: 2,
+            vertex_tolerance: 1.0e-8,
+            max_vertex_residual: 0.0,
+            chord_tolerance,
+        };
+        let expanded = index.expand_station_linear_regions(&[&candidate], options());
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0].source_polygons(), 24);
+        let SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin,
+            slope,
+        } = expanded[0].carrier()
+        else {
+            return Err("expected affine carrier".into());
+        };
+        assert_eq!(origin, Point3::new(0.0, 0.0, 0.0));
+        assert_eq!(axis, Vector3::unit_z());
+        assert_eq!(radius_at_origin.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(slope.to_bits(), 0.0_f64.to_bits());
+        Ok(())
+    }
+
+    #[test]
+    fn station_growth_distinguishes_source_fit_from_station_resolution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{MeridianGraphOptions, MeridianStationGraph};
+        let n = 12;
+        let positions = (0..3)
+            .flat_map(|row| {
+                (0..n).map(move |i| {
+                    let a = std::f64::consts::TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                    let (sin, cos) = a.sin_cos();
+                    let (r, z) = if row == 2 {
+                        (1.00002, 2.0 + 0.3 * cos + 0.17 * sin)
+                    } else {
+                        (1.0, crate::usize_to_f64(row))
+                    };
+                    Point3::new(r * cos, r * sin, z)
+                })
+            })
+            .collect();
+        let mut faces = (0..2)
+            .flat_map(|row| {
+                (0..n).flat_map(move |i| {
+                    let a = row * n + i;
+                    let b = row * n + (i + 1) % n;
+                    [vec![a, b, b + n], vec![a, b + n, a + n]]
+                })
+            })
+            .collect::<Vec<_>>();
+        faces.push((0..n).rev().collect());
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(faces),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let graph = MeridianStationGraph::new(
+            &evidence,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            MeridianGraphOptions {
+                station_resolution: 1.0e-8,
+                vertex_tolerance: 1.0e-8,
+                relative_tolerance: 1.0e-4,
+                max_linear_relative_chord_error: 0.25,
+                max_circular_relative_chord_error: 0.25,
+                normal_tolerance_radians: 1.0e-5,
+            },
+        )
+        .ok_or("missing station graph")?;
+        let candidates = graph.discover_linear(&index);
+        let core = candidates
+            .iter()
+            .find(|c| c.source_polygons == 2 * n)
+            .ok_or("missing independently repeated core")?;
+        let expanded = index.expand_station_linear_regions(&[core], options());
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0].source_polygons(), 4 * n);
+        // The cap has exact on-cylinder vertices, but no lateral extent.
+        assert!(
+            !expanded[0]
+                .supports()
+                .contains(&evidence.source_planar_support[4 * n])
+        );
+        // Tightening the declared source-fit envelope rejects the same
+        // noisy strip without touching the independently measured core.
+        assert!(
+            index
+                .expand_station_linear_regions(
+                    &[core],
+                    RimLinearOptions {
+                        relative_tolerance: 1.0e-6,
+                        ..options()
+                    }
+                )
+                .is_empty()
+        );
         Ok(())
     }
 

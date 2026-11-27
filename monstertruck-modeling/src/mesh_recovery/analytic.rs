@@ -257,6 +257,8 @@ pub struct AnalyticDiscoveryStats {
     pub curved_proposals: usize,
     /// Fixed independently measured circular cores expanded over irregular supports.
     pub expanded_circular_proposals: usize,
+    /// Fixed station-linear cores expanded across irregular lateral facets.
+    pub expanded_linear_proposals: usize,
     /// Admissible linear region proposals (direct and grown).
     pub linear_proposals: usize,
     /// Direct station-graph linear proposals.
@@ -299,6 +301,7 @@ struct ProposalSelection {
     selected: Vec<SelectedSurfaceProposal>,
     curved_proposals: usize,
     expanded_circular_proposals: usize,
+    expanded_linear_proposals: usize,
     direct_linear_proposals: usize,
     rim_linear_proposals: usize,
     rim_linear_candidates: Vec<SelectedSurfaceProposal>,
@@ -326,6 +329,7 @@ pub struct RecoveredAnalyticMesh {
     pub joint_fits: Vec<JointFitReport>,
     /// Rejected local reconstruction attempts with actionable diagnostics.
     pub joint_fit_rejections: Vec<JointFitAttempt>,
+    pub(in crate::mesh_recovery) ownership_alternative: Option<NativeAssembly>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -334,24 +338,28 @@ impl RecoveredAnalyticMesh {
     /// absence of self-intersection are separate requirements for a solid.
     #[must_use = "the returned shell exists only when the native reconstruction is complete"]
     pub fn complete_shell(&self) -> Option<Shell> {
-        if !self.trims.ambiguous_edges.is_empty() || self.native.trims.iter().any(Result::is_err) {
+        native_complete_shell(&self.trims, &self.native)
+    }
+}
+
+fn native_complete_shell(trims: &SharedTrimGraph, native: &NativeTrimGraph) -> Option<Shell> {
+    if !trims.ambiguous_edges.is_empty() || native.trims.iter().any(Result::is_err) {
+        return None;
+    }
+    let mut shell = Shell::new();
+    for region in &native.regions {
+        if region.requires_chart_cut {
             return None;
         }
-        let mut shell = Shell::new();
-        for region in &self.native.regions {
-            if region.requires_chart_cut {
-                return None;
-            }
-            shell.extend(region.faces.as_ref().ok()?.iter().cloned());
-        }
-        (!shell.is_empty()
-            && matches!(
-                shell.shell_condition(),
-                ShellCondition::Closed | ShellCondition::Oriented
-            )
-            && shell.is_geometric_consistent())
-        .then_some(shell)
+        shell.extend(region.faces.as_ref().ok()?.iter().cloned());
     }
+    (!shell.is_empty()
+        && matches!(
+            shell.shell_condition(),
+            ShellCondition::Closed | ShellCondition::Oriented
+        )
+        && shell.is_geometric_consistent())
+    .then_some(shell)
 }
 
 /// Discover a region partition from already measured track and growth
@@ -400,6 +408,7 @@ pub fn discover_analytic_regions(
         linear_candidates: candidates.linear,
         curved_proposals: selection.curved_proposals,
         expanded_circular_proposals: selection.expanded_circular_proposals,
+        expanded_linear_proposals: selection.expanded_linear_proposals,
         linear_proposals: selection.linear_proposals,
         direct_linear_proposals: selection.direct_linear_proposals,
         rim_linear_proposals: selection.rim_linear_proposals,
@@ -488,6 +497,9 @@ pub fn construct_analytic_recovery(
         mut stats,
         core_alternative,
     } = discovered;
+    let mut ownership = None;
+    let mut ownership_rejection = None;
+    let mut ownership_alternative = None;
     let mut assembly = if let Some(core) = core_alternative {
         let expanded = PartitionAlternative {
             partition,
@@ -504,13 +516,26 @@ pub fn construct_analytic_recovery(
                 matches!(proposal.carrier, SurfaceCarrier::CircularRevolution { .. })
             })
             .count();
+        ownership = selection.ownership;
+        ownership_rejection = selection.ownership_rejection;
+        ownership_alternative = selection.pending_ownership;
         selection.assembly
     } else {
         assemble_native(&evidence, partition, options)?
     };
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
-    let (joint_fits, joint_fit_rejections) =
-        joint_recovery::repair(&evidence, &mut assembly, options)?;
+    let (mut joint_fits, mut joint_fit_rejections) = joint_recovery::repair(
+        &evidence,
+        &mut assembly,
+        options,
+        ownership.as_ref().map(|fit| &fit.frozen),
+    )?;
+    if let Some(fit) = ownership {
+        joint_fits.insert(0, fit.report);
+    }
+    if let Some(rejection) = ownership_rejection {
+        joint_fit_rejections.insert(0, rejection);
+    }
     let trim = options.trim_options(&evidence);
     RegionBoundaryIndex::new(&evidence)?.repair_planar_crossings(
         &assembly.reconciled.partition,
@@ -532,13 +557,15 @@ pub fn construct_analytic_recovery(
         coplanar_reassignments,
         joint_fits,
         joint_fit_rejections,
+        ownership_alternative,
     })
 }
 
-struct NativeAssembly {
-    reconciled: ReconciledPartition,
-    trims: SharedTrimGraph,
-    native: NativeTrimGraph,
+#[derive(Debug)]
+pub(in crate::mesh_recovery) struct NativeAssembly {
+    pub reconciled: ReconciledPartition,
+    pub trims: SharedTrimGraph,
+    pub native: NativeTrimGraph,
 }
 
 fn assemble_native(
@@ -925,19 +952,8 @@ fn choose_partition(
         circular_proposals(boundary, &candidates.circular, options, absolute_tolerance);
     let mut seen = BTreeSet::new();
     let curved_count = proposals.len();
-    for candidate in &candidates.linear {
-        if let Some(proposal) = boundary.measure_surface_region(
-            &candidate.supports,
-            candidate.carrier,
-            SurfaceRegionBudget {
-                vertex: candidate.vertex_tolerance,
-                chord: candidate.chord_tolerance,
-            },
-        ) {
-            seen.insert(candidate.supports.clone());
-            proposals.push(proposal);
-        }
-    }
+    let measured_linear =
+        append_station_linear_proposals(boundary, &candidates.linear, &mut seen, &mut proposals);
     let direct_linear_count = proposals.len() - curved_count;
     append_growth_proposals(
         evidence,
@@ -949,8 +965,24 @@ fn choose_partition(
         &mut proposals,
     );
     let core_count = proposals.len();
-    append_expanded_circular_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
+    append_expanded_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
     let expanded_circular_count = proposals.len() - core_count;
+    let expanded_linear = boundary.expand_station_linear_regions(
+        &measured_linear,
+        RimLinearOptions {
+            absolute_tolerance,
+            relative_tolerance: options.relative_surface_tolerance,
+            angular_tolerance: options.profile_normal_tolerance_radians,
+            chord_fraction: options.max_linear_relative_chord_error,
+        },
+    );
+    append_expanded_proposals(
+        evidence,
+        expanded_linear,
+        absolute_tolerance,
+        &mut proposals,
+    );
+    let expanded_linear_count = proposals.len() - core_count - expanded_circular_count;
     let rim_linear_candidates = append_rim_proposals(
         boundary,
         circles,
@@ -958,7 +990,8 @@ fn choose_partition(
         absolute_tolerance,
         &mut proposals,
     );
-    let rim_linear_count = proposals.len() - core_count - expanded_circular_count;
+    let rim_linear_count =
+        proposals.len() - core_count - expanded_circular_count - expanded_linear_count;
     let partition = boundary.select_surface_partition(
         &proposals,
         planar_baseline,
@@ -999,6 +1032,7 @@ fn choose_partition(
         selected: chosen,
         curved_proposals: curved_count + expanded_circular_count,
         expanded_circular_proposals: expanded_circular_count,
+        expanded_linear_proposals: expanded_linear_count,
         direct_linear_proposals: direct_linear_count,
         rim_linear_proposals: rim_linear_count,
         rim_linear_candidates,
@@ -1006,6 +1040,30 @@ fn choose_partition(
         linear_proposals: proposals.len() - curved_count - expanded_circular_count,
         selected_curved,
     })
+}
+
+fn append_station_linear_proposals<'a, 'b>(
+    boundary: &RegionBoundaryIndex<'a>,
+    candidates: &'b [StationLinearCandidate],
+    seen: &mut BTreeSet<Vec<usize>>,
+    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
+) -> Vec<&'b StationLinearCandidate> {
+    let mut measured_linear = Vec::new();
+    for candidate in candidates {
+        if let Some(proposal) = boundary.measure_surface_region(
+            &candidate.supports,
+            candidate.carrier,
+            SurfaceRegionBudget {
+                vertex: candidate.vertex_tolerance,
+                chord: candidate.chord_tolerance,
+            },
+        ) {
+            seen.insert(candidate.supports.clone());
+            measured_linear.push(candidate);
+            proposals.push(proposal);
+        }
+    }
+    measured_linear
 }
 
 fn circular_proposals<'a>(
@@ -1042,7 +1100,7 @@ fn circular_proposals<'a>(
     (core, expanded)
 }
 
-fn append_expanded_circular_proposals<'a>(
+fn append_expanded_proposals<'a>(
     evidence: &MeshEvidence,
     expanded: Vec<SurfaceRegionProposal<'a>>,
     tolerance: f64,

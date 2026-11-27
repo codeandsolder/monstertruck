@@ -8,6 +8,10 @@ use super::{
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
 mod fillet;
+mod ownership;
+pub(in crate::mesh_recovery) use ownership::{
+    FrozenSourceFit, OwnershipGrowthOptions, fit_ownership_junctions, support_claim,
+};
 
 /// Strategy used to resolve a local analytic reconstruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +20,8 @@ pub enum JointFitMethod {
     FixedCarriers,
     /// Eliminate dependent triangular planes and reconstruct them through shared vertices.
     DependentPlanes,
+    /// Reconcile junctions on a competing expanded ownership partition.
+    OwnershipJunctions,
     /// Anchor a toroidal fillet to adjacent independent analytic carriers.
     AnchoredFillet,
     /// Optimize independent analytic carrier parameters and junctions jointly.
@@ -70,6 +76,15 @@ pub enum JointFitRejection {
         /// Native construction error, if present (otherwise pending chart cut).
         error: Option<super::NativeTrimError>,
     },
+    /// Speculative ownership boundary construction failed.
+    #[error("candidate boundary: {0}")]
+    CandidateBoundary(super::RegionBoundaryError),
+    /// Speculative native construction failed.
+    #[error("candidate native construction: {0}")]
+    CandidateNative(super::NativeTrimError),
+    /// All local faces exist but do not form a geometrically consistent shell.
+    #[error("inconsistent native shell")]
+    InconsistentShell,
     /// The reconstructed source incidence changed.
     #[error("changed ambiguous incidence")]
     AmbiguousIncidence,
@@ -116,6 +131,19 @@ impl JointFitContext {
         partition: &SurfaceRegionPartition,
         options: JointFitOptions,
     ) -> Option<Self> {
+        Self::with_chord_witness(evidence, partition, options, |carrier, p, q| {
+            carrier
+                .measure_segment(p, q)
+                .map_or(0.0, |r| r.witnessed_max)
+        })
+    }
+
+    fn with_chord_witness(
+        evidence: &MeshEvidence,
+        partition: &SurfaceRegionPartition,
+        options: JointFitOptions,
+        witness: impl Fn(SurfaceCarrier, Point3, Point3) -> f64,
+    ) -> Option<Self> {
         let mut incidence = vec![Vec::new(); evidence.positions.len()];
         let mut vertex_supports = vec![Vec::new(); evidence.positions.len()];
         let mut region_vertices = vec![Vec::new(); partition.carriers.len()];
@@ -131,11 +159,9 @@ impl JointFitContext {
                 }
                 for (&a, &b) in ids.iter().zip(ids.iter().cycle().skip(1)) {
                     let (p, q) = (evidence.positions[a], evidence.positions[b]);
-                    if let Some(residual) = carrier.measure_segment(p, q) {
-                        // Use the actual witness, not a loose analytic upper bound.
-                        for id in [a, b] {
-                            allowances[id] = allowances[id].max(residual.witnessed_max);
-                        }
+                    let residual = witness(carrier, p, q);
+                    for id in [a, b] {
+                        allowances[id] = allowances[id].max(residual);
                     }
                 }
             }
@@ -996,6 +1022,9 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     method: JointFitMethod,
     native: Option<&super::NativeTrimGraph>,
 ) -> Result<JointFitCandidate, JointFitRejection> {
+    if method == JointFitMethod::OwnershipJunctions {
+        return Err(JointFitRejection::Neighborhood);
+    }
     if method == JointFitMethod::DependentPlanes {
         return fit_dependent_planes(evidence, partition, prior, regions, context, native);
     }

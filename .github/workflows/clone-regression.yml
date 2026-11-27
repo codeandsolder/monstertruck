@@ -15,12 +15,12 @@ permissions:
 
 jobs:
   duplicates:
-    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/clone-regression.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
   merge-gate:
     name: Duplicate-code merge gate
     if: ${{ always() }}
     needs: [duplicates]
-    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
     with:
       needs-json: ${{ toJSON(needs) }}
       expected-results: '[["duplicates","success"]]'

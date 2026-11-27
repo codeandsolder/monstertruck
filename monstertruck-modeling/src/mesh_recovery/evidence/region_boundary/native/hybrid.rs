@@ -15,7 +15,8 @@ use crate::{
     Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchError, BoundaryPatchOptions, MeshEvidence, PrescribedSourceEdge,
-        RecoveredAnalyticMesh, RegionBoundaryError, RegionPatchOptions, approximate_boundary_patch,
+        ReconciledPartition, RecoveredAnalyticMesh, RegionBoundaryError, RegionPatchOptions,
+        approximate_boundary_patch,
     },
 };
 use monstertruck_topology::shell::ShellCondition;
@@ -179,15 +180,25 @@ pub enum HybridRecoveryError {
     },
     /// Bounded support-cover search exhausted its proposals.
     #[error(
-        "hybrid support search exhausted after {states} states and {trials} transactions: {last}"
+        "hybrid support search exhausted after {states} visited / {queued_states} queued states and {trials} transactions: {last}"
     )]
     SupportSearch {
         /// Number of visited candidate states.
         states: usize,
+        /// Number of distinct states admitted to the frontier, including unvisited ones.
+        queued_states: usize,
         /// Number of attempted full native transactions.
         trials: usize,
         /// Most recent geometric rejection or missing admissible cover.
         last: Box<Self>,
+    },
+    /// Both source-bounded ownership alternatives exhausted the shared search budget.
+    #[error("alternate ownership: {alternative}; strict ownership: {primary}")]
+    OwnershipAlternatives {
+        /// Competing expanded partition rejection.
+        alternative: Box<Self>,
+        /// Strict selected partition rejection.
+        primary: Box<Self>,
     },
     /// A previously valid retained analytic trim would fail.
     #[error("hybrid recovery would invalidate retained trim {trim}: {error}")]
@@ -237,6 +248,38 @@ struct HybridInput<'a> {
     strict: NativeTrimOptions,
 }
 
+// A borrowed recovery state. Explicit support IDs always refer to the
+// same active source evidence, even when a competing analytic partition
+// supplies the starting geometry.
+#[derive(Clone, Copy)]
+struct HybridSource<'a> {
+    evidence: &'a MeshEvidence,
+    reconciled: &'a ReconciledPartition,
+    trims: &'a SharedTrimGraph,
+    native: &'a NativeTrimGraph,
+}
+
+impl<'a> HybridSource<'a> {
+    const fn primary(recovery: &'a RecoveredAnalyticMesh) -> Self {
+        Self {
+            evidence: &recovery.evidence,
+            reconciled: &recovery.reconciled,
+            trims: &recovery.trims,
+            native: &recovery.native,
+        }
+    }
+
+    fn alternative(recovery: &'a RecoveredAnalyticMesh) -> Option<Self> {
+        let pending = recovery.ownership_alternative.as_ref()?;
+        Some(Self {
+            evidence: &recovery.evidence,
+            reconciled: &pending.reconciled,
+            trims: &pending.trims,
+            native: &pending.native,
+        })
+    }
+}
+
 impl RecoveredAnalyticMesh {
     /// Rebuild selected regions as bounded source-backed approximations
     /// in one shared native graph. No retained carrier is replaced.
@@ -257,11 +300,22 @@ impl RecoveredAnalyticMesh {
         patch: RegionPatchOptions,
         strict: NativeTrimOptions,
     ) -> Result<HybridRecovery, HybridRecoveryError> {
+        HybridSource::primary(self).construct_hybrid(selected, patch, strict)
+    }
+}
+
+impl HybridSource<'_> {
+    fn construct_hybrid(
+        &self,
+        selected: &[usize],
+        patch: RegionPatchOptions,
+        strict: NativeTrimOptions,
+    ) -> Result<HybridRecovery, HybridRecoveryError> {
         HybridInput {
-            evidence: &self.evidence,
+            evidence: self.evidence,
             partition: &self.reconciled.partition,
-            graph: &self.trims,
-            baseline: &self.native,
+            graph: self.trims,
+            baseline: self.native,
             positions: &self.reconciled.positions,
             selected: selected.iter().copied().collect(),
             patch,

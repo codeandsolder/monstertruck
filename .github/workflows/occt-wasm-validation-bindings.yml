@@ -24,13 +24,13 @@ jobs:
           persist-credentials: false
       - name: Resolve repository compiler
         id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@9c14ef2d72423958c56944febc620ec50f01d65a # main
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
           toolchain: ${{ steps.compiler.outputs.channel }}
           components: clippy
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
         with:
           rust-toolchain: ${{ steps.compiler.outputs.channel }}
           repository-path: step-redox/tools/occt-wasm-validator
@@ -58,12 +58,12 @@ jobs:
           if-no-files-found: error
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
   merge-gate:
     name: OCCT validator merge gate
     if: ${{ always() }}
     needs: [validate]
-    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
     with:
       needs-json: ${{ toJSON(needs) }}
       expected-results: '[["validate","success"]]'

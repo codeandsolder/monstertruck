@@ -18,7 +18,8 @@ pub use conic::ContactConicEvidence;
 mod curve_evidence;
 mod joint_fit;
 pub(in crate::mesh_recovery) use joint_fit::{
-    JointFitCandidate, JointFitContext, JointFitOptions, fit_neighborhood,
+    FrozenSourceFit, JointFitCandidate, JointFitContext, JointFitOptions, OwnershipGrowthOptions,
+    fit_neighborhood, fit_ownership_junctions, support_claim,
 };
 pub use joint_fit::{JointFitMethod, JointFitRejection};
 mod linear_section;

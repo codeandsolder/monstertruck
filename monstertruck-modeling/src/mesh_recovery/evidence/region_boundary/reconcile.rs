@@ -25,7 +25,7 @@ pub struct ReconciliationOptions {
 }
 
 /// One accepted independently anchored plane and its original ownership.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ReconciledPlane {
     /// Active region ID after consolidation.
     pub region: usize,

@@ -12,7 +12,12 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
 mod forced;
+mod multiplicity;
 pub use forced::SourceForcedPair;
+pub use multiplicity::{
+    SourceMultiplicityMethod, SourceMultiplicityPair, SourceMultiplicityResolution,
+    SourceTransverseCrossing,
+};
 
 /// A distinct topological copy of an exactly coincident source position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,14 +141,12 @@ impl ComponentVolume {
 // including those shared geometrically with other components, has exactly
 // two opposite uses within that component. No pairing is inferred between
 // components merely because their geometry coincides.
-fn closed_components(
-    positions: &[Point3],
-    polygons: &[InputPolygon],
+fn connected_membership(
+    polygon_count: usize,
     incidence: &EdgeIncidence,
     pairs: impl IntoIterator<Item = [usize; 2]>,
-    positive: Option<bool>,
-) -> Vec<Option<usize>> {
-    let mut neighbors = vec![Vec::new(); polygons.len()];
+) -> (Vec<usize>, usize) {
+    let mut neighbors = vec![Vec::new(); polygon_count];
     for uses in incidence.values() {
         if let [a, b] = uses.as_slice()
             && a.1 != b.1
@@ -156,14 +159,14 @@ fn closed_components(
         neighbors[a].push(b);
         neighbors[b].push(a);
     }
-    let mut membership = vec![usize::MAX; polygons.len()];
-    let mut closed = Vec::new();
-    for seed in 0..polygons.len() {
+    let mut membership = vec![usize::MAX; polygon_count];
+    let mut count = 0;
+    for seed in 0..polygon_count {
         if membership[seed] != usize::MAX {
             continue;
         }
-        let id = closed.len();
-        closed.push(true);
+        let id = count;
+        count += 1;
         membership[seed] = id;
         let mut queue = VecDeque::from([seed]);
         while let Some(current) = queue.pop_front() {
@@ -175,6 +178,18 @@ fn closed_components(
             }
         }
     }
+    (membership, count)
+}
+
+fn closed_components(
+    positions: &[Point3],
+    polygons: &[InputPolygon],
+    incidence: &EdgeIncidence,
+    pairs: impl IntoIterator<Item = [usize; 2]>,
+    positive: Option<bool>,
+) -> Vec<Option<usize>> {
+    let (membership, count) = connected_membership(polygons.len(), incidence, pairs);
+    let mut closed = vec![true; count];
     let mut uses_by_component = Vec::new();
     for uses in incidence.values() {
         if matches!(uses.as_slice(), [a, b] if a.1 != b.1) {
@@ -246,7 +261,7 @@ pub(super) fn separate_closed_components(
     }
     if closed.contains(&false) {
         let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
-        let pairs = forced::necessary_joins(polygons.len(), &incidence);
+        let pairs = forced::necessary_joins(polygons.len(), &incidence, None);
         if !pairs.is_empty() {
             let mut selected = closed_components(
                 positions,
@@ -276,6 +291,20 @@ pub(super) fn separate_closed_components(
             for (flag, component) in closed.iter_mut().zip(selected) {
                 *flag |= component.is_some();
             }
+        }
+    }
+    if closed.contains(&false) {
+        let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+        let selected =
+            multiplicity::select_components(positions, polygons, &incidence, &closed, provenance);
+        separate_components(
+            positions,
+            polygons,
+            &selected,
+            &mut provenance.separated_vertices,
+        );
+        for (flag, component) in closed.iter_mut().zip(selected) {
+            *flag |= component.is_some();
         }
     }
     closed
