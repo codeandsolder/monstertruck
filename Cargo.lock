@@ -6483,7 +6483,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "step-p21"
 version = "0.1.1"
-source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=cdee99ca872dabb0b25a547d64cce7db3ed512e3#cdee99ca872dabb0b25a547d64cce7db3ed512e3"
+source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=12dd6e25b89eb7837d875f1264854550dcc2b70e#12dd6e25b89eb7837d875f1264854550dcc2b70e"
 dependencies = [
  "Inflector",
  "derive_more",
@@ -6498,7 +6498,7 @@ dependencies = [
 [[package]]
 name = "step-p21-derive"
 version = "0.1.1"
-source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=cdee99ca872dabb0b25a547d64cce7db3ed512e3#cdee99ca872dabb0b25a547d64cce7db3ed512e3"
+source = "git+https://github.com/codeandsolder/step-p21-fast.git?rev=12dd6e25b89eb7837d875f1264854550dcc2b70e#12dd6e25b89eb7837d875f1264854550dcc2b70e"
 dependencies = [
  "Inflector",
  "proc-macro-crate",
