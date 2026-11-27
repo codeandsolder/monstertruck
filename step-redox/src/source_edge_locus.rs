@@ -327,6 +327,34 @@ fn complete_bspline_edge_with_index(
     let CurveSupport::BSpline(spline) = brep::curve_support(curve_id, step.entities, index) else {
         bail!("edge #{} has no supported full B-spline geometry", step.id);
     };
+    complete_bspline_support_with_proof(spline, [start, end], endpoint_tolerance_mm, proof)
+        .with_context(|| format!("edge #{}", step.id))
+}
+
+/// Construct the same full-domain, monotone, positive-weight spline from
+/// an already resolved source edge (e.g. the native topology planner).
+pub(crate) fn complete_bspline_support(
+    spline: brep::BSplineSupport,
+    [start, end]: [[f64; 3]; 2],
+    endpoint_tolerance_mm: f64,
+) -> Result<NurbsCurve<Vector4>> {
+    complete_bspline_support_with_proof(
+        spline,
+        [start, end],
+        endpoint_tolerance_mm,
+        EndpointProof::StrictChordProgress,
+    )
+}
+
+fn complete_bspline_support_with_proof(
+    spline: brep::BSplineSupport,
+    [start, end]: [[f64; 3]; 2],
+    endpoint_tolerance_mm: f64,
+    proof: EndpointProof,
+) -> Result<NurbsCurve<Vector4>> {
+    if !endpoint_tolerance_mm.is_finite() || endpoint_tolerance_mm <= 0.0 {
+        bail!("edge endpoint tolerance must be positive and finite");
+    }
     let count = spline.control_points_mm.len();
     let unit_weights;
     let weights = if let Some(weights) = &spline.weights {
@@ -339,12 +367,12 @@ fn complete_bspline_edge_with_index(
         .control_points_mm
         .first()
         .copied()
-        .ok_or_else(|| anyhow!("edge #{} has no B-spline controls", step.id))?;
+        .ok_or_else(|| anyhow!("edge has no B-spline controls"))?;
     let last_control = spline
         .control_points_mm
         .last()
         .copied()
-        .ok_or_else(|| anyhow!("edge #{} has no B-spline controls", step.id))?;
+        .ok_or_else(|| anyhow!("edge has no B-spline controls"))?;
     let monotone = has_strict_chord_progress(
         &spline.control_points_mm,
         weights,
@@ -356,10 +384,7 @@ fn complete_bspline_edge_with_index(
     if !(monotone
         || matches!(proof, EndpointProof::UniqueVisits) && unique_endpoint_visits(&spline, weights))
     {
-        bail!(
-            "edge #{} lacks an unambiguous full-domain trim certificate",
-            step.id
-        );
+        bail!("edge lacks an unambiguous full-domain trim certificate");
     }
     let controls = spline
         .control_points_mm
@@ -380,27 +405,21 @@ fn complete_bspline_edge_with_index(
     ));
     let (first, last) = curve.range_tuple();
     if !first.is_finite() || !last.is_finite() || first >= last {
-        bail!("edge #{} has invalid active B-spline range", step.id);
+        bail!("edge has invalid active B-spline range");
     }
     let first_point = curve.evaluate(first);
     let last_point = curve.evaluate(last);
     if point_distance(first_point, [last_point.x, last_point.y, last_point.z])
         <= endpoint_tolerance_mm
     {
-        bail!(
-            "edge #{} has ambiguous coincident geometric endpoints",
-            step.id
-        );
+        bail!("edge has ambiguous coincident geometric endpoints");
     }
     let forward = point_distance(first_point, start) <= endpoint_tolerance_mm
         && point_distance(last_point, end) <= endpoint_tolerance_mm;
     let backward = point_distance(first_point, end) <= endpoint_tolerance_mm
         && point_distance(last_point, start) <= endpoint_tolerance_mm;
     if !forward && !backward {
-        bail!(
-            "edge #{} trims a subrange of its B-spline geometry",
-            step.id
-        );
+        bail!("edge trims a subrange of its B-spline geometry");
     }
     Ok(curve)
 }

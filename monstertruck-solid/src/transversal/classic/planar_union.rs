@@ -338,7 +338,7 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         lhs_curve.search_nearest_parameter(approximate, None, 100)?,
         rhs_curve.search_nearest_parameter(approximate, None, 100)?,
     ];
-    let [u, v] = super::curve_refinement::crossing_parameters(&lhs_curve, &rhs_curve, seeds)?;
+    let [u, v] = super::curve_refinement::crossing_parameters(&lhs_curve, &rhs_curve, seeds, tol)?;
     let (a, b) = (lhs_curve.evaluate(u), rhs_curve.evaluate(v));
     (a.distance(b) <= tol).then(|| a.midpoint(b))
 }
@@ -1767,6 +1767,22 @@ mod tests {
             (actual - expected).abs() < 2.0e-5,
             "actual={actual},expected={expected}"
         );
+    }
+
+    #[test]
+    fn exact_crossing_refines_an_already_admissible_seed() {
+        let mut fixture = PlanarFixture::new(&[[-1., 0.], [1., 0.], [0., -1.], [0., 1.]]);
+        let lhs = ProjectedEdge {
+            edge: fixture.edge(0, 1),
+            uv: Vec::new(),
+        };
+        let rhs = ProjectedEdge {
+            edge: fixture.edge(2, 3),
+            uv: Vec::new(),
+        };
+        let seed = Point3::new(2e-7, -3e-7, 0.);
+        let point = exact_curve_crossing(&lhs, &rhs, seed, 1e-6).expect("crossing");
+        assert!(point.distance(Point3::new(0., 0., 0.)) <= DEFAULT_NUMERICAL_TOLERANCES.structural);
     }
 
     #[test]

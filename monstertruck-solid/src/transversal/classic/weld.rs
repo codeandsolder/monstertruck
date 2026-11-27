@@ -279,7 +279,14 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
             curve
                 .search_parameter(point, None, 100)
                 .or_else(|| curve.search_nearest_parameter(point, None, 100))
-                .and_then(|seed| super::curve_refinement::point_parameter(curve, point, seed))
+                .and_then(|seed| {
+                    super::curve_refinement::point_parameter(
+                        curve,
+                        point,
+                        seed,
+                        self.tolerances.length,
+                    )
+                })
                 .filter(|&parameter| {
                     parameter.is_finite()
                         && curve.evaluate(parameter).distance(point) <= self.tolerances.length
@@ -413,17 +420,20 @@ impl<C: ShapeOpsCurve<S>, S: ShapeOpsSurface> WeldContext<C, S> {
                     && t < end
                     && remaining.evaluate(t).distance(point) <= self.tolerances.length
             };
-            let parameter = if on_remaining(original_parameter) {
+            let seed = if on_remaining(original_parameter) {
                 original_parameter
             } else {
                 remaining
                     .search_parameter(point, None, 100)
-                    .or_else(|| remaining.search_nearest_parameter(point, None, 100))
-                    .and_then(|seed| {
-                        super::curve_refinement::point_parameter(&remaining, point, seed)
-                    })
-                    .filter(|&t| on_remaining(t))?
+                    .or_else(|| remaining.search_nearest_parameter(point, None, 100))?
             };
+            let parameter = super::curve_refinement::point_parameter(
+                &remaining,
+                point,
+                seed,
+                self.tolerances.length,
+            )
+            .filter(|&t| on_remaining(t))?;
             let later = remaining.cut(parameter);
             if remaining.back().distance(point) > self.tolerances.length
                 || later.front().distance(point) > self.tolerances.length
