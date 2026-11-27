@@ -5,10 +5,9 @@
 
 use super::{
     Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
-    MetricSpace, ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Torus, UnitCircle, Vector2,
-    Vector3, Zero,
+    MetricSpace, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
+    Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, Torus, Vector2, Vector3, Zero,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::PI;
@@ -337,58 +336,24 @@ fn choose_parameter_candidate(
 }
 
 impl Torus {
-    /// Exact inverse candidates for the torus parameterisation.
-    ///
-    /// A spindle torus is not one-to-one in the meridian projection: when
-    /// `R + r cos(v)` is negative, the same world-space azimuth is represented
-    /// by `u + pi`. Solving only from `rho = hypot(x, y)` therefore loses the
-    /// inner branch. Enumerating the two sine-compatible `v` values and using
-    /// the signed radial factor recovers both ring and spindle regimes without
-    /// weakening the final point-on-surface check.
+    /// Exact inversion uses the same signed-meridian projection as the
+    /// nearest-point solver, with the existing geometric residual gate.
+    /// Both meridian coordinates determine the angle through `atan2`;
+    /// using only `asin(z / r)` is ill-conditioned at the axial extrema
+    /// and can reject roundoff-sized deviations before the residual test.
     fn exact_parameter_candidates(
         &self,
         point: Point3,
         hint: Option<(f64, f64)>,
     ) -> Vec<(f64, f64, f64)> {
         let relative = point - self.center();
-        let rho = Vector2::new(relative.x, relative.y).magnitude();
         let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
-        let eps = 128.0 * f64::EPSILON * scale;
-        let sine = relative.z / self.small_radius();
-        if !sine.is_finite() || sine < -1.0 - eps || sine > 1.0 + eps {
+        let tolerance2 = (KERNEL_EPSILON * scale).powi(2);
+        if !tolerance2.is_finite() {
             return Vec::new();
         }
-        let alpha = f64::asin(sine.clamp(-1.0, 1.0));
-        let mut v_candidates = vec![
-            alpha.rem_euclid(2.0 * PI),
-            (PI - alpha).rem_euclid(2.0 * PI),
-        ];
-        if (v_candidates[0] - v_candidates[1]).abs() <= eps {
-            v_candidates.truncate(1);
-        }
-        let azimuth = if rho > eps {
-            relative.y.atan2(relative.x).rem_euclid(2.0 * PI)
-        } else {
-            hint.map_or(0.0, |h| h.0)
-        };
-        let mut candidates = Vec::with_capacity(v_candidates.len());
-        for v0 in v_candidates {
-            let signed_radius = self.small_radius().mul_add(v0.cos(), self.large_radius());
-            if (rho - signed_radius.abs()).abs() > eps.max(KERNEL_EPSILON * scale) {
-                continue;
-            }
-            let u0 = if signed_radius < 0.0 {
-                azimuth + PI
-            } else {
-                azimuth
-            };
-            let u = nearest_periodic_angle(u0.rem_euclid(2.0 * PI), hint.map(|h| h.0));
-            let v = nearest_periodic_angle(v0, hint.map(|h| h.1));
-            let distance2 = self.evaluate(u, v).distance2(point);
-            if distance2 <= (KERNEL_EPSILON * scale).powi(2) {
-                candidates.push((u, v, distance2));
-            }
-        }
+        let mut candidates = self.nearest_parameter_candidates(point, hint);
+        candidates.retain(|candidate| candidate.2 <= tolerance2);
         candidates
     }
 
@@ -494,11 +459,45 @@ impl ParameterDivision2D for Torus {
         (urange, vrange): ((f64, f64), (f64, f64)),
         tol: f64,
     ) -> (Vec<f64>, Vec<f64>) {
-        let circle = UnitCircle::<Point2>::new();
-        let utol = tol / (self.small_radius() + self.large_radius());
-        let (udiv, _) = circle.parameter_division(urange, utol);
-        let vtol = tol / self.small_radius();
-        let (vdiv, _) = circle.parameter_division(vrange, vtol);
-        (udiv, vdiv)
+        // Estimate the complete grid before allocating either axis. An
+        // unwrapped or otherwise huge chart must not allocate an unbounded
+        // circular polyline. Use the common budgeted adaptive divider if
+        // the closed-form grid does not fit.
+        let count = |span: f64, radius: f64| {
+            let ratio = tol / radius;
+            if !ratio.is_finite() || ratio <= 0.0 {
+                return None;
+            }
+            // Stable even when the chord/radius ratio is too small for
+            // subtracting it from one: acos(1-x) = 2 asin(sqrt(x/2)).
+            let step = 4.0 * (ratio.min(0.8) * 0.5).sqrt().asin();
+            crate::strict_segment_count(span, step)
+        };
+        let counts = count(
+            urange.1 - urange.0,
+            self.small_radius() + self.large_radius(),
+        )
+        .zip(count(vrange.1 - vrange.0, self.small_radius()));
+        let max_cells =
+            usize::try_from(monstertruck_traits::algo::surface::MAX_PARAMETER_DIVISION_CELLS)
+                .unwrap_or(usize::MAX);
+        let Some((nu, nv)) =
+            counts.filter(|&(nu, nv)| nu.checked_mul(nv).is_some_and(|n| n <= max_cells))
+        else {
+            return monstertruck_traits::algo::surface::parameter_division(
+                self,
+                (urange, vrange),
+                tol,
+            );
+        };
+        let division = |range: (f64, f64), count: usize| {
+            (0..=count)
+                .map(|i| {
+                    let t = crate::usize_to_f64(i) / crate::usize_to_f64(count);
+                    range.1.mul_add(t, range.0 * (1.0 - t))
+                })
+                .collect()
+        };
+        (division(urange, nu), division(vrange, nv))
     }
 }

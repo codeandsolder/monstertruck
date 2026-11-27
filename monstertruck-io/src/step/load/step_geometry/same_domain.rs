@@ -403,7 +403,7 @@ mod tests {
         );
         assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
         let cylinder = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
-        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (true, true));
+        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (false, true));
     }
 
     #[test]

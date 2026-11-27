@@ -87,25 +87,87 @@ fn ellipse_spans(
     Ok(spans)
 }
 
-pub(super) fn point_derivative(span: &[Homogeneous], parameter: f64) -> (Point, Point) {
-    let mut poles = span.to_vec();
-    let degree = (span.len() - 1) as f64;
-    let interpolate = |a: Homogeneous, b: Homogeneous| {
-        std::array::from_fn(|j| b[j].mul_add(parameter, a[j] * (1.0 - parameter)))
+/// Evaluate in a span-local homogeneous frame, retaining tiny curve
+/// derivatives even when the spatial coordinates are much larger.
+pub(super) struct SpanEvaluator {
+    anchor: Point,
+    controls: Vec<Homogeneous>,
+    derivatives: Vec<Homogeneous>,
+}
+
+fn de_casteljau(controls: &[Homogeneous], parameter: f64) -> Homogeneous {
+    // Normal STEP line, conic and low-order spline spans need no allocation
+    // per quadrature node. Higher-degree curves retain the same algorithm.
+    let mut local = [[0.0; 4]; 16];
+    let mut heap;
+    let work = if controls.len() <= local.len() {
+        local[..controls.len()].copy_from_slice(controls);
+        &mut local[..controls.len()]
+    } else {
+        heap = controls.to_vec();
+        heap.as_mut_slice()
     };
-    while poles.len() > 2 {
-        for i in 0..poles.len() - 1 {
-            poles[i] = interpolate(poles[i], poles[i + 1]);
+    for count in (1..work.len()).rev() {
+        for i in 0..count {
+            let a = work[i];
+            let b = work[i + 1];
+            work[i] = std::array::from_fn(|j| (b[j] - a[j]).mul_add(parameter, a[j]));
         }
-        poles.pop();
     }
-    // The penultimate De Casteljau level gives the derivative as well as
-    // the final point, with one work buffer and no separate derivative fit.
-    let h = interpolate(poles[0], poles[1]);
-    let d: Homogeneous = std::array::from_fn(|i| degree * (poles[1][i] - poles[0][i]));
-    let point = cartesian(h);
-    let derivative = scale(sub(spatial(d), scale(point, d[3])), h[3].recip());
-    (point, derivative)
+    work[0]
+}
+
+impl SpanEvaluator {
+    pub(super) fn new(span: &[Homogeneous]) -> Result<Self> {
+        ensure!(
+            span.len() >= 2
+                && span
+                    .iter()
+                    .all(|h| h[3] > 0.0 && h.iter().all(|x| x.is_finite())),
+            "invalid spatial span"
+        );
+        let anchor = cartesian(span[0]);
+        let controls = span
+            .iter()
+            .map(|h| {
+                [
+                    (-anchor[0]).mul_add(h[3], h[0]),
+                    (-anchor[1]).mul_add(h[3], h[1]),
+                    (-anchor[2]).mul_add(h[3], h[2]),
+                    h[3],
+                ]
+            })
+            .collect::<Vec<_>>();
+        let degree = (controls.len() - 1) as f64;
+        // Differentiate the original homogeneous control net once. The
+        // penultimate evaluation-level subtraction loses low-order bits on
+        // short spans, particularly when the rational weights vary.
+        let derivatives = controls
+            .windows(2)
+            .map(|pair| std::array::from_fn(|j| degree * (pair[1][j] - pair[0][j])))
+            .collect::<Vec<_>>();
+        ensure!(
+            controls
+                .iter()
+                .chain(&derivatives)
+                .flatten()
+                .all(|x| x.is_finite()),
+            "nonfinite local homogeneous span"
+        );
+        Ok(Self {
+            anchor,
+            controls,
+            derivatives,
+        })
+    }
+
+    pub(super) fn evaluate(&self, parameter: f64) -> (Point, Point) {
+        let h = de_casteljau(&self.controls, parameter);
+        let d = de_casteljau(&self.derivatives, parameter);
+        let local = cartesian(h);
+        let derivative = std::array::from_fn(|j| (-local[j]).mul_add(d[3], d[j]) / h[3]);
+        (add(self.anchor, local), derivative)
+    }
 }
 
 pub(super) fn edge_spans(
@@ -434,6 +496,39 @@ pub(super) fn native_wires(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_spans_preserve_derivatives_in_large_coordinate_frames() -> Result<()> {
+        let base = 2.0_f64.powi(26);
+        let step = 2.0_f64.powi(-20);
+        let span = vec![
+            homogeneous([base, 0., 0.], 1.),
+            homogeneous([base + step, 0., 0.], 1.),
+            homogeneous([base + 2. * step, 0., 0.], 1.),
+            homogeneous([base + 3. * step, 0., 0.], 1.),
+        ];
+        let evaluator = SpanEvaluator::new(&span)?;
+        for i in 0..=1000 {
+            let t = f64::from(i) / 1000.;
+            let (_, derivative) = evaluator.evaluate(t);
+            assert_eq!(derivative[0], 3. * step);
+        }
+        // Positive rational weights alter parameter speed, not the line
+        // locus. The local evaluation must preserve the small displacement
+        // after dividing by the changing homogeneous denominator.
+        let rational = vec![
+            homogeneous([base, 0., 0.], 1.),
+            homogeneous([base + step, 0., 0.], 0.5),
+        ];
+        let evaluator = SpanEvaluator::new(&rational)?;
+        for i in 0..=1000 {
+            let t = f64::from(i) / 1000.;
+            let (_, derivative) = evaluator.evaluate(t);
+            let expected = 0.5 * step / (-0.5_f64).mul_add(t, 1.).powi(2);
+            assert!((derivative[0] - expected).abs() <= 8. * f64::EPSILON * expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn matching_finds_alternative_for_shared_vertex() -> Result<()> {

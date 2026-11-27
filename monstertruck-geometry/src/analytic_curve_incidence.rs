@@ -151,23 +151,63 @@ pub(crate) fn reference_cone_polynomial(
     add_scaled(&radial_squared, &squared(&radius)?, -1.0)
 }
 
+// For same-degree Bernstein polynomials with positive denominator
+// coefficients, their quotient is a convex combination of coefficient
+// ratios. Subtract a separate scale-aware arithmetic allowance before
+// using this as a nonnegative squared-distance lower bound.
+fn nonnegative_quotient_lower(numerator: &[f64], denominator: &[f64], allowance: f64) -> f64 {
+    let lower = numerator
+        .iter()
+        .zip(denominator)
+        .map(|(&n, &d)| n / d)
+        .fold(f64::INFINITY, f64::min);
+    (lower - allowance).max(0.0)
+}
+
 fn torus(
     points: &[[f64; 4]],
     center: Point3,
     axis: Vector3,
     major: f64,
     minor: f64,
-) -> Option<Vec<f64>> {
+) -> Option<(Vec<f64>, f64)> {
     let [x, y, z, w] = coordinates(points, center)?;
     let norm = dot3(&[x, y, z])?;
     let w2 = squared(&w)?;
     let radial = add_scaled(&norm, &squared(&centered(points, center, axis)?)?, -1.0)?;
     let lhs = add_scaled(&norm, &w2, minor.mul_add(-minor, major * major))?;
-    add_scaled(
+    let polynomial = add_scaled(
         &squared(&lhs)?,
         &multiply(&radial, &w2)?,
         -4.0 * major * major,
-    )
+    )?;
+    // The second quartic factor equals ||p-center||² + 2 R rho
+    // + R²-r². Its global lower bound R²-r² is unnecessarily weak
+    // on most arcs, especially for thin-hole (R ≈ r) ring tori.
+    // Bound both squared distances over this particular Bezier span.
+    let degree = (points.len() - 1).to_f64()?;
+    let max_weight = w.iter().copied().fold(0.0_f64, f64::max);
+    let min_weight = w.iter().copied().fold(f64::INFINITY, f64::min);
+    let scale = points
+        .iter()
+        .flat_map(|p| p[..3].iter().map(move |v| v.abs() / p[3]))
+        .chain([center.x.abs(), center.y.abs(), center.z.abs(), major, minor])
+        .fold(1.0_f64, f64::max);
+    let allowance =
+        256.0 * f64::EPSILON * (degree + 1.0).powi(2) * (scale * (max_weight / min_weight)).powi(2);
+    let norm_lower = nonnegative_quotient_lower(&norm, &w2, allowance);
+    let radial_lower = nonnegative_quotient_lower(&radial, &w2, allowance);
+    let global = minor.mul_add(-minor, major * major);
+    let rho_lower = radial_lower.sqrt();
+    let factor_lower = (2.0 * major).mul_add(rho_lower, norm_lower + global) - allowance;
+    // Away from the rotation axis, the positive-radius profile and the
+    // reflected profile are distinct. For a spindle/horn torus the
+    // competing quartic factor must be strictly separated locally; there
+    // is no globally positive lower bound for that factor.
+    if major <= minor && (rho_lower <= 0.0 || factor_lower <= 0.0) {
+        return None;
+    }
+    Some((polynomial, factor_lower))
 }
 
 pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
@@ -287,18 +327,19 @@ fn torus_bound(
         || !valid_axis(axis)
         || !major_radius.is_finite()
         || !minor_radius.is_finite()
-        || major_radius <= minor_radius
+        || major_radius <= 0.0
         || minor_radius <= tolerance
     {
         return None;
     }
     // F = (tube_distance^2-r^2)*((rho+R)^2+z^2-r^2).
-    // The second factor is >= R^2-r^2 for a genuine ring torus.
-    let limit = tolerance
-        * 2.0_f64.mul_add(minor_radius, -tolerance)
-        * minor_radius.mul_add(-minor_radius, major_radius * major_radius)
-        * min_w.powi(4);
-    torus(points, center, axis, major_radius, minor_radius).map(|p| (p, limit))
+    // For a ring torus the second factor is globally positive. For a
+    // horn/spindle torus, only a locally positive, separated factor admits
+    // the positive-radial sheet; the reflected sheet is not interchangeable.
+    let (polynomial, factor_lower) = torus(points, center, axis, major_radius, minor_radius)?;
+    let limit =
+        tolerance * 2.0_f64.mul_add(minor_radius, -tolerance) * factor_lower * min_w.powi(4);
+    Some((polynomial, limit))
 }
 
 fn prove_span(points: &[[f64; 4]], support: AnalyticSupport, tolerance: f64) -> CurveIncidence {
@@ -556,6 +597,55 @@ mod tests {
         };
         assert_eq!(
             certify_nurbs_curve_on_support(&circle, wrong, 1.0e-7),
+            CurveIncidence::NotProven
+        );
+    }
+
+    #[test]
+    fn spindle_torus_certifies_only_regular_positive_radius_sheet() {
+        for major in [1.0, 2.0] {
+            let minor = 2.0;
+            let support = AnalyticSupport::Torus {
+                center: p(0.0, 0.0, 0.0),
+                axis: Vector3::unit_z(),
+                major_radius: major,
+                minor_radius: minor,
+            };
+            assert_eq!(
+                certify_nurbs_curve_on_support(&rational_circle(major + minor), support, 1.0e-7),
+                CurveIncidence::Proven
+            );
+            if major < minor {
+                // The reflected spindle sheet satisfies the quartic but
+                // not (rho-R)^2+z^2=r^2.
+                assert_ne!(
+                    certify_nurbs_curve_on_support(
+                        &rational_circle(minor - major),
+                        support,
+                        1.0e-7
+                    ),
+                    CurveIncidence::Proven
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tight_hole_torus_uses_local_quartic_factor_bound() {
+        let ring = AnalyticSupport::Torus {
+            center: p(0.0, 0.0, 0.0),
+            axis: Vector3::unit_z(),
+            major_radius: 1.0001,
+            minor_radius: 1.0,
+        };
+        let near = rational_circle(2.00010001);
+        let far = rational_circle(2.0001002);
+        assert_eq!(
+            certify_nurbs_curve_on_support(&near, ring, 1.0e-7),
+            CurveIncidence::Proven
+        );
+        assert_eq!(
+            certify_nurbs_curve_on_support(&far, ring, 1.0e-7),
             CurveIncidence::NotProven
         );
     }

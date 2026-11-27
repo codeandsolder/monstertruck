@@ -339,6 +339,11 @@ where
     S: ParametricSurface3D,
     T: Transform<Point3> + SquareMatrix<Scalar = f64> + Clone,
 {
+    fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
+        let (u, v) = self.entity.closed_chart_periods();
+        if self.orientation { (u, v) } else { (v, u) }
+    }
+
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Self::Vector {
         let transtrans = self.transform.transpose();

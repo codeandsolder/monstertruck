@@ -8,7 +8,7 @@ use super::{
     ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
     PreMeshableSurface, RobustMeshableSurface, SearchNearestParameter, SearchParameter, Shell,
     StandardAttributes, StandardVertex, TessellationPrimitiveMode, TessellationPrimitiveOptions,
-    Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire, Zero, algo, handles,
+    Tolerance, Triangulation, Vector2, Vector3, VertexIterator, Wire, algo, handles,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{
@@ -20,7 +20,7 @@ use crate::filters::StructuringFilter;
 use array_macro::array;
 use handles::FixedVertexHandle;
 use itertools::{Either, Itertools};
-use monstertruck_geometry::prelude::ParameterCurve;
+use monstertruck_geometry::prelude::{ParameterCurve, ParametricSurface};
 use rustc_hash::FxHashMap as HashMap;
 use std::{collections::hash_map::Entry, env, iter};
 // `std::time::Instant::now()` panics on `wasm32-unknown-unknown`.
@@ -29,10 +29,12 @@ use std::{collections::hash_map::Entry, env, iter};
 use web_time::Instant;
 
 mod boundary;
+mod charted;
 mod diagnostics;
 mod mesh;
 
 use boundary::{PolyBoundary, PolyBoundaryPiece};
+use charted::TrimChart;
 use diagnostics::observe_face_drop;
 pub use diagnostics::{FaceDropReason, face_drop_count, reset_face_drop_count};
 use mesh::{trimming_tessellation, untrimmed_tessellation};
@@ -51,7 +53,12 @@ pub trait ExactTrimBoundary2D {
     fn exact_trim_boundary_2d(&self, tolerance: f64) -> Vec<Point2>;
 
     /// Projects a point on the spatial boundary back onto this trim boundary.
-    fn project_boundary_point(&self, _point: Point3, _hint: Option<f64>) -> Option<(f64, Point2)> {
+    fn project_boundary_point(
+        &self,
+        _point: Point3,
+        _hint: Option<f64>,
+        _tolerance: f64,
+    ) -> Option<(f64, Point2)> {
         None
     }
 }
@@ -67,17 +74,62 @@ where
         lifted_trim_boundary_2d(self, tolerance)
     }
 
-    fn project_boundary_point(&self, point: Point3, hint: Option<f64>) -> Option<(f64, Point2)> {
-        // A boundary is walked from the trim's start. A trim closed in space
-        // but open in parameter space matches its start with both ends, and
-        // an unseeded search can land on the far one, sending every later
-        // projection off the curve. So an absent hint means the start.
-        let hint = Some(hint.unwrap_or_else(|| self.curve().range_tuple().0));
-        self.search_parameter(point, hint, 100)
-            .or_else(|| self.search_nearest_parameter(point, hint, 100))
-            .or_else(|| self.search_parameter(point, None, 100))
-            .or_else(|| self.search_nearest_parameter(point, None, 100))
-            .map(|t| (t, self.curve().evaluate(t)))
+    fn project_boundary_point(
+        &self,
+        point: Point3,
+        hint: Option<f64>,
+        tolerance: f64,
+    ) -> Option<(f64, Point2)> {
+        let (start, end) = self.curve().range_tuple();
+        if !start.is_finite()
+            || !end.is_finite()
+            || start > end
+            || !tolerance.is_finite()
+            || tolerance <= 0.0
+        {
+            return None;
+        }
+        // Newton's method is unconstrained. A stationary point of an
+        // extrapolated (or periodically repeated) trim is not a point
+        // on this finite edge. Verify the lifted residual even for the
+        // checked inverse, which searches the surface and curve separately.
+        let seed = hint
+            .filter(|t| t.is_finite())
+            .unwrap_or(start)
+            .clamp(start, end);
+        let candidate = |t: f64| {
+            if !t.is_finite() {
+                return None;
+            }
+            let t = t.clamp(start, end);
+            let uv = self.curve().evaluate(t);
+            (uv.x.is_finite()
+                && uv.y.is_finite()
+                && self.surface().evaluate(uv.x, uv.y).distance(point) <= tolerance)
+                .then_some((t, uv))
+        };
+        // Closed spatial trims can have both endpoints at the same point.
+        // Prefer the endpoint adjacent to the caller's seed when coincident.
+        let mut ends = [start, end];
+        ends.sort_by(|a, b| (a - seed).abs().total_cmp(&(b - seed).abs()));
+        for t in ends {
+            let uv = self.curve().evaluate(t);
+            if self.surface().evaluate(uv.x, uv.y).distance(point) <= KERNEL_EPSILON.min(tolerance)
+            {
+                return candidate(t);
+            }
+        }
+        self.search_parameter(point, Some(seed), 100)
+            .and_then(candidate)
+            .or_else(|| {
+                self.search_nearest_parameter(point, Some(seed), 100)
+                    .and_then(candidate)
+            })
+            .or_else(|| self.search_parameter(point, None, 100).and_then(candidate))
+            .or_else(|| {
+                self.search_nearest_parameter(point, None, 100)
+                    .and_then(candidate)
+            })
     }
 }
 
@@ -1144,7 +1196,7 @@ where
             tolerance,
         )
     };
-    let mut piece = if has_shared_edge_polyline {
+    let mut piece = if has_shared_edge_polyline || TrimChart::new(surface).is_wrapped() {
         aligned_trim_piece()
             .filter(PolyBoundaryPiece::is_cdt_compatible)
             .or_else(direct_trim_piece)
@@ -1297,14 +1349,35 @@ where
     }
     let preboundary = collect_trimmed_preboundary(face_idx, face, context);
     let (polygon, isoparams) = preboundary.map_or_default(|preboundary| {
-        tessellate_trimmed_preboundary(
-            face_idx,
-            preboundary,
-            surface,
-            tolerance,
-            primitive_config,
-            isoparametric_options,
-        )
+        let chart = TrimChart::new(surface);
+        if chart.is_wrapped() {
+            // In particular, refuse independently generated extrapolated
+            // pcurve samples that do not belong to the actual tiled chart.
+            if !preboundary
+                .iter()
+                .flat_map(|piece| &piece.0)
+                .all(|p| chart.evaluate(p.x, p.y).distance(p.point) <= tolerance)
+            {
+                return (None, Vec::new());
+            }
+            tessellate_trimmed_preboundary(
+                face_idx,
+                preboundary,
+                &chart,
+                tolerance,
+                primitive_config,
+                isoparametric_options,
+            )
+        } else {
+            tessellate_trimmed_preboundary(
+                face_idx,
+                preboundary,
+                surface,
+                tolerance,
+                primitive_config,
+                isoparametric_options,
+            )
+        }
     });
     log_mesh_trace(
         face_idx,

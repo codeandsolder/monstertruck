@@ -3,14 +3,11 @@
     reason = "compact symbols in basis-function recurrences follow the standard B-spline notation"
 )]
 
-use super::{BasisWindow, Deserialize, KnotVector, Result, Tolerance, Zero};
+use super::{BasisWindow, Deserialize, KnotVector, Result, Tolerance, Zero, inv_or_zero};
 use crate::errors::Error;
 use smallvec::SmallVec;
 use std::slice::SliceIndex;
 use std::vec::Vec;
-
-#[inline]
-fn inv_or_zero_strict(delta: f64) -> f64 { if delta.is_zero() { 0.0 } else { 1.0 / delta } }
 
 impl KnotVector {
     /// empty constructor
@@ -76,7 +73,8 @@ impl KnotVector {
     #[must_use = "Ignoring this result discards the maximum index `i` of `self[i] <= x` Return `None` if `x < self[0] or self.len() == 0`."]
     pub fn floor(&self, x: f64) -> Option<usize> { self.iter().rposition(|t| *t <= x) }
 
-    /// Returns the multiplicity of the `i`th knot
+    /// Returns the algebraic multiplicity of the `i`th knot. Distinct
+    /// parameters count separately, even inside the geometric tolerance.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::KnotVector;
@@ -86,11 +84,6 @@ impl KnotVector {
     #[inline]
     #[must_use = "Ignoring this result discards the multiplicity of the `i`th knot."]
     pub fn multiplicity(&self, i: usize) -> usize {
-        self.iter().filter(|u| self[i].near(u)).count()
-    }
-
-    #[inline]
-    fn strict_multiplicity(&self, i: usize) -> usize {
         let knot = self[i];
         self.iter()
             .filter(|value| {
@@ -293,9 +286,9 @@ impl KnotVector {
             // but does not make a second partial lookup on an invariant.
             let idx = self
                 .floor(t)
-                .unwrap_or_else(|| self.strict_multiplicity(0).saturating_sub(1));
+                .unwrap_or_else(|| self.multiplicity(0).saturating_sub(1));
             if idx == n {
-                n.saturating_sub(self.strict_multiplicity(n))
+                n.saturating_sub(self.multiplicity(n))
             } else {
                 idx
             }
@@ -310,10 +303,10 @@ impl KnotVector {
         for k in 1..=(degree - der_rank) {
             let base = idx.saturating_sub(k);
             let delta = self[base + k] - self[base];
-            let mut a = inv_or_zero_strict(delta) * (t - self[base]);
+            let mut a = inv_or_zero(delta) * (t - self[base]);
             for i in base..=usize::min(idx, n - k - 1) {
                 let delta = self[i + k + 1] - self[i + 1];
-                let b = inv_or_zero_strict(delta) * (self[i + k + 1] - t);
+                let b = inv_or_zero(delta) * (self[i + k + 1] - t);
                 let j = i - start;
                 eval[j] = b.mul_add(eval[j + 1], a * eval[j]);
                 a = 1.0 - b;
@@ -323,10 +316,10 @@ impl KnotVector {
         for k in (degree - der_rank + 1)..=degree {
             let base = idx.saturating_sub(k);
             let delta = self[base + k] - self[base];
-            let mut a = inv_or_zero_strict(delta);
+            let mut a = inv_or_zero(delta);
             for i in base..=usize::min(idx, n - k - 1) {
                 let delta = self[i + k + 1] - self[i + 1];
-                let b = inv_or_zero_strict(delta);
+                let b = inv_or_zero(delta);
                 let j = i - start;
                 eval[j] = b.mul_add(-eval[j + 1], a * eval[j]) * crate::usize_to_f64(k);
                 a = b;
@@ -548,7 +541,8 @@ impl KnotVector {
     }
 
     /// To single-multi description. i.e. decompose the unique vector of knots and the vector of
-    /// multiplicity of knots.
+    /// multiplicity of knots. This is a lossless structural conversion,
+    /// not a geometric approximation: every positive-length span remains.
     /// # Examples
     /// ```
     /// use monstertruck_geometry::prelude::KnotVector;
@@ -566,7 +560,10 @@ impl KnotVector {
         let mut mult = 1;
         while let Some(knot) = iter.next() {
             if let Some(next) = iter.peek() {
-                if knot.near(next) {
+                if knot
+                    .partial_cmp(*next)
+                    .is_some_and(std::cmp::Ordering::is_eq)
+                {
                     mult += 1;
                 } else {
                     knots.push(*knot);

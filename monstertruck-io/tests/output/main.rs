@@ -3,6 +3,7 @@ mod cylinder;
 mod derive;
 mod geometry;
 mod measurement_context;
+mod mesh_recovery_step;
 mod planar_cap_roundtrip;
 mod surface_curve_dedup;
 mod templates;

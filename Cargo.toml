@@ -75,7 +75,7 @@ rkyv = { version = "0.8", features = ["alloc"] }
 rclite = "0.4.2"
 rustc-hash = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-step-p21 = { git = "https://github.com/codeandsolder/step-p21-fast.git", rev = "688d976c1af945dda81087e008b5820a3d83b2e4" }
+step-p21 = { git = "https://github.com/codeandsolder/step-p21-fast.git", rev = "cdee99ca872dabb0b25a547d64cce7db3ed512e3" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smallvec = "1"

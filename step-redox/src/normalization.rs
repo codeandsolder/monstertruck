@@ -2,7 +2,7 @@ use crate::step_graph::visit_entity_refs;
 use crate::step_identity::{
     IndexBucket, hash_parameter_with_alias, parameters_equivalent_with_alias, resolve_alias,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use step_p21::ast::{EntityInstance, Name, Parameter, Record};
 
@@ -26,6 +26,16 @@ pub fn consolidate_presentation(entities: &mut Vec<EntityInstance>) -> Consolida
         ty: &'static str,
     }
 
+    // Most recovered B-reps have no presentation records at all. Avoid
+    // traversing every geometric reference when there cannot be a merge.
+    if !entities.iter().any(|entity| {
+        matches!(entity, EntityInstance::Simple { record, .. }
+            if matches!(record.name.as_str(),
+                "MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION"
+                | "PRESENTATION_LAYER_ASSIGNMENT"))
+    }) {
+        return ConsolidateStats::default();
+    }
     let mut refcounts: HashMap<u64, usize> = HashMap::new();
     for entity in entities.iter() {
         visit_entity_refs(entity, &mut |id| *refcounts.entry(id).or_insert(0) += 1);
@@ -181,11 +191,105 @@ pub struct InternStats {
     pub(super) by_type: BTreeMap<String, usize>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
 pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
+    let internable = internable_entities(entities);
+    let alias = acyclic_aliases(entities, &internable)
+        .unwrap_or_else(|| cyclic_aliases(entities, &internable));
+    let mut stats = InternStats::default();
+    if alias.is_empty() {
+        return stats;
+    }
+    entities.retain_mut(|entity| {
+        if alias.contains_key(&entity_id(entity)) {
+            stats.total += 1;
+            *stats.by_type.entry(entity_type_label(entity)).or_insert(0) += 1;
+            false
+        } else {
+            rewrite_entity_refs(entity, &alias);
+            true
+        }
+    });
+    stats
+}
+
+/// Hash-cons a value DAG from its leaves upward. Each reference to an
+/// eligible value is canonical before its parent is hashed. References to
+/// topology and all other identity entities remain opaque IDs.
+///
+/// Level order makes the representative the earliest source entity at
+/// each structural depth. Equal acyclic values have equal depth. The
+/// reverse adjacency uses flat links, avoiding one heap allocation per
+/// referenced value. Cyclic value graphs are handled separately.
+fn acyclic_aliases(entities: &[EntityInstance], internable: &[bool]) -> Option<HashMap<u64, u64>> {
+    let indices = entities
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| internable[*i])
+        .map(|(i, e)| (entity_id(e), i))
+        .collect::<HashMap<_, _>>();
+    let mut remaining = vec![0usize; entities.len()];
+    let mut heads = vec![usize::MAX; entities.len()];
+    let mut links = Vec::<(usize, usize)>::new();
+    let mut level = Vec::new();
+    for (index, entity) in entities.iter().enumerate() {
+        if !internable[index] {
+            continue;
+        }
+        visit_entity_refs(entity, &mut |id| {
+            if let Some(&child) = indices.get(&id) {
+                links.push((index, heads[child]));
+                heads[child] = links.len() - 1;
+                remaining[index] += 1;
+            }
+        });
+        if remaining[index] == 0 {
+            level.push(index);
+        }
+    }
+    let mut alias = HashMap::new();
+    let mut seen = HashMap::<u64, IndexBucket>::new();
+    let mut next = Vec::new();
+    let mut processed = 0usize;
+    while !level.is_empty() {
+        seen.clear();
+        for &index in &level {
+            let entity = &entities[index];
+            let hash = entity_structural_hash(entity, &alias);
+            match seen.entry(hash) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(IndexBucket::one(index));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if let Some(canonical) = entry
+                        .get()
+                        .find(|i| entities_equivalent(entity, &entities[i], &alias))
+                    {
+                        alias.insert(entity_id(entity), entity_id(&entities[canonical]));
+                    } else {
+                        entry.get_mut().push(index);
+                    }
+                }
+            }
+            processed += 1;
+            let mut link = heads[index];
+            while let Some(&(parent, tail)) = links.get(link) {
+                remaining[parent] -= 1;
+                if remaining[parent] == 0 {
+                    next.push(parent);
+                }
+                link = tail;
+            }
+        }
+        next.sort_unstable();
+        level.clear();
+        std::mem::swap(&mut level, &mut next);
+    }
+    (processed == indices.len()).then_some(alias)
+}
+
+/// Cyclic value references cannot be evaluated leaf-first. Preserve the
+/// conservative direct-reference fixed-point semantics for those graphs.
+fn cyclic_aliases(entities: &[EntityInstance], internable: &[bool]) -> HashMap<u64, u64> {
     // Store redirects only. An identity map for a million-entity STEP file is
     // a surprisingly expensive way of spelling "most things survive".
     let mut alias: HashMap<u64, u64> = HashMap::new();
@@ -194,7 +298,6 @@ pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
     // STEP references acquire a new canonical alias. The old implementation
     // rebuilt every internable key on every fixed-point round even though a key
     // can change only when one of its referenced IDs changes.
-    let internable = entities.iter().map(is_internable).collect::<Vec<_>>();
     let mut parents_by_ref = HashMap::<u64, Vec<usize>>::new();
     for (index, entity) in entities.iter().enumerate() {
         if !internable[index] {
@@ -211,7 +314,7 @@ pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
 
     let mut hashes = entities
         .iter()
-        .zip(&internable)
+        .zip(internable)
         .map(|(entity, &enabled)| enabled.then(|| entity_structural_hash(entity, &alias)))
         .collect::<Vec<_>>();
     let mut dirty = Vec::<usize>::new();
@@ -295,21 +398,7 @@ pub fn intern_section(entities: &mut Vec<EntityInstance>) -> InternStats {
     }
     let _ = compress_aliases(&mut alias);
 
-    let mut stats = InternStats::default();
-    let original = std::mem::take(entities);
-    entities.reserve(original.len().saturating_sub(alias.len()));
-    for mut entity in original {
-        let id = entity_id(&entity);
-        let root = resolve_alias(&alias, id);
-        if root != id {
-            stats.total += 1;
-            *stats.by_type.entry(entity_type_label(&entity)).or_insert(0) += 1;
-            continue;
-        }
-        rewrite_entity_refs(&mut entity, &alias);
-        entities.push(entity);
-    }
-    stats
+    alias
 }
 
 fn compress_aliases(alias: &mut HashMap<u64, u64>) -> Vec<u64> {
@@ -448,11 +537,106 @@ fn rewrite_param_refs(param: &mut Parameter, map: &HashMap<u64, u64>) {
     }
 }
 
+fn internable_entities(entities: &[EntityInstance]) -> Vec<bool> {
+    // A definitional representation is a geometry value when it is used
+    // solely as the parameter-space curve of a PCURVE. Other uses may give
+    // the representation an independent identity (e.g. relationships).
+    let mut curve_definitions = HashSet::new();
+    let mut other_references = HashSet::new();
+    let has_definitions = entities.iter().any(|entity| {
+        matches!(entity, EntityInstance::Simple { record, .. }
+            if record.name == "DEFINITIONAL_REPRESENTATION")
+    });
+    if has_definitions {
+        let definitions = entities
+            .iter()
+            .filter_map(|entity| match entity {
+                EntityInstance::Simple { id, record }
+                    if record.name == "DEFINITIONAL_REPRESENTATION" =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        for entity in entities {
+            let curve_definition = match entity {
+                EntityInstance::Simple { record, .. } if record.name == "PCURVE" => {
+                    match &record.parameter {
+                        Parameter::List(params) if params.len() == 3 => {
+                            match (&params[0], &params[1], &params[2]) {
+                                (
+                                    Parameter::String(_),
+                                    Parameter::Ref(Name::Entity(support)),
+                                    Parameter::Ref(Name::Entity(id)),
+                                ) if support != id => Some(*id),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(id) = curve_definition {
+                curve_definitions.insert(id);
+            }
+            visit_entity_refs(entity, &mut |id| {
+                if definitions.contains(&id) && Some(id) != curve_definition {
+                    other_references.insert(id);
+                }
+            });
+        }
+    }
+    entities
+        .iter()
+        .map(|entity| {
+            if matches!(entity, EntityInstance::Simple { record, .. }
+            if record.name == "DEFINITIONAL_REPRESENTATION")
+            {
+                let id = entity_id(entity);
+                curve_definitions.contains(&id) && !other_references.contains(&id)
+            } else {
+                is_internable(entity)
+            }
+        })
+        .collect()
+}
+
 fn is_internable(entity: &EntityInstance) -> bool {
     match entity {
         EntityInstance::Simple { record, .. } => internable_record(&record.name),
         EntityInstance::Complex { subsuper, .. } => {
-            !subsuper.0.is_empty() && subsuper.0.iter().all(|r| internable_record(&r.name))
+            // External mapping exposes the inherited abstract geometry
+            // records of rational B-splines. Accept these only together with
+            // a concrete allowlisted geometry type; never intern arbitrary
+            // representation items or an unknown/topological subtype.
+            let records = &subsuper.0;
+            let spline = records.iter().any(|record| {
+                matches!(
+                    record.name.as_str(),
+                    "B_SPLINE_CURVE"
+                        | "B_SPLINE_CURVE_WITH_KNOTS"
+                        | "RATIONAL_B_SPLINE_CURVE"
+                        | "B_SPLINE_SURFACE"
+                        | "B_SPLINE_SURFACE_WITH_KNOTS"
+                        | "RATIONAL_B_SPLINE_SURFACE"
+                )
+            });
+            !records.is_empty()
+                && records.iter().all(|record| {
+                    internable_record(&record.name)
+                        || (spline
+                            && matches!(
+                                record.name.as_str(),
+                                "BOUNDED_CURVE"
+                                    | "CURVE"
+                                    | "BOUNDED_SURFACE"
+                                    | "SURFACE"
+                                    | "GEOMETRIC_REPRESENTATION_ITEM"
+                                    | "REPRESENTATION_ITEM"
+                            ))
+                })
         }
     }
 }
@@ -489,6 +673,7 @@ fn internable_record(name: &str) -> bool {
             | "B_SPLINE_SURFACE"
             | "B_SPLINE_SURFACE_WITH_KNOTS"
             | "RATIONAL_B_SPLINE_SURFACE"
+            | "PCURVE"
             // Presentation/style values
             | "COLOUR_RGB"
             | "DRAUGHTING_PRE_DEFINED_COLOUR"
@@ -512,6 +697,7 @@ fn internable_record(name: &str) -> bool {
             | "UNCERTAINTY_MEASURE_WITH_UNIT"
             | "REPRESENTATION_CONTEXT"
             | "GEOMETRIC_REPRESENTATION_CONTEXT"
+            | "PARAMETRIC_REPRESENTATION_CONTEXT"
             | "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT"
             | "GLOBAL_UNIT_ASSIGNED_CONTEXT"
     )
@@ -593,6 +779,54 @@ mod tests {
                 ]),
             },
         }
+    }
+
+    fn direction_value(id: u64, parameter: Parameter) -> EntityInstance {
+        EntityInstance::Simple {
+            id,
+            record: Record {
+                name: "DIRECTION".into(),
+                parameter,
+            },
+        }
+    }
+
+    #[test]
+    fn acyclic_interning_has_no_fixed_point_depth_limit() {
+        let mut entities = Vec::new();
+        // Reverse dependency order and repeated child references. Distinct
+        // leaves must never merge merely because their parents have the
+        // same parameter shape.
+        for i in (1..=40_u64).rev() {
+            for offset in [0, 100] {
+                let parameter = if i == 1 {
+                    Parameter::Integer(17)
+                } else {
+                    let child = Parameter::Ref(Name::Entity(i - 1 + offset));
+                    Parameter::List(vec![child.clone(), child])
+                };
+                entities.push(direction_value(i + offset, parameter));
+            }
+        }
+        entities.push(direction_value(201, Parameter::Integer(18)));
+        let stats = intern_section(&mut entities);
+        assert_eq!(stats.total, 40);
+        assert_eq!(entities.len(), 41);
+        assert_eq!(intern_section(&mut entities).total, 0);
+    }
+
+    #[test]
+    fn cyclic_value_graph_uses_direct_reference_equivalence() {
+        let mut entities = vec![
+            direction_value(1, Parameter::Ref(Name::Entity(2))),
+            direction_value(2, Parameter::Ref(Name::Entity(1))),
+            direction_value(3, Parameter::Ref(Name::Entity(1))),
+        ];
+        let allowed = internable_entities(&entities);
+        assert!(acyclic_aliases(&entities, &allowed).is_none());
+        assert_eq!(intern_section(&mut entities).total, 1);
+        assert_eq!(entities.len(), 2);
+        assert_eq!(intern_section(&mut entities).total, 0);
     }
 
     #[test]
