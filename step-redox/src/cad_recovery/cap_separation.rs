@@ -70,7 +70,7 @@ fn curve_maximum(curve: &RecoveredProfileCurve, direction: [f64; 2]) -> Option<f
                     .fold(endpoints, f64::max),
             )
         }
-        _ => None,
+        RecoveredProfileCurve::BSpline { .. } => None,
     }
 }
 
