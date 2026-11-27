@@ -1575,6 +1575,69 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn spindle_band_at_meridian_extremum_has_regular_shared_chart_seams()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let origin = Point3::new(41.4274, -8.2296, 3.8608);
+        let major = 0.0762_f64;
+        let minor = 0.1778_f64;
+        let n = 36_usize;
+        let stations = 9_usize;
+        let mut positions = Vec::new();
+        for j in 0..stations {
+            let v = -PI * 0.5 * (1.0 - crate::usize_to_f64(j) / crate::usize_to_f64(stations - 1));
+            let (z, rho) = v.sin_cos();
+            for i in 0..n {
+                let (sin, cos) = (TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n)).sin_cos();
+                let radius = minor.mul_add(rho, major);
+                positions.push(origin + Vector3::new(radius * cos, radius * sin, minor * z));
+            }
+        }
+        let mut polygons = Vec::new();
+        for j in 0..stations - 1 {
+            for i in 0..n {
+                let [a, b, c, d] = [
+                    j * n + i,
+                    j * n + (i + 1) % n,
+                    (j + 1) * n + (i + 1) % n,
+                    (j + 1) * n + i,
+                ];
+                polygons.extend([vec![a, b, c], vec![a, c, d]]);
+            }
+        }
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions,
+                ..Default::default()
+            },
+            Faces::from_iter(polygons),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        // A fitted carrier may differ at roundoff scale from a source
+        // extremum. The existing native intersection tolerance covers it.
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: origin + Vector3::unit_z() * 1.0e-12,
+            axis: Vector3::unit_z(),
+            radial_center: major,
+            profile_radius: minor,
+        };
+        let native = native_for_carrier(&evidence, &supports, carrier, 0.01)?;
+        assert_eq!(native.regions.len(), 1);
+        let region = &native.regions[0];
+        assert!(!region.requires_chart_cut);
+        assert_eq!(region.chart_seams, 2);
+        let faces = region.faces.as_ref().map_err(|err| *err)?;
+        assert_eq!(faces.len(), 2);
+        let shell = faces.iter().cloned().collect::<crate::Shell>();
+        assert_eq!(
+            shell.shell_condition(),
+            monstertruck_topology::shell::ShellCondition::Oriented
+        );
+        assert!(shell.is_geometric_consistent());
+        Ok(())
+    }
+
+    #[test]
     fn cylindrical_band_with_piecewise_slanted_rim_has_shared_chart_cuts()
     -> Result<(), Box<dyn std::error::Error>> {
         let ring = 16_usize;
