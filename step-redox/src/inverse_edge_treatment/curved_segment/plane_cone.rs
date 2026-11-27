@@ -6,9 +6,9 @@ use super::{
 };
 use crate::brep::ConeSupport;
 use anyhow::{Context, Result, ensure};
-use monstertruck_geometry::analytic_cone_deviation::bound_nurbs_cone_deviation;
 use monstertruck_geometry::analytic_plane_cone_hyperbola::AxisParallelPlaneConeHyperbola;
 use monstertruck_geometry::analytic_plane_deviation::bound_nurbs_plane_deviation;
+use monstertruck_geometry::analytic_radial_deviation::bound_nurbs_radial_deviation;
 use monstertruck_geometry::prelude::{Point3, Vector3};
 
 #[derive(Clone, Copy)]
@@ -71,7 +71,7 @@ impl PlaneConeHyperbola {
             GEOM_TOL_MM,
         )
         .context("complete source hyperbola plane bound unsupported")?;
-        let cone = bound_nurbs_cone_deviation(
+        let cone = bound_nurbs_radial_deviation(
             &curve,
             origin,
             analytic.cone_axis(),
