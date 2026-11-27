@@ -326,11 +326,11 @@ mod tests {
         }
         let mut seen = BTreeSet::new();
         let mut groups = BTreeSet::new();
-        for seed in 0..partition.len() {
+        for (seed, &part) in partition.iter().enumerate() {
             if seen.contains(&seed) {
                 continue;
             }
-            if !groups.insert(partition[seed]) {
+            if !groups.insert(part) {
                 return false;
             }
             let mut stack = vec![seed];
