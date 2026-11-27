@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   native:
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
     with:
       checkout-submodules: "true"
       rustflags: "-D warnings"
@@ -32,7 +32,7 @@ jobs:
       test-suites: |
         [{"name":"cpu","cargo":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"],"doctests":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"]}]
   wasm:
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
     with:
       checkout-submodules: "true"
       rust-targets: wasm32-unknown-unknown
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+      - uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
         id: compiler
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
@@ -53,14 +53,14 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just readme-check
   source-quality:
-    uses: codeandsolder/ci-workflows/.github/workflows/source-quality.yml@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/source-quality.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
   workflow-policy:
-    uses: codeandsolder/ci-workflows/.github/workflows/workflow-concurrency.yml@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/workflow-concurrency.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
   merge-gate:
     name: CI merge gate
     if: ${{ always() }}
     needs: [native, wasm, readme, source-quality, workflow-policy]
-    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@4d1f6661ec4de02760706d415ca37c5628cca4c4 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@2a1b1b963b9df30329c02a82de5687d5fefe4ed5 # main
     with:
       needs-json: ${{ toJSON(needs) }}
       expected-results: |
