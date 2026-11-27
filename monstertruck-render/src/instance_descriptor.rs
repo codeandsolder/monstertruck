@@ -34,7 +34,7 @@ impl Material {
     /// };
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of material is returned rather than stored."]
     pub fn buffer(&self, device: &Device) -> BufferHandler {
         let material_data: [f32; 8] = [
             narrow_f64_to_f32(self.albedo[0]),
@@ -51,7 +51,7 @@ impl Material {
 
     #[doc(hidden)]
     #[inline]
-    #[must_use]
+    #[must_use = "The returned bind-group layout entry must be included in the GPU pipeline layout."]
     pub const fn bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,
@@ -88,7 +88,7 @@ impl PolygonState {
     /// };
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of instance matrix is returned rather than stored."]
     pub fn matrix_buffer(&self, device: &Device) -> BufferHandler {
         let matrix_data = matrix4_to_raw_f32(self.matrix);
         BufferHandler::from_slice(&matrix_data, device, BufferUsages::UNIFORM)
@@ -96,7 +96,7 @@ impl PolygonState {
 
     #[doc(hidden)]
     #[inline]
-    #[must_use]
+    #[must_use = "The matrix binding layout entry is returned for pipeline configuration."]
     pub fn matrix_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
@@ -122,12 +122,12 @@ impl PolygonState {
     /// };
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of material is returned rather than stored."]
     pub fn material_buffer(&self, device: &Device) -> BufferHandler { self.material.buffer(device) }
 
     #[doc(hidden)]
     #[inline]
-    #[must_use]
+    #[must_use = "The material binding layout entry is returned for pipeline configuration."]
     pub const fn material_bgl_entry() -> PreBindGroupLayoutEntry { Material::bgl_entry() }
 
     /// Creates texture view and sampler of the instance's texture image.
@@ -138,7 +138,7 @@ impl PolygonState {
     /// layout(set = 1, binding = 2) uniform texture2D texture_view;
     /// layout(set = 1, binding = 3) uniform sampler texture_sampler;
     /// ```
-    #[must_use]
+    #[must_use = "The constructed texture view and sampler of the instance's texture image is returned rather than stored."]
     pub fn textureview_and_sampler(&self, device: &Device) -> Option<(TextureView, Sampler)> {
         let texture = self.texture.as_ref()?;
         let view = texture.create_view(&TextureViewDescriptor::default());
@@ -155,7 +155,7 @@ impl PolygonState {
 
     #[doc(hidden)]
     #[inline]
-    #[must_use]
+    #[must_use = "The texture-view binding layout entry is returned for pipeline configuration."]
     pub const fn textureview_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,
@@ -170,7 +170,7 @@ impl PolygonState {
 
     #[doc(hidden)]
     #[inline]
-    #[must_use]
+    #[must_use = "The sampler binding layout entry is returned for pipeline configuration."]
     pub const fn sampler_bgl_entry() -> PreBindGroupLayoutEntry {
         PreBindGroupLayoutEntry {
             visibility: ShaderStages::FRAGMENT,

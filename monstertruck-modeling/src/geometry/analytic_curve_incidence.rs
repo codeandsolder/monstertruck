@@ -10,7 +10,7 @@ use monstertruck_geometry::analytic_curve_incidence::{
 ///
 /// A match does not certify face trims, edge incidence or occupied solid
 /// equivalence. Unsupported UV parameter compositions are never guessed.
-#[must_use]
+#[must_use = "check the global incidence certificate before claiming analytic surface membership"]
 pub fn certify_analytic_curve_on_surface(
     curve: &Curve,
     surface: &Surface,

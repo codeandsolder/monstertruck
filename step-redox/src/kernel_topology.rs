@@ -10,6 +10,9 @@ use crate::kernel_source_load::{KernelTopologyId, KernelTopologyProvenance};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod treatment_layer;
+pub(crate) use treatment_layer::{PlannedTreatmentLayer, plan_treatment_layer};
+
 /// In-memory identity of an edited native solid.
 ///
 /// Removed source entities are absent. Surviving source IDs retain their
@@ -20,6 +23,16 @@ pub struct KernelEditedSourceEvidence {
     pub boundary_shells: usize,
     pub faces: usize,
     pub retained_source_topology: KernelTopologyProvenance,
+}
+
+/// Disposable STEP-form analytic view of the current native topology.
+///
+/// The mapping addresses this exact exchange, including vertices and edges
+/// allocated by earlier inverse operations. It is not original provenance.
+pub struct KernelEditedSourceProjection {
+    pub exchange: step_p21::ast::Exchange,
+    pub source: SourceEntity,
+    pub topology: KernelTopologyProvenance,
 }
 
 /// Apply normalized topology edits to a backend-owned native solid.
@@ -71,8 +84,10 @@ pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspect
     /// Read the currently edited exact topology as a source-neutral semantic
     /// B-rep, without constructing STEP records.
     ///
-    /// Unsupported analytic geometry remains explicitly unclassified rather
-    /// than being approximated by line segments or faceted surfaces.
+    /// Face, edge and vertex identifiers are globally unique current native
+    /// `StableId`s, including entities allocated by previous patches. Loop and
+    /// coedge identifiers occupy a separate transient namespace. Unsupported
+    /// analytic geometry remains explicitly unclassified.
     ///
     /// # Errors
     /// Returns an error if the topology cannot be inspected consistently.
@@ -90,6 +105,17 @@ pub trait SourceTopologyEditor: crate::kernel_source_load::SourceStepLoadInspect
         &self,
         edited: &Self::EditedSource,
     ) -> Result<KernelEditedSourceEvidence>;
+
+    /// Project the current native geometry and its exact identity correspondence
+    /// into STEP records for analytic recognizers that still consume them.
+    /// No topology is imported or replaced.
+    ///
+    /// # Errors
+    /// Returns an error if the projection or identity journal is incomplete.
+    fn edited_source_step_projection(
+        &self,
+        edited: &Self::EditedSource,
+    ) -> Result<KernelEditedSourceProjection>;
 
     /// Export the edited native solid only when a STEP-form semantic view or
     /// an external STEP artifact is actually needed.
@@ -242,34 +268,198 @@ pub fn plan_source_edge_treatment_patches(
     evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
     provenance: &crate::kernel_source_load::KernelTopologyProvenance,
 ) -> Result<KernelTopologyPatch> {
+    Ok(plan_source_edge_treatment_transaction(exchange, source, evidence, provenance)?.patch)
+}
+
+/// Planned inverse topology and forward replay selectors from the same
+/// exact sharp chains. Each selector group represents a single connected
+/// treatment perimeter that must be replayed in one native operation.
+pub(crate) struct PlannedTreatmentTransaction {
+    pub patch: KernelTopologyPatch,
+    pub coupled_groups: Vec<CoupledTreatmentReplay>,
+}
+
+/// One connected forward operation, including generated corner blend faces
+/// which have no standalone selected sharp edge of their own.
+pub(crate) struct CoupledTreatmentReplay {
+    pub selectors: Vec<(u64, crate::cad_ir::EdgeSelector)>,
+    pub junction_faces: Vec<u64>,
+}
+
+impl CoupledTreatmentReplay {
+    const fn edges(selectors: Vec<(u64, crate::cad_ir::EdgeSelector)>) -> Self {
+        Self {
+            selectors,
+            junction_faces: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn plan_source_edge_treatment_transaction(
+    exchange: &step_p21::ast::Exchange,
+    source: SourceEntity,
+    evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
+    provenance: &KernelTopologyProvenance,
+) -> Result<PlannedTreatmentTransaction> {
     if evidence.is_empty() {
         bail!("edge-treatment patch batch cannot be empty");
     }
     let solid = source_reduced_solid(exchange, source)?;
+    plan_treatment_transaction(&solid, source.data_section, evidence, provenance)
+}
+
+fn treatment_components<'a>(
+    solid: &crate::reduced_brep::ReducedSolid,
+    evidence: &'a [crate::edge_treatments::EdgeTreatmentEvidence],
+) -> Vec<(bool, Vec<&'a crate::edge_treatments::EdgeTreatmentEvidence>)> {
     let mut ordered = evidence.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|item| item.treatment_face_id);
-    let families = crate::inverse_edge_treatment::edge_treatment_families(&solid, &ordered);
-    let patches = families
+    let (closed, remaining) = crate::inverse_edge_treatment::closed_components(solid, &ordered);
+    let mut groups = closed
         .into_iter()
-        .map(|family| {
-            if family.len() == 1 {
-                crate::inverse_edge_treatment::plan_edge_treatment_patch(
-                    &solid,
-                    family[0],
-                    source.data_section,
-                    provenance,
-                )
-            } else {
-                crate::inverse_edge_treatment::plan_circle_family_patch(
-                    &solid,
-                    &family,
-                    source.data_section,
-                    provenance,
-                )
-            }
-        })
+        .map(|group| (true, group))
+        .collect::<Vec<_>>();
+    groups.extend(
+        crate::inverse_edge_treatment::edge_treatment_families(solid, &remaining)
+            .into_iter()
+            .map(|group| (false, group)),
+    );
+    groups
+}
+
+fn plan_treatment_component(
+    solid: &crate::reduced_brep::ReducedSolid,
+    section: usize,
+    closed: bool,
+    group: &[&crate::edge_treatments::EdgeTreatmentEvidence],
+    provenance: &impl crate::inverse_edge_treatment::TreatmentTopology,
+) -> Result<PlannedTreatmentTransaction> {
+    if closed {
+        let result = crate::inverse_edge_treatment::plan_closed_perimeter(
+            solid, group, section, provenance,
+        )?;
+        return Ok(PlannedTreatmentTransaction {
+            patch: result.patch,
+            coupled_groups: vec![CoupledTreatmentReplay::edges(result.selectors)],
+        });
+    }
+    let patch = if group.len() == 1 {
+        crate::inverse_edge_treatment::plan_edge_treatment_patch(
+            solid, group[0], section, provenance,
+        )?
+    } else {
+        crate::inverse_edge_treatment::plan_circle_family_patch(solid, group, section, provenance)?
+    };
+    let coupled_groups = circular_replay_selectors(&patch, group)?
+        .into_iter()
+        .map(CoupledTreatmentReplay::edges)
+        .collect();
+    Ok(PlannedTreatmentTransaction {
+        patch,
+        coupled_groups,
+    })
+}
+
+/// A partial sharp circle is a bounded arc, while a full split circle is one
+/// operation even if it was authored as several source treatment faces.
+fn circular_replay_selectors(
+    patch: &KernelTopologyPatch,
+    group: &[&crate::edge_treatments::EdgeTreatmentEvidence],
+) -> Result<Vec<Vec<(u64, crate::cad_ir::EdgeSelector)>>> {
+    use crate::cad_ir::EdgeSelector;
+    use crate::edge_treatments::EdgeTreatmentVirtualEdge;
+    if !matches!(
+        group[0].virtual_edge,
+        EdgeTreatmentVirtualEdge::Circle { .. }
+    ) {
+        return Ok(Vec::new());
+    }
+    let KernelPatchCurve::CircleArc {
+        center_mm,
+        normal,
+        radius_mm,
+        ..
+    } = patch
+        .new_edges
+        .first()
+        .context("missing inverse circle")?
+        .curve
+    else {
+        bail!("inverse circle has no circular edge");
+    };
+    let mut sweep = 0.0_f64;
+    for edge in &patch.new_edges {
+        let KernelPatchCurve::CircleArc {
+            start_angle_rad,
+            end_angle_rad,
+            ..
+        } = edge.curve
+        else {
+            bail!("inverse circular treatment produced a noncircular sharp edge");
+        };
+        sweep += end_angle_rad - start_angle_rad;
+    }
+    let tol = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM / radius_mm;
+    let selector = if (sweep - std::f64::consts::TAU).abs() <= tol {
+        if group.len() == 1 {
+            return Ok(Vec::new());
+        }
+        EdgeSelector::Circle {
+            center_mm,
+            normal,
+            radius_mm,
+        }
+    } else {
+        anyhow::ensure!(
+            group.len() == 1 && sweep > tol && sweep < std::f64::consts::TAU - tol,
+            "invalid partial inverse circular chain"
+        );
+        EdgeSelector::CircleArc {
+            center_mm,
+            normal,
+            radius_mm,
+            start_mm: *patch
+                .new_vertices
+                .first()
+                .context("missing inverse arc start")?,
+            sweep_rad: sweep,
+        }
+    };
+    Ok(vec![
+        group
+            .iter()
+            .map(|item| (item.treatment_face_id, selector.clone()))
+            .collect(),
+    ])
+}
+
+fn combine_treatment_transactions(
+    plans: Vec<PlannedTreatmentTransaction>,
+) -> Result<PlannedTreatmentTransaction> {
+    let mut patches = Vec::new();
+    let mut coupled_groups = Vec::new();
+    for plan in plans {
+        patches.push(plan.patch);
+        coupled_groups.extend(plan.coupled_groups);
+    }
+    Ok(PlannedTreatmentTransaction {
+        patch: merge_topology_patches(patches)?,
+        coupled_groups,
+    })
+}
+
+pub(crate) fn plan_treatment_transaction(
+    solid: &crate::reduced_brep::ReducedSolid,
+    section: usize,
+    evidence: &[crate::edge_treatments::EdgeTreatmentEvidence],
+    provenance: &impl crate::inverse_edge_treatment::TreatmentTopology,
+) -> Result<PlannedTreatmentTransaction> {
+    anyhow::ensure!(!evidence.is_empty(), "empty treatment transaction");
+    let plans = treatment_components(solid, evidence)
+        .into_iter()
+        .map(|(closed, group)| plan_treatment_component(solid, section, closed, &group, provenance))
         .collect::<Result<Vec<_>>>()?;
-    merge_topology_patches(patches)
+    combine_treatment_transactions(plans)
 }
 
 /// Normalize representation-only coplanar partitions into one authoritative kernel topology edit.
@@ -592,7 +782,7 @@ fn topology_face(
         .with_context(|| format!("source face #{source_id} has no unique kernel StableId"))
 }
 
-fn source_reduced_solid(
+pub(crate) fn source_reduced_solid(
     exchange: &step_p21::ast::Exchange,
     source: SourceEntity,
 ) -> Result<crate::reduced_brep::ReducedSolid> {

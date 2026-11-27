@@ -136,7 +136,7 @@ impl<V: Copy> Faces<V> {
     /// let faces = Faces::from_tri_and_quad_faces(tri_faces, Vec::new());
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn from_tri_and_quad_faces(tri_faces: Vec<[V; 3]>, quad_faces: Vec<[V; 4]>) -> Self {
         Self {
             tri_faces,
@@ -179,7 +179,7 @@ impl<V: Copy> Faces<V> {
 
     /// Returns the vector of triangles.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of triangles."]
     pub const fn tri_faces(&self) -> &Vec<[V; 3]> { &self.tri_faces }
 
     /// Returns the mutable slice of triangles.
@@ -188,7 +188,7 @@ impl<V: Copy> Faces<V> {
 
     /// Returns the vector of quadrangles.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of quadrangles."]
     pub const fn quad_faces(&self) -> &Vec<[V; 4]> { &self.quad_faces }
 
     /// Returns the mutable slice of quadrangles.
@@ -197,7 +197,7 @@ impl<V: Copy> Faces<V> {
 
     /// Returns the vector of n-gons (n > 4).
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of n-gons (n > 4)."]
     pub const fn other_faces(&self) -> &Vec<Vec<V>> { &self.other_faces }
 
     /// Returns the mutable iterator of n-gons (n > 4).
@@ -252,12 +252,12 @@ impl<V: Copy> Faces<V> {
 
     /// Returns true if the faces is empty.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the collection contains no elements."]
     pub const fn is_empty(&self) -> bool { self.len() == 0 }
 
     /// Returns the number of faces.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the number of faces."]
     pub const fn len(&self) -> usize {
         self.tri_faces.len() + self.quad_faces.len() + self.other_faces.len()
     }
@@ -310,7 +310,7 @@ impl<V: Copy> Faces<V> {
     /// assert_eq!(iter.next(), None);
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards iterator with triangulation faces."]
     pub fn triangle_iter(&self) -> TriangleIterator<'_, V> {
         let len = self
             .face_iter()

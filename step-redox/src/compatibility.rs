@@ -32,7 +32,7 @@ const RISK_TYPES: &[&str] = &[
     "SHAPE_REPRESENTATION_RELATIONSHIP",
 ];
 
-#[must_use]
+#[must_use = "The STEP entity audit report is returned, not recorded automatically."]
 pub fn audit_entities(entities: &[EntityInstance]) -> CompatibilityAudit {
     let mut counts = BTreeMap::new();
     for entity in entities {

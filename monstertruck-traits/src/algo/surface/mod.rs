@@ -105,14 +105,14 @@ std::thread_local! {
 
 /// Reads the work charged on this thread since the last [`take_division_work`],
 /// without clearing it.
-#[must_use]
+#[must_use = "The per-thread division work measurement is returned, not stored elsewhere."]
 pub fn division_work() -> DivisionWork { DIVISION_WORK.with(std::cell::Cell::get) }
 
 /// Reads and clears the work charged on this thread.
 ///
 /// Call it immediately BEFORE a division to zero the meter and immediately
 /// AFTER to read that division's cost, including any nested ones.
-#[must_use]
+#[must_use = "The removed or reset value is returned only once and cannot be recovered afterward."]
 pub fn take_division_work() -> DivisionWork { DIVISION_WORK.replace(DivisionWork::default()) }
 
 /// Process-wide cells examined, across every thread.
@@ -136,7 +136,7 @@ static DIVISION_TRUNCATIONS_TOTAL: std::sync::atomic::AtomicU64 =
 static DIVISION_CELLS_MAX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Reads the process-wide `(cells, truncations)` counters.
-#[must_use]
+#[must_use = "The process-wide cell and truncation counters are returned to the caller."]
 pub fn division_totals() -> (u64, u64) {
     use std::sync::atomic::Ordering::Relaxed;
     (
@@ -180,20 +180,20 @@ pub fn charge_presearch_nodes(nodes: u64) {
 
 /// Grid nodes for a `(division + 1) x (division + 1)` presearch scan.
 #[inline]
-#[must_use]
+#[must_use = "The computed presearch nodes quantity is reported through this return value."]
 pub const fn presearch_nodes(division: usize) -> u64 {
     let side = division as u64 + 1;
     side.saturating_mul(side)
 }
 
 /// Reads the process-wide presearch-node counter.
-#[must_use]
+#[must_use = "The computed presearch nodes total quantity is reported through this return value."]
 pub fn presearch_nodes_total() -> u64 {
     PRESEARCH_NODES_TOTAL.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Reads the process-wide high-water mark of cells spent by one division.
-#[must_use]
+#[must_use = "The computed division max cells quantity is reported through this return value."]
 pub fn division_max_cells() -> u64 { DIVISION_CELLS_MAX.load(std::sync::atomic::Ordering::Relaxed) }
 
 /// Zeroes the high-water mark and returns what it held.
@@ -531,8 +531,48 @@ where
     S: ParametricSurface,
     S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
+    refine_parameter_grid(
+        surface,
+        (vec![urange.0, urange.1], vec![vrange.0, vrange.1]),
+        tol,
+        cell_budget,
+    )
+}
+
+/// Refine a tensor-product grid from caller-specified initial cuts, preserving
+/// every cut (for example exact chart seams) under the same global work budget.
+///
+/// # Panics
+/// Each axis must contain at least two finite nondecreasing coordinates and
+/// tolerance must be greater than or equal to the kernel epsilon.
+pub fn parameter_division_from_grid_with_budget<S>(
+    surface: &S,
+    (udiv, vdiv): (Vec<f64>, Vec<f64>),
+    tol: f64,
+    cell_budget: u64,
+) -> BudgetedDivision
+where
+    S: ParametricSurface,
+    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+{
     nonpositive_tolerance!(tol);
-    let (mut udiv, mut vdiv) = (vec![urange.0, urange.1], vec![vrange.0, vrange.1]);
+    assert!([&udiv, &vdiv].into_iter().all(|axis| axis.len() >= 2
+        && axis.iter().all(|x| x.is_finite())
+        && axis.windows(2).all(|pair| pair[0] <= pair[1])));
+    refine_parameter_grid(surface, (udiv, vdiv), tol, cell_budget)
+}
+
+fn refine_parameter_grid<S>(
+    surface: &S,
+    (mut udiv, mut vdiv): (Vec<f64>, Vec<f64>),
+    tol: f64,
+    cell_budget: u64,
+) -> BudgetedDivision
+where
+    S: ParametricSurface,
+    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+{
+    nonpositive_tolerance!(tol);
     let mut budget = CellBudget {
         remaining: cell_budget,
         exhausted: false,

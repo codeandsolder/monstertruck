@@ -54,9 +54,10 @@
 //!
 //! Edge curves get the same treatment: a segment is its two endpoints, a
 //! B-spline curve its control polygon, a rational curve its projected control
-//! polygon (positive weights only). A parameter curve or an intersection curve
-//! carries no cheap hull -- its `leader` is an APPROXIMATION, not an enclosure
-//! -- so those refuse too.
+//! polygon (positive weights only). Composite curves use certified surface
+//! and parameter-domain bounds. Transverse native plane intersections with
+//! well-conditioned degree-one guides additionally have finite projected
+//! span enclosures. Uncertified fitted leaders alone are never bounds.
 //!
 //! # This is a bound, not a tight bound
 //!
@@ -82,10 +83,11 @@
 //!   anything else refuses.
 
 use crate::{
-    BoundingBox, Conic2D, Curve, Curve2D, Face, InnerSpace, Line, Matrix4, ParameterCurve, Point2,
-    Point3, Solid, Surface, Vector3, Vector4,
+    BoundingBox, Conic2D, Curve, Curve2D, EuclideanSpace, Face, InnerSpace, Line, Matrix4,
+    ParameterCurve, Point2, Point3, Solid, Surface, Vector3, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
 
 /// How much an analytic sphere's axis-aligned bounding box exceeds the sphere:
 /// `(2r)^3 / (4/3 pi r^3) = 6 / pi`, independent of the radius.
@@ -100,7 +102,7 @@ pub const ANALYTIC_SPHERE_LOOSENESS: f64 = 6.0 / std::f64::consts::PI;
 /// The ratio of the certified box's volume to the enclosed ball's volume, for a
 /// ball of any radius: exactly [`ANALYTIC_SPHERE_LOOSENESS`].
 #[inline]
-#[must_use]
+#[must_use = "use the volume ratio when assessing the looseness of an analytic sphere bound"]
 pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 
 /// A certified axis-aligned box containing every point of `solid`, or [`None`]
@@ -110,7 +112,7 @@ pub const fn analytic_sphere_looseness() -> f64 { ANALYTIC_SPHERE_LOOSENESS }
 /// The box contains the solid's SURFACE and therefore -- the surface being a
 /// closed boundary -- the solid. See the module note for the per-class
 /// arguments and for how loose the result is.
-#[must_use]
+#[must_use = "handle uncertifiable solids rather than treating their bounding box as complete"]
 pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>> {
     let mut result = BoundingBox::<Point3>::new();
     let mut any = false;
@@ -124,7 +126,7 @@ pub fn certified_solid_bounding_box(solid: &Solid) -> Option<BoundingBox<Point3>
 }
 
 /// A certified axis-aligned box containing every point of `face`, or [`None`].
-#[must_use]
+#[must_use = "handle unsupported face classes when using certified bounds"]
 pub fn certified_face_bounding_box(face: &Face) -> Option<BoundingBox<Point3>> {
     let surface = face.surface();
     let hull = face_boundary_hull(face);
@@ -207,7 +209,7 @@ pub fn certified_surface_bounding_box(
 /// Diagnosis, not certification: an empty result means every face was bounded.
 /// A caller staring at a `None` needs to know WHICH class it tripped over, and
 /// guessing is how instruments start lying.
-#[must_use]
+#[must_use = "inspect uncertifiable face classes when explaining missing solid bounds"]
 pub fn uncertifiable_face_classes(solid: &Solid) -> Vec<String> {
     let mut classes: Vec<String> = Vec::new();
     for shell in solid.boundaries() {
@@ -267,7 +269,7 @@ const fn curve_class_name(curve: &Curve) -> &'static str {
 
 /// Points whose convex hull encloses every boundary wire of `face`, or [`None`]
 /// when some edge carries a curve with no cheap enclosure.
-#[must_use]
+#[must_use = "handle boundary curves without a certified convex enclosure"]
 pub fn face_boundary_hull(face: &Face) -> Option<Vec<Point3>> {
     let mut points = Vec::new();
     for edge in face.edge_iter() {
@@ -289,18 +291,101 @@ pub(crate) fn certified_curve_bounding_box(curve: &Curve) -> Option<BoundingBox<
     hull_box(&points)
 }
 
+/// A finite transverse intersection of native affine planes. A degree-one
+/// leader has a constant tangent on each positive knot span. Both the guide
+/// and its projection onto the carriers' common line are therefore bounded
+/// by the span endpoints. Include the possible tangent-plane projection,
+/// orthogonal fallback, and explicit endpoint anchors, without replacing the
+/// original intersection edge or its parameterization.
+fn planar_intersection_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
+    let Curve::Intersection(intersection) = curve else {
+        return None;
+    };
+    let (Surface::Plane(first), Surface::Plane(second)) = (
+        intersection.surface0().as_ref(),
+        intersection.surface1().as_ref(),
+    ) else {
+        return None;
+    };
+    let net = intersection.leader().try_into_homogeneous_bspline_curve()?;
+    if net.degree() != 1 {
+        return None;
+    }
+    // Exact span extraction avoids modeling-tolerance knot coalescing.
+    let spans = monstertruck_geometry::proof_bezier_spans(&net)?;
+    let normal0 = first.normal();
+    let normal1 = second.normal();
+    let cross = normal0.cross(normal1);
+    let sine = cross.magnitude();
+    let policy = DEFAULT_NUMERICAL_TOLERANCES;
+    if !sine.is_finite() || sine <= policy.angular {
+        return None;
+    }
+    let direction = cross / sine;
+    let origin = first.origin();
+    let r = normal1.dot(second.origin() - origin);
+    let base = origin + cross.cross(normal0) * (r / (sine * sine));
+    let budget = policy.parameter_projection;
+    let mut points = Vec::new();
+    for span in spans {
+        let [a, b] = span.controls.as_slice() else {
+            return None;
+        };
+        let decode = |p: &[f64; 4]| projected_control_point(Vector4::new(p[0], p[1], p[2], p[3]));
+        let (a, b) = (decode(a)?, decode(b)?);
+        let delta = b - a;
+        let length = delta.magnitude();
+        if !length.is_finite() || length <= policy.structural {
+            return None;
+        }
+        let tangent = delta / length;
+        let cosine = tangent.dot(direction);
+        let scale = a
+            .to_vec()
+            .magnitude()
+            .max(b.to_vec().magnitude())
+            .max(origin.to_vec().magnitude())
+            .max(second.origin().to_vec().magnitude())
+            .max(1.0);
+        let error = policy.structural * scale / sine;
+        if cosine.abs() <= policy.angular || error * (1.0 + cosine.abs().recip()) > budget {
+            return None;
+        }
+        for p in [a, b] {
+            let orthogonal = base + direction * direction.dot(p - base);
+            let projected = base + direction * (tangent.dot(p - base) / cosine);
+            // Only near-incidence, well-conditioned guides qualify. This
+            // includes the evaluator's leader fallback without bounding a
+            // remote or numerically singular branch.
+            if (p - orthogonal).magnitude() > budget || (p - projected).magnitude() > budget {
+                return None;
+            }
+            points.extend([p, orthogonal, projected]);
+        }
+    }
+    let anchors: [Option<Point3>; 2] = intersection.endpoint_anchors().into();
+    points.extend(anchors.into_iter().flatten());
+    let bounds = hull_box(&points)?;
+    let pad = Vector3::new(budget, budget, budget);
+    Some(BoundingBox::from_iter([
+        bounds.min() - pad,
+        bounds.max() + pad,
+    ]))
+}
+
 /// Appends points whose convex hull encloses `curve`, or returns [`None`] when
 /// the curve class carries no such finite point set.
 ///
-/// The two composite classes never touch their stored `leader`: a leader is a
-/// FITTED approximation of the curve and an approximation is not an enclosure.
-/// They are bounded structurally instead --
+/// A fitted leader alone is not an enclosure. Composite curves are bounded
+/// structurally instead --
 ///
 /// * a parameter curve `surface(c(t))` by pushing `c`'s 2D control hull through
 ///   [`surface_patch_box`], and
 /// * an intersection curve by the fact that it lies on BOTH its surfaces, so
 ///   any sound box for EITHER of them (or for either boundary parameter curve,
-///   which is tighter) contains it.
+///   which is tighter) contains it. Transverse native planes additionally
+///   admit a certified enclosure of their projected degree-one guide spans,
+///   including endpoint anchors and the evaluator fallback.
 ///
 /// -- and the box's eight corners are pushed, a convex hull containing it.
 pub fn push_curve_hull(curve: &Curve, points: &mut Vec<Point3>) -> Option<()> {
@@ -320,7 +405,12 @@ pub fn push_curve_hull(curve: &Curve, points: &mut Vec<Point3>) -> Option<()> {
         Curve::ParameterCurve(pcurve) => {
             push_box_corners(&parameter_curve_box(pcurve)?, points);
         }
-        Curve::Intersection(curve) => {
+        Curve::Intersection(intersection) => {
+            if let Some(bounds) = planar_intersection_box(curve) {
+                push_box_corners(&bounds, points);
+                return Some(());
+            }
+            let curve = intersection;
             // FOUR independent enclosures, each sound on its own, so their
             // INTERSECTION is sound and no looser than the best of them.
             let candidates = [

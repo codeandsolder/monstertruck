@@ -1,3 +1,5 @@
+#[cfg(feature = "cad-kernel-monstertruck")]
+mod precision_rechart;
 use crate::math3::{cross, distance, dot, norm, normalize as normalize3, sub};
 use crate::step_entities::{
     cartesian_point, entity_ref, finite_numeric_list as numeric_parameter_list,
@@ -7,6 +9,11 @@ use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub use precision_rechart::{
+    SourceCapPrecisionPatch, SourceCapRechartManifest, SourceCapRechartProposal,
+    propose_source_cap_rechart,
+};
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 
@@ -605,6 +612,96 @@ pub fn analyze_v_extrusion_surface(
         extrusion_mm: candidate.extrusion,
         max_residual_mm: candidate.max_residual_mm,
     })
+}
+
+/// Return both actual boundary control polygons of a linear tensor-product
+/// strip. Proof may normalize knot intervals because it checks the original
+/// full trim; a swapped U/V chart reverses the surface normal.
+pub fn boundary_strip_profiles(
+    surface_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<([crate::brep::BSplineSupport; 2], bool)> {
+    use crate::brep::BSplineSupport;
+    let surface = parse_surface(surface_id, entities, index)?;
+    if !is_not_true(&surface.u_closed)
+        || !is_not_true(&surface.v_closed)
+        || !is_not_true(&surface.self_intersect)
+    {
+        return None;
+    }
+    let rows = surface.control_points.len();
+    let columns = surface.control_points.first()?.len();
+    let (swapped, degree, multiplicities, values, sweep_multiplicities, sweep_values) =
+        if surface.v_degree == 1 && columns == 2 {
+            (
+                false,
+                surface.u_degree,
+                &surface.u_multiplicities,
+                &surface.u_knots,
+                &surface.v_multiplicities,
+                &surface.v_knots,
+            )
+        } else if surface.u_degree == 1 && rows == 2 {
+            (
+                true,
+                surface.v_degree,
+                &surface.v_multiplicities,
+                &surface.v_knots,
+                &surface.u_multiplicities,
+                &surface.u_knots,
+            )
+        } else {
+            return None;
+        };
+    if surface
+        .control_points
+        .iter()
+        .any(|row| row.len() != columns)
+    {
+        return None;
+    }
+    normalized_expanded_knots(
+        1,
+        2,
+        &integer_parameter_list(sweep_multiplicities)?,
+        &numeric_parameter_list(sweep_values)?,
+    )?;
+    let count = if swapped { columns } else { rows };
+    let knots = normalized_expanded_knots(
+        degree,
+        count,
+        &integer_parameter_list(multiplicities)?,
+        &numeric_parameter_list(values)?,
+    )?;
+    let profile = |side: usize| -> Option<BSplineSupport> {
+        let ij = |i: usize| if swapped { (side, i) } else { (i, side) };
+        let control_points_mm = (0..count)
+            .map(|i| {
+                let (row, col) = ij(i);
+                cartesian_point(surface.control_points[row][col], entities, index)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let weights = if let Some(weights) = &surface.weights {
+            Some(
+                (0..count)
+                    .map(|i| {
+                        let (row, col) = ij(i);
+                        number(weights.get(row)?.get(col)?).filter(|w| w.is_finite() && *w > 0.)
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        Some(BSplineSupport {
+            degree,
+            control_points_mm,
+            knots: knots.clone(),
+            weights,
+        })
+    };
+    Some(([profile(0)?, profile(1)?], swapped))
 }
 
 fn integer_parameter_list(parameter: &Parameter) -> Option<Vec<usize>> {

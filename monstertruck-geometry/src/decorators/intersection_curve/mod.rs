@@ -21,30 +21,7 @@ use monstertruck_core::Transform;
 use monstertruck_core::newton::{self, CalcOutput};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
-use std::{ops::Bound, sync::OnceLock};
-
-// Experiment only: isolate the *exact SSI representation's* adaptive curve
-// division from both modeling-curve division and topological admission.
-// An explicitly supplied experimental configuration must be valid: falling
-// back to the default sampling silently changes which Boolean we evaluate.
-fn experimental_ssi_curve_sample_floor() -> Option<f64> {
-    static FLOOR: OnceLock<Option<f64>> = OnceLock::new();
-    *FLOOR.get_or_init(|| {
-        std::env::var("MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM")
-            .ok()
-            .map(|value| {
-                let floor: f64 = value.parse().unwrap_or_else(|error| {
-                    eprintln!("invalid MT_EXPERIMENT_SSI_CURVE_SAMPLE_FLOOR_MM={value:?}: {error}");
-                    std::process::exit(2);
-                });
-                assert!(
-                    floor.is_finite() && floor > 0.0,
-                    "SSI sampling floor must be positive"
-                );
-                floor
-            })
-    })
-}
+use std::ops::Bound;
 
 impl<P> SnapCurveEndpoints for Line<P> {}
 
@@ -573,10 +550,8 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        let sampling_tol =
-            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
-        let result = algo::curve::parameter_division(self, range, sampling_tol);
-        intersection_trace::division(0, result.0.len(), sampling_tol);
+        let result = algo::curve::parameter_division(self, range, tol);
+        intersection_trace::division(0, result.0.len(), tol);
         result
     }
 }
@@ -736,10 +711,8 @@ where
     type Point = Point3;
     #[inline]
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Point3>) {
-        let sampling_tol =
-            experimental_ssi_curve_sample_floor().map_or(tol, |floor| tol.max(floor));
-        let result = algo::curve::parameter_division(self, range, sampling_tol);
-        intersection_trace::division(0, result.0.len(), sampling_tol);
+        let result = algo::curve::parameter_division(self, range, tol);
+        intersection_trace::division(0, result.0.len(), tol);
         result
     }
 }

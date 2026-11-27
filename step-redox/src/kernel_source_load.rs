@@ -79,10 +79,9 @@ pub struct KernelSourceSolidLoadEvidence {
 pub struct KernelTopologyId(u64);
 
 impl KernelTopologyId {
-    #[cfg(any(test, feature = "cad-kernel-monstertruck"))]
     pub(crate) const fn from_raw(raw: u64) -> Self { Self(raw) }
 
-    #[must_use]
+    #[must_use = "The computed raw quantity is reported through this return value."]
     pub const fn raw(self) -> u64 { self.0 }
 }
 
@@ -302,20 +301,19 @@ mod monstertruck_adapter {
     };
     use crate::cad_kernel::monstertruck::MonstertruckKernel;
     use crate::kernel_topology::{
-        KernelEditedSourceEvidence, KernelFaceBoundaryReplacement, KernelFaceSplice,
-        KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef, KernelTopologyPatch,
-        SourceTopologyEditor,
+        KernelEditedSourceEvidence, KernelEditedSourceProjection, KernelFaceBoundaryReplacement,
+        KernelFaceSplice, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchVertexRef,
+        KernelTopologyPatch, SourceTopologyEditor,
     };
     use crate::reduced_brep::{ReducedFace, ReducedSolid};
     use crate::step_document::StepSection;
     use crate::step_graph;
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, AnalyticSupport};
     use monstertruck_geometry::analytic_line_segment::{
         SegmentLocus, certify_bspline_segment_locus, certify_nurbs_segment_locus,
     };
     use monstertruck_geometry::prelude::UnitHyperbola;
-    #[cfg(test)]
     use monstertruck_io::step::load::ParsedStepSource;
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
@@ -605,7 +603,7 @@ mod monstertruck_adapter {
         {
             return None;
         }
-        let normal = x.cross(y).normalize();
+        let normal = x.cross(y).normalize() * if circle.orientation() { 1.0 } else { -1.0 };
         let center = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
         let radial = x / radius_mm;
         Some(CircleSupport {
@@ -985,6 +983,40 @@ mod monstertruck_adapter {
         source_topology: KernelTopologyProvenance,
     }
 
+    fn validate_native_semantic_ids(solid: &StepCompressedTrimmedSolid) -> Result<u64> {
+        // Topological identities belong to the *current* native shape.
+        // Fresh patch-created entities have StableIds as well; use those,
+        // not their former STEP IDs or transient compressed array indexes.
+        let mut assigned = std::collections::HashSet::new();
+        let mut synthetic_count = 0_u64;
+        for shell in &solid.boundaries {
+            for (ids, len) in [
+                (shell.vertex_stable_ids.as_deref(), shell.vertices.len()),
+                (shell.edge_stable_ids.as_deref(), shell.edges.len()),
+                (shell.face_stable_ids.as_deref(), shell.faces.len()),
+            ] {
+                let ids = ids.context("native semantic view requires assigned StableIds")?;
+                anyhow::ensure!(ids.len() == len, "native stable identity count mismatch");
+                for id in ids {
+                    anyhow::ensure!(
+                        id.is_assigned() && assigned.insert(id.raw()),
+                        "native semantic view has missing or nonunique StableId"
+                    );
+                }
+            }
+            for wire in shell.faces.iter().flat_map(|face| &face.boundaries) {
+                synthetic_count = synthetic_count
+                    .checked_add(2 + u64::try_from(wire.len())?)
+                    .context("native coedge identity count overflow")?;
+            }
+        }
+        let max_id = assigned.into_iter().max().unwrap_or(0);
+        max_id
+            .checked_add(synthetic_count)
+            .context("native semantic identity range overflow")?;
+        Ok(max_id)
+    }
+
     impl SourceTopologyEditor for MonstertruckKernel {
         type EditedSource = MonstertruckEditedSource;
 
@@ -1076,23 +1108,27 @@ mod monstertruck_adapter {
 
         fn edited_source_reduced_brep(&self, edited: &Self::EditedSource) -> Result<ReducedSolid> {
             let mut faces = Vec::new();
-            // Dense synthetic identities are deliberately independent of the
-            // original source journal. They identify a *current* exact shape.
-            let mut next_id = 1_u64;
+            let max_id = validate_native_semantic_ids(&edited.imported.solid)?;
+            let mut next_id = max_id;
             let mut allocate = || {
-                let id = next_id;
                 next_id += 1;
-                id
+                next_id
             };
             for shell in &edited.imported.solid.boundaries {
                 let vertex_ids = shell
-                    .vertices
-                    .iter()
-                    .map(|_| allocate())
-                    .collect::<Vec<_>>();
-                let edge_ids = shell.edges.iter().map(|_| allocate()).collect::<Vec<_>>();
-                for face in &shell.faces {
-                    let face_id = allocate();
+                    .vertex_stable_ids
+                    .as_ref()
+                    .context("missing vertex StableIds")?;
+                let edge_ids = shell
+                    .edge_stable_ids
+                    .as_ref()
+                    .context("missing edge StableIds")?;
+                let face_ids = shell
+                    .face_stable_ids
+                    .as_ref()
+                    .context("missing face StableIds")?;
+                for (face, stable_id) in shell.faces.iter().zip(face_ids) {
+                    let face_id = stable_id.raw();
                     let surface = native_surface_support(&face.surface, face_id);
                     let loops = face
                         .boundaries
@@ -1116,16 +1152,16 @@ mod monstertruck_adapter {
                                         &edge.curve,
                                         start,
                                         end,
-                                        edge_ids[use_.index],
+                                        edge_ids[use_.index].raw(),
                                     );
                                     OrientedEdgeUse {
                                         oriented_edge_id: allocate(),
-                                        edge_id: edge_ids[use_.index],
-                                        curve_id: edge_ids[use_.index],
+                                        edge_id: edge_ids[use_.index].raw(),
+                                        curve_id: edge_ids[use_.index].raw(),
                                         curve_same_sense: true,
                                         parameter_forward: use_.orientation,
-                                        start_vertex: vertex_ids[front],
-                                        end_vertex: vertex_ids[back],
+                                        start_vertex: vertex_ids[front].raw(),
+                                        end_vertex: vertex_ids[back].raw(),
                                         start_mm: [start.x, start.y, start.z],
                                         end_mm: [end.x, end.y, end.z],
                                         support,
@@ -1136,7 +1172,11 @@ mod monstertruck_adapter {
                                 bound_id,
                                 loop_id,
                                 outer: wire_index == 0,
-                                orientation: true,
+                                // Compressed boundaries are already surface-local.
+                                // The STEP proof view composes bound orientation
+                                // with face sense to obtain this traversal. Encode
+                                // the identity composition for native coedges.
+                                orientation: face.orientation,
                                 edges,
                             }
                         })
@@ -1208,6 +1248,87 @@ mod monstertruck_adapter {
                         .cloned()
                         .collect(),
                 },
+            })
+        }
+
+        fn edited_source_step_projection(
+            &self,
+            edited: &Self::EditedSource,
+        ) -> Result<KernelEditedSourceProjection> {
+            let solid = &edited.imported.solid;
+            validate_native_semantic_ids(solid)?;
+            let model = save::StepModel::from(solid);
+            let layout = model.topology_entity_ids();
+            let text =
+                CompleteStepDisplay::new(model, save::StepHeaderDescriptor::default()).to_string();
+            let exchange = ParsedStepSource::parse(text.as_bytes())?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                anyhow::bail!("native STEP projection must contain exactly one DATA section");
+            };
+            let index = step_graph::build_index(&section.entities);
+            let view = StepSection::new(0, &section.entities, &index);
+            let entity = |id: usize| -> Result<SourceEntity> {
+                view.entity(u64::try_from(id)?)
+                    .map(crate::step_document::StepEntity::source)
+                    .context("native projection omitted a scheduled STEP entity")
+            };
+            let mut topology = KernelTopologyProvenance {
+                vertices: Vec::new(),
+                edges: Vec::new(),
+                faces: Vec::new(),
+            };
+            anyhow::ensure!(
+                layout.shells.len() == solid.boundaries.len(),
+                "native projection lost a boundary shell"
+            );
+            for (ids, shell) in layout.shells.into_iter().zip(&solid.boundaries) {
+                let mapped = |indices: std::ops::Range<usize>,
+                              stable: Option<&[StableId]>|
+                 -> Result<Vec<KernelTopologyEntityProvenance>> {
+                    let stable = stable
+                        .context("native projection requires assigned topology identities")?;
+                    anyhow::ensure!(
+                        indices.len() == stable.len(),
+                        "native projection element count mismatch"
+                    );
+                    indices
+                        .zip(stable)
+                        .map(|(id, stable)| {
+                            Ok(KernelTopologyEntityProvenance {
+                                source: entity(id)?,
+                                topology_id: KernelTopologyId::from_raw(stable.raw()),
+                            })
+                        })
+                        .collect()
+                };
+                topology
+                    .vertices
+                    .extend(mapped(ids.vertices, shell.vertex_stable_ids.as_deref())?);
+                topology
+                    .edges
+                    .extend(mapped(ids.edges, shell.edge_stable_ids.as_deref())?);
+                let stable = shell
+                    .face_stable_ids
+                    .as_deref()
+                    .context("native projection requires assigned face identities")?;
+                anyhow::ensure!(
+                    ids.faces.len() == stable.len(),
+                    "native projection face count mismatch"
+                );
+                for (id, stable) in ids.faces.into_iter().zip(stable) {
+                    let source = entity(id)?;
+                    topology.faces.push(KernelFaceTopologyProvenance {
+                        source: Some(source),
+                        shell_member: Some(source),
+                        topology_id: KernelTopologyId::from_raw(stable.raw()),
+                    });
+                }
+            }
+            let source = entity(layout.root)?;
+            Ok(KernelEditedSourceProjection {
+                exchange,
+                source,
+                topology,
             })
         }
 

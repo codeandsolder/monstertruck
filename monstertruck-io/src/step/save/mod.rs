@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
-use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
+use monstertruck_core::{cgmath64::Matrix3, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
     CompressedTrimmedShell, CompressedTrimmedSolid,
@@ -26,19 +26,74 @@ impl Display for BooleanDisplay {
     }
 }
 
-/// display float number to step file
+/// A STEP REAL literal that round-trips every finite binary64 value.
+///
+/// Scientific notation is a presentation choice only: it never reduces the
+/// number of significant digits. STEP requires an uppercase exponent and
+/// a decimal point even when a mantissa is integral.
 #[derive(Clone, Copy, Debug)]
 pub struct FloatDisplay(pub f64);
 
 impl Display for FloatDisplay {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        const SCIENTIFIC_NOTATION_BELOW: f64 = 0.01;
         let Self(x) = *self;
-        if f64::abs(x) < DEFAULT_NUMERICAL_TOLERANCES.step_output_scientific_notation_threshold
-            && x != 0.0
-        {
-            f.write_fmt(format_args!("{x:.10E}"))
+        let text = if x != 0.0 && x.abs() < SCIENTIFIC_NOTATION_BELOW {
+            format!("{x:E}")
         } else {
-            f.write_fmt(format_args!("{x:?}"))
+            format!("{x:?}")
+        };
+        let Some((mantissa, exponent)) = text.split_once(['E', 'e']) else {
+            return f.write_str(&text);
+        };
+        f.write_str(mantissa)?;
+        if !mantissa.contains('.') {
+            f.write_str(".0")?;
+        }
+        f.write_fmt(format_args!("E{exponent}"))
+    }
+}
+
+#[cfg(test)]
+mod real_format_tests {
+    use super::FloatDisplay;
+
+    #[test]
+    fn step_real_roundtrips_binary64_without_losing_small_coordinates() {
+        let test = |value: f64| {
+            let text = FloatDisplay(value).to_string();
+            assert!(text.contains('.') && !text.contains('e'), "{text}");
+            assert_eq!(
+                text.parse::<f64>().expect("STEP REAL").to_bits(),
+                value.to_bits(),
+                "{value:?} -> {text}"
+            );
+        };
+        for value in [
+            0.,
+            -0.,
+            1.,
+            -1.,
+            0.009_876_543_210_987_654,
+            -0.001_234_567_890_123_456_7,
+            1e-6,
+            5e-4,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::MAX,
+            f64::MIN,
+        ] {
+            test(value);
+        }
+        // Deterministic bit-pattern coverage spans subnormals, tiny/huge
+        // exponents, both signs, and arbitrary significands.
+        let mut bits = 0x1234_5678_9abc_def0_u64;
+        for _ in 0..10_000 {
+            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let value = f64::from_bits(bits);
+            if value.is_finite() {
+                test(value);
+            }
         }
     }
 }
@@ -161,15 +216,23 @@ pub trait StepFormat {
     /// # Errors
     /// Returns an error if writing the STEP representation fails.
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result;
+
+    /// Affine map from this surface's native UV coordinates into the
+    /// emitted STEP surface's parameter chart, when they differ.
+    fn parameter_space_transform(&self) -> Option<Matrix3> { None }
 }
 
 impl<T: StepFormat> StepFormat for &T {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result { StepFormat::fmt(*self, idx, f) }
+    fn parameter_space_transform(&self) -> Option<Matrix3> { (*self).parameter_space_transform() }
 }
 
 impl<T: StepFormat> StepFormat for Box<T> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         StepFormat::fmt(self.as_ref(), idx, f)
+    }
+    fn parameter_space_transform(&self) -> Option<Matrix3> {
+        self.as_ref().parameter_space_transform()
     }
 }
 
@@ -242,6 +305,45 @@ macro_rules! impl_const_step_length {
                     fn step_length(&self) -> usize { <Self as ConstStepLength>::LENGTH }
         }
     };
+}
+
+/// An exact face-local STEP parameter curve. The support surface may be
+/// referenced instead of emitted again when its complete STEP encoding
+/// is identical to the adjacent face's carrier.
+pub trait StepPcurve: StepFormat + StepLength {
+    /// True only when the complete encoded support (including all dependent
+    /// entities and its parameterization) matches the supplied encoding.
+    fn matches_surface_encoding(&self, encoding: &str) -> bool;
+
+    /// Number of newly emitted entities when referencing a shared parameter
+    /// context. A matching support surface can also be referenced.
+    fn step_length_with_shared_context(&self, shared_surface: bool) -> usize;
+
+    /// Write this pcurve using the shared parameter-space context and,
+    /// if supplied, the existing identically encoded support surface.
+    ///
+    /// # Errors
+    /// Returns an error if writing the STEP representation fails.
+    fn fmt_with_shared_context(
+        &self,
+        idx: usize,
+        surface_idx: Option<usize>,
+        context_idx: usize,
+        formatter: &mut Formatter<'_>,
+    ) -> Result;
+}
+
+// STEP encoders use consecutive indices relative to their root. Comparing
+// complete encodings at the same root proves emitted chart identity, not
+// merely spatial support equality or sampled geometric coincidence.
+fn canonical_step_encoding(entity: &impl StepFormat) -> Option<String> {
+    let mut encoding = String::new();
+    std::fmt::write(
+        &mut encoding,
+        format_args!("{}", StepDisplay::new(entity, 1)),
+    )
+    .ok()?;
+    Some(encoding)
 }
 
 /// Additional information for output to `edge_curve`.
@@ -432,27 +534,27 @@ impl Default for StepMeasurementContext {
 
 impl StepMeasurementContext {
     /// STEP `REAL` literal for the distance accuracy value.
-    pub(super) const fn accuracy(&self) -> StepReal { StepReal(self.distance_accuracy_value) }
+    pub(super) const fn accuracy(&self) -> FloatDisplay {
+        FloatDisplay(self.distance_accuracy_value)
+    }
 }
 
-/// Formats an `f64` as a STEP `REAL` literal: shortest round-tripping form with
-/// an uppercase exponent and a mantissa that always carries a decimal point.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct StepReal(pub f64);
+/// STEP entity numbers assigned to the elements of a compressed shell,
+/// in the same order as its vertex, edge and face arrays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepShellEntityIds {
+    pub shell: usize,
+    pub vertices: std::ops::Range<usize>,
+    pub edges: std::ops::Range<usize>,
+    pub faces: Vec<usize>,
+}
 
-impl Display for StepReal {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        let text = format!("{:E}", self.0);
-        let (mantissa, exponent) = match text.split_once('E') {
-            Some((mantissa, exponent)) => (mantissa, Some(exponent)),
-            None => (text.as_str(), None),
-        };
-        f.write_str(mantissa)?;
-        if !mantissa.contains('.') {
-            f.write_str(".0")?;
-        }
-        exponent.map_or(Ok(()), |exponent| f.write_fmt(format_args!("E{exponent}")))
-    }
+/// Exact export layout. Entity numbers belong to this emitted model only;
+/// they can be joined to external topology identity journals by array index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepModelEntityIds {
+    pub root: usize,
+    pub shells: Vec<StepShellEntityIds>,
 }
 
 /// Display model with configurations

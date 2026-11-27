@@ -13,7 +13,7 @@ categories = ["graphics"]
 [features]
 analyzers = []
 filters = []
-tessellation = ["spade", "filters"]
+tessellation = ["spade", "robust", "filters"]
 # Legacy-VTK mesh I/O, off by default: it is only needed to write `.vtu`.
 # `vtkio` no longer drags `lz4_flex` (RUSTSEC-2026-0041) -- the workspace
 # dependency drops its compression feature, so the advisory is absent from the
@@ -35,6 +35,7 @@ itertools = { workspace = true }
 log = { workspace = true }
 rustc-hash = { workspace = true }
 spade = { workspace = true, optional = true }
+robust = { workspace = true, optional = true }
 monstertruck-core = { workspace = true }
 monstertruck-geometry = { workspace = true }
 monstertruck-mesh = { workspace = true }

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use step_p21::ast::{EntityInstance, Parameter, Record};
 
@@ -80,7 +80,7 @@ impl<'a> StepSectionView<'a> {
 }
 
 /// Stable document-global source identity for provenance journals built above the parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SourceEntity {
     pub data_section: usize,
     pub ordinal: usize,

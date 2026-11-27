@@ -121,6 +121,40 @@ impl ShellTopology {
     fn interface_edges(&self, component: &HashSet<u64>, host: u64) -> HashSet<u64> {
         component_interface_edges(component, host, &self.face_edges, &self.edge_faces)
     }
+
+    /// Compute all actual interfaces in one incidence traversal. A single
+    /// requested host needs only its own indexed boundary edges.
+    fn component_interfaces(
+        &self,
+        component: &HashSet<u64>,
+        hosts: &HashSet<u64>,
+    ) -> HashMap<u64, HashSet<u64>> {
+        if hosts.len() == 1
+            && let Some(&host) = hosts.iter().next()
+        {
+            let edges = self.interface_edges(component, host);
+            return if edges.is_empty() {
+                HashMap::new()
+            } else {
+                HashMap::from([(host, edges)])
+            };
+        }
+        let mut interfaces = HashMap::<u64, HashSet<u64>>::new();
+        let mut visited = HashSet::new();
+        for face in component {
+            for &edge in self.face_edges.get(face).into_iter().flatten() {
+                if !visited.insert(edge) {
+                    continue;
+                }
+                for &host in self.edge_faces.get(&edge).into_iter().flatten() {
+                    if hosts.contains(&host) {
+                        interfaces.entry(host).or_default().insert(edge);
+                    }
+                }
+            }
+        }
+        interfaces
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -654,14 +688,7 @@ fn open_chain_run(
     }
 }
 
-/// Materialize one closed canonical tool solid per recovered boundary-feature
-/// family without changing the source solid.
-///
-/// This is an analysis aid for recursive decomposition. The generated tool
-/// solid reuses the canonical feature's source faces and closes each planar
-/// carrier interface with a synthetic cap. Additive tools need the interface
-/// cap normal opposite the source host's outward normal; subtractive tools
-/// need it aligned with the host outward normal.
+/// Fold coplanar islands into the synthetic interface cap as holes.
 fn coplanar_feature_cap_holes(
     member: &BoundaryFeatureInstanceEvidence,
     host_frame: &PlaneFrame,
@@ -683,7 +710,7 @@ fn coplanar_feature_cap_holes(
             return None;
         };
         let record = simple_record(&entities[*index.get(bound_id)?])?;
-        if record.name != "FACE_OUTER_BOUND" {
+        if !matches!(record.name.as_str(), "FACE_OUTER_BOUND" | "FACE_BOUND") {
             return None;
         }
         let Parameter::List(params) = &record.parameter else {
@@ -699,6 +726,62 @@ fn coplanar_feature_cap_holes(
     Some(out)
 }
 
+/// Reverse a tool's retained source face without modifying the source shell.
+/// STEP bound traversal is relative to the face normal, so both flags invert.
+/// The carrier, edge loops, and exact trim geometry remain shared.
+fn reversed_tool_face(
+    face: u64,
+    entities: &mut Vec<EntityInstance>,
+    index: &HashMap<u64, usize>,
+    next_id: &mut u64,
+) -> Result<u64> {
+    let record = index
+        .get(&face)
+        .and_then(|&position| entities.get(position))
+        .filter(|entity| entity_id(entity) == face)
+        .and_then(simple_record)
+        .ok_or_else(|| anyhow::anyhow!("invalid tool face #{face}"))?
+        .clone();
+    let Parameter::List(mut params) = record.parameter else {
+        bail!("malformed tool face #{face}");
+    };
+    let Some(Parameter::List(bounds)) = params.get_mut(1) else {
+        bail!("missing tool face bounds #{face}");
+    };
+    for bound_ref in bounds {
+        let bound = entity_ref_value(bound_ref)
+            .ok_or_else(|| anyhow::anyhow!("invalid bound reference on tool face #{face}"))?;
+        let record = index
+            .get(&bound)
+            .and_then(|&position| entities.get(position))
+            .filter(|entity| entity_id(entity) == bound)
+            .and_then(simple_record)
+            .ok_or_else(|| anyhow::anyhow!("invalid tool bound #{bound}"))?
+            .clone();
+        let Parameter::List(mut bound_params) = record.parameter else {
+            bail!("malformed tool bound #{bound}");
+        };
+        reverse_orientation(&mut bound_params, 2)?;
+        *bound_ref = entity_ref(push_simple(entities, next_id, &record.name, bound_params));
+    }
+    reverse_orientation(&mut params, 3)?;
+    Ok(push_simple(entities, next_id, &record.name, params))
+}
+
+fn reverse_orientation(params: &mut [Parameter], position: usize) -> Result<()> {
+    let Some(Parameter::Enumeration(value)) = params.get_mut(position) else {
+        bail!("missing STEP orientation");
+    };
+    if !matches!(value.as_str(), "T" | "F") {
+        bail!("invalid STEP orientation {value}");
+    }
+    *value = toggle_tf(value);
+    Ok(())
+}
+
+/// Materialize closed canonical tool solids without modifying the source
+/// shell. Additive caps face opposite the host; subtractive caps face with
+/// the host and the retained pocket faces are reversed into cutter walls.
 pub fn materialize_boundary_feature_tools_for_analysis(
     entities: &mut Vec<EntityInstance>,
     min_instances: usize,
@@ -706,47 +789,32 @@ pub fn materialize_boundary_feature_tools_for_analysis(
     BoundaryFeatureDiagnostics,
     Vec<BoundaryFeatureToolMaterialization>,
 )> {
-    materialize_boundary_feature_tools_for_analysis_filtered(entities, min_instances, None)
+    let index = build_index(entities);
+    let report = diagnose_boundary_features_with_index_filtered(entities, &index, None);
+    let tools =
+        materialize_boundary_feature_tools_from_report(entities, &index, &report, min_instances)?;
+    Ok((report, tools))
 }
 
-pub fn materialize_boundary_feature_tools_for_analysis_for_shells(
-    entities: &mut Vec<EntityInstance>,
-    min_instances: usize,
-    target_shells: &HashSet<u64>,
-) -> Result<(
-    BoundaryFeatureDiagnostics,
-    Vec<BoundaryFeatureToolMaterialization>,
-)> {
-    materialize_boundary_feature_tools_for_analysis_filtered(
-        entities,
-        min_instances,
-        Some(target_shells),
-    )
-}
-
+/// Materialize from the exact immutable source evidence already obtained by
+/// the recovery pass. The caller must supply the unchanged source and index.
 #[expect(
     clippy::too_many_lines,
     reason = "boundary-tool materialization keeps proof, emission, and provenance bookkeeping transactional"
 )]
-fn materialize_boundary_feature_tools_for_analysis_filtered(
+pub fn materialize_boundary_feature_tools_from_report(
     entities: &mut Vec<EntityInstance>,
+    initial_index: &HashMap<u64, usize>,
+    report: &BoundaryFeatureDiagnostics,
     min_instances: usize,
-    target_shells: Option<&HashSet<u64>>,
-) -> Result<(
-    BoundaryFeatureDiagnostics,
-    Vec<BoundaryFeatureToolMaterialization>,
-)> {
+) -> Result<Vec<BoundaryFeatureToolMaterialization>> {
     if min_instances == 0 {
         bail!("boundary feature tool materialization requires min_instances > 0");
     }
-
-    let initial_index = build_index(entities);
-    let representation_by_shell = collect_shell_contexts(entities, &initial_index)
+    let representation_by_shell = collect_shell_contexts(entities, initial_index)
         .into_iter()
         .map(|context| (context.shell_id, context.representation_id))
         .collect::<HashMap<_, _>>();
-    let report =
-        diagnose_boundary_features_with_index_filtered(entities, &initial_index, target_shells);
     let mut next_id = entities
         .iter()
         .map(entity_id)
@@ -763,7 +831,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
             continue;
         };
 
-        let index = &initial_index;
+        let index = initial_index;
         let mut bound_owner = HashMap::<u64, u64>::new();
         for &host in &family.host_face_ids {
             let Some(bounds) = ref_list_param(host, 1, entities, index) else {
@@ -816,7 +884,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                 bail!("feature interface bound #{bound_id} has invalid orientation");
             };
 
-            let flip = family.polarity == FeaturePolarity::Additive;
+            let additive = family.polarity == FeaturePolarity::Additive;
             let cap_bound = push_simple(
                 entities,
                 &mut next_id,
@@ -824,17 +892,19 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                 vec![
                     Parameter::String("NONE".to_string()),
                     entity_ref(loop_id),
-                    Parameter::Enumeration(if flip {
-                        toggle_tf(&bound_orientation)
-                    } else {
+                    // A cap shares the original host traversal for a boss,
+                    // but reverses it for an inverted pocket wall.
+                    Parameter::Enumeration(if additive {
                         bound_orientation
+                    } else {
+                        toggle_tf(&bound_orientation)
                     }),
                 ],
             );
             let mut cap_bounds = vec![entity_ref(cap_bound)];
             if member.interface_bound_ids.len() == 1
                 && let Some(holes) =
-                    coplanar_feature_cap_holes(member, &frame, entities, &initial_index)
+                    coplanar_feature_cap_holes(member, &frame, entities, initial_index)
             {
                 for (face_id, hole_loop_id, hole_orientation) in holes {
                     folded_cap_faces.insert(face_id);
@@ -845,7 +915,11 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                         vec![
                             Parameter::String("NONE".to_string()),
                             entity_ref(hole_loop_id),
-                            Parameter::Enumeration(hole_orientation),
+                            Parameter::Enumeration(if additive {
+                                hole_orientation
+                            } else {
+                                toggle_tf(&hole_orientation)
+                            }),
                         ],
                     );
                     cap_bounds.push(entity_ref(hole_bound));
@@ -859,7 +933,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
                     Parameter::String("NONE".to_string()),
                     Parameter::List(cap_bounds),
                     entity_ref(frame.surface_id),
-                    Parameter::Enumeration(if flip {
+                    Parameter::Enumeration(if additive {
                         toggle_tf(&frame.sense)
                     } else {
                         frame.sense
@@ -874,8 +948,14 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
             .iter()
             .copied()
             .filter(|face_id| !folded_cap_faces.contains(face_id))
-            .map(entity_ref)
-            .collect::<Vec<_>>();
+            .map(|face| {
+                if family.polarity == FeaturePolarity::Subtractive {
+                    reversed_tool_face(face, entities, index, &mut next_id).map(entity_ref)
+                } else {
+                    Ok(entity_ref(face))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         closed_faces.extend(cap_faces.iter().copied().map(entity_ref));
         let tool_shell = push_simple(
             entities,
@@ -923,7 +1003,7 @@ fn materialize_boundary_feature_tools_for_analysis_filtered(
         });
     }
 
-    Ok((report, materialized))
+    Ok(materialized)
 }
 
 /// Remove proven leaf boundary-feature patches from shell topology so the
@@ -1339,10 +1419,19 @@ fn grouped_boundary_features_with_index(
             .collect::<Vec<_>>();
         report.planar_hosts += hosts.len();
 
-        for (host_face, frame, bounds) in &hosts {
+        let frames = hosts
+            .iter()
+            .map(|(face, frame, _)| (*face, frame.clone()))
+            .collect::<HashMap<_, _>>();
+        let lookups = hosts
+            .iter()
+            .map(|(face, _, bounds)| (*face, host_bound_lookup(*face, bounds, entities, index)))
+            .collect::<HashMap<_, _>>();
+        for (host_face, _, _) in &hosts {
+            if lookups[host_face].is_empty() {
+                continue;
+            }
             let host_set = HashSet::from([*host_face]);
-            let frames = HashMap::from([(*host_face, frame.clone())]);
-            let lookups = HashMap::from([(*host_face, host_bound_lookup(bounds, entities, index))]);
             for component in topology.components_without_hosts(&host_set) {
                 let Some(candidate) = boundary_feature_candidate(
                     &context, component, &host_set, &frames, &lookups, &topology, entities, index,
@@ -1361,14 +1450,6 @@ fn grouped_boundary_features_with_index(
                 .iter()
                 .map(|(face, _, _)| *face)
                 .collect::<HashSet<_>>();
-            let frames = hosts
-                .iter()
-                .map(|(face, frame, _)| (*face, frame.clone()))
-                .collect::<HashMap<_, _>>();
-            let lookups = hosts
-                .iter()
-                .map(|(face, _, bounds)| (*face, host_bound_lookup(bounds, entities, index)))
-                .collect::<HashMap<_, _>>();
 
             for component in topology.components_without_hosts(&host_set) {
                 let Some(candidate) = boundary_feature_candidate(
@@ -1473,36 +1554,31 @@ fn boundary_feature_candidate(
     if component.is_empty() || component.len() > MAX_BOUNDARY_FEATURE_FACES {
         return None;
     }
-    if !topology.component_is_two_manifold_with_hosts(&component, requested_hosts) {
-        return None;
-    }
-
     let mut interfaces = Vec::new();
-    let mut sides = Vec::new();
-    let vertices = component_vertex_points(&component, &topology.face_edges, entities, index)?;
-    for &host in requested_hosts {
-        let interface_edges = topology.interface_edges(&component, host);
-        if interface_edges.is_empty() {
-            continue;
-        }
+    for (host, interface_edges) in topology.component_interfaces(&component, requested_hosts) {
         let matches = bound_lookups
             .get(&host)?
             .get(&edge_set_key(&interface_edges))?;
-        if matches.len() != 1 {
+        let [(bound_id, loop_id, bound_orientation)] = matches.as_slice() else {
             return None;
-        }
-        let (bound_id, loop_id, bound_orientation) = &matches[0];
+        };
         interfaces.push(FeatureInterface {
             host_face_id: host,
             bound_id: *bound_id,
             loop_id: *loop_id,
             bound_orientation: bound_orientation.clone(),
         });
-        sides.push(plane_side(&vertices, frames.get(&host)?));
     }
-    if interfaces.is_empty() {
+    if interfaces.is_empty()
+        || !topology.component_is_two_manifold_with_hosts(&component, requested_hosts)
+    {
         return None;
     }
+    let vertices = component_vertex_points(&component, &topology.face_edges, entities, index)?;
+    let sides = interfaces
+        .iter()
+        .map(|interface| Some(plane_side(&vertices, frames.get(&interface.host_face_id)?)))
+        .collect::<Option<Vec<_>>>()?;
 
     let polarity = if sides.iter().all(|side| *side == PlaneSide::Positive) {
         FeaturePolarity::Additive
@@ -1629,7 +1705,7 @@ pub fn diagnose_planar_features(entities: &[EntityInstance]) -> PlanarFeatureDia
             let Some(host_bounds) = ref_list_param(host_face, 1, entities, &index) else {
                 continue;
             };
-            let bound_lookup = host_bound_lookup(&host_bounds, entities, &index);
+            let bound_lookup = host_bound_lookup(host_face, &host_bounds, entities, &index);
             let host_set = HashSet::from([host_face]);
             let components = topology.components_without_hosts(&host_set);
             let mut host = PlanarHostDiagnostic {
@@ -1728,9 +1804,12 @@ fn collect_shell_contexts(
         let Some(record) = simple_record(entity) else {
             continue;
         };
-        if record.name != "ADVANCED_BREP_SHAPE_REPRESENTATION"
-            && record.name != "MANIFOLD_SURFACE_SHAPE_REPRESENTATION"
-        {
+        if !matches!(
+            record.name.as_str(),
+            "SHAPE_REPRESENTATION"
+                | "ADVANCED_BREP_SHAPE_REPRESENTATION"
+                | "MANIFOLD_SURFACE_SHAPE_REPRESENTATION"
+        ) {
             continue;
         }
         let representation_id = entity_id(entity);
@@ -1797,12 +1876,41 @@ fn is_closed_shell(
 }
 
 fn host_bound_lookup(
+    host_face: u64,
     bounds: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> HashMap<Vec<u64>, Vec<(u64, u64, String)>> {
     let mut out = HashMap::<Vec<u64>, Vec<(u64, u64, String)>>::new();
+    if bounds.len() < 2 {
+        return out;
+    }
+    let explicit = bounds
+        .iter()
+        .copied()
+        .filter(|bound| {
+            index
+                .get(bound)
+                .and_then(|idx| simple_record(&entities[*idx]))
+                .is_some_and(|record| record.name == "FACE_OUTER_BOUND")
+        })
+        .collect::<Vec<_>>();
+    let outer = match explicit.as_slice() {
+        [outer] => *outer,
+        [] => {
+            let Some(outer) =
+                crate::solid_extrusions::unlabelled_planar_outer_bound(host_face, entities, index)
+            else {
+                return out;
+            };
+            outer
+        }
+        _ => return out,
+    };
     for &bound in bounds {
+        if bound == outer {
+            continue;
+        }
         let Some(record) = index
             .get(&bound)
             .and_then(|idx| simple_record(&entities[*idx]))
@@ -1844,18 +1952,17 @@ fn component_interface_edges(
     face_edges: &HashMap<u64, HashSet<u64>>,
     edge_faces: &HashMap<u64, Vec<u64>>,
 ) -> HashSet<u64> {
-    let mut out = HashSet::new();
-    for face in component {
-        for edge in face_edges.get(face).into_iter().flatten() {
-            if edge_faces
+    face_edges
+        .get(&host)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|edge| {
+            edge_faces
                 .get(edge)
-                .is_some_and(|faces| faces.contains(&host))
-            {
-                out.insert(*edge);
-            }
-        }
-    }
-    out
+                .is_some_and(|faces| faces.iter().any(|face| component.contains(face)))
+        })
+        .collect()
 }
 
 fn component_vertex_points(
@@ -2029,6 +2136,134 @@ mod tests {
     use super::*;
 
     #[test]
+    fn indexed_feature_interfaces_match_exhaustive_face_incidence() {
+        let faces = vec![1, 2, 3, 4, 5, 6];
+        let edge_faces = HashMap::from([
+            (10, vec![1, 2]),
+            (11, vec![1, 2, 3]),
+            (12, vec![2, 4]),
+            (13, vec![3, 4]),
+            (14, vec![4, 5]),
+            (15, vec![5]),
+            (16, vec![6]),
+        ]);
+        let face_edges = faces
+            .iter()
+            .copied()
+            .map(|face| {
+                let edges = edge_faces
+                    .iter()
+                    .filter_map(|(&edge, incident)| incident.contains(&face).then_some(edge))
+                    .collect();
+                (face, edges)
+            })
+            .collect();
+        let topology = ShellTopology {
+            faces,
+            face_edges,
+            edge_faces,
+            adjacency: HashMap::new(),
+        };
+        for mut assignment in 0..3_usize.pow(6) {
+            let mut component = HashSet::new();
+            let mut hosts = HashSet::new();
+            for &face in &topology.faces {
+                match assignment % 3 {
+                    1 => {
+                        component.insert(face);
+                    }
+                    2 => {
+                        hosts.insert(face);
+                    }
+                    _ => {}
+                }
+                assignment /= 3;
+            }
+            let expected = hosts
+                .iter()
+                .filter_map(|&host| {
+                    let edges = component
+                        .iter()
+                        .flat_map(|face| topology.face_edges[face].iter().copied())
+                        .filter(|edge| topology.edge_faces[edge].contains(&host))
+                        .collect::<HashSet<_>>();
+                    (!edges.is_empty()).then_some((host, edges))
+                })
+                .collect::<HashMap<_, _>>();
+            assert_eq!(topology.component_interfaces(&component, &hosts), expected);
+        }
+    }
+
+    #[test]
+    fn blind_relief_tools_are_closed_oriented_extrusions() -> Result<()> {
+        use crate::brep::solid_face_ids;
+        use crate::solid_extrusions::detect_solid_extrusions_with_index;
+        use monstertruck_io::step::load::ParsedStepSource;
+
+        let fixtures = [
+            include_bytes!("../validation/fixtures/native_relief_blind_254dc55c.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step").as_slice(),
+        ];
+        for bytes in fixtures {
+            let mut exchange = ParsedStepSource::parse(bytes)?.exchange;
+            let entities = &mut exchange.data[0].entities;
+            let original = entities.clone();
+            let (_, tools) = materialize_boundary_feature_tools_for_analysis(entities, 1)?;
+            let index = build_index(entities);
+            let extrusions = detect_solid_extrusions_with_index(
+                entities,
+                &index,
+                &crate::brep::manifold_solid_ids(entities),
+            );
+            let cutters = tools
+                .iter()
+                .filter(|tool| tool.polarity == FeaturePolarity::Subtractive)
+                .collect::<Vec<_>>();
+            assert!(cutters.len() >= 5);
+            for tool in cutters {
+                assert!(
+                    extrusions
+                        .iter()
+                        .any(|extrusion| extrusion.solid_id == tool.solid_id)
+                );
+                let faces = solid_face_ids(tool.solid_id, entities, &index)
+                    .ok_or_else(|| anyhow::anyhow!("missing cutter shell"))?;
+                let mut coedges = BTreeMap::<u64, Vec<bool>>::new();
+                for face in faces {
+                    let loops = face_loops(face, entities, &index)
+                        .ok_or_else(|| anyhow::anyhow!("missing cutter face loops"))?;
+                    for boundary in loops {
+                        for edge in boundary.edges {
+                            coedges.entry(edge.edge_id).or_default().push(
+                                (edge.parameter_forward == edge.curve_same_sense)
+                                    == boundary.orientation,
+                            );
+                        }
+                    }
+                }
+                assert!(
+                    coedges
+                        .values()
+                        .all(|uses| matches!(uses.as_slice(), [a, b] if a != b))
+                );
+            }
+            // The only original record changed by materialization is the
+            // representation's item list, never a face or face bound.
+            for (before, after) in original.iter().zip(entities.iter()) {
+                if simple_record(before).is_some_and(|record| {
+                    matches!(
+                        record.name.as_str(),
+                        "ADVANCED_FACE" | "FACE_SURFACE" | "FACE_BOUND" | "FACE_OUTER_BOUND"
+                    )
+                }) {
+                    assert_eq!(before, after);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn feature_dependency_selection_is_leaf_first() {
         let family =
             |host_face_ids: Vec<u64>, member_faces: Vec<u64>| BoundaryFeatureFamilyEvidence {
@@ -2176,7 +2411,7 @@ mod tests {
         assert_eq!(frame.outward, [0.0, 0.0, 1.0]);
         let bounds = ref_list_param(host_face, 1, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing boss host bounds"))?;
-        let lookup = host_bound_lookup(&bounds, entities, &index);
+        let lookup = host_bound_lookup(host_face, &bounds, entities, &index);
         let hosts = HashSet::from([host_face]);
         let components = topology.components_without_hosts(&hosts);
         assert_eq!(components.len(), 2);
@@ -2210,6 +2445,52 @@ mod tests {
             boss_candidates += usize::from(candidate.is_some());
         }
         assert_eq!(boss_candidates, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn generic_bounds_preserve_outer_wire_independent_of_order() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/boundary_boss_extrusion.step");
+        let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let entities = &mut exchange.data[0].entities;
+        let index = build_index(entities);
+        let host_face = 53;
+        let bounds = ref_list_param(host_face, 1, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing boss host bounds"))?;
+        let expected = host_bound_lookup(host_face, &bounds, entities, &index);
+        assert_eq!(expected.len(), 1);
+        for entity in entities.iter_mut() {
+            if let Some(record) = simple_record_mut(entity)
+                && record.name == "FACE_OUTER_BOUND"
+            {
+                record.name = "FACE_BOUND".to_string();
+            }
+        }
+        let face = simple_record_mut(&mut entities[index[&host_face]])
+            .ok_or_else(|| anyhow::anyhow!("missing host face record"))?;
+        let Parameter::List(params) = &mut face.parameter else {
+            bail!("missing face parameters");
+        };
+        let Some(Parameter::List(bound_list)) = params.get_mut(1) else {
+            bail!("missing face bound list");
+        };
+        bound_list.reverse();
+        let reordered = ref_list_param(host_face, 1, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("missing reordered host bounds"))?;
+        assert_eq!(
+            host_bound_lookup(host_face, &reordered, entities, &index),
+            expected
+        );
+        // Every one-wire face is an outer boundary, despite the generic tag.
+        for entity in entities.iter() {
+            let face_id = entity_id(entity);
+            if let Some(bounds) = ref_list_param(face_id, 1, entities, &index)
+                && simple_record(entity).is_some_and(|record| record.name == "ADVANCED_FACE")
+                && bounds.len() == 1
+            {
+                assert!(host_bound_lookup(face_id, &bounds, entities, &index).is_empty());
+            }
+        }
         Ok(())
     }
 

@@ -4,7 +4,7 @@
 //! or interpolation is used: every claimed loft wall is a matching source
 //! planar quadrilateral with identical topology and geometric vertices.
 
-use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
+use crate::brep::{CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
@@ -25,13 +25,13 @@ struct Vertex {
 struct Section {
     level: f64,
     corners: [Vertex; 4],
+    bounds: [[f64; 2]; 2],
     profile: Profile2d,
 }
 
 fn plane_quad(face: &ReducedFace) -> bool {
     matches!(face.surface, SurfaceSupport::Plane(_))
         && face.loops.len() == 1
-        && face.loops[0].outer
         && face.loops[0].edges.len() == 4
         && face.loops[0]
             .edges
@@ -110,6 +110,7 @@ fn section(
     Some(Section {
         level,
         corners,
+        bounds: [[xmin, xmax], [ymin, ymax]],
         profile,
     })
 }
@@ -246,7 +247,7 @@ fn candidate(
             groups.push((level, vec![vertex]));
         }
     }
-    if groups.len() < 3 || groups.iter().any(|(_, group)| group.len() != 4) {
+    if groups.len() < 2 || groups.iter().any(|(_, group)| group.len() != 4) {
         return None;
     }
     let sections = groups
@@ -353,10 +354,11 @@ pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtensio
 /// Discover source-witnessed ruled end sections, including multi-stage
 /// planar strips and analytic walls continuing into an earlier core.
 pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    let planes = incident_planar_supports(solid);
     solid
         .faces()
         .filter_map(|cap| {
-            terminal_sectioned_ruled_extension(solid, cap)
+            terminal_sectioned_ruled_extension(solid, cap, &planes)
                 .or_else(|| terminal_ruled_extension(solid, cap))
                 .or_else(|| terminal_extended_planar_ruled_extension(solid, cap))
         })
@@ -625,8 +627,61 @@ fn next_quad_wall_ring(
     Some((next, walls))
 }
 
+/// Index the actual analytic plane equations incident to each source vertex.
+fn incident_planar_supports(solid: &ReducedSolid) -> BTreeMap<u64, Vec<PlaneSupport>> {
+    let mut result = BTreeMap::<u64, Vec<PlaneSupport>>::new();
+    for face in solid.faces() {
+        let SurfaceSupport::Plane(plane) = face.surface else {
+            continue;
+        };
+        let vertices = face
+            .loop_edges()
+            .flat_map(|edge| [edge.start_vertex, edge.end_vertex])
+            .collect::<BTreeSet<_>>();
+        for vertex in vertices {
+            result.entry(vertex).or_default().push(plane);
+        }
+    }
+    result
+}
+
+/// When three independent source planes determine a corner, intersect their
+/// authored equations instead of amplifying rounded STEP vertex errors into
+/// the normals of short loft walls. Solve in coordinates local to the witness.
+fn planar_corner(planes: &[PlaneSupport], witness: [f64; 3]) -> Option<[f64; 3]> {
+    let mut best = None;
+    let mut best_det = DIR_TOL;
+    for (i, first) in planes.iter().enumerate() {
+        for (j, second) in planes.iter().enumerate().skip(i + 1) {
+            for third in planes.iter().skip(j + 1) {
+                let determinant = dot(first.normal, cross(second.normal, third.normal)).abs();
+                if determinant > best_det {
+                    best_det = determinant;
+                    best = Some([first, second, third]);
+                }
+            }
+        }
+    }
+    // Rank-deficient incidences do not determine a replacement point.
+    let point = if let Some([first, second, third]) = best {
+        let local = |plane: &PlaneSupport| (plane.normal, sub(plane.origin_mm, witness));
+        crate::math3::add(
+            witness,
+            intersect_three_planes(local(first), local(second), local(third))?,
+        )
+    } else {
+        witness
+    };
+    (distance(point, witness) <= TOL_MM
+        && planes
+            .iter()
+            .all(|plane| dot(sub(point, plane.origin_mm), plane.normal).abs() <= TOL_MM))
+    .then_some(point)
+}
+
 fn section_from_wall_ring(
     ring: &[OrientedEdgeUse],
+    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
     origin: [f64; 3],
     axis: [f64; 3],
     x: [f64; 3],
@@ -648,8 +703,11 @@ fn section_from_wall_ring(
     }
     let vertices = seen
         .into_iter()
-        .map(|(id, point)| Vertex { id, point })
-        .collect::<Vec<_>>();
+        .map(|(id, witness)| {
+            let point = planar_corner(planes.get(&id)?.as_slice(), witness)?;
+            Some(Vertex { id, point })
+        })
+        .collect::<Option<Vec<_>>>()?;
     let level = dot(sub(vertices.first()?.point, origin), axis);
     if vertices
         .iter()
@@ -660,12 +718,87 @@ fn section_from_wall_ring(
     section(level, &vertices, origin, x, y)
 }
 
+/// Each wall owns one of the four rectangular bounds. The measured
+/// section station controls its depth, while the authored plane normal
+/// controls the slope. Propagate bounds from the previous exact section:
+/// subtracting noisy independent vertex coordinates across a short bevel
+/// otherwise magnifies their positional uncertainty into angular error.
+fn propagate_wall_slopes(
+    solid: &ReducedSolid,
+    walls: &[u64],
+    previous: &Section,
+    stage: &mut Section,
+    frame_basis: [[f64; 3]; 3],
+    origin: [f64; 3],
+) -> Option<()> {
+    let [x, y, axis] = frame_basis;
+    let delta = stage.level - previous.level;
+    let mut bounds = [[None; 2]; 2];
+    for &wall_id in walls {
+        let wall = solid.faces().find(|face| face.id == wall_id)?;
+        let SurfaceSupport::Plane(plane) = wall.surface else {
+            return None;
+        };
+        let corners = previous
+            .corners
+            .iter()
+            .enumerate()
+            .filter_map(|(index, vertex)| {
+                wall.loop_edges()
+                    .any(|edge| edge.start_vertex == vertex.id || edge.end_vertex == vertex.id)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let (coord, end) = match corners.as_slice() {
+            [0, 1] => (1, 0),
+            [1, 2] => (0, 1),
+            [2, 3] => (1, 1),
+            [0, 3] => (0, 0),
+            _ => return None,
+        };
+        let basis = [x, y];
+        let normal = dot(plane.normal, basis[coord]);
+        if normal.abs() <= DIR_TOL || dot(plane.normal, basis[1 - coord]).abs() > DIR_TOL {
+            return None;
+        }
+        let slope = -dot(plane.normal, axis) / normal;
+        let bound = slope.mul_add(delta, previous.bounds[coord][end]);
+        if !bound.is_finite()
+            || (bound - stage.bounds[coord][end]).abs() > TOL_MM
+            || bounds[coord][end].replace(bound).is_some()
+        {
+            return None;
+        }
+    }
+    let [[Some(xmin), Some(xmax)], [Some(ymin), Some(ymax)]] = bounds else {
+        return None;
+    };
+    if xmax - xmin <= TOL_MM || ymax - ymin <= TOL_MM {
+        return None;
+    }
+    let corners = [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]];
+    let frame_origin = crate::math3::add(origin, crate::math3::mul(axis, stage.level));
+    for (corner, witness) in corners.iter().zip(stage.corners) {
+        let point = crate::math3::add(
+            crate::math3::add(frame_origin, crate::math3::mul(x, corner[0])),
+            crate::math3::mul(y, corner[1]),
+        );
+        if distance(point, witness.point) > TOL_MM {
+            return None;
+        }
+    }
+    stage.bounds = [[xmin, xmax], [ymin, ymax]];
+    stage.profile = Profile2d::polygon(corners.to_vec()).ok()?;
+    Some(())
+}
+
 /// A source terminal cap may lead into several real four-quad rings before
 /// disappearing into a larger solid. Each ring yields an *editable* loft
 /// section; no fictitious shoulder/cap is introduced into source provenance.
 fn terminal_sectioned_ruled_extension(
     solid: &ReducedSolid,
     cap: &ReducedFace,
+    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
 ) -> Option<RuledEndExtension> {
     if !plane_quad(cap) {
         return None;
@@ -673,26 +806,42 @@ fn terminal_sectioned_ruled_extension(
     let SurfaceSupport::Plane(plane) = cap.surface else {
         return None;
     };
-    let origin = cap.loops.first()?.edges.first()?.start_mm;
-    let axis = normalize(plane.normal, DIR_TOL)?;
     let first_edge = cap.loops.first()?.edges.first()?;
-    let x = normalize(sub(first_edge.end_mm, first_edge.start_mm), DIR_TOL)?;
-    if dot(x, axis).abs() > DIR_TOL {
+    let origin = planar_corner(planes.get(&first_edge.start_vertex)?, first_edge.start_mm)?;
+    let axis = normalize(plane.normal, DIR_TOL)?;
+    let CurveSupport::Line(line) = first_edge.support else {
+        return None;
+    };
+    let direction = normalize(line.direction, DIR_TOL)?;
+    if dot(direction, axis).abs() > DIR_TOL {
         return None;
     }
-    let y = normalize(cross(axis, x), DIR_TOL)?;
+    let direction = if dot(direction, sub(first_edge.end_mm, first_edge.start_mm)) < 0.0 {
+        crate::math3::mul(direction, -1.0)
+    } else {
+        direction
+    };
+    let y = normalize(cross(axis, direction), DIR_TOL)?;
+    let x = normalize(cross(y, axis), DIR_TOL)?;
     let mut current = cap.loops.first()?.edges.clone();
-    let mut sections = vec![section_from_wall_ring(&current, origin, axis, x, y)?];
+    let mut sections = vec![section_from_wall_ring(
+        &current, planes, origin, axis, x, y,
+    )?];
     let mut consumed = BTreeSet::from([cap.id]);
     let mut wall_ids = Vec::new();
     let mut direction = 0.0_f64;
     while let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) {
-        let Some(stage) = section_from_wall_ring(&next, origin, axis, x, y) else {
+        let Some(mut stage) = section_from_wall_ring(&next, planes, origin, axis, x, y) else {
             break;
         };
-        let previous = sections.last()?.level;
-        let delta = stage.level - previous;
+        let previous = sections.last()?;
+        let delta = stage.level - previous.level;
         if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
+            break;
+        }
+        if propagate_wall_slopes(solid, &walls, previous, &mut stage, [x, y, axis], origin)
+            .is_none()
+        {
             break;
         }
         direction = delta;
@@ -913,13 +1062,11 @@ fn intersect_three_planes(
 pub fn detect_sectioned_planar_lofts(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    solid_ids: &[u64],
 ) -> Vec<CadFragment> {
-    entities
+    solid_ids
         .iter()
-        .filter_map(|e| {
-            let record = crate::step_graph::simple_record(e)?;
-            (record.name == "MANIFOLD_SOLID_BREP").then_some(crate::step_graph::entity_id(e))
-        })
+        .copied()
         .filter_map(|id| {
             let reduced = ReducedSolid::from_step(id, entities, index)?;
             detect_sectioned_planar_loft(&reduced)
@@ -932,6 +1079,101 @@ mod terminal_extension_tests {
     use super::*;
     use crate::step_graph::build_index;
     use monstertruck_io::step::load::ParsedStepSource;
+
+    #[test]
+    fn authored_plane_corner_refines_noisy_vertex_without_inventing_rank() -> anyhow::Result<()> {
+        let exact = [67.0, 5.0, -9.0];
+        let witness = crate::math3::add(exact, [2e-9, -3e-9, 4e-9]);
+        let plane = |normal, origin_mm| PlaneSupport {
+            normal,
+            origin_mm,
+            max_residual_mm: 0.0,
+        };
+        let supports = [
+            plane([1.0, 0.0, 0.0], exact),
+            plane([0.0, 1.0, 0.0], exact),
+            plane([0.0, 0.0, 1.0], exact),
+            plane(
+                [
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    0.0,
+                ],
+                exact,
+            ),
+        ];
+        let refined = planar_corner(&supports, witness).ok_or_else(|| {
+            anyhow::anyhow!("independent source planes must determine the corner")
+        })?;
+        assert!(distance(refined, exact) < 1e-14);
+        let rank_deficient = planar_corner(&supports[..2], witness)
+            .ok_or_else(|| anyhow::anyhow!("rank-deficient incidence should retain the witness"))?;
+        assert!(distance(rank_deficient, witness) < f64::EPSILON);
+        let inconsistent = [
+            supports[0],
+            supports[1],
+            supports[2],
+            plane(
+                [1.0, 0.0, 0.0],
+                crate::math3::add(exact, [10.0 * TOL_MM, 0.0, 0.0]),
+            ),
+        ];
+        assert!(planar_corner(&inconsistent, witness).is_none());
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn two_section_drafted_rectangle_with_unlabelled_bounds_is_exact() -> anyhow::Result<()> {
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+        let kernel = MonstertruckKernel::project_standard();
+        let mut model = CadModel::new();
+        let root = model.add_node(CadNode::Loft {
+            sections: vec![
+                LoftSection {
+                    profile: Profile2d::polygon(vec![
+                        [-0.75, 0.0],
+                        [0.75, 0.0],
+                        [0.75, 0.9],
+                        [-0.75, 0.9],
+                    ])?,
+                    transform: RigidTransform::identity(),
+                },
+                LoftSection {
+                    profile: Profile2d::polygon(vec![
+                        [-0.738, 0.012],
+                        [0.738, 0.012],
+                        [0.738, 0.888],
+                        [-0.738, 0.888],
+                    ])?,
+                    transform: RigidTransform::translation_mm([0.0, 0.0, 1.35]),
+                },
+            ],
+        });
+        model.add_root(root)?;
+        let authored = kernel.evaluate(&model, root)?;
+        let step = kernel
+            .to_step(&authored)?
+            .replace("FACE_OUTER_BOUND(", "FACE_BOUND(");
+        let exchange = ParsedStepSource::parse(step.as_bytes())?.exchange;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let ids = crate::brep::manifold_solid_ids(entities);
+        let [id] = ids.as_slice() else {
+            anyhow::bail!("drafted rectangle must export exactly one solid");
+        };
+        let reduced = ReducedSolid::from_step(*id, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("no source B-rep"))?;
+        let recovered = detect_sectioned_planar_loft(&reduced)
+            .ok_or_else(|| anyhow::anyhow!("two-section taper not recognized"))?;
+        assert!(
+            matches!(recovered.model.node(recovered.root)?, CadNode::Loft { sections } if sections.len() == 2)
+        );
+        let proof = crate::cad_recovery::SourceRecovery::new(*id, entities, &index, &kernel)
+            .ok_or_else(|| anyhow::anyhow!("no original boundary certificate"))?;
+        assert!(proof.proves(&recovered.model, recovered.root, None)?);
+        Ok(())
+    }
 
     #[test]
     fn four_section_beveled_bar_is_an_exact_editable_loft() -> anyhow::Result<()> {

@@ -9,8 +9,8 @@
 use super::{
     CurveSupport, DIR_TOL, EdgeTreatmentEvidence, EndpointEdit, GEOM_TOL_MM, KernelFaceSplice,
     KernelNewEdge, KernelPatchCurve, KernelPatchEdgeRef, KernelPatchEdgeUse, KernelPatchVertexRef,
-    KernelTopologyPatch, KernelTopologyProvenance, OrientedEdgeUse, ReducedFace, ReducedSolid,
-    SurfaceSupport, add, carrier_run_neighbors, cross, distance, dot, edge_face_users, face,
+    KernelTopologyPatch, OrientedEdgeUse, ReducedFace, ReducedSolid, SurfaceSupport,
+    TreatmentTopology, add, carrier_run_neighbors, cross, distance, dot, edge_face_users, face,
     global_edge_endpoints, mul, norm, normalize, normalize_retained_edge_rewrites,
     plan_terminal_splices, sub, topology_edges, topology_face, unique_face_edges,
 };
@@ -466,7 +466,7 @@ pub(super) fn plan_curved_segment_patch(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     virtual_start: [f64; 3],
     virtual_end: [f64; 3],
 ) -> Result<Option<KernelTopologyPatch>> {

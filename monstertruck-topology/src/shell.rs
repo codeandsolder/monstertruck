@@ -33,7 +33,7 @@ type FaceAdjacencyMap<'a, P, C, S> = HashMap<&'a Face<P, C, S>, Vec<AdjacentFace
 impl<P, C, S> Shell<P, C, S> {
     /// Creates the empty shell.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self {
         Self {
             face_list: Vec::new(),
@@ -42,7 +42,7 @@ impl<P, C, S> Shell<P, C, S> {
 
     /// Creates the empty shell with space for at least `capacity` faces.
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             face_list: Vec::with_capacity(capacity),
@@ -59,12 +59,12 @@ impl<P, C, S> Shell<P, C, S> {
 
     /// Creates a consuming iterator. Practically, an alias of `into_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "The consuming iterator is returned without traversal; ignoring it skips iteration."]
     pub fn face_into_iter(self) -> FaceIntoIter<P, C, S> { self.face_list.into_iter() }
 
     /// Returns an iterator over the faces. Practically, an alias of `par_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards an iterator over the faces. Practically, an alias of `par_iter()`."]
     pub fn face_par_iter(&self) -> FaceParallelIter<'_, P, C, S>
     where
         P: Send,
@@ -85,7 +85,7 @@ impl<P, C, S> Shell<P, C, S> {
 
     /// Creates a consuming iterator. Practically, an alias of `into_par_iter()`.
     #[inline]
-    #[must_use]
+    #[must_use = "The parallel iterator is lazy; ignoring it skips traversal."]
     pub fn face_into_par_iter(self) -> FaceParallelIntoIter<P, C, S>
     where
         P: Send,
@@ -118,7 +118,7 @@ impl<P, C, S> Shell<P, C, S> {
 
     /// Returns a parallel iterator over the vertices.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a parallel iterator over the vertices."]
     pub fn vertex_par_iter(&self) -> impl ParallelIterator<Item = Vertex<P>> + '_
     where
         P: Send,
@@ -136,7 +136,7 @@ impl<P, C, S> Shell<P, C, S> {
     ///
     /// Examples for each condition can be found on the page of
     /// [`ShellCondition`](./shell/enum.ShellCondition.html).
-    #[must_use]
+    #[must_use = "The shell's regularity and orientation classification is returned as a value."]
     pub fn shell_condition(&self) -> ShellCondition {
         self.edge_iter().collect::<Boundaries<C>>().condition()
     }
@@ -175,7 +175,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// This method is optimized when the shell is oriented.
     /// Even if the shell is not oriented, all the edges of the boundary are extracted.
     /// However, the connected components of the boundary are split into several wires.
-    #[must_use]
+    #[must_use = "Ignoring this result discards a vector of all boundaries as wires."]
     pub fn extract_boundaries(&self) -> Vec<Wire<P, C>> {
         let boundaries: Boundaries<C> = self.edge_iter().collect();
         let mut vemap: HashMap<_, _> = self
@@ -235,7 +235,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// let v0_ads: HashSet<&VertexId<()>> = HashSet::from_iter(v0_ads_vec);
     /// assert_eq!(v0_ads, HashSet::from_iter(vec![&v[2].id(), &v[3].id()]));
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards the adjacency matrix of vertices in the shell."]
     pub fn vertex_adjacency(&self) -> HashMap<VertexId<P>, Vec<VertexId<P>>> {
         let mut adjacency = EntryMap::new(|x| x, |_| Vec::new());
         let mut done_edge: HashSet<EdgeId<C>> = HashSet::default();
@@ -332,7 +332,7 @@ impl<P, C, S> Shell<P, C, S> {
     ///     })
     /// })
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards the adjacency matrix of faces in the shell."]
     pub fn face_adjacency(&self) -> FaceAdjacencyMap<'_, P, C, S> {
         let mut edge_face_map = EntryMap::new(|edge: &Edge<P, C>| edge.id(), |_| Vec::new());
         self.face_iter().for_each(|face| {
@@ -428,7 +428,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// let shell: Shell<_, _, _> = vec![face0, face1].into();
     /// assert!(!shell.is_connected());
     /// ```
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the shell is connected or not."]
     pub fn is_connected(&self) -> bool {
         let mut adjacency = self.vertex_adjacency();
         // Connecting another boundary of the same face with an edge
@@ -484,7 +484,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// assert!(shell.is_connected());
     /// assert_eq!(shell.connected_components().len(), 2);
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards a vector consisting of shells of each connected components."]
     pub fn connected_components(&self) -> Vec<Self> {
         let mut adjacency = self.face_adjacency();
         // Seed each component in shell order: draining the adjacency map from
@@ -745,7 +745,7 @@ impl<P, C, S> Shell<P, C, S> {
     /// Returns the consistence of the geometry of end vertices
     /// and the geometry of edge.
     #[inline]
-    #[must_use]
+    #[must_use = "The returned boolean reports whether the geometry satisfies consistency checks."]
     pub fn is_geometric_consistent(&self) -> bool
     where
         P: Tolerance,
@@ -815,6 +815,24 @@ impl<P, C, S> Shell<P, C, S> {
     where
         P: Debug,
         C: Concat<C, Point = P, Output = C> + Invertible + ParameterTransform, {
+        self.remove_vertex_by_join_edges(vertex_id, |a, b| a.concat(b).ok())
+    }
+
+    /// Remove a degree-two boundary vertex using a caller-supplied geometric join.
+    /// The join must preserve the two outer endpoint identities. All incident
+    /// coedges are replaced together; unsupported incidence leaves the shell intact.
+    pub fn remove_vertex_by_join_edges(
+        &mut self,
+        vertex_id: VertexId<P>,
+        join: impl FnOnce(&Edge<P, C>, &Edge<P, C>) -> Option<Edge<P, C>>,
+    ) -> Option<Edge<P, C>> {
+        let join = |a: &Edge<P, C>, b: &Edge<P, C>| {
+            if a.back() != b.front() || a.front() == b.back() {
+                return None;
+            }
+            let edge = join(a, b)?;
+            (edge.front() == a.front() && edge.back() == b.back()).then_some(edge)
+        };
         let mut vec: Vec<(&mut Wire<P, C>, usize)> = self
             .face_iter_mut()
             .flat_map(|face| &mut face.boundaries)
@@ -831,19 +849,33 @@ impl<P, C, S> Shell<P, C, S> {
             None
         } else if vec.len() == 1 {
             let (wire, idx) = vec.pop()?;
-            let edge = wire[idx].concat(&wire[(idx + 1) % wire.len()]).ok()?;
+            let edge = join(&wire[idx], &wire[(idx + 1) % wire.len()])?;
             wire.swap_subwire_into_edges(idx, edge.clone());
             Some(edge)
         } else {
             let (wire0, idx0) = vec.pop()?;
             let (wire1, idx1) = vec.pop()?;
-            if !wire0[idx0].is_same(&wire1[(idx1 + 1) % wire1.len()])
-                || !wire0[(idx0 + 1) % wire0.len()].is_same(&wire1[idx1])
-            {
+            // Stored (absolute) face wires may use the same direction when
+            // their face orientations differ. Match the ordered pair in
+            // either direction, not the physical coedge sense.
+            let (a, b) = (&wire0[idx0], &wire0[(idx0 + 1) % wire0.len()]);
+            let (c, d) = (&wire1[idx1], &wire1[(idx1 + 1) % wire1.len()]);
+            let reverse = if a == c && b == d {
+                false
+            } else if *a == d.inverse() && *b == c.inverse() {
+                true
+            } else {
                 return None;
-            }
-            let edge = wire0[idx0].concat(&wire0[(idx0 + 1) % wire0.len()]).ok()?;
-            wire1.swap_subwire_into_edges(idx1, edge.inverse());
+            };
+            let edge = join(a, b)?;
+            wire1.swap_subwire_into_edges(
+                idx1,
+                if reverse {
+                    edge.inverse()
+                } else {
+                    edge.clone()
+                },
+            );
             wire0.swap_subwire_into_edges(idx0, edge.clone());
             Some(edge)
         }
@@ -885,7 +917,7 @@ impl<P, C, S> Shell<P, C, S> {
     ///     "[Face([[(0, 1), (1, 3), (3, 2), (2, 0)]]), Face([[(1, 2), (2, 0), (0, 3), (3, 1)]])]",
     /// );
     /// ```
-    #[must_use]
+    #[must_use = "The constructed display struct for debugging the shell is returned rather than stored."]
     pub const fn display(
         &self,
         format: ShellDisplayFormat,

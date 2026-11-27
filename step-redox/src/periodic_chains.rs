@@ -93,7 +93,7 @@ struct Partition {
     score: [i64; 8],
 }
 
-#[must_use]
+#[must_use = "The computed detect periodic chains collection is returned and must be retained or inspected."]
 pub fn detect_periodic_chains(entities: &[EntityInstance]) -> Vec<PeriodicChainPattern> {
     let index = build_index(entities);
     detect_periodic_chains_with_index(entities, &index)

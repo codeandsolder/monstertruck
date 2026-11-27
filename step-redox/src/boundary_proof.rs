@@ -1,5 +1,5 @@
 use crate::brep::{self, BSplineSupport, CurveSupport, SplineExtrusionSupport, SurfaceSupport};
-use crate::math3::{add, canonical_direction, cross, distance, dot, mul, norm, normalize, sub};
+use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -14,8 +14,45 @@ const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
 const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
 pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
+mod bounded;
+mod cell_correspondence;
+use cell_correspondence::{CellKind, CellWitnesses};
+mod sphere_chart;
+mod spline_strip;
+pub use sphere_chart::{
+    SphereChartAudit, SphereChartChange, SphereChartManifest, audit_sphere_charts,
+};
+#[cfg(feature = "cad-kernel-monstertruck")]
+pub use spline_strip::coincidence::{
+    SplineCapPrecisionAudit, SplineCapPrecisionGap, SplineCapPrecisionGapReason,
+    SplineCapPrecisionWitness, audit_source_spline_cap_precision,
+};
+mod strip_sense;
+pub use spline_strip::{SplineCurveKey, SplineStripKey};
+pub use strip_sense::StripFaceSenseRepair;
+pub(crate) use strip_sense::{ReconciledStripBoundary, reconcile_strip_face_senses};
+
 type PointKey = [i64; 3];
 type GroupedBoundarySegments = BTreeMap<[OrientedSupportKey; 2], Vec<(PointKey, PointKey)>>;
+type GroupedCircularSegments =
+    BTreeMap<([OrientedSupportKey; 2], CircleLocusKey), Vec<bounded::Arc>>;
+
+type GroupedSplineSegments = BTreeMap<
+    ([OrientedSupportKey; 2], Box<SplineCurveKey>),
+    Vec<[spline_strip::ProfilePosition; 2]>,
+>;
+
+type GroupedCylinderIntersections =
+    BTreeMap<([OrientedSupportKey; 2], bounded::CylinderIntersectionKey), Vec<bounded::Arc>>;
+
+#[derive(Default)]
+struct PhysicalBoundaryGroups {
+    linear: GroupedBoundarySegments,
+    circular: GroupedCircularSegments,
+    cylinder_sections: BTreeMap<[OrientedSupportKey; 2], Vec<bounded::Arc>>,
+    cylinder_intersections: GroupedCylinderIntersections,
+    splines: GroupedSplineSegments,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -40,6 +77,23 @@ pub enum OrientedSupportKey {
         positive_nappe: bool,
         radial_outward: bool,
     },
+    Sphere {
+        center_mm: PointKey,
+        radius_mm: i64,
+        radial_outward: bool,
+    },
+    Torus {
+        center_mm: PointKey,
+        axis: [i64; 3],
+        major_radius_mm: i64,
+        minor_radius_mm: i64,
+        radial_outward: bool,
+    },
+    /// Complete bounded spline wall, including its two actual profile curves.
+    SplineStrip {
+        strip: Box<SplineStripKey>,
+        outward_positive: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,6 +113,27 @@ enum SupportLocusKey {
         slope: i64,
         positive_nappe: bool,
     },
+    Sphere {
+        center_mm: PointKey,
+        radius_mm: i64,
+    },
+    Torus {
+        center_mm: PointKey,
+        axis: [i64; 3],
+        major_radius_mm: i64,
+        minor_radius_mm: i64,
+    },
+    SplineStrip {
+        strip: Box<SplineStripKey>,
+    },
+}
+
+/// Parameterization-independent circle carrier for a bounded physical chain.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct CircleLocusKey {
+    center_mm: PointKey,
+    normal: [i64; 3],
+    radius_mm: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -68,8 +143,31 @@ pub enum BoundaryChainKey {
         supports: [OrientedSupportKey; 2],
         endpoints_mm: [PointKey; 2],
     },
-    Cycle {
+    /// An increasing arc around the canonical circle normal. Reversed
+    /// endpoints select the complementary arc, not the same geometry.
+    Circular {
         supports: [OrientedSupportKey; 2],
+        locus: CircleLocusKey,
+        endpoints_mm: Option<[PointKey; 2]>,
+    },
+    /// Angular coverage of an oblique plane/cylinder ellipse. The carrier
+    /// pair fixes the ellipse uniquely; endpoints remain physical 3-D points,
+    /// ordered by increasing angle around the canonical cylinder axis.
+    CylinderSection {
+        supports: [OrientedSupportKey; 2],
+        endpoints_mm: Option<[PointKey; 2]>,
+    },
+    /// Regular branch of two nonparallel cylindrical carriers.
+    CylinderIntersection {
+        supports: [OrientedSupportKey; 2],
+        primary_is_second: bool,
+        positive_branch: bool,
+        endpoints_mm: Option<[PointKey; 2]>,
+    },
+    /// Complete bounded rational spline, certified on both incident carriers.
+    Spline {
+        supports: [OrientedSupportKey; 2],
+        curve: Box<SplineCurveKey>,
     },
 }
 
@@ -79,6 +177,26 @@ pub struct AnalyticBoundarySignature {
     pub supports: Vec<OrientedSupportKey>,
     /// Physical boundaries between distinct oriented analytic support patches.
     pub chains: Vec<BoundaryChainKey>,
+}
+
+impl AnalyticBoundarySignature {
+    /// Endpoints of physical boundary chains, already proven on the source.
+    pub(crate) fn boundary_vertices(&self) -> Vec<[f64; 3]> {
+        self.chains
+            .iter()
+            .filter_map(|chain| match chain {
+                BoundaryChainKey::Open { endpoints_mm, .. } => Some(*endpoints_mm),
+                BoundaryChainKey::Circular { endpoints_mm, .. }
+                | BoundaryChainKey::CylinderSection { endpoints_mm, .. }
+                | BoundaryChainKey::CylinderIntersection { endpoints_mm, .. } => *endpoints_mm,
+                BoundaryChainKey::Spline { curve, .. } => curve.ends(),
+            })
+            .flatten()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|p| dequantize_vector(p, POINT_Q_MM))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +225,7 @@ struct EdgeGeometry {
     end: PointKey,
     start_vertex: u64,
     end_vertex: u64,
+    parameter_forward: bool,
     curve_id: u64,
     support: CurveSupport,
 }
@@ -170,19 +289,21 @@ impl UnionFind {
     }
 }
 
-#[must_use]
+#[must_use = "The analytic boundary comparison is returned for exact-geometry validation."]
 pub fn compare_analytic_boundaries(
     first_solid_id: u64,
     first_entities: &[EntityInstance],
     second_solid_id: u64,
     second_entities: &[EntityInstance],
 ) -> AnalyticBoundaryComparison {
-    let first = analytic_boundary_diagnostic(first_solid_id, first_entities);
-    let second = analytic_boundary_diagnostic(second_solid_id, second_entities);
-    let equivalent = first.supported
-        && second.supported
-        && first.signature.is_some()
-        && first.signature == second.signature;
+    let first =
+        analytic_boundary_diagnostic(first_solid_id, first_entities, &build_index(first_entities));
+    let second = analytic_boundary_diagnostic(
+        second_solid_id,
+        second_entities,
+        &build_index(second_entities),
+    );
+    let equivalent = compare_diagnostics(&first, first_entities, &second, second_entities);
     AnalyticBoundaryComparison {
         equivalent,
         first,
@@ -190,12 +311,50 @@ pub fn compare_analytic_boundaries(
     }
 }
 
-#[must_use]
-pub fn analytic_boundary_diagnostic(
+/// Compare diagnostics that were independently derived from these exact source
+/// entity sections. Reuse the original diagnostic across candidate replays.
+pub(crate) fn compare_diagnostics(
+    first: &AnalyticBoundaryDiagnostic,
+    first_entities: &[EntityInstance],
+    second: &AnalyticBoundaryDiagnostic,
+    second_entities: &[EntityInstance],
+) -> bool {
+    match (&first.signature, &second.signature) {
+        (Some(a), Some(b)) if a == b => true,
+        (Some(a), Some(b))
+            if a.supports.len() == b.supports.len() && a.chains.len() == b.chains.len() =>
+        {
+            let witnesses = |diagnostic: &AnalyticBoundaryDiagnostic,
+                             entities: &[EntityInstance]| {
+                let mut cells = CellWitnesses::tracked();
+                let signature = analytic_boundary_signature(
+                    diagnostic.solid_id,
+                    entities,
+                    &build_index(entities),
+                    &mut cells,
+                )
+                .ok()?;
+                (diagnostic.signature.as_ref()? == &signature).then_some(cells)
+            };
+            cell_correspondence::compare(
+                a,
+                b,
+                || witnesses(first, first_entities),
+                || witnesses(second, second_entities),
+            )
+            .unwrap_or(false)
+        }
+        _ => false,
+    }
+}
+
+#[must_use = "The boundary diagnostic is returned for inspection of analytic recovery quality."]
+pub(crate) fn analytic_boundary_diagnostic(
     solid_id: u64,
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
 ) -> AnalyticBoundaryDiagnostic {
-    match analytic_boundary_signature(solid_id, entities) {
+    match analytic_boundary_signature(solid_id, entities, index, &mut CellWitnesses::default()) {
         Ok(signature) => AnalyticBoundaryDiagnostic {
             solid_id,
             supported: true,
@@ -275,23 +434,42 @@ fn strict_closed_shell_faces(
 fn analytic_boundary_signature(
     solid_id: u64,
     entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
 ) -> Result<AnalyticBoundarySignature, String> {
-    let index = build_index(entities);
-    let face_ids = strict_closed_shell_faces(solid_id, entities, &index)?;
+    let face_ids = strict_closed_shell_faces(solid_id, entities, index)?;
 
-    let graph = collect_boundary_graph(&face_ids, entities, &index)?;
+    let graph = collect_boundary_graph(&face_ids, entities, index, cells)?;
     let (mut union_find, component_support) = merge_support_components(&graph)?;
-    let grouped_segments = group_physical_boundaries(
+    let groups = group_physical_boundaries(
         &graph,
         &mut union_find,
         &component_support,
         entities,
-        &index,
+        index,
+        cells,
     )?;
 
     let mut chains = Vec::new();
-    for (supports, segments) in grouped_segments {
-        chains.extend(normalize_support_pair_chains(&supports, &segments)?);
+    for ((supports, curve), pieces) in groups.splines {
+        spline_strip::complete_profile_cover(&curve, &pieces)
+            .ok_or("incomplete or overlapping spline boundary coverage")?;
+        chains.push(BoundaryChainKey::Spline { supports, curve });
+    }
+    for (supports, segments) in groups.linear {
+        chains.extend(normalize_linear_chains(&supports, &segments)?);
+    }
+    for ((supports, locus), arcs) in groups.circular {
+        chains.extend(
+            bounded::normalize_arcs(&supports, &locus, &arcs)
+                .map_err(|reason| format!("{reason}: {supports:?}, {locus:?}, {arcs:?}"))?,
+        );
+    }
+    for (supports, arcs) in groups.cylinder_sections {
+        chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs)?);
+    }
+    for ((supports, key), arcs) in groups.cylinder_intersections {
+        chains.extend(bounded::normalize_intersections(&supports, key, &arcs)?);
     }
     chains.sort();
 
@@ -338,6 +516,7 @@ fn collect_boundary_graph(
     face_ids: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
 ) -> Result<BoundaryGraph, String> {
     let mut faces = Vec::with_capacity(face_ids.len());
     let mut edge_uses = HashMap::<u64, Vec<CoedgeUse>>::new();
@@ -347,7 +526,7 @@ fn collect_boundary_graph(
     let mut edge_geometry = HashMap::<u64, EdgeGeometry>::new();
 
     for (face_index, face_id) in face_ids.iter().copied().enumerate() {
-        let support = oriented_support_key(face_id, entities, index)
+        let support = oriented_support_key(face_id, entities, index, cells)
             .ok_or_else(|| format!("face #{face_id} has no supported oriented analytic carrier"))?;
         let loops = brep::face_loops(face_id, entities, index)
             .ok_or_else(|| format!("face #{face_id} has unsupported boundary topology"))?;
@@ -372,12 +551,15 @@ fn collect_boundary_graph(
                     effective_forward: effective_coedge_forward(edge, boundary.orientation),
                 });
                 let geometry = EdgeGeometry {
-                    start: point_key(edge.start_mm)
+                    start: cells
+                        .point(edge.start_mm)
                         .ok_or_else(|| format!("edge #{} has non-finite start", edge.edge_id))?,
-                    end: point_key(edge.end_mm)
+                    end: cells
+                        .point(edge.end_mm)
                         .ok_or_else(|| format!("edge #{} has non-finite end", edge.edge_id))?,
                     start_vertex: edge.start_vertex,
                     end_vertex: edge.end_vertex,
+                    parameter_forward: edge.parameter_forward,
                     curve_id: edge.curve_id,
                     support: edge.support.clone(),
                 };
@@ -411,7 +593,9 @@ fn validate_or_insert_edge_geometry(
         && existing.end == geometry.start
         && existing.start_vertex == geometry.end_vertex
         && existing.end_vertex == geometry.start_vertex;
-    if !same && !reversed {
+    if !(same && existing.parameter_forward == geometry.parameter_forward
+        || reversed && existing.parameter_forward != geometry.parameter_forward)
+    {
         return Err(format!(
             "edge #{edge_id} has inconsistent endpoint geometry"
         ));
@@ -483,9 +667,13 @@ fn group_physical_boundaries(
     component_support: &HashMap<usize, OrientedSupportKey>,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-) -> Result<GroupedBoundarySegments, String> {
-    let mut grouped_segments = BTreeMap::new();
-    for (edge_id, attached) in &graph.edge_uses {
+    cells: &mut CellWitnesses,
+) -> Result<PhysicalBoundaryGroups, String> {
+    let mut rejected = Vec::new();
+    let mut groups = PhysicalBoundaryGroups::default();
+    let mut edge_uses = graph.edge_uses.iter().collect::<Vec<_>>();
+    edge_uses.sort_unstable_by_key(|(id, _)| **id);
+    for (edge_id, attached) in edge_uses {
         let unique_faces = attached
             .iter()
             .map(|edge_use| edge_use.face_index)
@@ -519,22 +707,72 @@ fn group_physical_boundaries(
             .edge_geometry
             .get(edge_id)
             .ok_or_else(|| format!("edge #{edge_id} has no geometry"))?;
-        if geometry.start == geometry.end
-            && !edge_is_proven_closed_circle(geometry, entities, index)
-        {
-            return Err(format!("edge #{edge_id} collapses after quantization"));
+        let loci = supports.each_ref().map(support_locus_key);
+        let curve = resolve_geometric_curve_support(geometry.curve_id, entities, index);
+        let classified = curve.as_ref().map_or_else(
+            || {
+                // A source exporter can declare an exact elliptical trim
+                // self-intersecting. Keep ordinary recognizers strict; only
+                // accept such geometry through the full angular certificate.
+                let explicit =
+                    brep::curve_geometry_for_incidence_proof(geometry.curve_id, entities, index);
+                bounded::certify_flagged_angular_section(geometry, &explicit, &loci)
+            },
+            |curve| bounded::classify(geometry, curve, &loci, cells),
+        );
+        match classified {
+            Some(bounded::BoundedEdge::Line) => groups
+                .linear
+                .entry(supports)
+                .or_insert_with(Vec::new)
+                .push((geometry.start, geometry.end)),
+            Some(bounded::BoundedEdge::Circle(locus, arc)) => groups
+                .circular
+                .entry((supports, locus))
+                .or_insert_with(Vec::new)
+                .push(arc),
+            Some(bounded::BoundedEdge::CylinderSection(arc)) => groups
+                .cylinder_sections
+                .entry(supports)
+                .or_default()
+                .push(arc),
+            Some(bounded::BoundedEdge::CylinderIntersection(key, arc)) => groups
+                .cylinder_intersections
+                .entry((supports, key))
+                .or_default()
+                .push(arc),
+            Some(bounded::BoundedEdge::Spline(piece)) => groups
+                .splines
+                .entry((supports, piece.profile))
+                .or_default()
+                .push(piece.interval),
+            None if curve.is_none() => rejected.push(format!("#{edge_id}: unresolved curve")),
+            None => {
+                rejected.push(format!(
+                    "#{edge_id}: {} on {loci:?}",
+                    match curve {
+                        Some(CurveSupport::Line(_)) => "line",
+                        Some(CurveSupport::Circle(_)) => "circle",
+                        Some(CurveSupport::BSpline(_)) => "spline",
+                        Some(CurveSupport::Other { .. }) | None => "other",
+                    }
+                ));
+            }
         }
-        if !edge_proves_support_intersection(geometry, &supports, entities, index) {
-            return Err(format!(
-                "edge #{edge_id} is not proven on the exact intersection locus of its carriers"
-            ));
-        }
-        grouped_segments
-            .entry(supports)
-            .or_insert_with(Vec::new)
-            .push((geometry.start, geometry.end));
     }
-    Ok(grouped_segments)
+    if !rejected.is_empty() {
+        return Err(format!(
+            "{} uncertified physical edges: {}",
+            rejected.len(),
+            rejected
+                .iter()
+                .take(16)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    Ok(groups)
 }
 
 fn prove_all_supports_are_bounded(
@@ -544,9 +782,11 @@ fn prove_all_supports_are_bounded(
     let used_supports = chains
         .iter()
         .flat_map(|chain| match chain {
-            BoundaryChainKey::Open { supports, .. } | BoundaryChainKey::Cycle { supports } => {
-                supports.iter()
-            }
+            BoundaryChainKey::Open { supports, .. }
+            | BoundaryChainKey::Circular { supports, .. }
+            | BoundaryChainKey::CylinderSection { supports, .. }
+            | BoundaryChainKey::CylinderIntersection { supports, .. }
+            | BoundaryChainKey::Spline { supports, .. } => supports.iter(),
         })
         .cloned()
         .collect::<BTreeSet<_>>();
@@ -559,78 +799,98 @@ fn prove_all_supports_are_bounded(
     Ok(())
 }
 
-fn normalize_support_pair_chains(
+/// A linear chain must cover one straight interval exactly once. Sorting
+/// only endpoints would otherwise collapse a bent path or backtracking
+/// sequence into the same signature as a single line.
+fn normalize_linear_chains(
     supports: &[OrientedSupportKey; 2],
     segments: &[(PointKey, PointKey)],
 ) -> Result<Vec<BoundaryChainKey>, String> {
-    if segments.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let mut adjacency = BTreeMap::<PointKey, Vec<usize>>::new();
-    for (segment_index, &(start, end)) in segments.iter().enumerate() {
-        adjacency.entry(start).or_default().push(segment_index);
-        adjacency.entry(end).or_default().push(segment_index);
+    for (index, &(start, end)) in segments.iter().enumerate() {
+        if start == end {
+            return Err("collapsed linear edge".into());
+        }
+        adjacency.entry(start).or_default().push(index);
+        adjacency.entry(end).or_default().push(index);
     }
     if adjacency.values().any(|edges| edges.len() > 2) {
-        return Err("support-pair boundary graph branches".to_owned());
+        return Err("linear boundary graph branches".into());
     }
-
     let mut visited = vec![false; segments.len()];
-    let mut out = Vec::new();
-    for seed in 0..segments.len() {
-        if visited[seed] {
+    let mut result = Vec::new();
+    let mut spans = Vec::new();
+    for (&start, incident) in &adjacency {
+        let [seed] = incident.as_slice() else {
+            continue;
+        };
+        if visited[*seed] {
             continue;
         }
-        let mut stack = vec![seed];
-        let mut component_vertices = BTreeSet::new();
-        while let Some(segment_index) = stack.pop() {
-            if visited[segment_index] {
-                continue;
+        let mut path = vec![start];
+        let mut current = start;
+        let mut index = *seed;
+        loop {
+            if visited[index] {
+                return Err("repeated linear boundary".into());
             }
-            visited[segment_index] = true;
-            let (start, end) = segments[segment_index];
-            component_vertices.insert(start);
-            component_vertices.insert(end);
-            for vertex in [start, end] {
-                if let Some(neighbors) = adjacency.get(&vertex) {
-                    for &neighbor in neighbors {
-                        if !visited[neighbor] {
-                            stack.push(neighbor);
-                        }
-                    }
+            visited[index] = true;
+            let (first, second) = segments[index];
+            current = if first == current { second } else { first };
+            path.push(current);
+            let Some(next) = adjacency[&current].iter().copied().find(|&i| i != index) else {
+                break;
+            };
+            index = next;
+        }
+        let from = dequantize_vector(start, POINT_Q_MM).ok_or("invalid linear start")?;
+        let to = dequantize_vector(current, POINT_Q_MM).ok_or("invalid linear end")?;
+        let chord = sub(to, from);
+        let direction = normalize(chord, 0.).ok_or("zero-length linear chain")?;
+        let mut previous = f64::NEG_INFINITY;
+        for point in path {
+            let offset = sub(
+                dequantize_vector(point, POINT_Q_MM).ok_or("invalid linear vertex")?,
+                from,
+            );
+            let projection = dot(offset, direction);
+            if projection <= previous
+                || norm(cross(offset, direction)) > ANALYTIC_BOUNDARY_PROOF_TOL_MM
+            {
+                return Err("linear chain bends or backtracks".into());
+            }
+            previous = projection;
+        }
+        let length = norm(chord);
+        for &(other_start, other_end) in &spans {
+            let a = sub(other_start, from);
+            let b = sub(other_end, from);
+            if norm(cross(a, direction)) <= ANALYTIC_BOUNDARY_PROOF_TOL_MM
+                && norm(cross(b, direction)) <= ANALYTIC_BOUNDARY_PROOF_TOL_MM
+            {
+                let first = dot(a, direction);
+                let second = dot(b, direction);
+                let overlap = first.max(second).min(length) - first.min(second).max(0.);
+                if overlap > ANALYTIC_BOUNDARY_PROOF_TOL_MM {
+                    return Err("overlapping linear boundary intervals".into());
                 }
             }
         }
-
-        let endpoints = component_vertices
-            .iter()
-            .copied()
-            .filter(|vertex| adjacency.get(vertex).is_some_and(|edges| edges.len() == 1))
-            .collect::<Vec<_>>();
-        let all_degree_two = component_vertices
-            .iter()
-            .all(|vertex| adjacency.get(vertex).is_some_and(|edges| edges.len() == 2));
-
-        if endpoints.len() == 2 {
-            let mut endpoints_mm = [endpoints[0], endpoints[1]];
-            endpoints_mm.sort_unstable();
-            out.push(BoundaryChainKey::Open {
-                supports: supports.to_owned(),
-                endpoints_mm,
-            });
-        } else if endpoints.is_empty() && all_degree_two {
-            out.push(BoundaryChainKey::Cycle {
-                supports: supports.to_owned(),
-            });
-        } else {
-            return Err("support-pair component is neither a simple path nor cycle".to_owned());
-        }
+        spans.push((from, to));
+        let mut endpoints_mm = [start, current];
+        endpoints_mm.sort_unstable();
+        result.push(BoundaryChainKey::Open {
+            supports: supports.clone(),
+            endpoints_mm,
+        });
     }
-    Ok(out)
+    if visited.iter().any(|&value| !value) {
+        return Err("closed linear boundary cycle".into());
+    }
+    Ok(result)
 }
 
-const fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
+fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
     match support {
         OrientedSupportKey::Plane {
             normal, offset_mm, ..
@@ -660,41 +920,29 @@ const fn support_locus_key(support: &OrientedSupportKey) -> SupportLocusKey {
             slope: *slope,
             positive_nappe: *positive_nappe,
         },
-    }
-}
-
-fn edge_proves_support_intersection(
-    edge: &EdgeGeometry,
-    supports: &[OrientedSupportKey; 2],
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> bool {
-    let loci = [
-        support_locus_key(&supports[0]),
-        support_locus_key(&supports[1]),
-    ];
-    if !support_pair_can_intersect(&loci) {
-        return false;
-    }
-
-    let support = match &edge.support {
-        CurveSupport::Other { .. } => {
-            resolve_geometric_curve_support(edge.curve_id, entities, index)
-        }
-        support => Some(support.clone()),
-    };
-    match support {
-        Some(CurveSupport::Line(line)) => loci.iter().all(|locus| match locus {
-            SupportLocusKey::Cone { .. } => {
-                line_segment_lies_on_cone(line, [edge.start, edge.end], locus)
-            }
-            _ => line_lies_on_support(line, locus),
-        }),
-        Some(CurveSupport::Circle(circle)) => loci
-            .iter()
-            .all(|locus| circle_lies_on_support(circle, locus)),
-        Some(CurveSupport::BSpline(spline)) => bspline_lies_on_supports(&spline, &loci),
-        Some(CurveSupport::Other { .. }) | None => false,
+        OrientedSupportKey::Sphere {
+            center_mm,
+            radius_mm,
+            ..
+        } => SupportLocusKey::Sphere {
+            center_mm: *center_mm,
+            radius_mm: *radius_mm,
+        },
+        OrientedSupportKey::Torus {
+            center_mm,
+            axis,
+            major_radius_mm,
+            minor_radius_mm,
+            ..
+        } => SupportLocusKey::Torus {
+            center_mm: *center_mm,
+            axis: *axis,
+            major_radius_mm: *major_radius_mm,
+            minor_radius_mm: *minor_radius_mm,
+        },
+        OrientedSupportKey::SplineStrip { strip, .. } => SupportLocusKey::SplineStrip {
+            strip: strip.clone(),
+        },
     }
 }
 
@@ -703,6 +951,7 @@ fn edge_proves_support_intersection(
 /// the underlying geometry is an untrimmed circle with positive radius and the
 /// vertex demonstrably lies on that circle. Arbitrary closed splines, lines,
 /// and coincident endpoints do not establish a complete periodic traversal.
+#[cfg(test)]
 fn edge_is_proven_closed_circle(
     edge: &EdgeGeometry,
     entities: &[EntityInstance],
@@ -764,31 +1013,6 @@ fn resolve_geometric_curve_support(
         current = entity_ref_value(params.get(1)?)?;
     }
     None
-}
-
-fn bspline_lies_on_supports(spline: &BSplineSupport, loci: &[SupportLocusKey; 2]) -> bool {
-    if let Some(line) = bspline_line_support(spline)
-        && loci.iter().all(|locus| match locus {
-            SupportLocusKey::Cone { .. } => {
-                // Positive rational weights make the spline a convex
-                // combination of its control points. Both ends and every
-                // control polygon segment must lie on one generator of the
-                // *same nappe*, not merely share a line through the apex.
-                spline
-                    .control_points_mm
-                    .iter()
-                    .copied()
-                    .all(|point| point_lies_on_cone_nappe(point, locus))
-                    && spline.control_points_mm.windows(2).all(|pair| {
-                        point_lies_on_cone_nappe(mul(add(pair[0], pair[1]), 0.5), locus)
-                    })
-            }
-            _ => line_lies_on_support(line, locus),
-        })
-    {
-        return true;
-    }
-    bspline_is_circular_section_of_supports(spline, loci)
 }
 
 fn bspline_line_support(spline: &BSplineSupport) -> Option<brep::LineSupport> {
@@ -900,10 +1124,14 @@ fn circle_section_of_plane_and_support(
             }
             Some((add(apex, mul(axis, axial)), axis, radius))
         }
-        SupportLocusKey::Plane { .. } => None,
+        SupportLocusKey::Plane { .. }
+        | SupportLocusKey::Sphere { .. }
+        | SupportLocusKey::Torus { .. }
+        | SupportLocusKey::SplineStrip { .. } => None,
     }
 }
 
+#[cfg(test)]
 fn bspline_is_circular_section_of_supports(
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
@@ -1037,7 +1265,19 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
         (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cylinder { .. })
         | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cone { .. })
         | (SupportLocusKey::Cylinder { .. }, SupportLocusKey::Cone { .. })
-        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. }) => false,
+        | (SupportLocusKey::Cone { .. }, SupportLocusKey::Cylinder { .. })
+        | (
+            SupportLocusKey::Sphere { .. }
+            | SupportLocusKey::Torus { .. }
+            | SupportLocusKey::SplineStrip { .. },
+            _,
+        )
+        | (
+            _,
+            SupportLocusKey::Sphere { .. }
+            | SupportLocusKey::Torus { .. }
+            | SupportLocusKey::SplineStrip { .. },
+        ) => loci[0] != loci[1],
     }
 }
 
@@ -1077,7 +1317,10 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
             norm(cross(direction, axis)) <= ANGULAR_TOLERANCE
                 && (norm(radial) - radius).abs() <= LOCUS_TOLERANCE_MM
         }
-        SupportLocusKey::Cone { .. } => false,
+        SupportLocusKey::SplineStrip { strip } => spline_strip::line_on_strip(line, strip),
+        SupportLocusKey::Cone { .. }
+        | SupportLocusKey::Sphere { .. }
+        | SupportLocusKey::Torus { .. } => false,
     }
 }
 
@@ -1139,6 +1382,10 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
                 && norm(radial_center) <= LOCUS_TOLERANCE_MM
                 && signed_axial.mul_add(-slope, circle.radius_mm).abs() <= LOCUS_TOLERANCE_MM
         }
+        SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. } => {
+            bounded::circle_on_curved_support(circle, support)
+        }
+        SupportLocusKey::SplineStrip { .. } => false,
     }
 }
 
@@ -1180,10 +1427,51 @@ fn boundary_surface_support(
     constructive
 }
 
+/// Choose the sign in the *same quantized space* used by the boundary
+/// signature. Raw floating-point dominant-component ties can flip the
+/// canonical direction of a 45-degree plane under an equivalent rechart.
+/// Keep the signed original vector for physical offset/axis calculations.
+fn canonical_boundary_direction(raw: [f64; 3]) -> Option<([f64; 3], [i64; 3])> {
+    let key = vector_key(raw, DIRECTION_Q)?;
+    let dominant = key
+        .iter()
+        .max_by_key(|component| component.unsigned_abs())?;
+    if *dominant == 0 {
+        return None;
+    }
+    if *dominant < 0 {
+        Some((mul(raw, -1.0), key.map(|component| -component)))
+    } else {
+        Some((raw, key))
+    }
+}
+
+/// A complete nonplanar polynomial patch cannot be obtained by trimming
+/// and combining only planes and elliptic cylinders. This is negative
+/// evidence for analytic-only material candidates, never admission proof.
+pub(crate) fn requires_nonplanar_polynomial_carrier(
+    face_ids: &[u64],
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> bool {
+    face_ids.iter().any(|&face_id| {
+        let Some(surface_id) = brep::face_surface(face_id, entities, index) else {
+            return false;
+        };
+        let forward = match brep::face_sense(face_id, entities, index).as_deref() {
+            Some("T") => true,
+            Some("F") => false,
+            _ => return false,
+        };
+        spline_strip::has_nonplanar_polynomial_patch(face_id, surface_id, forward, entities, index)
+    })
+}
+
 fn oriented_support_key(
     face_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    cells: &mut CellWitnesses,
 ) -> Option<OrientedSupportKey> {
     let surface_id = brep::face_surface(face_id, entities, index)?;
     let forward = match brep::face_sense(face_id, entities, index)?.as_str() {
@@ -1195,35 +1483,35 @@ fn oriented_support_key(
     match boundary_surface_support(surface_id, entities, index) {
         SurfaceSupport::Plane(plane) => {
             let raw_normal = normalize(plane.normal, 0.0)?;
-            let normal = canonical_direction(raw_normal);
+            let (normal, normal_key) = cells.direction(raw_normal)?;
             let outward = if forward {
                 raw_normal
             } else {
                 mul(raw_normal, -1.0)
             };
             Some(OrientedSupportKey::Plane {
-                normal: vector_key(normal, DIRECTION_Q)?,
-                offset_mm: quantize(dot(normal, plane.origin_mm), SCALAR_Q_MM)?,
+                normal: normal_key,
+                offset_mm: cells.scalar(CellKind::Offset, dot(normal, plane.origin_mm))?,
                 outward_positive: dot(outward, normal) >= 0.0,
             })
         }
         SurfaceSupport::Cylinder(cylinder) => {
             let raw_axis = normalize(cylinder.axis, 0.0)?;
-            let axis = canonical_direction(raw_axis);
+            let (axis, axis_key) = cells.direction(raw_axis)?;
             let closest = sub(
                 cylinder.axis_origin_mm,
                 mul(axis, dot(axis, cylinder.axis_origin_mm)),
             );
             Some(OrientedSupportKey::Cylinder {
-                axis: vector_key(axis, DIRECTION_Q)?,
-                closest_mm: point_key(closest)?,
-                radius_mm: quantize(cylinder.radius_mm, SCALAR_Q_MM)?,
+                axis: axis_key,
+                closest_mm: cells.point(closest)?,
+                radius_mm: cells.scalar(CellKind::Radius, cylinder.radius_mm)?,
                 radial_outward: forward,
             })
         }
         SurfaceSupport::Cone(cone) => {
             let raw_axis = normalize(cone.axis, 0.0)?;
-            let axis = canonical_direction(raw_axis);
+            let (axis, axis_key) = cells.direction(raw_axis)?;
             let slope = cone.semi_angle_rad.tan();
             if !slope.is_finite() || slope <= 0.0 {
                 return None;
@@ -1232,15 +1520,15 @@ fn oriented_support_key(
                 cone.reference_origin_mm,
                 mul(raw_axis, cone.reference_radius_mm / slope),
             );
-            let slope_key = quantize(slope, DIRECTION_Q)?;
+            let slope_key = cells.scalar(CellKind::Slope, slope)?;
             if slope_key <= 0 {
                 // A positive cone angle that vanishes under key quantization
                 // has no recoverable nappe geometry: refuse ambiguous keys.
                 return None;
             }
             Some(OrientedSupportKey::Cone {
-                apex_mm: point_key(apex)?,
-                axis: vector_key(axis, DIRECTION_Q)?,
+                apex_mm: cells.point(apex)?,
+                axis: axis_key,
                 slope: slope_key,
                 // The original STEP chart's positive axial direction selects
                 // the nappe; canonicalizing the axis must also update its sign.
@@ -1248,10 +1536,37 @@ fn oriented_support_key(
                 radial_outward: forward,
             })
         }
-        SurfaceSupport::SplineExtrusion(surface) => {
-            spline_extrusion_cylinder_key(&surface, forward)
+        SurfaceSupport::Sphere(sphere) => {
+            let radius_mm = cells.scalar(CellKind::Radius, sphere.radius_mm)?;
+            (radius_mm > 0).then_some(OrientedSupportKey::Sphere {
+                center_mm: cells.point(sphere.center_mm)?,
+                radius_mm,
+                radial_outward: forward,
+            })
         }
-        _ => None,
+        SurfaceSupport::Torus(torus) => {
+            let minor_radius_mm = cells.scalar(CellKind::Radius, torus.minor_radius_mm)?;
+            let major_radius_mm = cells.scalar(CellKind::Radius, torus.major_radius_mm)?;
+            let (_, axis) = cells.direction(normalize(torus.axis, 0.0)?)?;
+            (minor_radius_mm > 0 && major_radius_mm > minor_radius_mm).then_some(
+                OrientedSupportKey::Torus {
+                    center_mm: cells.point(torus.center_mm)?,
+                    axis,
+                    major_radius_mm,
+                    minor_radius_mm,
+                    radial_outward: forward,
+                },
+            )
+        }
+        SurfaceSupport::SplineExtrusion(surface) => {
+            spline_extrusion_cylinder_key(&surface, forward, cells).or_else(|| {
+                spline_strip::oriented_key(face_id, surface_id, forward, entities, index, cells)
+            })
+        }
+        SurfaceSupport::Other { .. } => {
+            spline_strip::oriented_key(face_id, surface_id, forward, entities, index, cells)
+        }
+        SurfaceSupport::Revolution(_) => None,
     }
 }
 
@@ -1265,6 +1580,7 @@ fn oriented_support_key(
 fn spline_extrusion_cylinder_key(
     surface: &SplineExtrusionSupport,
     forward: bool,
+    cells: &mut CellWitnesses,
 ) -> Option<OrientedSupportKey> {
     const FIT_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.source_analytic_fit_mm;
 
@@ -1272,7 +1588,7 @@ fn spline_extrusion_cylinder_key(
         return None;
     }
     let raw_axis = normalize(surface.extrusion_mm, 0.0)?;
-    let axis = canonical_direction(raw_axis);
+    let (axis, axis_key) = cells.direction(raw_axis)?;
     let (t0, t1) = bspline_domain(&surface.profile)?;
     let p0 = evaluate_bspline(&surface.profile, t0)?;
     let p1 = evaluate_bspline(&surface.profile, t1)?;
@@ -1326,9 +1642,9 @@ fn spline_extrusion_cylinder_key(
 
     let closest = sub(center, mul(axis, dot(axis, center)));
     Some(OrientedSupportKey::Cylinder {
-        axis: vector_key(axis, DIRECTION_Q)?,
-        closest_mm: point_key(closest)?,
-        radius_mm: quantize(radius, SCALAR_Q_MM)?,
+        axis: axis_key,
+        closest_mm: cells.point(closest)?,
+        radius_mm: cells.scalar(CellKind::Radius, radius)?,
         radial_outward,
     })
 }
@@ -1628,6 +1944,77 @@ mod tests {
         }
     }
 
+    /// Shift only physical 3-D Cartesian points, retaining authored 2-D
+    /// parameter curves, directions, incidence, rational weights and trims.
+    fn shifted_entities(entities: &[EntityInstance], shift: f64) -> Vec<EntityInstance> {
+        let mut shifted = entities.to_vec();
+        for entity in &mut shifted {
+            if let Some(record) = crate::step_graph::simple_record_mut(entity)
+                && record.name == "CARTESIAN_POINT"
+                && let Parameter::List(params) = &mut record.parameter
+                && let Some(Parameter::List(coordinates)) = params.get_mut(1)
+                && coordinates.len() == 3
+                && let Some(z) = crate::step_entities::number(&coordinates[2])
+            {
+                coordinates[2] = Parameter::Real(z + shift);
+            }
+        }
+        shifted
+    }
+
+    #[test]
+    fn complete_boundary_cell_crossings_preserve_the_original_quantum() -> anyhow::Result<()> {
+        let fixtures = [
+            (
+                15,
+                include_bytes!("../validation/fixtures/native_conical_frustum.step").as_slice(),
+            ),
+            (
+                1202,
+                include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step").as_slice(),
+            ),
+        ];
+        for (solid, source) in fixtures {
+            let parsed = monstertruck_io::step::load::ParsedStepSource::parse(source)?.exchange;
+            let [section] = parsed.data.as_slice() else {
+                anyhow::bail!("expected one DATA section");
+            };
+            let compare = |a, b| {
+                let a = shifted_entities(&section.entities, a * POINT_Q_MM);
+                let b = shifted_entities(&section.entities, b * POINT_Q_MM);
+                let result = compare_analytic_boundaries(solid, &a, solid, &b);
+                assert!(result.first.supported, "{:?}", result.first.reason);
+                assert!(result.second.supported, "{:?}", result.second.reason);
+                assert_ne!(result.first.signature, result.second.signature);
+                result.equivalent
+            };
+            // Crossing a cell boundary by 0.02 quantum is admissible, but
+            // even neighbouring cell indices do not prove a 1.8-quantum gap.
+            assert!(compare(0.49, 0.51), "solid #{solid}");
+            assert!(compare(0.51, 0.49), "solid #{solid}: symmetry");
+            assert!(!compare(-0.4, 1.4), "solid #{solid}: excessive gap");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn boundary_direction_sign_is_invariant_at_quantized_dominant_ties() {
+        let t = std::f64::consts::FRAC_1_SQRT_2;
+        // Equal analytic directions represented on opposite sides of a
+        // floating-point dominant-component tie; also reverse the chart.
+        let first = normalize([t, -t + f64::EPSILON, 0.0], 0.0).unwrap();
+        let second = normalize([t - f64::EPSILON, -t, 0.0], 0.0).unwrap();
+        let (a, a_key) = canonical_boundary_direction(first).unwrap();
+        let (b, b_key) = canonical_boundary_direction(second).unwrap();
+        let (reversed, reversed_key) = canonical_boundary_direction(mul(first, -1.0)).unwrap();
+        assert_eq!(a_key, b_key);
+        assert_eq!(a_key, reversed_key);
+        assert!(dot(a, b) > 1.0 - DIRECTION_Q);
+        assert!(dot(a, reversed) > 1.0 - DIRECTION_Q);
+        assert!(dot(a, first) * dot(reversed, mul(first, -1.0)) < 0.0);
+        assert!(canonical_boundary_direction([0.0; 3]).is_none());
+    }
+
     #[test]
     fn line_carrier_proof_rejects_off_plane_line() {
         let support = SupportLocusKey::Plane {
@@ -1781,7 +2168,11 @@ mod tests {
             let [section] = exchange.data.as_slice() else {
                 anyhow::bail!("{name}: expected one DATA section");
             };
-            let diagnostic = analytic_boundary_diagnostic(15, &section.entities);
+            let diagnostic = analytic_boundary_diagnostic(
+                15,
+                &section.entities,
+                &build_index(&section.entities),
+            );
             assert!(diagnostic.supported, "{name}: {diagnostic:?}");
             assert!(
                 diagnostic.signature.as_ref().is_some_and(|sig| {
@@ -1808,6 +2199,7 @@ mod tests {
             end: point,
             start_vertex: 17,
             end_vertex: 17,
+            parameter_forward: true,
             curve_id: 7,
             support: CurveSupport::Line(brep::LineSupport {
                 origin_mm: [1.0, 0.0, 0.0],
@@ -1957,8 +2349,8 @@ mod tests {
     #[test]
     fn open_chain_normalization_ignores_degree_two_partitions() {
         let supports = [plane(0, true), plane(10_000_000, true)];
-        let one = normalize_support_pair_chains(&supports, &[([0, 0, 0], [20, 0, 0])]);
-        let split = normalize_support_pair_chains(
+        let one = normalize_linear_chains(&supports, &[([0, 0, 0], [20, 0, 0])]);
+        let split = normalize_linear_chains(
             &supports,
             &[([0, 0, 0], [7, 0, 0]), ([7, 0, 0], [20, 0, 0])],
         );
@@ -1967,29 +2359,24 @@ mod tests {
     }
 
     #[test]
-    fn cycle_normalization_ignores_partition_vertices() {
+    fn linear_normalization_refuses_cycles_bends_backtracking_and_overlap() {
         let supports = [plane(0, true), plane(10_000_000, true)];
-        let first = normalize_support_pair_chains(
-            &supports,
-            &[
+        for edges in [
+            vec![
                 ([0, 0, 0], [10, 0, 0]),
                 ([10, 0, 0], [10, 10, 0]),
-                ([10, 10, 0], [0, 10, 0]),
-                ([0, 10, 0], [0, 0, 0]),
+                ([10, 10, 0], [0, 0, 0]),
             ],
-        );
-        let split = normalize_support_pair_chains(
-            &supports,
-            &[
-                ([0, 0, 0], [5, 0, 0]),
-                ([5, 0, 0], [10, 0, 0]),
-                ([10, 0, 0], [10, 10, 0]),
-                ([10, 10, 0], [0, 10, 0]),
-                ([0, 10, 0], [0, 0, 0]),
+            vec![([0, 0, 0], [10, 10, 0]), ([10, 10, 0], [20, 0, 0])],
+            vec![
+                ([0, 0, 0], [30, 0, 0]),
+                ([30, 0, 0], [10, 0, 0]),
+                ([10, 0, 0], [40, 0, 0]),
             ],
-        );
-        assert!(first.is_ok());
-        assert_eq!(first, split);
+            vec![([0, 0, 0], [30, 0, 0]), ([10, 0, 0], [40, 0, 0])],
+        ] {
+            assert!(normalize_linear_chains(&supports, &edges).is_err());
+        }
     }
 
     #[test]
@@ -2195,7 +2582,7 @@ mod tests {
     #[test]
     fn branch_is_rejected() {
         let supports = [plane(0, true), plane(10_000_000, true)];
-        let result = normalize_support_pair_chains(
+        let result = normalize_linear_chains(
             &supports,
             &[
                 ([0, 0, 0], [10, 0, 0]),

@@ -30,7 +30,7 @@ pub struct ShapeFromStep(SubShapeFromStep);
 #[wasm_bindgen]
 impl ShapeFromStep {
     /// Meshes a shape from STEP.
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_polygon(&self, tol: f64) -> PolygonMesh {
         match &self.0 {
             SubShapeFromStep::Shell(x) => x.robust_triangulation(tol).to_polygon().into(),
@@ -42,7 +42,7 @@ impl ShapeFromStep {
 #[wasm_bindgen]
 impl Table {
     /// Reads a STEP file.
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_step(step_str: &str) -> Option<Self> {
         StepTable::from_step(step_str)
             .map(Table)
@@ -52,10 +52,10 @@ impl Table {
             .ok()
     }
     /// Gets shell indices.
-    #[must_use]
+    #[must_use = "The computed shell indices collection is returned and must be retained or inspected."]
     pub fn shell_indices(&self) -> Vec<u64> { self.0.shell.keys().copied().collect() }
     /// Gets a shape from an entity index.
-    #[must_use]
+    #[must_use = "The optional shape outcome must be inspected to distinguish a value from absence."]
     pub fn shape(&self, idx: u64) -> Option<ShapeFromStep> {
         let stepshell = self.shell.get(&idx)?;
         let shell = self

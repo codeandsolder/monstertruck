@@ -113,9 +113,10 @@ impl ReducedSolid {
 
     /// Build a semantic B-rep view directly from a kernel-owned native solid.
     ///
-    /// The caller supplies its already ordered, exact-trim faces. Synthetic
-    /// topology identities are assigned by that caller and never masquerade
-    /// as STEP source provenance.
+    /// The caller supplies its already ordered, exact-trim faces. Native
+    /// topology identities belong to the current native solid and never
+    /// masquerade as STEP source provenance.
+    #[cfg(feature = "cad-kernel-monstertruck")]
     pub(crate) fn from_native_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
         let max_id = faces
             .iter()
@@ -993,6 +994,7 @@ mod tests {
             ],
             inferred_radius_mm: Some(0.1),
             inferred_setbacks_mm: None,
+            first_setback_carrier_normal: None,
             inferred_angle_rad: None,
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Circle {

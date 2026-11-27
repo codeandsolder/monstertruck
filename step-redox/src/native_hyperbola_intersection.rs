@@ -26,7 +26,7 @@ use monstertruck_io::step::load::step_geometry::{
 /// Both supporting surfaces are emitted as SURFACE associations, not as
 /// fabricated STEP PCURVEs. Native STEP consumers may choose a different
 /// surface UV branch, but the 3D geometry remains the preferred master.
-#[must_use]
+#[must_use = "The constructed exact, self-contained analytic STEP intersection *geometry* is returned rather than stored."]
 pub fn native_healed_intersection_curve(candidate: &HyperbolaHealingCandidate) -> Curve3D {
     let analytic = candidate.analytic;
     let axis = analytic.cone_axis();

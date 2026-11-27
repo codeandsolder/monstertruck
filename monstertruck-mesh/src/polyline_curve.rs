@@ -47,7 +47,7 @@ impl PolylineCurve<Point2> {
     /// assert_near!(hexagon.area(), -1.5 * f64::sqrt(3.0));
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The computed area quantity is reported through this return value."]
     pub fn area(&self) -> f64 {
         let sum = |sum, (p, q): (&Point2, &Point2)| (q.x + p.x).mul_add(q.y - p.y, sum);
         self.iter().circular_tuple_windows().fold(0.0, sum) / 2.0
@@ -72,7 +72,7 @@ impl PolylineCurve<Point2> {
         clippy::many_single_char_names,
         reason = "2D winding calculation uses conventional point, vector, and cross-product notation"
     )]
-    #[must_use]
+    #[must_use = "The outcome of the include predicate is returned and must be observed."]
     pub fn include(&self, c: Point2) -> bool {
         if self.iter().any(|p| (*p - c).so_small()) {
             return true;

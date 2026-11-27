@@ -342,7 +342,7 @@ pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> O
 /// The returned relation includes the orientation induced by each carrier's
 /// parameterization, allowing topology to distinguish a harmless reversed
 /// parameterization from an oppositely oriented physical face.
-#[must_use]
+#[must_use = "The optional same surface domain outcome must be inspected to distinguish a value from absence."]
 pub fn same_surface_domain(
     left: &Surface,
     right: &Surface,
@@ -403,7 +403,7 @@ mod tests {
         );
         assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
         let cylinder = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
-        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (true, true));
+        assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (false, true));
     }
 
     #[test]

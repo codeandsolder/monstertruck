@@ -91,7 +91,7 @@ impl Line<Point2> {
     /// let line1 = Line(Point2::new(-1.0, 0.0), Point2::new(8.0, 3.0));
     /// assert!(line0.intersection(line1).is_none());
     /// ```
-    #[must_use]
+    #[must_use = "Ignoring this result discards the intersection of two lines and its parameters."]
     pub fn intersection(self, other: Self) -> Option<(f64, f64, Point2)> {
         let mat = Matrix2::from_cols(self.1 - self.0, other.0 - other.1);
         let v = other.0 - self.0;

@@ -3,14 +3,18 @@ use crate::cad_ir::{
     BooleanOp, CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, NodeId,
     ProofStatus, Provenance, RigidTransform,
 };
-use crate::cad_kernel::CadKernel;
+use crate::cad_kernel::{CadKernel, ReplayMode};
 use crate::cad_recovery::{
-    CadFragment, CadFragmentSource, rebuilt_kernel_boundary_matches_source,
-    recover_auto_proven_extrusion_core_union_fragment, recover_open_rectangular_sweep_fragments,
-    recover_periodic_chain_fragments, recover_radial_slot_revolution_fragments,
+    CadFragment, CadFragmentSource, CandidateAcceptance, SourceRecovery,
+    recover_open_rectangular_sweep_fragments, recover_periodic_chain_fragments,
+    recover_proven_material_fragment, recover_radial_slot_revolution_fragments,
     recover_revolved_round_tail_fragments, recover_round_sweep_fragments,
     recover_solid_extrusion_fragment, recover_solid_extrusion_fragments,
     recover_solid_revolution_fragments,
+};
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+use crate::cad_recovery::{
+    rebuilt_kernel_boundary_matches_source, recover_auto_proven_extrusion_core_union_fragment,
 };
 use crate::kernel_source_load::{
     KernelSourceLoadEvidence, KernelTopologyProvenance, SourceStepLoadInspector,
@@ -19,7 +23,6 @@ use crate::kernel_source_load::{
 use crate::kernel_topology::plan_source_coplanar_normalization_patch;
 use crate::kernel_topology::{
     SourceTopologyEditor, plan_source_boundary_feature_peel_from_entities,
-    plan_source_edge_treatment_patches,
 };
 use crate::patterns::InstancePattern;
 use crate::planar_features::{
@@ -28,13 +31,16 @@ use crate::planar_features::{
 use crate::solid_revolutions::SolidSurfaceSignature;
 use anyhow::{Context, Result, bail};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Exchange};
 
+mod native_peels;
+mod treatment_layers;
+
 pub const COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v13";
-pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v18";
+pub const KERNEL_COMPLETE_IR_SCHEMA: &str = "step-redox-complete-ir-v21";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReducedBrepMutationMode {
@@ -95,10 +101,20 @@ pub struct SourceInstancePattern {
     pub pattern: InstancePattern,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelRecoveryFailure {
     pub source: SourceEntity,
     pub error: String,
+}
+
+/// A candidate verified against a source proof view in which only uniquely
+/// contradictory, fully proven spline-strip face-sense flags were reversed.
+///
+/// This is deliberately distinct from verification of the authored source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceOrientationReconciliation {
+    pub source: SourceEntity,
+    pub repairs: Vec<crate::boundary_proof::StripFaceSenseRepair>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,9 +142,36 @@ pub struct CompleteIr {
     pub unrecovered_solids: Vec<SourceSolidSummary>,
     pub body_scan: BodyScanSummary,
     pub body_count: usize,
+    /// Selected models independently compared with their original oriented
+    /// analytic source boundaries, not merely structurally reconstructed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_boundary_verified_solids: Vec<SourceEntity>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_orientation_reconciled_solids: Vec<SourceOrientationReconciliation>,
     pub constructively_recovered_solid_count: usize,
     pub semantically_recovered_solid_count: usize,
     pub unrecovered_solid_count: usize,
+}
+
+impl CompleteIr {
+    /// All selected whole-solid fragments, regardless of semantic family.
+    /// The source ID belongs to its original DATA section.
+    pub fn selected_fragments(&self) -> impl Iterator<Item = &SourceCadFragment> {
+        [
+            self.solid_extrusions.as_slice(),
+            self.solid_lofts.as_slice(),
+            self.solid_revolutions.as_slice(),
+            self.radial_slot_revolutions.as_slice(),
+            self.solid_sweeps.as_slice(),
+            self.periodic_chains.as_slice(),
+            self.boundary_feature_composites.as_slice(),
+            self.edge_treatment_composites.as_slice(),
+            self.same_domain_normalized_solids.as_slice(),
+            self.extrusion_core_unions.as_slice(),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -219,7 +262,7 @@ impl LocalRecoveryTargets {
         })
     }
 
-    fn is_empty(&self) -> bool { self.solid_ids.is_empty() }
+    const fn is_empty(&self) -> bool { self.solid_ids.is_empty() }
 
     fn shell_ids(&self) -> HashSet<u64> { self.shell_to_solid.keys().copied().collect() }
 
@@ -329,13 +372,34 @@ struct PreparedBoundaryReduction {
     family_indices: Vec<usize>,
 }
 
+/// Stronger evidence takes precedence over structural ranking. Original
+/// proof is never reported for a metadata-reconciled source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BoundaryVerification {
+    Structural,
+    Reconciled(Vec<crate::boundary_proof::StripFaceSenseRepair>),
+    Original,
+}
+
+impl BoundaryVerification {
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::Structural => 0,
+            Self::Reconciled(_) => 1,
+            Self::Original => 2,
+        }
+    }
+
+    const fn is_certified(&self) -> bool { !matches!(self, Self::Structural) }
+}
+
 #[derive(Debug)]
 struct SelectedWholeSolid {
     fragment: CadFragment,
     complexity: u64,
     /// This candidate passed the independent, oriented source-boundary check,
     /// not only a source-topology pattern recognizer.
-    boundary_verified: bool,
+    boundary_verification: BoundaryVerification,
 }
 
 #[derive(Debug)]
@@ -356,13 +420,13 @@ impl WholeSolidRecoveryState {
 
     fn add_candidates<I>(&mut self, candidates: I) -> Result<usize>
     where I: IntoIterator<Item = SourceCadFragment> {
-        self.add_candidates_with_proof(candidates, false)
+        self.add_candidates_with_proof(candidates, &BoundaryVerification::Structural)
     }
 
     fn add_candidates_with_proof<I>(
         &mut self,
         candidates: I,
-        boundary_verified: bool,
+        boundary_verification: &BoundaryVerification,
     ) -> Result<usize>
     where
         I: IntoIterator<Item = SourceCadFragment>,
@@ -390,7 +454,7 @@ impl WholeSolidRecoveryState {
             }
             let complexity = fragment.model.complexity_score(fragment.root)?;
             let replace = self.selected.get(&source).is_none_or(|existing| {
-                if boundary_verified == existing.boundary_verified {
+                if boundary_verification.rank() == existing.boundary_verification.rank() {
                     whole_solid_candidate_is_preferred(
                         &existing.fragment.source,
                         existing.complexity,
@@ -398,7 +462,7 @@ impl WholeSolidRecoveryState {
                         complexity,
                     )
                 } else {
-                    boundary_verified
+                    boundary_verification.rank() > existing.boundary_verification.rank()
                 }
             });
             if replace {
@@ -407,7 +471,7 @@ impl WholeSolidRecoveryState {
                     SelectedWholeSolid {
                         fragment,
                         complexity,
-                        boundary_verified,
+                        boundary_verification: boundary_verification.clone(),
                     },
                 );
                 self.revision += 1;
@@ -429,6 +493,7 @@ impl WholeSolidRecoveryState {
             .collect()
     }
 
+    #[cfg(test)]
     fn semantically_unrecovered_sources(&self) -> BTreeSet<SourceEntity> {
         self.source_solids
             .iter()
@@ -451,6 +516,7 @@ struct CompleteIrBuildState {
     instance_pattern_diagnostics: Vec<SourceInstancePattern>,
     body_scan: Vec<SourceSolidSummary>,
     recovery: WholeSolidRecoveryState,
+    direct_candidates: BTreeMap<SourceEntity, Vec<CadFragment>>,
 }
 
 impl CompleteIrBuildState {
@@ -512,6 +578,12 @@ impl CompleteIrBuildState {
                 matches!(
                     source,
                     CadFragmentSource::ExtrusionCoreUnion { .. }
+                        | CadFragmentSource::SectionalExtrusionUnion { .. }
+                        | CadFragmentSource::SectionalExtrusionTransitions { .. }
+                        | CadFragmentSource::SectionalLoftUnion { .. }
+                        | CadFragmentSource::FormedSheetExtrusionUnion { .. }
+                        | CadFragmentSource::SourceCapExtrusionUnion { .. }
+                        | CadFragmentSource::SignedCapAssembly { .. }
                         | CadFragmentSource::ExtrusionCoreRuledEnds { .. }
                         | CadFragmentSource::CapExtrusionRuledEnds { .. }
                 )
@@ -520,6 +592,33 @@ impl CompleteIrBuildState {
             kernel_source_load,
             unrecovered_solid_count: unrecovered_solids.len(),
             body_count: self.body_scan.len(),
+            source_boundary_verified_solids: self
+                .recovery
+                .selected
+                .iter()
+                .filter_map(|(&source, selected)| {
+                    matches!(
+                        selected.boundary_verification,
+                        BoundaryVerification::Original
+                    )
+                    .then_some(source)
+                })
+                .collect(),
+            source_orientation_reconciled_solids: self
+                .recovery
+                .selected
+                .iter()
+                .filter_map(|(&source, selected)| {
+                    let BoundaryVerification::Reconciled(repairs) = &selected.boundary_verification
+                    else {
+                        return None;
+                    };
+                    Some(SourceOrientationReconciliation {
+                        source,
+                        repairs: repairs.clone(),
+                    })
+                })
+                .collect(),
             constructively_recovered_solid_count,
             semantically_recovered_solid_count: selected.len(),
             body_scan: BodyScanSummary {
@@ -561,7 +660,7 @@ pub fn recover_complete_ir_bytes(input: &[u8]) -> Result<CompleteIr> {
 /// through a supplied CAD kernel plus the independent analytic boundary proof.
 ///
 /// The parser-only [`recover_complete_ir_bytes`] path reports schema v10 and never
-/// invokes a CAD backend. This explicit kernel-backed path reports schema v15,
+/// invokes a CAD backend. This explicit kernel-backed path reports its versioned schema,
 /// includes parser-neutral source-load evidence,
 /// records admitted kernel-owned topology-normalized composites and extrusion-core unions separately, and leaves any unsupported
 /// or unproven body in `unrecovered_solids`. Backend failures are diagnostic per
@@ -574,32 +673,21 @@ pub fn recover_complete_ir_bytes(input: &[u8]) -> Result<CompleteIr> {
 /// a proposal, not proof of occupied material; rejected candidates do not
 /// prevent another valid representation of the same source solid from winning.
 fn recover_verified_direct_constructive_fragment<K: CadKernel>(
-    source: SourceEntity,
-    exchange: &Exchange,
-    kernel: &K,
+    proof: &SourceRecovery<'_, K>,
+    candidates: Vec<CadFragment>,
+    ceiling: Option<u64>,
 ) -> Result<Option<CadFragment>> {
-    let Some(section) = exchange.data.get(source.data_section) else {
-        bail!("missing DATA section {}", source.data_section);
-    };
-    let entities = &section.entities;
-    let index = crate::step_graph::build_index(entities);
-    let mut candidates = recover_constructive_fragments_from_entities_with_index(entities, &index)?
+    let mut candidates = candidates
         .into_iter()
-        .filter(|fragment| {
-            source_solid_id(&fragment.source) == source.id
-                && is_constructive_source(&fragment.source)
-        })
         .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
         .collect::<Result<Vec<_>>>()?;
     candidates.sort_by_key(|(complexity, _)| *complexity);
-    for (_, fragment) in candidates {
-        let Ok(evaluated) = kernel.evaluate(&fragment.model, fragment.root) else {
-            continue;
-        };
-        if !kernel.summarize(&evaluated).is_single_solid() {
-            continue;
+    for (cost, fragment) in candidates {
+        if ceiling.is_some_and(|limit| cost >= limit) {
+            break;
         }
-        if rebuilt_kernel_boundary_matches_source(kernel, &evaluated, source.id, entities)
+        if proof
+            .proves(&fragment.model, fragment.root, None)
             .unwrap_or(false)
         {
             return Ok(Some(fragment));
@@ -624,46 +712,135 @@ pub fn recover_complete_ir_with_kernel_bytes<
 ) -> Result<CompleteIr> {
     let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
     let document = kernel.resolve_source_exchange(exchange)?;
+    let exchange = document.as_ref();
+    // Reuse the same section-local evidence for the initial parser proposal
+    // pass and every independent proof provider, including multi-DATA inputs.
+    let indexes: Vec<_> = exchange
+        .data
+        .iter()
+        .map(|section| crate::step_graph::build_index(&section.entities))
+        .collect();
+    let source_tolerances: Vec<_> = exchange
+        .data
+        .iter()
+        .zip(&indexes)
+        .map(|(section, index)| {
+            crate::solid_revolutions::source_tolerance_by_representation_item(
+                &section.entities,
+                index,
+            )
+        })
+        .collect();
+    let sections: Vec<_> = indexes
+        .iter()
+        .zip(&source_tolerances)
+        .map(|(index, source_tolerances)| SectionEvidence {
+            index,
+            source_tolerances,
+            surface_signatures: None,
+        })
+        .collect();
     let mut build = recover_complete_ir_build_state(
-        document.as_ref(),
+        exchange,
         ReducedBrepMutationMode::KernelOwned,
-        None,
+        Some(&sections),
     )?;
     let source_load = kernel.inspect_source_document(&document)?;
-    let mut failures = apply_kernel_recovery(
-        &mut build.recovery,
-        |source| recover_kernel_boundary_feature_fragment(source, &source_load, &document, kernel),
-        false,
-    );
-    failures.extend(apply_kernel_recovery(
-        &mut build.recovery,
-        |source| {
-            recover_kernel_topology_normalized_fragment(&document, source, &source_load, kernel)
-        },
-        false,
-    ));
-    if kernel.supports_step_export() {
-        failures.extend(apply_kernel_recovery(
+    let mut failures = Vec::new();
+    let export = kernel.supports_step_export();
+    // All candidates for one source share immutable boundary evidence.
+    // A proof-only orientation reconciliation retains its own provenance.
+    // Drop it before proceeding to the next solid: do not retain the full
+    // assembly's spline signatures merely to reuse the evidence later.
+    for source in build.recovery.source_solids.clone() {
+        let entities = &exchange.data[source.data_section].entities;
+        let index = &indexes[source.data_section];
+        let proof = if export {
+            SourceRecovery::new(source.id, entities, index, kernel).or_else(|| {
+                SourceRecovery::reconcile_strip_senses(source.id, entities, index, kernel)
+            })
+        } else {
+            None
+        };
+        failures.extend(recover_native_histories(
             &mut build.recovery,
-            |source| {
-                recover_auto_proven_extrusion_core_union_fragment(
-                    input,
-                    source.data_section,
-                    source.id,
-                    kernel,
-                )
+            &native_peels::ReplayTarget {
+                source,
+                proof: proof.as_ref(),
+                mode: ReplayMode::General,
             },
-            true,
+            &source_load,
+            &document,
+            kernel,
+            index,
         ));
-        failures.extend(apply_kernel_recovery(
-            &mut build.recovery,
-            |source| {
-                recover_verified_direct_constructive_fragment(source, document.as_ref(), kernel)
-            },
-            true,
-        ));
+        let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
+        let Some(proof) = proof else {
+            continue;
+        };
+        // A direct source feature is the canonical representation on an
+        // equal score. Prove it before searching alternative decompositions;
+        // strictly cheaper certified material candidates can still replace it.
+        let candidate = recover_verified_direct_constructive_fragment(
+            &proof,
+            candidates,
+            build.recovery.certified_ceiling(source),
+        )
+        .map(|candidate| {
+            candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+        });
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
+        let candidate =
+            recover_proven_material_fragment(&proof, build.recovery.certified_ceiling(source)).map(
+                |candidate| {
+                    candidate.map(|fragment| KernelRecoveryCandidate::certified(fragment, &proof))
+                },
+            );
+        failures.extend(build.recovery.admit_kernel_candidate(source, candidate));
     }
     Ok(build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, Some(source_load)))
+}
+
+/// Prefer independently proven native histories before general solver replay.
+fn recover_native_histories<K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor>(
+    recovery: &mut WholeSolidRecoveryState,
+    initial: &native_peels::ReplayTarget<'_, '_, K>,
+    source_load: &KernelSourceLoadEvidence,
+    document: &K::Document,
+    kernel: &K,
+    index: &HashMap<u64, usize>,
+) -> Vec<KernelRecoveryFailure> {
+    let source = initial.source;
+    let mut failures = Vec::new();
+    let modes = if initial.proof.is_some() && kernel.supports_analytic_replay() {
+        &[ReplayMode::AnalyticOnly, ReplayMode::General][..]
+    } else {
+        &[ReplayMode::General][..]
+    };
+    for &mode in modes {
+        if recovery.selected.contains_key(&source) {
+            break;
+        }
+        let target = native_peels::ReplayTarget {
+            source,
+            proof: initial.proof,
+            mode,
+        };
+        let candidate =
+            recover_kernel_boundary_feature_fragment(&target, source_load, document, kernel, index);
+        failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        if !recovery.selected.contains_key(&source) {
+            let candidate = recover_kernel_topology_normalized_fragment(
+                document,
+                &target,
+                source_load,
+                kernel,
+                index,
+            );
+            failures.extend(recovery.admit_replay_candidate(source, candidate, mode));
+        }
+    }
+    failures
 }
 
 /// Peel fully proven boundary-feature leaves on kernel-owned topology. The parser
@@ -671,11 +848,13 @@ pub fn recover_complete_ir_with_kernel_bytes<
 fn recover_kernel_boundary_feature_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     source_document: &K::Document,
     kernel: &K,
-) -> Result<Option<CadFragment>> {
+    index: &HashMap<u64, usize>,
+) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
     let Some(load) = source_load.solids.iter().find(|item| item.source == source) else {
         return Ok(None);
     };
@@ -693,59 +872,23 @@ fn recover_kernel_boundary_feature_fragment<
     let mut projected_entities = section.entities.clone();
     // Only shell membership and host FACE_BOUND references are ever changed
     // in this semantic projection; the original entity index stays valid.
-    let index = crate::step_graph::build_index(&projected_entities);
-    let original_outer_faces = crate::brep::solid_face_ids(source.id, &projected_entities, &index)
-        .ok_or_else(|| anyhow::anyhow!("source solid has no readable outer-shell faces"))?;
+    let original_outer_faces =
+        crate::brep::solid_face_ids(source.id, &projected_entities, index)
+            .ok_or_else(|| anyhow::anyhow!("source solid has no readable outer-shell faces"))?;
     let mut edited = None::<K::EditedSource>;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
     for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
-        let targets = LocalRecoveryTargets::from_solids(
-            &BTreeSet::from([source.id]),
-            &projected_entities,
-            &index,
-        )?;
-        if targets.is_empty() {
+        let Some(native_pass) =
+            prepare_native_boundary_pass(source, &projected_entities, index, provenance, pass)?
+        else {
             break;
-        }
-
-        let shells = targets.shell_ids();
-        let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
-            &projected_entities,
-            &index,
-            &shells,
-        );
-        let selected = crate::planar_features::leaf_feature_family_indices(&report.families)
-            .into_iter()
-            .filter(|&i| {
-                targets
-                    .solid_for_shell(report.families[i].shell_id)
-                    .is_some()
-            })
-            .collect::<Vec<_>>();
-        if selected.is_empty() {
-            break;
-        }
-        let prepared = prepare_boundary_feature_reduction(
-            &projected_entities,
-            &index,
-            &targets,
-            &shells,
-            &report,
-            &selected,
-            pass,
-        )?;
-        if prepared.family_indices.is_empty() {
-            break;
-        }
-        let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
-            source,
-            &projected_entities,
-            &index,
-            &report,
-            &prepared.family_indices,
-            provenance,
-        )?;
+        };
+        let NativeBoundaryPass {
+            patch,
+            plan,
+            families,
+        } = native_pass;
         // The native geometry transaction commits first. Then update only
         // shell membership and FACE_BOUND references in the disposable source
         // projection. Its preflight is atomic, and we never clone/reimport a
@@ -757,7 +900,7 @@ fn recover_kernel_boundary_feature_fragment<
         }
         crate::planar_features::apply_boundary_feature_peel_plan(
             &mut projected_entities,
-            &index,
+            index,
             &plan,
         )?;
         let current = edited
@@ -767,7 +910,7 @@ fn recover_kernel_boundary_feature_fragment<
             source,
             &original_outer_faces,
             &projected_entities,
-            &index,
+            index,
             provenance,
             load.boundaries.len(),
             &kernel.inspect_edited_source(current)?,
@@ -775,10 +918,10 @@ fn recover_kernel_boundary_feature_fragment<
 
         // Advance semantic replay only after the authoritative native
         // transaction has passed the source-identity consistency check.
-        for (_, LocalReductionStep::BoundaryFeature(mut feature)) in prepared.steps {
+        replay.extend(families.into_iter().map(|mut feature| {
             feature.original_source_ids = pass == 0;
-            replay.push(feature);
-        }
+            feature
+        }));
         if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
             bail!("kernel boundary-feature peeling did not reach a fixed point");
         }
@@ -786,7 +929,64 @@ fn recover_kernel_boundary_feature_fragment<
     let Some(edited) = edited else {
         return Ok(None);
     };
-    finish_native_boundary_feature_replay(kernel, source, &edited, &replay)
+    finish_native_boundary_feature_replay(kernel, target, edited, provenance, replay)
+}
+
+struct NativeBoundaryPass {
+    patch: crate::kernel_topology::KernelTopologyPatch,
+    plan: BoundaryFeaturePeelPlan,
+    families: Vec<RecoveredBoundaryFeatureFamily>,
+}
+
+fn prepare_native_boundary_pass(
+    source: SourceEntity,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    provenance: &KernelTopologyProvenance,
+    pass_index: usize,
+) -> Result<Option<NativeBoundaryPass>> {
+    let targets = LocalRecoveryTargets::from_solids(&BTreeSet::from([source.id]), entities, index)?;
+    if targets.is_empty() {
+        return Ok(None);
+    }
+    let shells = targets.shell_ids();
+    let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
+        entities, index, &shells,
+    );
+    let selected = (0..report.families.len())
+        .filter(|&i| {
+            targets
+                .solid_for_shell(report.families[i].shell_id)
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    let prepared = prepare_boundary_feature_reduction(
+        entities, index, &targets, &report, &selected, pass_index,
+    )?;
+    if prepared.family_indices.is_empty() {
+        return Ok(None);
+    }
+    let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
+        source,
+        entities,
+        index,
+        &report,
+        &prepared.family_indices,
+        provenance,
+    )?;
+    let families = prepared
+        .steps
+        .into_iter()
+        .map(|(_, LocalReductionStep::BoundaryFeature(feature))| feature)
+        .collect();
+    Ok(Some(NativeBoundaryPass {
+        patch,
+        plan,
+        families,
+    }))
 }
 
 /// Ensure projected shell membership exactly matches the retained native
@@ -859,35 +1059,43 @@ fn finish_native_boundary_feature_replay<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     kernel: &K,
-    source: SourceEntity,
-    edited: &K::EditedSource,
-    replay: &[RecoveredBoundaryFeatureFamily],
-) -> Result<Option<CadFragment>> {
-    let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
-        // Rare non-native analytic families still use one final snapshot, not
-        // a serialization/reimport on every feature-peeling round.
-        let snapshot = kernel.edited_source_to_step(edited)?;
-        let document = kernel.resolve_source_exchange(
-            monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?.exchange,
-        )?;
-        recognize_single_healed_host(document.as_ref())
-    })?
+    target: &native_peels::ReplayTarget<'_, '_, K>,
+    mut edited: K::EditedSource,
+    provenance: &KernelTopologyProvenance,
+    replay: Vec<RecoveredBoundaryFeatureFamily>,
+) -> Result<Option<KernelRecoveryCandidate>> {
+    let mut journal = native_peels::Journal::default();
+    journal.boundary(replay);
+    let Some(fragment) = journal.finish(
+        kernel,
+        &mut edited,
+        target,
+        provenance,
+        native_peels::NextPeel::Treatment,
+        None,
+    )?
     else {
         return Ok(None);
     };
-    host.model.provenance.clear();
-    let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
-    kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
+    // The journal has already qualified the complete replay against the
+    // original supported boundary, before choosing a host representation.
+    Ok(Some(match target.proof {
+        Some(proof) => KernelRecoveryCandidate::certified(fragment, proof),
+        None => KernelRecoveryCandidate::structural(fragment),
+    }))
 }
 
 fn recover_kernel_topology_normalized_fragment<
     K: CadKernel + SourceStepLoadInspector + SourceTopologyEditor,
 >(
     document: &K::Document,
-    source: SourceEntity,
+    target: &native_peels::ReplayTarget<'_, '_, K>,
     source_load: &KernelSourceLoadEvidence,
     kernel: &K,
-) -> Result<Option<CadFragment>> {
+    index: &HashMap<u64, usize>,
+) -> Result<Option<KernelRecoveryCandidate>> {
+    let source = target.source;
+    let proof = target.proof;
     let exchange = document.as_ref();
     let Some(load) = source_load
         .solids
@@ -903,108 +1111,106 @@ fn recover_kernel_topology_normalized_fragment<
         return Ok(None);
     };
 
-    let evidence = replayable_source_treatments(exchange, source)?;
-    let patches = if evidence.is_empty() {
-        Vec::new()
-    } else {
-        vec![
-            plan_source_edge_treatment_patches(exchange, source, &evidence, &provenance)
-                .context("construct inverse edge-treatment topology patch")?,
-        ]
-    };
-    // Keep one exact kernel-owned source throughout both reduction stages.
-    // The source identity journal does not depend on temporary STEP numbers.
-    let mut edited = kernel
-        .edit_source_topology(document, source, &patches)
-        .context("apply inverse edge-treatment topology patch to source")?;
+    let evidence = replayable_source_treatments(
+        &exchange.data[source.data_section].entities,
+        index,
+        source.id,
+    );
+    let treatment_layers::PeelOutcome {
+        mut edited,
+        layers,
+        stop,
+    } = treatment_layers::peel(kernel, document, source, &provenance, &evidence)
+        .context("peel dependency-ordered native edge treatments")?;
     if kernel.inspect_edited_source(&edited)?.faces == 0 {
         return Ok(None);
     }
     let same_domain_merges = kernel
         .normalize_edited_source(&mut edited)
         .context("normalize native source faces after inverse treatments")?;
-    let unchanged = patches.is_empty() && same_domain_merges == 0;
+    let unchanged = layers.is_empty() && same_domain_merges == 0;
     // Even an unedited source can have a native constructive representation
     // that the parser-only path did not recognize (e.g. an exact U-directed
     // rational spline extrusion). Do not needlessly serialize that source or
     // mislabel direct recovery as a topology-normalization operation.
-    let native = recognize_native_edited_host(kernel, &edited)?;
-    let Some(mut host) = (if unchanged {
-        native
-    } else {
-        native.map_or_else(
-            || {
-                let snapshot = kernel.edited_source_to_step(&edited)?;
-                let final_document = kernel.resolve_source_exchange(
-                    monstertruck_io::step::load::ParsedStepSource::parse(snapshot.as_bytes())?
-                        .exchange,
-                )?;
-                recognize_single_healed_host(final_document.as_ref())
-            },
-            |fragment| Ok(Some(fragment)),
-        )?
-    }) else {
+    if unchanged {
+        // An unchanged structural host cannot be admitted by the restricted
+        // pass. Avoid evaluating it twice before the general pass.
+        if target.mode == ReplayMode::AnalyticOnly {
+            return Ok(None);
+        }
+        let Some(mut host) = recognize_native_edited_host(kernel, &edited)? else {
+            if let Some(reason) = stop {
+                bail!("inverse treatment fixed point: {reason}");
+            }
+            return Ok(None);
+        };
+        host.model.provenance.clear();
+        // Reuse the evaluated native proposal for its source-boundary
+        // certificate. Otherwise a more expensive certified representation
+        // could outrank the same independently provable native construction
+        // simply because its provider supplied only structural evidence.
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        if !kernel.summarize(&evaluated).is_single_solid() {
+            return Ok(None);
+        }
+        if let Some(proof) = proof
+            && proof
+                .matches_evaluated_boundary(&evaluated)
+                .unwrap_or(false)
+        {
+            return Ok(Some(KernelRecoveryCandidate::certified(host, proof)));
+        }
+        return Ok(Some(KernelRecoveryCandidate::structural(host)));
+    }
+    let mut journal = native_peels::Journal::default();
+    journal.treatment(layers);
+    let Some(mut fragment) = journal.finish(
+        kernel,
+        &mut edited,
+        target,
+        &provenance,
+        native_peels::NextPeel::Boundary,
+        stop,
+    )?
+    else {
         return Ok(None);
     };
-    // Synthetic edited-native identifiers are never original STEP provenance.
-    host.model.provenance.clear();
-    if unchanged {
-        return kernel_replay_is_single_solid(kernel, &host)
-            .map(|accepted| accepted.then_some(host));
-    }
-
-    if evidence.is_empty() {
-        host.source = CadFragmentSource::SameDomainNormalized {
+    if !matches!(
+        fragment.source,
+        CadFragmentSource::EdgeTreatmentComposite { .. }
+            | CadFragmentSource::BoundaryFeatureComposite { .. }
+    ) {
+        fragment.source = CadFragmentSource::SameDomainNormalized {
             solid_id: source.id,
         };
-        return Ok(Some(host));
+        return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
-
-    let replay = evidence
-        .iter()
-        .filter_map(|item| {
-            replayable_edge_treatment(item).map(|(profile, edge)| (item, profile, edge))
-        })
-        .collect::<Vec<_>>();
-    if replay.len() != evidence.len() {
-        return Ok(None);
+    if !kernel.supports_step_export() {
+        return Ok(Some(KernelRecoveryCandidate::structural(fragment)));
     }
-    let fragment = replay_edge_treatments(host, source.id, replay)?;
-    kernel_replay_is_single_solid(kernel, &fragment).map(|accepted| accepted.then_some(fragment))
+    // A closed replay is only a candidate. Export-capable kernels must
+    // certify the reconstructed occupied boundary against the original,
+    // not merely the intermediate peeled host.
+    let Some(proof) = proof else {
+        bail!("native edge-treatment replay lacks a supported source boundary proof");
+    };
+    Ok(Some(KernelRecoveryCandidate::certified(fragment, proof)))
 }
 
 fn replayable_source_treatments(
-    exchange: &Exchange,
-    source: SourceEntity,
-) -> Result<Vec<crate::edge_treatments::EdgeTreatmentEvidence>> {
-    let section = exchange
-        .data
-        .get(source.data_section)
-        .ok_or_else(|| anyhow::anyhow!("missing DATA section {}", source.data_section))?;
-    let index = crate::step_graph::build_index(&section.entities);
-    let target = HashSet::from([source.id]);
-    let mut evidence =
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    solid_id: u64,
+) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+    let target = HashSet::from([solid_id]);
+    let mut evidence = select_replayable_treatments(
         crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
-            &section.entities,
-            &index,
-            &target,
-        )
-        .into_iter()
-        .filter(|item| replayable_edge_treatment(item).is_some())
-        .collect::<Vec<_>>();
+            entities, index, &target,
+        ),
+    );
     evidence.sort_by_key(|item| item.treatment_face_id);
-    evidence.dedup_by_key(|item| item.treatment_face_id);
-    Ok(evidence)
-}
-
-/// Prefer native exact-trim semantic recognition while retaining the general
-/// STEP-record recognizer for shapes not yet consumed by the native adapter.
-fn recognize_edited_host_with_fallback<K: SourceTopologyEditor>(
-    kernel: &K,
-    edited: &K::EditedSource,
-    fallback: impl FnOnce() -> Result<Option<CadFragment>>,
-) -> Result<Option<CadFragment>> {
-    recognize_native_edited_host(kernel, edited)?.map_or_else(fallback, |host| Ok(Some(host)))
+    evidence
 }
 
 /// Recognize exact analytic hosts from the edited native B-rep, with no STEP
@@ -1028,7 +1234,12 @@ fn recognize_native_edited_host<K: SourceTopologyEditor>(
         .transpose()
 }
 
-fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>> {
+fn recognize_single_healed_host<K: CadKernel>(
+    healed: &Exchange,
+    kernel: &K,
+    acceptance: Option<&CandidateAcceptance<'_, K>>,
+    mode: ReplayMode,
+) -> Result<Option<CadFragment>> {
     let [section] = healed.data.as_slice() else {
         return Ok(None);
     };
@@ -1067,67 +1278,155 @@ fn recognize_single_healed_host(healed: &Exchange) -> Result<Option<CadFragment>
             )?);
         }
     }
-    let refs = candidates.iter().collect::<Vec<_>>();
-    let selected = select_cheapest_whole_solid_fragments(&refs)?;
-    Ok(selected
-        .get(solid_id)
-        .filter(|host| is_constructive_source(&host.source))
-        .map(|host| (*host).clone()))
+    // Direct constructive candidates are tried in canonical complexity order,
+    // not evaluated eagerly. A rejected candidate cannot suppress another
+    // executable representation of the same host.
+    let mut candidates = candidates
+        .into_iter()
+        .filter(|fragment| {
+            source_solid_id(&fragment.source) == *solid_id
+                && is_constructive_source(&fragment.source)
+        })
+        .map(|fragment| Ok((fragment.model.complexity_score(fragment.root)?, fragment)))
+        .collect::<Result<Vec<_>>>()?;
+    candidates.sort_by_key(|(cost, _)| *cost);
+    for (_, fragment) in candidates {
+        if acceptance.is_none_or(|accept| accept(&fragment.model, fragment.root, None)) {
+            return Ok(Some(fragment));
+        }
+    }
+    // Apply all independently certified material recognizers to this
+    // immutable final native snapshot, not just the sectional family.
+    let Some(proof) = SourceRecovery::new(*solid_id, &section.entities, &index, kernel) else {
+        return Ok(None);
+    };
+    let proof = if let Some(accept) = acceptance {
+        proof.requiring(accept, mode)
+    } else {
+        proof
+    };
+    recover_proven_material_fragment(&proof, None)
 }
 
+#[cfg(test)]
 fn kernel_replay_is_single_solid<K: CadKernel>(kernel: &K, fragment: &CadFragment) -> Result<bool> {
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     Ok(kernel.summarize(&evaluated).is_single_solid())
 }
 
-fn apply_kernel_recovery<F>(
-    recovery: &mut WholeSolidRecoveryState,
-    mut recover: F,
-    boundary_verified: bool,
-) -> Vec<KernelRecoveryFailure>
-where
-    F: FnMut(SourceEntity) -> Result<Option<CadFragment>>,
-{
-    let mut failures = Vec::new();
-    // Independently proven material may replace a cheaper but merely
-    // structurally inferred source candidate. Otherwise previously selected
-    // candidates would prevent the kernel-backed source proof from ever running.
-    let targets = if boundary_verified {
-        recovery.source_solids.clone()
-    } else {
-        recovery.semantically_unrecovered_sources()
-    };
-    for source in targets {
-        match recover(source) {
-            Ok(Some(fragment)) if source_solid_id(&fragment.source) == source.id => {
-                if let Err(error) = recovery.add_candidates_with_proof(
+/// Whole-solid evidence belongs to the individual candidate, not to the
+/// provider: native topology recovery may prove a treatment composite with
+/// an independent source-boundary comparison, or return a structural host.
+struct KernelRecoveryCandidate {
+    fragment: CadFragment,
+    boundary_verification: BoundaryVerification,
+}
+
+impl KernelRecoveryCandidate {
+    const fn structural(fragment: CadFragment) -> Self {
+        Self {
+            fragment,
+            boundary_verification: BoundaryVerification::Structural,
+        }
+    }
+
+    fn certified<K: CadKernel>(fragment: CadFragment, proof: &SourceRecovery<'_, K>) -> Self {
+        let repairs = proof.strip_face_sense_repairs();
+        let boundary_verification = if repairs.is_empty() {
+            BoundaryVerification::Original
+        } else {
+            BoundaryVerification::Reconciled(repairs.to_vec())
+        };
+        Self {
+            fragment,
+            boundary_verification,
+        }
+    }
+}
+
+impl WholeSolidRecoveryState {
+    fn certified_ceiling(&self, source: SourceEntity) -> Option<u64> {
+        self.selected
+            .get(&source)
+            .filter(|selected| {
+                selected.boundary_verification.is_certified()
+                    && is_constructive_source(&selected.fragment.source)
+            })
+            .map(|selected| selected.complexity)
+    }
+
+    // Restricted replay is speculative: only independently certified
+    // success may suppress the complete search. Structural candidates and
+    // solver deferrals must still be handled by the general pass.
+    fn admit_replay_candidate(
+        &mut self,
+        source: SourceEntity,
+        candidate: Result<Option<KernelRecoveryCandidate>>,
+        mode: ReplayMode,
+    ) -> Option<KernelRecoveryFailure> {
+        if mode == ReplayMode::General {
+            return self.admit_kernel_candidate(source, candidate);
+        }
+        if let Ok(Some(candidate)) = candidate
+            && candidate.boundary_verification.is_certified()
+        {
+            let _ = self.admit_kernel_candidate(source, Ok(Some(candidate)));
+        }
+        None
+    }
+
+    fn admit_kernel_candidate(
+        &mut self,
+        source: SourceEntity,
+        candidate: Result<Option<KernelRecoveryCandidate>>,
+    ) -> Option<KernelRecoveryFailure> {
+        let result = match candidate {
+            Ok(Some(KernelRecoveryCandidate {
+                fragment,
+                boundary_verification,
+            })) if source_solid_id(&fragment.source) == source.id => self
+                .add_candidates_with_proof(
                     [SourceCadFragment {
                         source_solid: source,
                         fragment,
                     }],
-                    boundary_verified,
-                ) {
-                    failures.push(KernelRecoveryFailure {
-                        source,
-                        error: error.to_string(),
-                    });
-                }
-            }
-            Ok(Some(fragment)) => failures.push(KernelRecoveryFailure {
-                source,
-                error: format!(
-                    "kernel recovery returned local solid #{} while recovering DATA section {:?} solid #{}",
-                    source_solid_id(&fragment.source),
-                    source.data_section,
-                    source.id
-                ),
-            }),
-            Ok(None) => {}
-            Err(error) => failures.push(KernelRecoveryFailure {
-                source,
-                error: format!("{error:#}"),
-            }),
-        }
+                    &boundary_verification,
+                )
+                .map(|_| ()),
+            Ok(Some(KernelRecoveryCandidate { fragment, .. })) => Err(anyhow::anyhow!(
+                "kernel recovery returned local solid #{} while recovering DATA section {:?} solid #{}",
+                source_solid_id(&fragment.source),
+                source.data_section,
+                source.id
+            )),
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+        result.err().map(|error| KernelRecoveryFailure {
+            source,
+            error: format!("{error:#}"),
+        })
+    }
+}
+
+#[cfg(test)]
+fn apply_kernel_recovery<F>(
+    recovery: &mut WholeSolidRecoveryState,
+    mut recover: F,
+    all_sources: bool,
+) -> Vec<KernelRecoveryFailure>
+where
+    F: FnMut(SourceEntity, Option<u64>) -> Result<Option<KernelRecoveryCandidate>>,
+{
+    let targets = if all_sources {
+        recovery.source_solids.clone()
+    } else {
+        recovery.semantically_unrecovered_sources()
+    };
+    let mut failures = Vec::new();
+    for source in targets {
+        let candidate = recover(source, recovery.certified_ceiling(source));
+        failures.extend(recovery.admit_kernel_candidate(source, candidate));
     }
     failures
 }
@@ -1214,6 +1513,7 @@ fn recover_complete_ir_build_state<'a>(
                 recovery_section.entities,
                 &recovery_section.index,
                 context.source_tolerances,
+                &crate::brep::manifold_solid_ids(recovery_section.entities),
             )?
         } else {
             recover_constructive_fragments_from_entities_with_index(
@@ -1250,7 +1550,7 @@ fn recover_complete_ir_build_state<'a>(
 
     let surface_signature_summaries = signatures;
     let instance_pattern_diagnostics = patterns;
-    let recovery = recover_whole_solids(
+    let (recovery, direct_candidates) = recover_and_retain_direct_candidates(
         &recovery_sections,
         &body_scan,
         direct_candidates,
@@ -1262,13 +1562,54 @@ fn recover_complete_ir_build_state<'a>(
         instance_pattern_diagnostics,
         body_scan,
         recovery,
+        direct_candidates,
     })
+}
+
+type DirectCandidatesBySource = BTreeMap<SourceEntity, Vec<CadFragment>>;
+
+fn recover_and_retain_direct_candidates(
+    recovery_sections: &[RecoverySection<'_>],
+    body_scan: &[SourceSolidSummary],
+    direct_candidates: Vec<SourceCadFragment>,
+    mutation_mode: ReducedBrepMutationMode,
+) -> Result<(WholeSolidRecoveryState, DirectCandidatesBySource)> {
+    let result = if mutation_mode == ReducedBrepMutationMode::KernelOwned {
+        let recovery = recover_whole_solids(
+            recovery_sections,
+            body_scan,
+            direct_candidates.iter().cloned(),
+            mutation_mode,
+        )?;
+        let mut by_source = BTreeMap::<SourceEntity, Vec<CadFragment>>::new();
+        for candidate in direct_candidates {
+            if is_constructive_source(&candidate.fragment.source) {
+                by_source
+                    .entry(candidate.source_solid)
+                    .or_default()
+                    .push(candidate.fragment);
+            }
+        }
+        (recovery, by_source)
+    } else {
+        (
+            recover_whole_solids(
+                recovery_sections,
+                body_scan,
+                direct_candidates,
+                mutation_mode,
+            )?,
+            BTreeMap::new(),
+        )
+    };
+
+    Ok(result)
 }
 
 fn recover_whole_solids(
     sections: &[RecoverySection<'_>],
     body_scan: &[SourceSolidSummary],
-    direct_candidates: Vec<SourceCadFragment>,
+    direct_candidates: impl IntoIterator<Item = SourceCadFragment>,
     mutation_mode: ReducedBrepMutationMode,
 ) -> Result<WholeSolidRecoveryState> {
     let mut recovery = WholeSolidRecoveryState::new(body_scan);
@@ -1577,15 +1918,13 @@ fn recover_boundary_feature_pass(
         index,
         &target_shell_ids,
     );
-    let target_family_indices =
-        crate::planar_features::leaf_feature_family_indices(&report.families)
-            .into_iter()
-            .filter(|&candidate| {
-                targets
-                    .shell_to_solid
-                    .contains_key(&report.families[candidate].shell_id)
-            })
-            .collect::<Vec<_>>();
+    let target_family_indices = (0..report.families.len())
+        .filter(|&candidate| {
+            targets
+                .shell_to_solid
+                .contains_key(&report.families[candidate].shell_id)
+        })
+        .collect::<Vec<_>>();
     if target_family_indices.is_empty() {
         return Ok(false);
     }
@@ -1594,7 +1933,6 @@ fn recover_boundary_feature_pass(
         current,
         index,
         targets,
-        &target_shell_ids,
         &report,
         &target_family_indices,
         pass_index,
@@ -1615,7 +1953,6 @@ fn prepare_boundary_feature_reduction(
     source_entities: &[EntityInstance],
     source_index: &HashMap<u64, usize>,
     targets: &LocalRecoveryTargets,
-    target_shell_ids: &HashSet<u64>,
     report: &crate::planar_features::BoundaryFeatureDiagnostics,
     target_family_indices: &[usize],
     pass_index: usize,
@@ -1623,16 +1960,27 @@ fn prepare_boundary_feature_reduction(
     // This clone is the disposable proof-only tool materialization. The source
     // is immutable, and neither consumer receives a mutable topology owner.
     let mut tool_entities = source_entities.to_vec();
-    let (tool_report, materialized) =
-        crate::planar_features::materialize_boundary_feature_tools_for_analysis_for_shells(
-            &mut tool_entities,
-            1,
-            target_shell_ids,
-        )?;
-    if tool_report.families.len() != report.families.len() {
-        bail!("boundary-feature tool materialization changed family indexing");
-    }
-    let tool_candidates = recover_constructive_fragments_from_entities(&tool_entities)?;
+    let materialized = crate::planar_features::materialize_boundary_feature_tools_from_report(
+        &mut tool_entities,
+        source_index,
+        report,
+        1,
+    )?;
+    let tool_ids = materialized
+        .iter()
+        .map(|tool| tool.solid_id)
+        .collect::<Vec<_>>();
+    let tool_index = crate::step_graph::build_index(&tool_entities);
+    let tolerances = crate::solid_revolutions::source_tolerance_by_representation_item(
+        &tool_entities,
+        &tool_index,
+    );
+    let tool_candidates = recover_constructive_fragments_with_tolerances(
+        &tool_entities,
+        &tool_index,
+        &tolerances,
+        &tool_ids,
+    )?;
     let tool_refs = tool_candidates.iter().collect::<Vec<_>>();
     let selected_tools = select_cheapest_whole_solid_fragments(&tool_refs)?;
     let mut peelable_family_indices = Vec::new();
@@ -1658,8 +2006,8 @@ fn prepare_boundary_feature_reduction(
         if !is_constructive_source(&tool.source) {
             continue;
         }
-        let mut tool = (*tool).clone();
-        if !regularize_boundary_feature_tool(&mut tool, family, source_entities, source_index) {
+        let tool = (*tool).clone();
+        if !validate_boundary_feature_tool(&tool, family, source_entities, source_index) {
             continue;
         }
         pending_steps.push((
@@ -1675,14 +2023,72 @@ fn prepare_boundary_feature_reduction(
         ));
         peelable_family_indices.push(family_index);
     }
+    let selected = select_closed_feature_families(&report.families, &peelable_family_indices);
+    let (family_indices, steps) = peelable_family_indices
+        .into_iter()
+        .zip(pending_steps)
+        .filter(|(index, _)| selected.contains(index))
+        .unzip();
     Ok(PreparedBoundaryReduction {
-        steps: pending_steps,
-        family_indices: peelable_family_indices,
+        steps,
+        family_indices,
     })
 }
 
-fn regularize_boundary_feature_tool(
-    tool: &mut CadFragment,
+/// Closed constructive tools can already account for nested feature hypotheses.
+/// Only defer a parent if its dependent hypothesis extends outside its patch.
+fn select_closed_feature_families(
+    families: &[crate::planar_features::BoundaryFeatureFamilyEvidence],
+    proven: &[usize],
+) -> BTreeSet<usize> {
+    let faces = families
+        .iter()
+        .map(|family| {
+            family
+                .members
+                .iter()
+                .flat_map(|member| member.face_ids.iter().copied())
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    let hosts = families
+        .iter()
+        .map(|family| {
+            family
+                .host_face_ids
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut eligible = proven
+        .iter()
+        .copied()
+        .filter(|&i| {
+            families.iter().enumerate().all(|(j, _)| {
+                i == j || faces[i].is_disjoint(&hosts[j]) || faces[j].is_subset(&faces[i])
+            })
+        })
+        .collect::<Vec<_>>();
+    eligible.sort_by_key(|&i| (std::cmp::Reverse(faces[i].len()), i));
+    let mut selected = BTreeSet::new();
+    let mut removed = BTreeSet::new();
+    let mut retained = BTreeSet::new();
+    for i in eligible {
+        if faces[i].is_disjoint(&removed)
+            && faces[i].is_disjoint(&retained)
+            && hosts[i].is_disjoint(&removed)
+        {
+            removed.extend(&faces[i]);
+            retained.extend(&hosts[i]);
+            selected.insert(i);
+        }
+    }
+    selected
+}
+
+fn validate_boundary_feature_tool(
+    tool: &CadFragment,
     family: &crate::planar_features::BoundaryFeatureFamilyEvidence,
     source_entities: &[EntityInstance],
     source_index: &HashMap<u64, usize>,
@@ -1695,14 +2101,7 @@ fn regularize_boundary_feature_tool(
     else {
         return false;
     };
-    regularize_boundary_tool_for_boolean(tool, family.polarity, &host_outwards).is_ok()
-}
-
-fn recover_constructive_fragments_from_entities(
-    entities: &[EntityInstance],
-) -> Result<Vec<CadFragment>> {
-    let index = crate::step_graph::build_index(entities);
-    recover_constructive_fragments_from_entities_with_index(entities, &index)
+    validate_boundary_tool_for_boolean(tool, &host_outwards).is_ok()
 }
 
 fn recover_constructive_fragments_from_entities_with_index(
@@ -1711,33 +2110,44 @@ fn recover_constructive_fragments_from_entities_with_index(
 ) -> Result<Vec<CadFragment>> {
     let source_tolerances =
         crate::solid_revolutions::source_tolerance_by_representation_item(entities, index);
-    recover_constructive_fragments_with_tolerances(entities, index, &source_tolerances)
+    recover_constructive_fragments_with_tolerances(
+        entities,
+        index,
+        &source_tolerances,
+        &crate::brep::manifold_solid_ids(entities),
+    )
 }
 
 fn recover_constructive_fragments_with_tolerances(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
     source_tolerances: &HashMap<u64, f64>,
+    solid_ids: &[u64],
 ) -> Result<Vec<CadFragment>> {
-    let extrusions = crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index);
+    let extrusions =
+        crate::solid_extrusions::detect_solid_extrusions_with_index(entities, index, solid_ids);
     let revolutions = crate::solid_revolutions::detect_solid_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
     let radial_slots = crate::solid_revolutions::detect_radial_slot_revolutions_with_tolerances(
         entities,
         index,
         source_tolerances,
+        solid_ids,
     );
-    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index);
-    let revolved_round_tails = crate::solid_sweeps::detect_revolved_round_tails(entities, index);
-    let open_sweeps = crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index);
+    let closed_sweeps = crate::solid_sweeps::detect_round_sweeps(entities, index, solid_ids);
+    let revolved_round_tails =
+        crate::solid_sweeps::detect_revolved_round_tails(entities, index, solid_ids);
+    let open_sweeps =
+        crate::solid_sweeps::sheet::detect_open_rectangular_sweeps(entities, index, solid_ids);
 
     let mut out = recover_solid_extrusion_fragments(&extrusions)?;
     out.extend(recover_solid_revolution_fragments(&revolutions)?);
     out.extend(crate::solid_lofts::detect_sectioned_planar_lofts(
-        entities, index,
+        entities, index, solid_ids,
     ));
     out.extend(recover_radial_slot_revolution_fragments(&radial_slots)?);
     out.extend(recover_round_sweep_fragments(&closed_sweeps)?);
@@ -1769,16 +2179,16 @@ fn recover_reduced_brep_fragments(
         return Ok(Vec::new());
     }
 
-    let evidence = crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
-        entities,
-        index,
-        &candidate_solid_ids,
+    let evidence = select_replayable_treatments(
+        crate::edge_treatments::detect_edge_treatment_evidence_for_solids_with_index(
+            entities,
+            index,
+            &candidate_solid_ids,
+        ),
     );
     let mut by_solid = BTreeMap::<u64, Vec<_>>::new();
     for item in &evidence {
-        if replayable_edge_treatment(item).is_some() {
-            by_solid.entry(item.solid_id).or_default().push(item);
-        }
+        by_solid.entry(item.solid_id).or_default().push(item);
     }
 
     let mut out = Vec::new();
@@ -1821,34 +2231,155 @@ fn recover_reduced_brep_fragments(
     Ok(out)
 }
 
+type ReplayTreatment<'a> = (
+    &'a crate::edge_treatments::EdgeTreatmentEvidence,
+    EdgeTreatmentProfile,
+    EdgeTreatmentEdge,
+);
+
 fn replay_edge_treatments(
+    fragment: CadFragment,
+    solid_id: u64,
+    replay: Vec<ReplayTreatment<'_>>,
+) -> Result<CadFragment> {
+    replay_grouped_edge_treatments(fragment, solid_id, replay, Vec::new())
+}
+
+/// Owned forward operation. Geometry is captured in the inverse layer's
+/// current coordinate space, while provenance is independently mapped back
+/// to original STEP member identities.
+#[derive(Clone)]
+struct TreatmentReplayGroup {
+    face_ids: Vec<u64>,
+    profile: EdgeTreatmentProfile,
+    edges: Vec<EdgeTreatmentEdge>,
+    max_residual_mm: f64,
+}
+
+fn replay_grouped_edge_treatments(
+    fragment: CadFragment,
+    solid_id: u64,
+    replay: Vec<ReplayTreatment<'_>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
+) -> Result<CadFragment> {
+    apply_treatment_replay_groups(
+        fragment,
+        solid_id,
+        make_treatment_replay_groups(replay, coupled_groups)?,
+    )
+}
+
+/// Every connected perimeter is one operation, not a sequence of
+/// independently replayed rounds that would destroy their common junctions.
+fn make_treatment_replay_groups(
+    replay: Vec<ReplayTreatment<'_>>,
+    coupled_groups: Vec<crate::kernel_topology::CoupledTreatmentReplay>,
+) -> Result<Vec<TreatmentReplayGroup>> {
+    let mut remaining = BTreeMap::new();
+    for item in replay {
+        anyhow::ensure!(
+            remaining.insert(item.0.treatment_face_id, item).is_none(),
+            "multiple forward treatment interpretations for the same face"
+        );
+    }
+    let mut groups = Vec::<TreatmentReplayGroup>::new();
+    for planned in coupled_groups {
+        let mut group = planned
+            .selectors
+            .into_iter()
+            .map(|(id, selector)| {
+                let mut item = remaining
+                    .remove(&id)
+                    .with_context(|| format!("coupled replay has no source treatment #{id}"))?;
+                item.2.selector = selector;
+                Ok(item)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        anyhow::ensure!(!group.is_empty(), "empty coupled replay group");
+        group.sort_by_key(|(item, _, _)| item.treatment_face_id);
+        let mut prepared = prepare_treatment_replay_group(group)?;
+        if !planned.junction_faces.is_empty() {
+            prepared.max_residual_mm = prepared
+                .max_residual_mm
+                .max(crate::numeric::NUMERICAL_GEOMETRY_TOL_MM);
+        }
+        prepared.face_ids.extend(planned.junction_faces);
+        prepared.face_ids.sort_unstable();
+        anyhow::ensure!(
+            prepared.face_ids.windows(2).all(|pair| pair[0] != pair[1]),
+            "coupled treatment contains a duplicated junction"
+        );
+        groups.push(prepared);
+    }
+    for item in remaining.into_values() {
+        groups.push(prepare_treatment_replay_group(vec![item])?);
+    }
+    groups.sort_by_key(|group| group.face_ids[0]);
+    Ok(groups)
+}
+
+fn prepare_treatment_replay_group(group: Vec<ReplayTreatment<'_>>) -> Result<TreatmentReplayGroup> {
+    let profile = group[0].1;
+    anyhow::ensure!(
+        group.iter().all(|(_, p, _)| *p == profile),
+        "one coupled treatment perimeter has mixed forward profiles"
+    );
+    let mut face_ids = Vec::with_capacity(group.len());
+    let mut max_residual_mm = 0.0_f64;
+    let mut edges = Vec::<EdgeTreatmentEdge>::new();
+    for (item, _, edge) in group {
+        face_ids.push(item.treatment_face_id);
+        max_residual_mm = max_residual_mm.max(item.max_boundary_residual_mm);
+        if let Some(existing) = edges
+            .iter()
+            .find(|existing| existing.selector == edge.selector)
+        {
+            anyhow::ensure!(
+                crate::numeric::near_imported_feature_mm(
+                    (existing.radius_mm - edge.radius_mm).abs()
+                ),
+                "split treatment has conflicting forward dimensions"
+            );
+        } else {
+            edges.push(edge);
+        }
+    }
+    Ok(TreatmentReplayGroup {
+        face_ids,
+        profile,
+        edges,
+        max_residual_mm,
+    })
+}
+
+fn apply_treatment_replay_groups(
     mut fragment: CadFragment,
     solid_id: u64,
-    mut replay: Vec<(
-        &crate::edge_treatments::EdgeTreatmentEvidence,
-        EdgeTreatmentProfile,
-        EdgeTreatmentEdge,
-    )>,
+    groups: impl IntoIterator<Item = TreatmentReplayGroup>,
 ) -> Result<CadFragment> {
-    replay.sort_by_key(|(item, _, _)| item.treatment_face_id);
-    let treatment_face_ids = replay
-        .iter()
-        .map(|(item, _, _)| item.treatment_face_id)
-        .collect::<Vec<_>>();
+    let mut treatment_face_ids = BTreeSet::new();
     fragment.model.roots.clear();
     let mut root = fragment.root;
-    for (item, profile, edge) in replay {
+    for group in groups {
+        for &id in &group.face_ids {
+            anyhow::ensure!(
+                treatment_face_ids.insert(id),
+                "source treatment replayed twice"
+            );
+        }
         root = fragment.model.add_node(CadNode::EdgeTreatment {
             child: root,
-            profile,
-            edges: vec![edge],
+            profile: group.profile,
+            edges: group.edges,
         });
+        let mut source_entity_ids = vec![solid_id];
+        source_entity_ids.extend(group.face_ids);
         fragment.model.set_provenance(
             root,
             Provenance {
-                source_entity_ids: vec![solid_id, item.treatment_face_id],
+                source_entity_ids,
                 proof: ProofStatus::WithinTolerance,
-                max_residual_mm: Some(item.max_boundary_residual_mm),
+                max_residual_mm: Some(group.max_residual_mm),
             },
         )?;
     }
@@ -1857,11 +2388,31 @@ fn replay_edge_treatments(
     if !treatment_face_ids.is_empty() {
         fragment.source = CadFragmentSource::EdgeTreatmentComposite {
             solid_id,
-            treatment_face_ids,
+            treatment_face_ids: treatment_face_ids.into_iter().collect(),
         };
     }
     fragment.model.validate()?;
     Ok(fragment)
+}
+
+/// Local analytic evidence is not proof that a face should be removed.
+/// A symmetric ring of mutually interchangeable planar candidates is a host
+/// profile, not a simultaneous batch of edge treatments. Keep its authored
+/// profile intact, rather than choosing alternating chamfers by source ID.
+fn select_replayable_treatments(
+    mut evidence: Vec<crate::edge_treatments::EdgeTreatmentEvidence>,
+) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+    evidence.retain(|item| replayable_edge_treatment(item).is_some());
+    let profile_faces = crate::edge_treatments::reciprocal_planar_profile_faces(&evidence);
+    evidence.retain(|item| !profile_faces.contains(&(item.solid_id, item.treatment_face_id)));
+    let mut counts = HashMap::new();
+    for item in &evidence {
+        *counts
+            .entry((item.solid_id, item.treatment_face_id))
+            .or_insert(0_usize) += 1;
+    }
+    evidence.retain(|item| counts[&(item.solid_id, item.treatment_face_id)] == 1);
+    evidence
 }
 
 fn replayable_edge_treatment(
@@ -1898,10 +2449,23 @@ fn replayable_edge_treatment(
             {
                 return None;
             }
-            // Supplier exports with micrometre-scale asymmetric setbacks
-            // represent the same intended nominal chamfer. Fit both setbacks
-            // to one canonical dimension rather than declaring non-recovery.
-            (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
+            // Numerical point tolerance is not a symmetry certificate:
+            // a tiny setback difference over a short bevel can alter its
+            // plane normal far beyond the direction quantum. Coalesce only
+            // arithmetic roundoff, not measured geometric asymmetry.
+            if (first - second).abs() <= f64::EPSILON * first.max(second) {
+                (EdgeTreatmentProfile::Chamfer, first.midpoint(second))
+            } else {
+                // Preserve the source carrier position, rather than fitting a
+                // nominal common size that moves later dependent selectors.
+                (
+                    EdgeTreatmentProfile::CarrierChamfer {
+                        first_carrier_normal: item.first_setback_carrier_normal?,
+                        second_setback_mm: second,
+                    },
+                    first,
+                )
+            }
         }
         crate::edge_treatments::EdgeTreatmentKind::CylindricalFillet
         | crate::edge_treatments::EdgeTreatmentKind::ToroidalFillet => {
@@ -1949,86 +2513,40 @@ fn feature_host_outward_directions(
     (!out.is_empty()).then_some(out)
 }
 
-fn regularize_boundary_tool_for_boolean(
-    tool: &mut CadFragment,
-    polarity: FeaturePolarity,
+/// The healed host and the exact closed tool already describe the occupied
+/// material. Preserve both source cap stations; do not enlarge the tool just
+/// to force volumetric overlap.
+fn validate_boundary_tool_for_boolean(
+    tool: &CadFragment,
     host_outwards: &[[f64; 3]],
 ) -> Result<()> {
-    if !matches!(tool.source, CadFragmentSource::SolidExtrusion { .. }) {
-        bail!("boundary-feature Boolean tool is not an extrusion");
-    }
-    let (transform_index, body_index, z_axis) = match tool.model.node(tool.root)? {
-        CadNode::Transform { transform, child } => (
-            tool.root.0,
-            child.0,
-            [
-                transform.matrix[0][2],
-                transform.matrix[1][2],
-                transform.matrix[2][2],
-            ],
-        ),
-        _ => bail!("boundary-feature extrusion tool root is not a rigid transform"),
+    let CadNode::Transform { transform, child } = tool.model.node(tool.root)? else {
+        bail!("boundary-feature extrusion tool root is not a rigid transform");
     };
-    let z_norm = z_axis[2]
-        .mul_add(
-            z_axis[2],
-            z_axis[1].mul_add(z_axis[1], z_axis[0] * z_axis[0]),
-        )
-        .sqrt();
-    if !z_norm.is_finite()
-        || (z_norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit
+    let z_axis = [
+        transform.matrix[0][2],
+        transform.matrix[1][2],
+        transform.matrix[2][2],
+    ];
+    let norm = crate::math3::norm(z_axis);
+    if !norm.is_finite()
+        || (norm - 1.0).abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_axis_unit
     {
         bail!("boundary-feature extrusion tool axis is not unit length");
     }
-
-    let max_residual = tool
-        .model
-        .provenance
-        .values()
-        .filter_map(|provenance| provenance.max_residual_mm)
-        .fold(0.0_f64, f64::max);
-    let margin_mm =
-        (10.0 * max_residual).max(DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm);
-    let mut extend_negative = false;
-    let mut extend_positive = false;
-    for outward in host_outwards {
-        let outward_norm = outward[2]
-            .mul_add(
-                outward[2],
-                outward[1].mul_add(outward[1], outward[0] * outward[0]),
-            )
-            .sqrt();
-        if !outward_norm.is_finite() || outward_norm <= 0.0 {
+    for &outward in host_outwards {
+        let length = crate::math3::norm(outward);
+        if !length.is_finite() || length <= 0.0 {
             bail!("boundary-feature host normal is invalid");
         }
-        let alignment = outward[2].mul_add(
-            z_axis[2],
-            outward[1].mul_add(z_axis[1], outward[0] * z_axis[0]),
-        ) / outward_norm;
+        let alignment = crate::math3::dot(outward, z_axis) / length;
         if (alignment.abs() - 1.0).abs()
             > DEFAULT_STEP_RECOVERY_TOLERANCES.source_axis_direction_cosine
         {
             bail!("boundary-feature interface is not an extrusion end cap");
         }
-        match (polarity, alignment > 0.0) {
-            // A subtractive tool occupies source-solid material and opens at the
-            // carrier plane. Extend it outward, beyond the source solid.
-            (FeaturePolarity::Subtractive, true)
-            // An additive tool occupies material outside the source host and is
-            // attached at the carrier plane. Extend it inward, into material the
-            // host already occupies, so the union has volumetric overlap.
-            | (FeaturePolarity::Additive, false) => extend_positive = true,
-            (FeaturePolarity::Subtractive, false) | (FeaturePolarity::Additive, true) => {
-                extend_negative = true;
-            }
-        }
     }
-
-    let extension_count = u8::from(extend_negative) + u8::from(extend_positive);
-    if extension_count == 0 {
-        bail!("boundary-feature Boolean tool has no extendable interface");
-    }
-    let CadNode::Extrude { vector_mm, .. } = &mut tool.model.nodes[body_index] else {
+    let CadNode::Extrude { vector_mm, .. } = tool.model.node(*child)? else {
         bail!("boundary-feature tool transform does not wrap an extrusion");
     };
     if vector_mm[0].abs() > DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_transform
@@ -2038,24 +2556,7 @@ fn regularize_boundary_tool_for_boolean(
     {
         bail!("boundary-feature extrusion vector is not canonical +Z");
     }
-    vector_mm[2] = margin_mm.mul_add(f64::from(extension_count), vector_mm[2]);
-
-    if extend_negative {
-        let CadNode::Transform { transform, .. } = &mut tool.model.nodes[transform_index] else {
-            unreachable!("root shape checked above");
-        };
-        for (axis, axis_component) in z_axis.iter().copied().enumerate() {
-            transform.matrix[axis][3] =
-                (-margin_mm).mul_add(axis_component, transform.matrix[axis][3]);
-        }
-    }
-
-    for provenance in tool.model.provenance.values_mut() {
-        provenance.proof = ProofStatus::StructurallyProven;
-        provenance.max_residual_mm = None;
-    }
-    tool.model.validate()?;
-    Ok(())
+    tool.model.validate()
 }
 
 fn compose_boundary_feature_fragment(
@@ -2067,6 +2568,7 @@ fn compose_boundary_feature_fragment(
     let host_offset = model.append_model(&host.model)?;
     let mut current = shifted_fragment_root(host.root, host_offset)?;
 
+    let mut batch = None::<FeatureReplayBatch>;
     for family in families.iter().rev() {
         let tool_offset = model.append_model(&family.tool.model)?;
         let tool_root = shifted_fragment_root(family.tool.root, tool_offset)?;
@@ -2117,31 +2619,32 @@ fn compose_boundary_feature_fragment(
             instance_roots.push(root);
         }
 
-        let mut children = Vec::with_capacity(instance_roots.len() + 1);
-        children.push(current);
-        children.extend(instance_roots);
         let op = match family.polarity {
             FeaturePolarity::Additive => BooleanOp::Union,
             FeaturePolarity::Subtractive => BooleanOp::Difference,
         };
-        current = model.add_node(CadNode::Boolean { op, children });
-        let mut sources = vec![source_solid_id];
-        for member in &family.members {
-            if family.original_source_ids {
+        if batch
+            .as_ref()
+            .is_some_and(|(pass, previous, _, _)| *pass != family.pass_index || *previous != op)
+        {
+            current = finish_feature_batch(&mut model, current, batch.take())?;
+        }
+        let (_, _, children, sources) = batch.get_or_insert_with(|| {
+            (
+                family.pass_index,
+                op,
+                Vec::new(),
+                BTreeSet::from([source_solid_id]),
+            )
+        });
+        children.extend(instance_roots);
+        if family.original_source_ids {
+            for member in &family.members {
                 sources.extend(feature_member_source_ids(source_solid_id, member));
             }
         }
-        sources.sort_unstable();
-        sources.dedup();
-        model.set_provenance(
-            current,
-            Provenance {
-                source_entity_ids: sources,
-                proof: ProofStatus::StructurallyProven,
-                max_residual_mm: None,
-            },
-        )?;
     }
+    current = finish_feature_batch(&mut model, current, batch)?;
 
     model.add_root(current)?;
     model.validate()?;
@@ -2160,6 +2663,29 @@ fn compose_boundary_feature_fragment(
         model,
         root: current,
     })
+}
+
+type FeatureReplayBatch = (usize, BooleanOp, Vec<NodeId>, BTreeSet<u64>);
+
+fn finish_feature_batch(
+    model: &mut CadModel,
+    host: NodeId,
+    batch: Option<FeatureReplayBatch>,
+) -> Result<NodeId> {
+    let Some((_, op, tools, sources)) = batch else {
+        return Ok(host);
+    };
+    let children = std::iter::once(host).chain(tools).collect();
+    let root = model.add_node(CadNode::Boolean { op, children });
+    model.set_provenance(
+        root,
+        Provenance {
+            source_entity_ids: sources.into_iter().collect(),
+            proof: ProofStatus::StructurallyProven,
+            max_residual_mm: None,
+        },
+    )?;
+    Ok(root)
 }
 
 fn shifted_fragment_root(root: NodeId, offset: usize) -> Result<NodeId> {
@@ -2256,6 +2782,12 @@ const fn source_solid_id(source: &CadFragmentSource) -> u64 {
         | CadFragmentSource::RevolvedRoundTail { solid_id, .. }
         | CadFragmentSource::PeriodicChain { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreUnion { solid_id, .. }
+        | CadFragmentSource::SectionalExtrusionUnion { solid_id, .. }
+        | CadFragmentSource::SectionalExtrusionTransitions { solid_id, .. }
+        | CadFragmentSource::SectionalLoftUnion { solid_id, .. }
+        | CadFragmentSource::FormedSheetExtrusionUnion { solid_id, .. }
+        | CadFragmentSource::SourceCapExtrusionUnion { solid_id, .. }
+        | CadFragmentSource::SignedCapAssembly { solid_id, .. }
         | CadFragmentSource::ExtrusionCoreRuledEnds { solid_id, .. }
         | CadFragmentSource::CapExtrusionRuledEnds { solid_id, .. }
         | CadFragmentSource::RuledEndExtension { solid_id, .. }
@@ -2614,6 +3146,53 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn explicitly_scoped_tool_recognition_matches_full_section_candidates() -> Result<()> {
+        // Include both authored and newly materialized bodies, preserving the
+        // original representation contexts and every geometry reference.
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step");
+        let mut parsed = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let entities = &mut parsed.data[0].entities;
+        let original_index = crate::step_graph::build_index(entities);
+        let original_ids = crate::brep::manifold_solid_ids(entities);
+        let report = crate::planar_features::diagnose_boundary_features(entities);
+        let tools = crate::planar_features::materialize_boundary_feature_tools_from_report(
+            entities,
+            &original_index,
+            &report,
+            1,
+        )?;
+        let tool_ids = tools.iter().map(|tool| tool.solid_id).collect::<Vec<_>>();
+        assert!(!tool_ids.is_empty());
+        assert!(tool_ids.iter().all(|id| !original_ids.contains(id)));
+        let index = crate::step_graph::build_index(entities);
+        let tolerances =
+            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+        let full = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &crate::brep::manifold_solid_ids(entities),
+        )?;
+        let scoped = recover_constructive_fragments_with_tolerances(
+            entities,
+            &index,
+            &tolerances,
+            &tool_ids,
+        )?;
+        let expected = full
+            .into_iter()
+            .filter(|fragment| tool_ids.contains(&source_solid_id(&fragment.source)))
+            .collect::<Vec<_>>();
+        assert!(!expected.is_empty());
+        assert_eq!(scoped, expected);
+        assert_eq!(
+            recover_constructive_fragments_with_tolerances(entities, &index, &tolerances, &[])?,
+            []
+        );
+        Ok(())
+    }
+
     const fn test_source_in(data_section: usize, solid_id: u64) -> SourceEntity {
         SourceEntity {
             data_section,
@@ -2664,6 +3243,8 @@ mod tests {
             unrecovered_solids: solids.clone(),
             body_scan: BodyScanSummary { solids },
             body_count: solid_ids.len(),
+            source_boundary_verified_solids: Vec::new(),
+            source_orientation_reconciled_solids: Vec::new(),
             constructively_recovered_solid_count: 0,
             semantically_recovered_solid_count: 0,
             unrecovered_solid_count: solid_ids.len(),
@@ -2679,14 +3260,21 @@ mod tests {
             instance_pattern_diagnostics: report.instance_pattern_diagnostics,
             body_scan,
             recovery,
+            direct_candidates: BTreeMap::new(),
         }
     }
 
     fn apply_test_kernel_recovery<F>(solid_ids: &[u64], mut recover: F) -> CompleteIr
     where F: FnMut(u64) -> Result<Option<CadFragment>> {
         let mut build = build_state_with_unrecovered(solid_ids);
-        let failures =
-            apply_kernel_recovery(&mut build.recovery, |source| recover(source.id), false);
+        let failures = apply_kernel_recovery(
+            &mut build.recovery,
+            |source, _| {
+                recover(source.id)
+                    .map(|candidate| candidate.map(KernelRecoveryCandidate::structural))
+            },
+            false,
+        );
         build.finish(KERNEL_COMPLETE_IR_SCHEMA, failures, None)
     }
 
@@ -2820,6 +3408,7 @@ mod tests {
             ],
             inferred_radius_mm: None,
             inferred_setbacks_mm: Some([0.5, 0.5]),
+            first_setback_carrier_normal: Some([1.0, 0.0, 0.0]),
             inferred_angle_rad: Some(std::f64::consts::FRAC_PI_4),
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Segment {
@@ -2830,14 +3419,95 @@ mod tests {
         }
     }
 
+    fn reciprocal_chamfer_candidate_ring(
+        solid_id: u64,
+        count: u32,
+    ) -> Vec<crate::edge_treatments::EdgeTreatmentEvidence> {
+        use crate::edge_treatments::EdgeTreatmentVirtualEdge;
+        (0..count)
+            .map(|i| {
+                let mut item = test_treatment_evidence(solid_id, u64::from(i));
+                let previous = (i + count - 1) % count;
+                let next = (i + 1) % count;
+                item.carriers[0].face_id = u64::from(previous);
+                item.carriers[0].shared_edge_ids = vec![100 + u64::from(previous)];
+                item.carriers[1].face_id = u64::from(next);
+                item.carriers[1].shared_edge_ids = vec![100 + u64::from(i)];
+                let angle = std::f64::consts::TAU * f64::from(i) / f64::from(count);
+                let (sine, cosine) = angle.sin_cos();
+                item.virtual_edge = EdgeTreatmentVirtualEdge::Segment {
+                    start_mm: [cosine, sine, 0.0],
+                    end_mm: [cosine, sine, 1.0],
+                };
+                item
+            })
+            .collect()
+    }
+
     #[test]
-    fn supplier_chamfer_micron_setback_drift_replays_at_common_nominal_size() -> Result<()> {
+    fn reciprocal_planar_profile_ring_retains_all_host_faces_not_arbitrary_chamfers() {
+        let mut candidates = reciprocal_chamfer_candidate_ring(42, 8);
+        let ordinary = test_treatment_evidence(42, 99);
+        candidates.push(ordinary.clone());
+        // Reused raw entity numbers in a different solid do not connect rings.
+        let other_solid = test_treatment_evidence(43, 2);
+        candidates.push(other_solid.clone());
+        assert_eq!(
+            select_replayable_treatments(candidates),
+            [ordinary, other_solid]
+        );
+    }
+
+    #[test]
+    fn reciprocal_planar_profile_ring_does_not_discard_nonuniform_or_open_chamfer_sets() {
+        let ring = reciprocal_chamfer_candidate_ring(42, 8);
+        let mut unequal = ring.clone();
+        unequal[0].inferred_setbacks_mm = Some([0.2, 0.2]);
+        assert_eq!(select_replayable_treatments(unequal.clone()), unequal);
+        let mut open = ring.clone();
+        open.pop();
+        assert_eq!(select_replayable_treatments(open.clone()), open);
+        let mut unrelated_edge = ring.clone();
+        unrelated_edge[0].carriers[0].shared_edge_ids = vec![999];
+        assert_eq!(
+            select_replayable_treatments(unrelated_edge.clone()),
+            unrelated_edge
+        );
+        let mut reverse = ring;
+        if let crate::edge_treatments::EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm } =
+            &mut reverse[0].virtual_edge
+        {
+            std::mem::swap(start_mm, end_mm);
+        }
+        reverse.reverse();
+        assert!(select_replayable_treatments(reverse).is_empty());
+    }
+
+    #[test]
+    fn supplier_chamfer_micron_setback_drift_preserves_both_dimensions() -> Result<()> {
         let mut evidence = test_treatment_evidence(42, 77);
         evidence.inferred_setbacks_mm = Some([0.5, 0.506_7]);
         let (profile, edge) = replayable_edge_treatment(&evidence)
             .ok_or_else(|| anyhow::anyhow!("6.7 micrometre difference must replay"))?;
-        assert_eq!(profile, EdgeTreatmentProfile::Chamfer);
-        assert!((edge.radius_mm - 0.503_35).abs() < 1.0e-12);
+        assert_eq!(
+            profile,
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [1.0, 0.0, 0.0],
+                second_setback_mm: 0.506_7,
+            }
+        );
+        assert_eq!(edge.radius_mm, 0.5);
+        evidence.inferred_setbacks_mm = Some([0.5, 0.500_000_01]);
+        let (profile, edge) = replayable_edge_treatment(&evidence)
+            .context("sub-tolerance setback asymmetry must be preserved")?;
+        assert_eq!(
+            profile,
+            EdgeTreatmentProfile::CarrierChamfer {
+                first_carrier_normal: [1.0, 0.0, 0.0],
+                second_setback_mm: 0.500_000_01,
+            }
+        );
+        assert_eq!(edge.radius_mm, 0.5);
         evidence.inferred_setbacks_mm = Some([0.5, 0.510_1]);
         assert!(replayable_edge_treatment(&evidence).is_none());
         evidence.inferred_setbacks_mm = Some([0.5, f64::NAN]);
@@ -2878,6 +3548,62 @@ mod tests {
         assert_eq!(
             fragment.model.provenance[&fragment.root].source_entity_ids,
             vec![solid_id, 77]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coupled_replay_retains_bounded_arcs_and_an_atomic_treatment_node() -> Result<()> {
+        let mut first = test_treatment_evidence(42, 77);
+        first.kind = crate::edge_treatments::EdgeTreatmentKind::ToroidalFillet;
+        first.inferred_radius_mm = Some(0.2);
+        first.virtual_edge = crate::edge_treatments::EdgeTreatmentVirtualEdge::Circle {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+        };
+        let mut second = test_treatment_evidence(42, 78);
+        second.kind = crate::edge_treatments::EdgeTreatmentKind::CylindricalFillet;
+        second.inferred_radius_mm = Some(0.2);
+        let replay = [&first, &second]
+            .into_iter()
+            .map(|e| {
+                let (profile, edge) =
+                    replayable_edge_treatment(e).context("missing replayable treatment")?;
+                Ok((e, profile, edge))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let arc = EdgeSelector::CircleArc {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+            start_mm: [2.0, 0.0, 0.0],
+            sweep_rad: std::f64::consts::FRAC_PI_2,
+        };
+        let segment = EdgeSelector::Segment {
+            start_mm: [0.0, 2.0, 0.0],
+            end_mm: [-1.0, 2.0, 0.0],
+        };
+        let fragment = replay_grouped_edge_treatments(
+            constructive_fragment(42, 1)?,
+            42,
+            replay,
+            vec![crate::kernel_topology::CoupledTreatmentReplay {
+                selectors: vec![(78, segment.clone()), (77, arc.clone())],
+                junction_faces: Vec::new(),
+            }],
+        )?;
+        let CadNode::EdgeTreatment { edges, profile, .. } = fragment.model.node(fragment.root)?
+        else {
+            bail!("missing atomic treatment node");
+        };
+        assert_eq!(*profile, EdgeTreatmentProfile::Round);
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].selector, arc);
+        assert_eq!(edges[1].selector, segment);
+        assert_eq!(
+            fragment.model.provenance[&fragment.root].source_entity_ids,
+            vec![42, 77, 78]
         );
         Ok(())
     }
@@ -3120,12 +3846,38 @@ mod tests {
         let verified = constructive_fragment(7, 5)?;
         let expected_complexity = verified.model.complexity_score(verified.root)?;
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
-        state.add_candidates_with_proof([qualified_fragment(verified)], true)?;
-        assert!(state.selected[&test_source(7)].boundary_verified);
+        let failures = apply_kernel_recovery(
+            &mut state,
+            |_, ceiling| {
+                assert_eq!(
+                    ceiling, None,
+                    "structural guess cannot prune certified evidence"
+                );
+                Ok(Some(KernelRecoveryCandidate {
+                    fragment: verified.clone(),
+                    boundary_verification: BoundaryVerification::Original,
+                }))
+            },
+            true,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(matches!(
+            state.selected[&test_source(7)].boundary_verification,
+            BoundaryVerification::Original
+        ));
         assert_eq!(
             state.selected[&test_source(7)].complexity,
             expected_complexity
         );
+        let failures = apply_kernel_recovery(
+            &mut state,
+            |_, ceiling| {
+                assert_eq!(ceiling, Some(expected_complexity));
+                Ok(None)
+            },
+            true,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
         // A later unverified shortcut cannot displace an exact proven body.
         state.add_candidates([qualified_fragment(constructive_fragment(7, 1)?)])?;
         assert_eq!(
@@ -3267,6 +4019,68 @@ END-ISO-10303-21;
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn kernel_reuses_qualified_direct_candidates_for_distinct_complete_data_sections() -> Result<()>
+    {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let box_exchange = |size_mm| -> Result<Exchange> {
+            let mut model = CadModel::new();
+            let root = model.add_node(CadNode::Primitive(Primitive::Box { size_mm }));
+            model.add_root(root)?;
+            let step = kernel.to_step(&kernel.evaluate(&model, root)?)?;
+            Ok(monstertruck_io::step::load::ParsedStepSource::parse(step.as_bytes())?.exchange)
+        };
+        let mut exchange = box_exchange([2.0, 3.0, 4.0])?;
+        exchange.data.extend(box_exchange([5.0, 7.0, 8.0])?.data);
+        let build =
+            recover_complete_ir_build_state(&exchange, ReducedBrepMutationMode::KernelOwned, None)?;
+        let sources = build
+            .recovery
+            .source_solids
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let [first, second] = sources.as_slice() else {
+            bail!("expected two source boxes")
+        };
+        assert_eq!(first.id, second.id);
+        assert_ne!(first.data_section, second.data_section);
+        for source in &sources {
+            let entities = &exchange.data[source.data_section].entities;
+            let index = crate::step_graph::build_index(entities);
+            let direct = recover_constructive_fragments_from_entities_with_index(entities, &index)?;
+            assert_eq!(build.direct_candidates[source], direct);
+            assert!(!direct.is_empty());
+        }
+        let report = recover_complete_ir_with_kernel_bytes(
+            crate::write_exchange(&exchange)?.as_bytes(),
+            &kernel,
+        )?;
+        assert_eq!(report.source_boundary_verified_solids, sources);
+        assert_eq!(report.constructively_recovered_solid_count, 2);
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 2);
+        for selected in fragments {
+            let shape = kernel.evaluate(&selected.fragment.model, selected.fragment.root)?;
+            let own = selected.source_solid;
+            let other = if own == *first { *second } else { *first };
+            assert!(rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &shape,
+                own.id,
+                &exchange.data[own.data_section].entities
+            )?);
+            assert!(!rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &shape,
+                other.id,
+                &exchange.data[other.data_section].entities
+            )?);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
     fn assert_boss_native_edit(
         document: &monstertruck_io::step::load::ResolvedStepDocument,
         source: SourceEntity,
@@ -3337,7 +4151,6 @@ END-ISO-10303-21;
             &section.entities,
             &index,
             &targets,
-            &HashSet::from([shell]),
             &report,
             &selected,
             0,
@@ -3381,13 +4194,649 @@ END-ISO-10303-21;
         )?;
         let healed_report = kernel.inspect_source_document(&healed_document)?;
         assert_eq!(healed_report.solids.len(), 1);
-        let host = recognize_single_healed_host(healed_document.as_ref())?
-            .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
+        let host = recognize_single_healed_host(
+            healed_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("boss peel did not expose an analytic box host"))?;
         assert!(matches!(
             host.source,
             CadFragmentSource::SolidExtrusion { .. }
         ));
         Ok(())
+    }
+
+    /// Relief-bearing manufacturer parts have hole boundaries that may also be
+    /// recognized as subordinate feature hypotheses. A closed extrusion tool
+    /// already accounts for these boundaries; do not strand the parent.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_cohort_peels_complete_tools() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let fixtures: &[(&[u8], usize, usize)] = &[
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step"),
+                230,
+                6,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_housing_0036d9d5.step"),
+                263,
+                30,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_housing_0112d499.step"),
+                264,
+                40,
+            ),
+            (
+                // The correctly oriented subtractive tools now remove 55
+                // additional faces in this first native transaction.
+                include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step"),
+                385,
+                90,
+            ),
+        ];
+        for &(bytes, original_faces, healed_faces) in fixtures {
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+            )?;
+            let load = kernel.inspect_source_document(&document)?;
+            let [loaded] = load.solids.as_slice() else {
+                bail!("expected one native relief solid");
+            };
+            let provenance = loaded
+                .topology_provenance
+                .as_ref()
+                .context("relief source lacks native identity")?;
+            let section = &document.as_ref().data[loaded.source.data_section];
+            let index = crate::step_graph::build_index(&section.entities);
+            let original = crate::brep::solid_face_ids(loaded.source.id, &section.entities, &index)
+                .context("relief source has no faces")?;
+            assert_eq!(original.len(), original_faces);
+            let targets = LocalRecoveryTargets::from_solids(
+                &BTreeSet::from([loaded.source.id]),
+                &section.entities,
+                &index,
+            )?;
+            let shells = targets.shell_ids();
+            let report = crate::planar_features::diagnose_boundary_features_for_shells_with_index(
+                &section.entities,
+                &index,
+                &shells,
+            );
+            let prepared = prepare_boundary_feature_reduction(
+                &section.entities,
+                &index,
+                &targets,
+                &report,
+                &(0..report.families.len()).collect::<Vec<_>>(),
+                0,
+            )?;
+            let (patch, plan) = plan_source_boundary_feature_peel_from_entities(
+                loaded.source,
+                &section.entities,
+                &index,
+                &report,
+                &prepared.family_indices,
+                provenance,
+            )?;
+            let edited = kernel.edit_source_topology(&document, loaded.source, &[patch])?;
+            let native = kernel.inspect_edited_source(&edited)?;
+            let mut projected = section.entities.clone();
+            crate::planar_features::apply_boundary_feature_peel_plan(
+                &mut projected,
+                &index,
+                &plan,
+            )?;
+            validate_native_peel_projection(
+                loaded.source,
+                &original,
+                &projected,
+                &index,
+                provenance,
+                loaded.boundaries.len(),
+                &native,
+            )?;
+            assert_eq!(native.faces, healed_faces);
+            let reduced = kernel.edited_source_reduced_brep(&edited)?;
+            assert!(reduced.validate_closed_topology().is_some());
+            if healed_faces == 6 {
+                assert!(recognize_native_edited_host(&kernel, &edited)?.is_some());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_replays_complete_source_cohort() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let fixtures: &[(&[u8], usize)] = &[
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_0b5fc9e7.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_16147ee2.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_b974305f.step"),
+                230,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_box_587c2a36.step"),
+                234,
+            ),
+        ];
+        for &(bytes, faces) in fixtures {
+            let document = kernel.resolve_source_exchange(
+                monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange,
+            )?;
+            let load = kernel.inspect_source_document(&document)?;
+            let [source] = load.solids.as_slice() else {
+                bail!("expected one relief source")
+            };
+            let entities = &document.as_ref().data[source.source.data_section].entities;
+            let index = crate::step_graph::build_index(entities);
+            let proof = SourceRecovery::new(source.source.id, entities, &index, &kernel);
+            let fragment = recover_kernel_boundary_feature_fragment(
+                &native_peels::ReplayTarget {
+                    source: source.source,
+                    proof: proof.as_ref(),
+                    mode: ReplayMode::General,
+                },
+                &load,
+                &document,
+                &kernel,
+                &index,
+            )?
+            .context("native relief did not reconstruct a whole body")?;
+            assert!(
+                matches!(
+                    fragment.boundary_verification,
+                    BoundaryVerification::Original
+                ),
+                "native source proof refused for {:?}",
+                source.source
+            );
+            let fragment = fragment.fragment;
+            assert!(matches!(
+                fragment.source,
+                CadFragmentSource::BoundaryFeatureComposite {
+                    passes: 1,
+                    feature_families: 9,
+                    feature_instances: 13,
+                    ..
+                }
+            ));
+            let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
+            let summary = kernel.summarize(&evaluated);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, faces);
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(
+                kernel.to_step(&evaluated)?.as_bytes(),
+            )?
+            .exchange;
+            let reimported = kernel.resolve_source_exchange(exchange)?;
+            let reloaded = kernel.inspect_source_document(&reimported)?;
+            assert_eq!(reloaded.solids.len(), 1);
+            assert!(reloaded.solids[0].failure.is_none());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn assert_source_verified_relief(bytes: &[u8]) -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragments = report.selected_fragments().collect::<Vec<_>>();
+        let [body] = fragments.as_slice() else {
+            bail!("expected exactly one selected whole-source reconstruction");
+        };
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_shallow_relief_is_admitted_by_complete_ir() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_box_0b5fc9e7.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_round_at_terminal_shoulder_limit_recovers_exactly() -> Result<()> {
+        use crate::cad_ir::{
+            CadModel, CadNode, EdgeSelector, EdgeTreatmentEdge, EdgeTreatmentProfile, Profile2d,
+            RigidTransform,
+        };
+        use crate::cad_kernel::{CadKernel, monstertruck::MonstertruckKernel};
+
+        let mut model = CadModel::new();
+        let section = model.add_node(CadNode::Extrude {
+            profile: Profile2d::polygon(vec![
+                [0., 0.],
+                [1., 0.],
+                [1., 4.9],
+                [0.4, 5.5],
+                [0., 5.5],
+            ])?,
+            vector_mm: [0., 0., 6.65],
+        });
+        let child = model.add_node(CadNode::Transform {
+            child: section,
+            transform: RigidTransform {
+                matrix: [
+                    [0., 0., 1., 0.],
+                    [1., 0., 0., 0.],
+                    [0., 1., 0., 0.],
+                    [0., 0., 0., 1.],
+                ],
+            },
+        });
+        let root = model.add_node(CadNode::EdgeTreatment {
+            child,
+            profile: EdgeTreatmentProfile::Round,
+            edges: vec![EdgeTreatmentEdge {
+                selector: EdgeSelector::Segment {
+                    start_mm: [6.65, 0., 5.5],
+                    end_mm: [6.65, 0.4, 5.5],
+                },
+                radius_mm: 0.6,
+            }],
+        });
+        model.add_root(root)?;
+        let kernel = MonstertruckKernel::project_standard();
+        let evaluated = kernel.evaluate(&model, root)?;
+        let source = kernel.to_step(&evaluated)?;
+        assert_source_verified_relief(source.as_bytes())
+    }
+
+    /// A real relief-bearing host with a limiting oblique fillet. Check
+    /// the composed provider itself, independently of candidate ranking.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_boundary_feature_peel_exposes_treated_host() -> Result<()> {
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_oblique_fillet_ba0460c9.step");
+        let recovered = verified_native_boundary_feature_candidate(bytes)?;
+        assert!(matches!(
+            recovered.fragment.source,
+            CadFragmentSource::BoundaryFeatureComposite { .. }
+        ));
+        assert!(
+            recovered
+                .fragment
+                .model
+                .nodes
+                .iter()
+                .any(|node| matches!(node, CadNode::EdgeTreatment { .. }))
+        );
+        Ok(())
+    }
+
+    // Real high-face-count relief housing, formerly timing out in repeated
+    // core recognition. Require complete independent original-boundary proof,
+    // not any particular reconstruction family or operation count.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_large_relief_housing_recovery_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_housing_271239a1.step"
+        ))
+    }
+
+    // The host itself requires intersecting planar Booleans. Their rebuilt
+    // transverse edges must retain certified finite bounds for the next
+    // shallow contact batch.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_on_boolean_host_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_boolean_host_22bfe2fc.step"
+        ))
+    }
+
+    // A native revolution cutter must retain affine planar caps so that
+    // the contact interface can be rebuilt before the lettering is replayed.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_with_circular_recesses_is_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_curved_1c75cccd.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_7a4544b3.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_224fa2f0.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
+    // A translated full disk can acquire a few ulps of axis displacement
+    // on its second semicircle. Require complete original-source proof
+    // for circular recesses with differing radius and depth.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_with_translated_revolution_caps_is_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_curved_a7efbe91.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_e319f3f9.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_0036d9d5.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_limiting_hollow_analytic_loft_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_cda28227.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_mixed_sectional_host_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_65712a81.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_tapered_hosts_are_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_tapered_4eef029b.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_a9bc1938.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_6a408847.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_tapered_e43d7cca.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_turning_spline_relief_is_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_turning_09b26184.step"
+        ))
+    }
+
+    // The host requires parallel extrusion transition algebra. Replayed
+    // spline contact intersections must converge beyond the weld radius;
+    // competing analytic-only cores cannot cover its polynomial strips.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_polynomial_crossings_and_core_exclusion_are_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_polynomial_622f6bfb.step"
+        ))
+    }
+
+    // Adjacent canonical cells occur simultaneously in plane direction,
+    // plane offset, and the spline/endpoint coordinates of this original.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_mixed_boundary_cells_are_source_verified() -> Result<()> {
+        assert_source_verified_relief(include_bytes!(
+            "../validation/fixtures/native_relief_mixed_cells_30821d92.step"
+        ))
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_partitioned_spline_caps_are_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_partitioned_63d50d37.step")
+                .as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_partitioned_67cf7259.step")
+                .as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_local_contact_rebuilds_stepped_relief_sources() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_stepped_66eb641f.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_stepped_c7c4ea15.step").as_slice(),
+        ] {
+            let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(report.constructively_recovered_solid_count, 1);
+            assert_eq!(report.unrecovered_solid_count, 0);
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [report.body_scan.solids[0].source]
+            );
+            let [body] = report.boundary_feature_composites.as_slice() else {
+                bail!("stepped relief must recover an executable boundary feature composite");
+            };
+            let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+            let summary = kernel.summarize(&rebuilt);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, 238);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_planar_contact_rebuilds_exact_relief_recesses() -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for (bytes, faces) in [
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_202872e8.step")
+                    .as_slice(),
+                246,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_17a62594.step")
+                    .as_slice(),
+                250,
+            ),
+            (
+                include_bytes!("../validation/fixtures/native_relief_recess_dc36f700.step")
+                    .as_slice(),
+                254,
+            ),
+        ] {
+            let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+            assert_eq!(report.body_count, 1);
+            assert_eq!(report.constructively_recovered_solid_count, 1);
+            assert_eq!(
+                report.source_boundary_verified_solids,
+                [report.body_scan.solids[0].source],
+                "recess original source proof failed ({faces} faces)"
+            );
+            let [body] = report.boundary_feature_composites.as_slice() else {
+                bail!("recess source must recover an executable feature composite");
+            };
+            let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+            let summary = kernel.summarize(&rebuilt);
+            assert!(summary.is_single_solid(), "{summary:?}");
+            assert_eq!(summary.faces, faces);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_blind_spline_recesses_reconstruct_whole_body() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_254dc55c.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("blind spline recesses must recover one editable feature composite");
+        };
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert!(report.source_boundary_verified_solids.is_empty());
+        let [reconciliation] = report.source_orientation_reconciled_solids.as_slice() else {
+            bail!("expected an independently verified orientation reconciliation");
+        };
+        assert_eq!(reconciliation.source, report.body_scan.solids[0].source);
+        assert_eq!(
+            reconciliation
+                .repairs
+                .iter()
+                .map(|r| r.face_id)
+                .collect::<Vec<_>>(),
+            [530, 729, 845, 1686]
+        );
+        assert!(
+            reconciliation
+                .repairs
+                .iter()
+                .all(|r| !r.original_same_sense && r.reconciled_same_sense)
+        );
+        assert!(kernel_replay_is_single_solid(&kernel, &body.fragment)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_spherical_bosses_and_blind_recesses_are_source_verified() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_blind_636f2bd5.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let [body] = report.boundary_feature_composites.as_slice() else {
+            bail!("expected editable subtractive and spherical feature composite");
+        };
+        let rebuilt = kernel.evaluate(&body.fragment.model, body.fragment.root)?;
+        let summary = kernel.summarize(&rebuilt);
+        assert!(summary.is_single_solid(), "{summary:?}");
+        assert_eq!(summary.faces, 84);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_housing_reconciles_only_certified_strip_face_senses() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_relief_housing_0914dda4.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(bytes, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert!(report.source_boundary_verified_solids.is_empty());
+        let [reconciliation] = report.source_orientation_reconciled_solids.as_slice() else {
+            bail!("expected a distinct orientation-reconciled recovery certificate");
+        };
+        assert_eq!(reconciliation.source, report.body_scan.solids[0].source);
+        assert_eq!(
+            reconciliation
+                .repairs
+                .iter()
+                .map(|r| r.face_id)
+                .collect::<Vec<_>>(),
+            [799, 1682, 2395, 3004, 3833, 4324, 4496, 4755, 6122, 8592]
+        );
+        assert!(
+            reconciliation
+                .repairs
+                .iter()
+                .all(|r| r.original_same_sense != r.reconciled_same_sense)
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_independently_proven_sectional_recovery() -> Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_sectional_stepped_655821f7.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
+            .context("no constructive healed sectional host")?;
+        let entities = &exchange.data[0].entities;
+        let index = crate::step_graph::build_index(entities);
+        let source = crate::cad_recovery::SourceRecovery::new(99, entities, &index, &kernel)
+            .context("source boundary proof")?;
+        let sectional = crate::cad_recovery::sectional::recover(&source, None)?
+            .context("independently proven sectional candidate")?;
+        assert!(matches!(
+            sectional.source,
+            CadFragmentSource::SectionalExtrusionUnion { slabs: 5, .. }
+                | CadFragmentSource::SectionalExtrusionTransitions { slabs: 5, .. }
+        ));
+        assert!(
+            host.model.complexity_score(host.root)?
+                <= sectional.model.complexity_score(sectional.root)?
+        );
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            99,
+            &exchange.data[0].entities
+        )?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn healed_host_can_use_proven_material_core_union() -> Result<()> {
+        let bytes =
+            include_bytes!("../validation/fixtures/native_relief_healed_host_0036d9d5.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let host = recognize_single_healed_host(&exchange, &kernel, None, ReplayMode::General)?
+            .context("no constructive healed union host")?;
+        assert!(is_constructive_source(&host.source), "{:?}", host.source);
+        assert_eq!(source_solid_id(&host.source), 16);
+        let evaluated = kernel.evaluate(&host.model, host.root)?;
+        assert!(crate::cad_recovery::rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &evaluated,
+            16,
+            &exchange.data[0].entities
+        )?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn prove_direct_fixture<K: CadKernel>(
+        source: SourceEntity,
+        exchange: &Exchange,
+        kernel: &K,
+    ) -> Result<Option<CadFragment>> {
+        let entities = &exchange.data[source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let Some(proof) = SourceRecovery::new(source.id, entities, &index, kernel) else {
+            return Ok(None);
+        };
+        let mut build =
+            recover_complete_ir_build_state(exchange, ReducedBrepMutationMode::KernelOwned, None)?;
+        let candidates = build.direct_candidates.remove(&source).unwrap_or_default();
+        recover_verified_direct_constructive_fragment(&proof, candidates, None)
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
@@ -3402,17 +4851,68 @@ END-ISO-10303-21;
             Vec::<KernelRecoveryFailure>::new()
         );
         assert_eq!(report.unrecovered_solid_count, 0);
-        // Source-boundary verified simple CAD now outranks the more expensive
-        // native boss peel; the native transaction itself has a separate
-        // dedicated test above, so don't pin the Complete IR to history.
         let exact = recover_auto_proven_extrusion_core_union_fragment(input, 0, 16, &kernel)?
-            .ok_or_else(|| anyhow::anyhow!("square boss has no exact simple CAD"))?;
+            .context("square boss has no exact simple material model")?;
         let chosen = selected_unique_source_fragment(&report)?;
         assert_eq!(
-            *chosen, exact,
-            "source-proof selection changed the admitted CAD"
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
         );
+        assert!(
+            chosen.model.complexity_score(chosen.root)?
+                <= exact.model.complexity_score(exact.root)?
+        );
+        let source = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let shape = kernel.evaluate(&chosen.model, chosen.root)?;
+        assert!(kernel.summarize(&shape).is_single_solid());
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &shape,
+            16,
+            &source.data[0].entities
+        )?);
         Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_boss_replay_candidate_has_independent_original_boundary_proof() -> Result<()> {
+        verified_native_boundary_feature_candidate(include_bytes!(
+            "../validation/fixtures/boundary_boss_extrusion.step"
+        ))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn verified_native_boundary_feature_candidate(input: &[u8]) -> Result<KernelRecoveryCandidate> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let document = kernel.resolve_source_exchange(
+            monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange,
+        )?;
+        let load = kernel.inspect_source_document(&document)?;
+        let [solid] = load.solids.as_slice() else {
+            bail!("expected exactly one source solid");
+        };
+        let entities = &document.as_ref().data[solid.source.data_section].entities;
+        let index = crate::step_graph::build_index(entities);
+        let proof = SourceRecovery::new(solid.source.id, entities, &index, &kernel);
+        let recovered = recover_kernel_boundary_feature_fragment(
+            &native_peels::ReplayTarget {
+                source: solid.source,
+                proof: proof.as_ref(),
+                mode: ReplayMode::General,
+            },
+            &load,
+            &document,
+            &kernel,
+            &index,
+        )?
+        .context("native boundary-feature recovery refused")?;
+        assert!(matches!(
+            recovered.boundary_verification,
+            BoundaryVerification::Original
+        ));
+        Ok(recovered)
     }
 
     /// Exact kernel adapter for native-peeling tests: any intermediate or final
@@ -3493,6 +4993,13 @@ END-ISO-10303-21;
             edited: &Self::EditedSource,
         ) -> Result<crate::kernel_topology::KernelEditedSourceEvidence> {
             self.0.inspect_edited_source(edited)
+        }
+
+        fn edited_source_step_projection(
+            &self,
+            _: &Self::EditedSource,
+        ) -> Result<crate::kernel_topology::KernelEditedSourceProjection> {
+            bail!("native feature peeling must not export an intermediate STEP projection")
         }
 
         fn edited_source_to_step(&self, _: &Self::EditedSource) -> Result<String> {
@@ -3732,12 +5239,7 @@ END-ISO-10303-21;
             "automatically recovered JLC staged loft must match its complete oriented source boundary"
         );
         assert!(
-            recover_verified_direct_constructive_fragment(
-                report.body_scan.solids[0].source,
-                &source,
-                &kernel,
-            )?
-            .is_some(),
+            prove_direct_fixture(report.body_scan.solids[0].source, &source, &kernel)?.is_some(),
             "the generic source-admission path must independently certify this JLC loft"
         );
         Ok(())
@@ -3846,6 +5348,46 @@ END-ISO-10303-21;
         Ok(())
     }
 
+    /// Historical corpus case 99527c was unrecovered before the general
+    /// source-derived union improvements. Its independently published STEP
+    /// manifold is the acceptance oracle, not any implementation's node order.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_four_core_union_99527c_is_automatically_source_recovered() -> Result<()> {
+        use crate::cad_kernel::CadKernel;
+
+        let input = include_bytes!("../validation/fixtures/native_four_core_union_99527c.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(report.body_count, 1);
+        assert_eq!(
+            report.constructively_recovered_solid_count, 1,
+            "source solid #56 must automatically recover: {:?}",
+            report.kernel_recovery_failures
+        );
+        assert_eq!(report.unrecovered_solid_count, 0);
+        assert_eq!(report.body_scan.solids[0].source.id, 56);
+
+        let selected = selected_unique_source_fragment(&report)?;
+        selected.model.validate()?;
+        let rebuilt = kernel.evaluate(&selected.model, selected.root)?;
+        assert!(kernel.summarize(&rebuilt).is_single_solid());
+        let source = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let [source_section] = source.data.as_slice() else {
+            bail!("four-core source did not have one DATA section");
+        };
+        assert!(
+            rebuilt_kernel_boundary_matches_source(
+                &kernel,
+                &rebuilt,
+                56,
+                &source_section.entities,
+            )?,
+            "automatically selected editable model is not source-boundary equivalent"
+        );
+        Ok(())
+    }
+
     #[cfg(feature = "cad-kernel-monstertruck")]
     #[test]
     fn real_open_cap_and_hook_union_reconstructs_complete_editable_body() -> Result<()> {
@@ -3872,21 +5414,7 @@ END-ISO-10303-21;
 
     #[cfg(feature = "cad-kernel-monstertruck")]
     fn selected_unique_source_fragment(report: &CompleteIr) -> Result<&CadFragment> {
-        let selected = [
-            report.solid_extrusions.as_slice(),
-            report.solid_lofts.as_slice(),
-            report.solid_revolutions.as_slice(),
-            report.radial_slot_revolutions.as_slice(),
-            report.solid_sweeps.as_slice(),
-            report.periodic_chains.as_slice(),
-            report.boundary_feature_composites.as_slice(),
-            report.edge_treatment_composites.as_slice(),
-            report.same_domain_normalized_solids.as_slice(),
-            report.extrusion_core_unions.as_slice(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+        let selected = report.selected_fragments().collect::<Vec<_>>();
         let [chosen] = selected.as_slice() else {
             bail!(
                 "expected exactly one selected source CAD model, got {}",
@@ -3894,6 +5422,213 @@ END-ISO-10303-21;
             );
         };
         Ok(&chosen.fragment)
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[derive(Clone, Copy)]
+    enum TargetedFamily {
+        Loft,
+        SourceCapUnion,
+        CoreRuledEnds,
+        CapRuledEnds,
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    impl TargetedFamily {
+        fn matches(self, source: &CadFragmentSource, solid_id: u64) -> bool {
+            source_solid_id(source) == solid_id
+                && matches!(
+                    (self, source),
+                    (Self::Loft, CadFragmentSource::SolidLoft { .. })
+                        | (
+                            Self::SourceCapUnion,
+                            CadFragmentSource::SourceCapExtrusionUnion { .. }
+                        )
+                        | (
+                            Self::CoreRuledEnds,
+                            CadFragmentSource::ExtrusionCoreRuledEnds { .. }
+                        )
+                        | (
+                            Self::CapRuledEnds,
+                            CadFragmentSource::CapExtrusionRuledEnds { .. }
+                        )
+                )
+        }
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    fn verify_targeted_analytic_sources(
+        samples: &[(&str, &[u8], u64, TargetedFamily)],
+    ) -> Result<()> {
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        for &(label, input, solid_id, family) in samples {
+            let exchange = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+            let [section] = exchange.data.as_slice() else {
+                bail!("{label}: expected sole source DATA section");
+            };
+            let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+            assert_eq!(report.body_count, 1, "{label}");
+            assert_eq!(
+                report.constructively_recovered_solid_count, 1,
+                "{label}: {:?}",
+                report.kernel_recovery_failures
+            );
+            let fragment = selected_unique_source_fragment(&report)?;
+            assert!(
+                family.matches(&fragment.source, solid_id),
+                "{label}: unexpected constructive family {:?}",
+                fragment.source
+            );
+            fragment.model.validate()?;
+            let rebuilt = kernel.evaluate(&fragment.model, fragment.root)?;
+            assert!(kernel.summarize(&rebuilt).is_single_solid(), "{label}");
+            assert!(
+                rebuilt_kernel_boundary_matches_source(
+                    &kernel,
+                    &rebuilt,
+                    solid_id,
+                    &section.entities
+                )?,
+                "{label}: source boundary differs"
+            );
+        }
+        Ok(())
+    }
+
+    /// Representative previously unrecovered source bodies from the frozen
+    /// catalog census. Admit their whole editable solid, not just a candidate
+    /// with a valid topology. Both the loft and constructive union paths
+    /// must reproduce the original oriented analytic boundary.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_targeted_analytic_sources_are_automatically_recovered() -> Result<()> {
+        let samples: &[(&str, &[u8], u64, TargetedFamily)] = &[
+            (
+                "42c4c451",
+                include_bytes!("../validation/fixtures/native_targeted_42c4c451.step"),
+                22,
+                TargetedFamily::Loft,
+            ),
+            (
+                "5c8c706c",
+                include_bytes!("../validation/fixtures/native_targeted_5c8c706c.step"),
+                50,
+                TargetedFamily::Loft,
+            ),
+            (
+                "66abf5fd",
+                include_bytes!("../validation/fixtures/native_targeted_66abf5fd.step"),
+                38,
+                TargetedFamily::Loft,
+            ),
+            (
+                "eb76f3ce",
+                include_bytes!("../validation/fixtures/native_targeted_eb76f3ce.step"),
+                20,
+                TargetedFamily::Loft,
+            ),
+            (
+                "58dd1537",
+                include_bytes!("../validation/fixtures/native_targeted_58dd1537.step"),
+                66,
+                TargetedFamily::SourceCapUnion,
+            ),
+            (
+                "b13fc76c",
+                include_bytes!("../validation/fixtures/native_targeted_b13fc76c.step"),
+                54,
+                TargetedFamily::SourceCapUnion,
+            ),
+        ];
+        verify_targeted_analytic_sources(samples)
+    }
+
+    /// Nine additional historical failures, all now representable as exact
+    /// lofts or extrusions with source-witnessed ruled ends. Keep whole-source
+    /// equivalence as the acceptance condition rather than matching only caps.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn real_low_face_analytic_sources_are_automatically_recovered() -> Result<()> {
+        verify_targeted_analytic_sources(&[
+            (
+                "9288385a",
+                include_bytes!("../validation/fixtures/native_targeted_9288385a.step"),
+                24,
+                TargetedFamily::Loft,
+            ),
+            (
+                "119a071d",
+                include_bytes!("../validation/fixtures/native_targeted_119a071d.step"),
+                40,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "14116ee2",
+                include_bytes!("../validation/fixtures/native_targeted_14116ee2.step"),
+                60,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "2b38a50f",
+                include_bytes!("../validation/fixtures/native_targeted_2b38a50f.step"),
+                6,
+                TargetedFamily::Loft,
+            ),
+            (
+                "3752a555",
+                include_bytes!("../validation/fixtures/native_targeted_3752a555.step"),
+                139,
+                TargetedFamily::CapRuledEnds,
+            ),
+            (
+                "49a2725d",
+                include_bytes!("../validation/fixtures/native_targeted_49a2725d.step"),
+                8,
+                TargetedFamily::Loft,
+            ),
+            (
+                "530c77f2",
+                include_bytes!("../validation/fixtures/native_targeted_530c77f2.step"),
+                38,
+                TargetedFamily::Loft,
+            ),
+            (
+                "7b59e66c",
+                include_bytes!("../validation/fixtures/native_targeted_7b59e66c.step"),
+                37,
+                TargetedFamily::CoreRuledEnds,
+            ),
+            (
+                "c146449c",
+                include_bytes!("../validation/fixtures/native_targeted_c146449c.step"),
+                53,
+                TargetedFamily::Loft,
+            ),
+            (
+                "ed8dbb8d",
+                include_bytes!("../validation/fixtures/native_targeted_ed8dbb8d.step"),
+                16,
+                TargetedFamily::Loft,
+            ),
+        ])
+    }
+
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_loft_is_source_certified_before_ranking_material_alternatives() -> Result<()> {
+        let input = include_bytes!("../validation/fixtures/native_targeted_530c77f2.step");
+        let kernel = crate::cad_kernel::monstertruck::MonstertruckKernel::project_standard();
+        let report = recover_complete_ir_with_kernel_bytes(input, &kernel)?;
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        let fragment = selected_unique_source_fragment(&report)?;
+        assert!(matches!(
+            fragment.source,
+            CadFragmentSource::SolidLoft { solid_id: 38, .. }
+        ));
+        Ok(())
     }
 
     /// Three distinct real JLCPCB solids with long source profiles (including
@@ -3973,8 +5708,7 @@ END-ISO-10303-21;
             );
             let source_entity = report.body_scan.solids[0].source;
             assert!(
-                recover_verified_direct_constructive_fragment(source_entity, &exchange, &kernel)?
-                    .is_some(),
+                prove_direct_fixture(source_entity, &exchange, &kernel)?.is_some(),
                 "{label}: the independent direct-candidate proof did not admit the source"
             );
         }
@@ -4048,13 +5782,33 @@ END-ISO-10303-21;
             "{:?}",
             report.kernel_recovery_failures
         );
-        assert_eq!(report.extrusion_core_unions.len(), 1);
-        let union = &report.extrusion_core_unions[0].fragment;
-        assert!(matches!(
-            union.source,
-            CadFragmentSource::ExtrusionCoreUnion { solid_id: 145, .. }
-        ));
-        union.model.validate()?;
+        let explicit = crate::cad_recovery::recover_proven_extrusion_core_union_fragment(
+            input,
+            0,
+            145,
+            &[[62, 128], [199, 317], [233, 287], [305, 362]],
+            &kernel,
+        )?
+        .context("source-order four-core SSI union stopped reproducing the source")?;
+        let selected = selected_unique_source_fragment(&report)?;
+        assert_eq!(report.constructively_recovered_solid_count, 1);
+        assert_eq!(
+            report.source_boundary_verified_solids,
+            [report.body_scan.solids[0].source]
+        );
+        assert!(
+            selected.model.complexity_score(selected.root)?
+                < explicit.model.complexity_score(explicit.root)?
+        );
+        let original = monstertruck_io::step::load::ParsedStepSource::parse(input)?.exchange;
+        let shape = kernel.evaluate(&selected.model, selected.root)?;
+        assert!(kernel.summarize(&shape).is_single_solid());
+        assert!(rebuilt_kernel_boundary_matches_source(
+            &kernel,
+            &shape,
+            145,
+            &original.data[0].entities
+        )?);
         Ok(())
     }
 
@@ -4131,8 +5885,13 @@ END-ISO-10303-21;
             monstertruck_io::step::load::ParsedStepSource::parse(legacy_snapshot.as_bytes())?
                 .exchange,
         )?;
-        let legacy = recognize_single_healed_host(legacy_document.as_ref())?
-            .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
+        let legacy = recognize_single_healed_host(
+            legacy_document.as_ref(),
+            &kernel,
+            None,
+            ReplayMode::General,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("legacy STEP host was not constructively recovered"))?;
         assert!(kernel_replay_is_single_solid(&kernel, &native_fragment)?);
         assert_eq!(
             kernel.summarize(&kernel.evaluate(&native_fragment.model, native_fragment.root)?),

@@ -59,7 +59,7 @@ pub enum CarrierDomainRelation {
 }
 
 /// A finite, nonzero direction normalized with a deterministic sign.
-#[must_use]
+#[must_use = "The optional canonical direction outcome must be inspected to distinguish a value from absence."]
 pub fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
     let magnitude = vector.magnitude();
     if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
@@ -79,7 +79,7 @@ pub fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
 /// Validate that a homogeneous transform is a finite uniform similarity.
 ///
 /// Reject shear, perspective, singular transforms and non-finite coefficients.
-#[must_use]
+#[must_use = "The optional similarity scale must be checked before accepting a transformed carrier."]
 pub fn similarity_scale(transform: Matrix4) -> Option<f64> {
     let tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
     if ![
@@ -150,11 +150,15 @@ fn finite_point(point: Point3) -> bool {
 
 impl AnalyticCarrier {
     /// The checked, unoriented geometric support (never a trim or solid proof).
-    #[must_use]
+    #[must_use = "The checked analytic support is returned, not an independent trim or solid proof."]
     pub const fn support(self) -> AnalyticSupport { self.support }
 
+    /// Whether the chart normal agrees with the canonical implicit support normal.
+    #[must_use = "The boolean result of `positive_orientation` must be observed to use the predicate."]
+    pub const fn positive_orientation(self) -> bool { self.orientation }
+
     /// Certify a planar carrier with its parametric orientation.
-    #[must_use]
+    #[must_use = "The optional planar carrier must be retained only if geometric certification succeeds."]
     pub fn plane(plane: &Plane) -> Option<Self> {
         let normal = canonical_direction(plane.normal())?;
         let origin = plane.origin();
@@ -172,7 +176,7 @@ impl AnalyticCarrier {
     }
 
     /// Certify a sphere under a true similarity transform.
-    #[must_use]
+    #[must_use = "The optional spherical carrier must be retained only if geometric certification succeeds."]
     pub fn sphere(sphere: &Processor<Sphere, Matrix4>) -> Option<Self> {
         Self::sphere_pose(
             sphere.entity().center(),
@@ -184,7 +188,7 @@ impl AnalyticCarrier {
 
     /// Certify a sphere supplied by an exchange adapter without discarding its
     /// original chart transform or orientation.
-    #[must_use]
+    #[must_use = "The certified sphere pose is returned with its original chart orientation."]
     pub fn sphere_pose(
         center: Point3,
         radius: f64,
@@ -206,7 +210,7 @@ impl AnalyticCarrier {
     /// Certify a torus under a true similarity transform.
     ///
     /// Self-intersecting spindle tori have no one global implicit orientation.
-    #[must_use]
+    #[must_use = "The optional toroidal carrier must be retained only if geometric certification succeeds."]
     pub fn torus(torus: &Processor<Torus, Matrix4>) -> Option<Self> {
         let transform = *torus.transform();
         let scale = similarity_scale(transform)?;
@@ -239,7 +243,7 @@ impl AnalyticCarrier {
     /// The generic revolution model may contain a line, spline or composite
     /// curve. Only a *structural line* permits this proof. `profile`, `origin`
     /// and `axis` are in the untransformed revolution coordinate system.
-    #[must_use]
+    #[must_use = "The certified cylinder or cone carrier is returned when the geometry qualifies."]
     pub fn linear_revolution(
         profile: Line<Point3>,
         origin: Point3,
@@ -346,7 +350,7 @@ impl AnalyticCarrier {
     /// Compare two certified analytic supports and their *global* orientation.
     ///
     /// This is not a claim that trimmed boundaries or solids are equal.
-    #[must_use]
+    #[must_use = "The optional same domain outcome must be inspected to distinguish a value from absence."]
     pub fn same_domain(
         self,
         other: Self,
@@ -378,7 +382,7 @@ fn axis_line_distance(origin: Point3, axis: Vector3, other: Point3) -> f64 {
 }
 
 /// Compare certified unoriented analytic supports, independently of charts.
-#[must_use]
+#[must_use = "The boolean result of `same_support` must be observed to use the predicate."]
 pub fn same_support(
     left: AnalyticSupport,
     right: AnalyticSupport,

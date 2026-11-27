@@ -10,7 +10,7 @@ use std::f64::consts::TAU;
 impl<P> UnitCircle<P> {
     /// constructor
     #[inline]
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self { Self(std::marker::PhantomData) }
 }
 

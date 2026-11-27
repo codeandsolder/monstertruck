@@ -619,11 +619,14 @@ impl ExactParameterBoundary2D<NurbsSurface<Vector4>> for Line<Point3> {
         &self,
         surface: &NurbsSurface<Vector4>,
     ) -> Option<Self::BoundaryCurve> {
-        exact_line_boundary_on_homogeneous_extrusion_surface(self, surface).or_else(|| {
-            (surface.degrees() == (1, 1))
-                .then(|| exact_line_boundary_on_affine_surface(self, surface))
-                .flatten()
-        })
+        crate::nurbs::iso_boundary::affine_clamped_boundary(surface, self)
+            .map(|uv| ParameterCurve::new(uv, surface.clone()))
+            .or_else(|| exact_line_boundary_on_homogeneous_extrusion_surface(self, surface))
+            .or_else(|| {
+                (surface.degrees() == (1, 1))
+                    .then(|| exact_line_boundary_on_affine_surface(self, surface))
+                    .flatten()
+            })
     }
 }
 

@@ -1,54 +1,46 @@
 //! Geometric inside/outside and coincident-face classification.
 
 use super::{
-    AltRegion, BooleanTolerance, EuclideanSpace, Face, IncludingPointInDomain, InnerSpace,
-    Invertible, MeshableShape, MeshableSurface, MetricSpace, ParametricSurface3D, Point3,
-    PolyShell, PolygonMesh, PolylineCurve, PolylineableCurve, SearchNearestParameter,
-    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SurfaceParameter, Vector3, divide_face,
-    hash, loops_store,
+    AltRegion, BooleanTolerance, EuclideanSpace, Face, InnerSpace, Invertible, MeshableShape,
+    MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolylineableCurve,
+    SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SignedRayIndex,
+    SurfaceParameter, Vector3, divide_face, hash, loops_store,
 };
 
-/// Classify a tessellated shell point using the signed winding convention shared
-/// with [`IncludingPointInDomain`], with several deterministic ray directions to
-/// avoid a single degenerate ray deciding the result.
-pub(super) fn classify_inside_with_polyshell(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
-    point: Point3,
-) -> Option<bool> {
-    let offsets = [
-        Vector3::new(0.0, 0.0, 0.0),
-        Vector3::new(0.613, -0.271, 0.149),
-        Vector3::new(-0.347, 0.509, -0.221),
-        Vector3::new(0.193, 0.401, 0.577),
-        Vector3::new(-0.433, -0.127, 0.389),
-    ];
-    let (inside_votes, outside_votes) = offsets
-        .into_iter()
-        .map(|offset| hash::take_one_unit(point + offset))
-        .try_fold((0usize, 0usize), |(inside, outside), direction| {
-            let count = poly_shell.iter().try_fold(0isize, |count, face| {
-                // Tessellation stores each polygon in the underlying surface's
-                // orientation and represents topological reversal on the Face.
-                // Apply that orientation to the signed crossing contribution;
-                // cloning and inverting the whole polygon per ray is unnecessary.
-                let polygon = face.surface()?;
-                let crossing = polygon.signed_crossing_faces(point, direction);
-                Some(
-                    count
-                        + if face.orientation() {
-                            crossing
-                        } else {
-                            -crossing
-                        },
-                )
-            })?;
-            if count >= 1 {
-                Some((inside + 1, outside))
-            } else {
-                Some((inside, outside + 1))
-            }
-        })?;
-    Some(inside_votes > outside_votes)
+/// Snapshot the tessellated operand once for every repeated ray query.
+#[derive(Clone, Debug)]
+pub(super) struct WindingClassifier(Option<SignedRayIndex>);
+
+impl WindingClassifier {
+    pub(super) fn new(poly_shell: &PolyShell) -> Self {
+        // Retain failure on any missing polygon, as in the exhaustive scan.
+        let meshes = poly_shell
+            .iter()
+            .map(|face| Some((face.surface()?, face.orientation())))
+            .collect::<Option<Vec<_>>>();
+        Self(meshes.map(SignedRayIndex::new))
+    }
+
+    /// Several deterministic ray directions avoid a single degenerate ray
+    /// deciding the classification, preserving signed material winding.
+    pub(super) fn inside(&self, point: Point3) -> Option<bool> {
+        let index = self.0.as_ref()?;
+        let offsets = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.613, -0.271, 0.149),
+            Vector3::new(-0.347, 0.509, -0.221),
+            Vector3::new(0.193, 0.401, 0.577),
+            Vector3::new(-0.433, -0.127, 0.389),
+        ];
+        let inside = offsets
+            .into_iter()
+            .filter(|offset| {
+                let direction = hash::take_one_unit(point + *offset);
+                index.signed_crossing_faces(point, direction) >= 1
+            })
+            .count();
+        Some(inside > offsets.len() / 2)
+    }
 }
 
 pub(super) fn sample_points_on_face<C, S>(
@@ -59,14 +51,12 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
-
     let shell = Shell::from(vec![face.clone()]);
     let triangulated = shell.triangulation(BooleanTolerance::new(tol).mesh_seed);
     let polygon = triangulated.first()?.surface()?;
     let positions = polygon.positions();
     let minimum_triangle_area = BooleanTolerance::new(tol).area_floor;
-    let mut candidates = polygon
+    let candidates = polygon
         .faces()
         .triangle_iter()
         .filter_map(|triangle| {
@@ -92,24 +82,42 @@ where
         );
     }
 
+    Some(spread_face_samples(candidates))
+}
+
+/// Preserve the stable area ordering and swap-removal tie policy while
+/// updating each candidate's distance to the selected witness set once per
+/// new witness, rather than rescanning all preceding witnesses.
+fn spread_face_samples(mut candidates: Vec<(f64, Point3)>) -> Vec<Point3> {
+    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
+    if candidates.is_empty() {
+        return Vec::new();
+    }
     candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
-    let mut samples = vec![candidates.swap_remove(0).1];
-    while samples.len() < MAX_CLASSIFICATION_SAMPLES && !candidates.is_empty() {
-        let next = candidates
-            .iter()
+    let mut latest = candidates.swap_remove(0).1;
+    let mut samples = vec![latest];
+    // Area is no longer needed after choosing the first witness. Reuse its
+    // slot for the minimum squared distance to any selected witness.
+    for (nearest, _) in &mut candidates {
+        *nearest = f64::INFINITY;
+    }
+    while samples.len() < MAX_CLASSIFICATION_SAMPLES {
+        let Some(next) = candidates
+            .iter_mut()
             .enumerate()
-            .map(|(index, (_, point))| {
-                let distance2 = samples
-                    .iter()
-                    .map(|sample| sample.distance2(*point))
-                    .fold(f64::INFINITY, f64::min);
-                (index, distance2)
+            .map(|(index, (nearest, point))| {
+                *nearest = nearest.min(latest.distance2(*point));
+                (index, *nearest)
             })
             .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
-            .map(|(index, _)| index)?;
-        samples.push(candidates.swap_remove(next).1);
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        latest = candidates.swap_remove(next).1;
+        samples.push(latest);
     }
-    Some(samples)
+    samples
 }
 
 fn strict_majority(inside: usize, outside: usize) -> Option<bool> {
@@ -121,14 +129,14 @@ fn strict_majority(inside: usize, outside: usize) -> Option<bool> {
 }
 
 pub(super) fn classify_points_inside(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     points: impl IntoIterator<Item = Point3>,
 ) -> Option<bool> {
     let (inside, outside) =
         points
             .into_iter()
             .try_fold((0usize, 0usize), |(inside, outside), point| {
-                if classify_inside_with_polyshell(poly_shell, point)? {
+                if winding.inside(point)? {
                     Some((inside + 1, outside))
                 } else {
                     Some((inside, outside + 1))
@@ -144,7 +152,7 @@ pub(super) fn classify_points_inside(
 /// remains inconclusive when its witnesses have different side relations.
 /// The returned pair is (source exterior, source interior).
 pub(super) fn unanimous_boundary_contact_sides<S>(
-    poly_shell: &PolyShell,
+    winding: &WindingClassifier,
     points: &[Point3],
     surface: &S,
     orientation: bool,
@@ -176,8 +184,8 @@ where
         let classify_pair = |scale| {
             let delta = outward * (shift * scale);
             Some([
-                classify_inside_with_polyshell(poly_shell, point + delta)?,
-                classify_inside_with_polyshell(poly_shell, point - delta)?,
+                winding.inside(point + delta)?,
+                winding.inside(point - delta)?,
             ])
         };
         let first = classify_pair(1.0)?;
@@ -202,7 +210,7 @@ fn unanimous_opposing_sides(
 }
 
 pub(super) fn classify_unknown_face<C, S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     face: &Face<Point3, C, S>,
     tol: f64,
 ) -> Option<bool>
@@ -210,7 +218,7 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    classify_points_inside(poly_shell, sample_points_on_face(face, tol)?)
+    classify_points_inside(winding, sample_points_on_face(face, tol)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,7 +245,7 @@ fn unique_relation(inside: usize, outside: usize, coincident: usize) -> Option<F
 }
 
 pub(super) fn classify_points_relation<S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     points: impl IntoIterator<Item = Point3>,
     surface: &S,
     tol: f64,
@@ -255,7 +263,7 @@ where
                 .search_parameter(point, None, 100)
                 .or_else(|| surface.search_nearest_parameter(point, None, 100));
             let Some((u, v)) = parameter else {
-                let is_inside = classify_inside_with_polyshell(poly_shell, point)?;
+                let is_inside = winding.inside(point)?;
                 return Some((
                     inside + usize::from(is_inside),
                     outside + usize::from(!is_inside),
@@ -263,10 +271,8 @@ where
                 ));
             };
             let normal = surface.normal(u, v);
-            let outward_inside =
-                classify_inside_with_polyshell(poly_shell, point + normal * offset)?;
-            let inward_inside =
-                classify_inside_with_polyshell(poly_shell, point - normal * offset)?;
+            let outward_inside = winding.inside(point + normal * offset)?;
+            let inward_inside = winding.inside(point - normal * offset)?;
             if outward_inside {
                 Some((inside + 1, outside, coincident))
             } else if inward_inside {
@@ -280,7 +286,7 @@ where
 }
 
 pub(super) fn classify_face_relation<C, S>(
-    poly_shell: &Shell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>,
+    winding: &WindingClassifier,
     face: &Face<Point3, C, S>,
     tol: f64,
 ) -> Option<FaceRelation>
@@ -295,14 +301,14 @@ where
 {
     let points = sample_points_on_face(face, tol)?;
     let surface = face.oriented_surface();
-    classify_points_relation(poly_shell, points, &surface, tol)
+    classify_points_relation(winding, points, &surface, tol)
 }
 
 pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     region: &AltRegion<C, S>,
-    candidate: &PolygonMesh,
+    candidate: &loops_store::PlanarMesh<'_>,
     other_regions: &[AltRegion<C, S>],
-    other_poly: &PolyShell,
+    other_poly: &[Option<loops_store::PlanarMesh<'_>>],
     tol: f64,
 ) -> Option<bool> {
     let representative =
@@ -341,6 +347,50 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
 #[cfg(test)]
 mod vote_tests {
     use super::*;
+
+    #[test]
+    fn incremental_witness_distances_preserve_exhaustive_selection() {
+        fn reference(mut candidates: Vec<(f64, Point3)>) -> Vec<Point3> {
+            candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+            let mut samples = vec![candidates.swap_remove(0).1];
+            while samples.len() < 9 && !candidates.is_empty() {
+                let (next, _) = candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, point))| {
+                        let distance = samples.iter().fold(f64::INFINITY, |nearest, sample| {
+                            nearest.min(sample.distance2(*point))
+                        });
+                        (index, distance)
+                    })
+                    .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+                    .expect("nonempty candidates");
+                samples.push(candidates.swap_remove(next).1);
+            }
+            samples
+        }
+
+        // Distinct areas, equal areas, coincident centroids and symmetric
+        // distances exercise both initial ordering and last-maximum ties.
+        for count in 0..=63 {
+            for offset in 0..7 {
+                let candidates = (0..count)
+                    .map(|i| {
+                        let x = f64::from((i + offset) % 5) - 2.0;
+                        let y = f64::from((i / 5 + offset) % 5) - 2.0;
+                        (f64::from((i + offset) % 3), Point3::new(x, y, 0.0))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    spread_face_samples(candidates.clone()),
+                    reference(candidates)
+                );
+            }
+        }
+    }
 
     #[test]
     fn curved_two_edge_face_samples_from_its_trimmed_interior() {

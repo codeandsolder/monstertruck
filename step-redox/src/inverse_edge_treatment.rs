@@ -23,7 +23,91 @@ use std::collections::{BTreeMap, BTreeSet};
 const GEOM_TOL_MM: f64 = crate::numeric::NUMERICAL_GEOMETRY_TOL_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.inverse_edge_treatment_direction;
 
+/// Resolve entity IDs in the proof view to the native identities that own
+/// the edit. STEP records and inspected native topology are separate namespaces.
+pub trait TreatmentTopology {
+    fn vertex(&self, section: usize, id: u64) -> Option<KernelTopologyId>;
+    fn edge(&self, section: usize, id: u64) -> Option<KernelTopologyId>;
+    fn face(&self, section: usize, id: u64) -> Option<KernelTopologyId>;
+}
+
+impl TreatmentTopology for KernelTopologyProvenance {
+    fn vertex(&self, section: usize, id: u64) -> Option<KernelTopologyId> {
+        self.vertex_for_source_id(section, id)
+    }
+    fn edge(&self, section: usize, id: u64) -> Option<KernelTopologyId> {
+        self.edge_for_source_id(section, id)
+    }
+    fn face(&self, section: usize, id: u64) -> Option<KernelTopologyId> {
+        self.face_for_source_id(section, id)
+    }
+}
+
+/// Lookup for a native B-rep whose topological IDs have already been checked
+/// for globally unique, assigned `StableId`s. Bound/coedge IDs are not targets.
+pub struct NativeTreatmentTopology {
+    vertices: BTreeSet<u64>,
+    edges: BTreeSet<u64>,
+    faces: BTreeSet<u64>,
+}
+
+impl NativeTreatmentTopology {
+    pub fn new(solid: &ReducedSolid) -> Self {
+        let mut lookup = Self {
+            vertices: BTreeSet::new(),
+            edges: BTreeSet::new(),
+            faces: BTreeSet::new(),
+        };
+        for face in solid.faces() {
+            lookup.faces.insert(face.id);
+            for edge in face.loop_edges() {
+                lookup.vertices.extend([edge.start_vertex, edge.end_vertex]);
+                lookup.edges.insert(edge.edge_id);
+            }
+        }
+        lookup
+    }
+}
+
+impl TreatmentTopology for NativeTreatmentTopology {
+    fn vertex(&self, _: usize, id: u64) -> Option<KernelTopologyId> {
+        self.vertices
+            .contains(&id)
+            .then(|| KernelTopologyId::from_raw(id))
+    }
+    fn edge(&self, _: usize, id: u64) -> Option<KernelTopologyId> {
+        self.edges
+            .contains(&id)
+            .then(|| KernelTopologyId::from_raw(id))
+    }
+    fn face(&self, _: usize, id: u64) -> Option<KernelTopologyId> {
+        self.faces
+            .contains(&id)
+            .then(|| KernelTopologyId::from_raw(id))
+    }
+}
+
+mod coupled;
 mod curved_segment;
+mod segment;
+pub mod spherical_junction;
+
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+pub fn te_treatment_fixture() -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Cursor, Read};
+    let archive = include_bytes!("../validation/fixtures/bundled/te-T2111092004-000.zip");
+    let mut zip = zip::ZipArchive::new(Cursor::new(archive))?;
+    let mut bytes = Vec::new();
+    zip.by_index(0)?.read_to_end(&mut bytes)?;
+    assert_eq!(
+        hex::encode(Sha256::digest(&bytes)),
+        "b485ad005657eec408ee345f77d68848d54c42940892a9e40aae30d2d18d95cf"
+    );
+    Ok(bytes)
+}
+
+pub use coupled::{closed_components, plan_closed_perimeter};
 
 #[derive(Debug, Clone)]
 struct EndpointEdit {
@@ -35,18 +119,12 @@ struct EndpointEdit {
     replacement_curve: Option<KernelPatchCurve>,
 }
 
-#[derive(Debug)]
-struct SegmentCarrierPlan {
-    splice: KernelFaceSplice,
-    endpoint_edits: [EndpointEdit; 2],
-}
-
 /// Normalize one proven inverse edge treatment without mutating parser-side topology.
 pub fn plan_edge_treatment_patch(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<KernelTopologyPatch> {
     ensure!(
         evidence.solid_id == solid.solid_id(),
@@ -62,7 +140,7 @@ pub fn plan_edge_treatment_patch(
 
     match evidence.virtual_edge {
         EdgeTreatmentVirtualEdge::Segment { start_mm, end_mm } => {
-            plan_segment_patch(solid, evidence, data_section, provenance, start_mm, end_mm)
+            segment::plan_segment_patch(solid, evidence, data_section, provenance, start_mm, end_mm)
         }
         EdgeTreatmentVirtualEdge::Circle {
             center_mm,
@@ -639,7 +717,7 @@ fn circle_family_carrier_patch(
     frame: CircleFrame,
     angles: &[f64],
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<(Vec<KernelFaceSplice>, Vec<KernelRetainedEdge>)> {
     let mut splices = Vec::new();
     let mut edits = Vec::new();
@@ -690,7 +768,7 @@ pub fn plan_circle_family_patch(
     solid: &ReducedSolid,
     family: &[&EdgeTreatmentEvidence],
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<KernelTopologyPatch> {
     ensure!(
         family.len() > 1,
@@ -782,130 +860,35 @@ pub fn plan_circle_family_patch(
     })
 }
 
-fn plan_segment_patch(
-    solid: &ReducedSolid,
-    evidence: &EdgeTreatmentEvidence,
-    data_section: usize,
-    provenance: &KernelTopologyProvenance,
-    virtual_start: [f64; 3],
-    virtual_end: [f64; 3],
-) -> Result<KernelTopologyPatch> {
-    ensure!(
-        distance(virtual_start, virtual_end) > GEOM_TOL_MM,
-        "inverse segment for treatment face #{} is degenerate",
-        evidence.treatment_face_id
-    );
-    if let Some(patch) = curved_segment::plan_curved_segment_patch(
-        solid,
-        evidence,
-        data_section,
-        provenance,
-        virtual_start,
-        virtual_end,
-    )? {
-        return Ok(patch);
-    }
-    let treatment = face(solid, evidence.treatment_face_id)?;
-    let treatment_edges = unique_face_edges(treatment)?;
-    let treatment_face = topology_face(provenance, data_section, evidence.treatment_face_id)?;
-    let (carrier_plans, interface_edges) = collect_segment_carrier_plans(
-        solid,
-        evidence,
-        data_section,
-        provenance,
-        virtual_start,
-        virtual_end,
-    )?;
-    ensure!(
-        interface_edges.is_subset(&treatment_edges),
-        "carrier interface contains an edge absent from treatment face #{}",
-        evidence.treatment_face_id
-    );
-    let endpoint_edits = carrier_plans
-        .iter()
-        .flat_map(|plan| plan.endpoint_edits.iter().cloned())
-        .collect::<Vec<_>>();
-    let rewrite_edges =
-        normalize_retained_edge_rewrites(&endpoint_edits, data_section, provenance)?;
-    let terminal_edges = treatment_edges
-        .difference(&interface_edges)
-        .copied()
-        .collect::<BTreeSet<_>>();
-    ensure!(
-        !terminal_edges.is_empty(),
-        "segment treatment face #{} has no terminal boundary",
-        evidence.treatment_face_id
-    );
-    let mut face_splices = carrier_plans
-        .into_iter()
-        .map(|plan| plan.splice)
-        .collect::<Vec<_>>();
-    face_splices.extend(plan_terminal_splices(
-        solid,
-        evidence,
-        data_section,
-        provenance,
-        &terminal_edges,
-    )?);
-
-    Ok(KernelTopologyPatch {
-        remove_faces: vec![treatment_face],
-        new_vertices: vec![virtual_start, virtual_end],
-        new_edges: vec![KernelNewEdge {
-            vertices: (KernelPatchVertexRef::New(0), KernelPatchVertexRef::New(1)),
-            curve: KernelPatchCurve::Line {
-                start_mm: virtual_start,
-                end_mm: virtual_end,
-            },
-        }],
-        rewrite_edges,
-        face_splices,
-        face_boundary_replacements: Vec::new(),
-        require_unused_edges: topology_edges(
-            provenance,
-            data_section,
-            treatment_edges.iter().copied(),
-        )?,
-    })
-}
-
-fn collect_segment_carrier_plans(
-    solid: &ReducedSolid,
-    evidence: &EdgeTreatmentEvidence,
-    data_section: usize,
-    provenance: &KernelTopologyProvenance,
-    virtual_start: [f64; 3],
-    virtual_end: [f64; 3],
-) -> Result<(Vec<SegmentCarrierPlan>, BTreeSet<u64>)> {
-    let mut plans = Vec::with_capacity(2);
-    let mut interface_edges = BTreeSet::new();
-    for carrier in &evidence.carriers {
-        for &edge_id in &carrier.shared_edge_ids {
-            ensure!(
-                interface_edges.insert(edge_id),
-                "treatment face #{} assigns source edge #{edge_id} to both carriers",
-                evidence.treatment_face_id
-            );
-        }
-        plans.push(plan_segment_carrier(
-            face(solid, carrier.face_id)?,
-            &carrier.shared_edge_ids,
-            data_section,
-            provenance,
-            virtual_start,
-            virtual_end,
-        )?);
-    }
-    Ok((plans, interface_edges))
-}
-
 fn plan_terminal_splices(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     terminal_edges: &BTreeSet<u64>,
 ) -> Result<Vec<KernelFaceSplice>> {
+    terminal_run_edges(solid, evidence, terminal_edges)?
+        .into_iter()
+        .map(|(face_id, edges)| {
+            let terminal_face = face(solid, face_id)?;
+            ensure!(
+                edges_form_one_cyclic_run(terminal_face, &edges),
+                "terminal edges {edges:?} are not one contiguous run on face #{face_id}"
+            );
+            Ok(KernelFaceSplice {
+                face: topology_face(provenance, data_section, face_id)?,
+                remove_edges: topology_edges(provenance, data_section, edges.iter().copied())?,
+                replacement: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn terminal_run_edges(
+    solid: &ReducedSolid,
+    evidence: &EdgeTreatmentEvidence,
+    terminal_edges: &BTreeSet<u64>,
+) -> Result<BTreeMap<u64, BTreeSet<u64>>> {
     let mut terminal_by_face = BTreeMap::<u64, BTreeSet<u64>>::new();
     for &terminal_edge in terminal_edges {
         let users = edge_face_users(solid, terminal_edge);
@@ -931,103 +914,7 @@ fn plan_terminal_splices(
             .or_default()
             .insert(terminal_edge);
     }
-    terminal_by_face
-        .into_iter()
-        .map(|(face_id, edges)| {
-            let terminal_face = face(solid, face_id)?;
-            ensure!(
-                edges_form_one_cyclic_run(terminal_face, &edges),
-                "terminal edges {edges:?} are not one contiguous run on face #{face_id}"
-            );
-            Ok(KernelFaceSplice {
-                face: topology_face(provenance, data_section, face_id)?,
-                remove_edges: topology_edges(provenance, data_section, edges.iter().copied())?,
-                replacement: Vec::new(),
-            })
-        })
-        .collect()
-}
-
-fn plan_segment_carrier(
-    face: &ReducedFace,
-    shared_edge_ids: &[u64],
-    data_section: usize,
-    provenance: &KernelTopologyProvenance,
-    virtual_start: [f64; 3],
-    virtual_end: [f64; 3],
-) -> Result<SegmentCarrierPlan> {
-    ensure!(
-        !shared_edge_ids.is_empty(),
-        "carrier has no shared treatment edges"
-    );
-    let shared = shared_edge_ids.iter().copied().collect::<BTreeSet<_>>();
-    ensure!(
-        shared.len() == shared_edge_ids.len(),
-        "carrier face #{} repeats a shared treatment edge",
-        face.id
-    );
-    let (previous, next) = carrier_run_neighbors(face, &shared)?;
-    let CurveSupport::Line(previous_line) = previous.support else {
-        bail!(
-            "carrier face #{} previous retained edge is not linear",
-            face.id
-        );
-    };
-    let CurveSupport::Line(next_line) = next.support else {
-        bail!("carrier face #{} next retained edge is not linear", face.id);
-    };
-    let previous_direction = normalize(previous_line.direction, DIR_TOL)
-        .context("previous retained edge direction is degenerate")?;
-    let next_direction = normalize(next_line.direction, DIR_TOL)
-        .context("next retained edge direction is degenerate")?;
-    let (healed_start, healed_end) = [(virtual_start, virtual_end), (virtual_end, virtual_start)]
-        .into_iter()
-        .find(|(previous_point, next_point)| {
-            point_to_unit_line_distance(
-                *previous_point,
-                previous_line.origin_mm,
-                previous_direction,
-            ) <= GEOM_TOL_MM
-                && point_to_unit_line_distance(*next_point, next_line.origin_mm, next_direction)
-                    <= GEOM_TOL_MM
-        })
-        .with_context(|| {
-            format!(
-                "proven inverse segment does not meet retained neighbors on carrier face #{}",
-                face.id
-            )
-        })?;
-    let forward = distance(healed_start, virtual_start) <= GEOM_TOL_MM;
-    let (start_vertex, end_vertex) = if forward { (0, 1) } else { (1, 0) };
-
-    Ok(SegmentCarrierPlan {
-        splice: KernelFaceSplice {
-            face: topology_face(provenance, data_section, face.id)?,
-            remove_edges: topology_edges(provenance, data_section, shared.iter().copied())?,
-            replacement: vec![KernelPatchEdgeUse {
-                edge: KernelPatchEdgeRef::New(0),
-                orientation: forward,
-            }],
-        },
-        endpoint_edits: [
-            EndpointEdit {
-                carrier_face_id: face.id,
-                old_vertex: previous.end_vertex,
-                edge: previous,
-                new_vertex: start_vertex,
-                new_point: healed_start,
-                replacement_curve: None,
-            },
-            EndpointEdit {
-                carrier_face_id: face.id,
-                old_vertex: next.start_vertex,
-                edge: next,
-                new_vertex: end_vertex,
-                new_point: healed_end,
-                replacement_curve: None,
-            },
-        ],
-    })
+    Ok(terminal_by_face)
 }
 
 fn carrier_run_neighbors(
@@ -1098,7 +985,7 @@ fn carrier_run_neighbors(
 fn normalize_retained_edge_rewrites(
     edits: &[EndpointEdit],
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<Vec<KernelRetainedEdge>> {
     let mut by_edge = BTreeMap::<u64, Vec<&EndpointEdit>>::new();
     for edit in edits {
@@ -1310,7 +1197,7 @@ fn partial_circle_carrier_splices(
     new_vertices: &[[f64; 3]],
     edge_count: usize,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
 ) -> Result<(Vec<KernelFaceSplice>, Vec<EndpointEdit>)> {
     let first = new_vertices
         .first()
@@ -1396,7 +1283,7 @@ fn plan_partial_circle_patch(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     frame: CircleFrame,
     treatment_edges: &BTreeSet<u64>,
 ) -> Result<KernelTopologyPatch> {
@@ -1494,7 +1381,7 @@ fn plan_circle_patch(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     center_mm: [f64; 3],
     normal: [f64; 3],
     radius_mm: f64,
@@ -1556,7 +1443,7 @@ fn plan_circle_carriers(
     solid: &ReducedSolid,
     evidence: &EdgeTreatmentEvidence,
     data_section: usize,
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     center_mm: [f64; 3],
     normal: [f64; 3],
 ) -> Result<(Vec<KernelFaceSplice>, BTreeSet<u64>)> {
@@ -1779,27 +1666,27 @@ fn edges_form_one_cyclic_run(face: &ReducedFace, edges: &BTreeSet<u64>) -> bool 
 }
 
 fn topology_vertex(
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     data_section: usize,
     source_id: u64,
 ) -> Result<KernelTopologyId> {
     provenance
-        .vertex_for_source_id(data_section, source_id)
+        .vertex(data_section, source_id)
         .with_context(|| format!("source vertex #{source_id} has no unique kernel StableId"))
 }
 
 fn topology_edge(
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     data_section: usize,
     source_id: u64,
 ) -> Result<KernelTopologyId> {
     provenance
-        .edge_for_source_id(data_section, source_id)
+        .edge(data_section, source_id)
         .with_context(|| format!("source edge #{source_id} has no unique kernel StableId"))
 }
 
 fn topology_edges(
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     data_section: usize,
     source_ids: impl IntoIterator<Item = u64>,
 ) -> Result<Vec<KernelTopologyId>> {
@@ -1810,12 +1697,12 @@ fn topology_edges(
 }
 
 fn topology_face(
-    provenance: &KernelTopologyProvenance,
+    provenance: &impl TreatmentTopology,
     data_section: usize,
     source_id: u64,
 ) -> Result<KernelTopologyId> {
     provenance
-        .face_for_source_id(data_section, source_id)
+        .face(data_section, source_id)
         .with_context(|| format!("source face #{source_id} has no unique kernel StableId"))
 }
 
@@ -2188,6 +2075,7 @@ mod tests {
             ],
             inferred_radius_mm: None,
             inferred_setbacks_mm: Some([0.5, 0.5]),
+            first_setback_carrier_normal: Some([1.0, 0.0, 0.0]),
             inferred_angle_rad: Some(std::f64::consts::FRAC_PI_4),
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Segment {
@@ -2418,6 +2306,7 @@ mod tests {
             ],
             inferred_radius_mm: Some(0.1),
             inferred_setbacks_mm: None,
+            first_setback_carrier_normal: None,
             inferred_angle_rad: None,
             carrier_angle_rad: std::f64::consts::FRAC_PI_2,
             virtual_edge: EdgeTreatmentVirtualEdge::Circle {

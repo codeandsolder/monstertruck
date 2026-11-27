@@ -39,10 +39,9 @@ use monstertruck_mesh::Origin;
 use monstertruck_mesh::PolylineCurve;
 #[cfg(feature = "tessellation")]
 use monstertruck_mesh::{
-    BoundedCurve, CurveParameter, ExactParameterBoundary2D, HashGen, Invertible,
-    ParameterBoundary2D, ParameterDivision1D, ParameterDivision2D, ParametricCurve2D,
-    ParametricCurve3D, ParametricSurface3D, Point2, SearchNearestParameter, SearchParameter,
-    SurfaceParameter, algo,
+    BoundedCurve, CurveParameter, ExactParameterBoundary2D, Invertible, ParameterBoundary2D,
+    ParameterDivision1D, ParameterDivision2D, ParametricCurve2D, ParametricCurve3D,
+    ParametricSurface3D, Point2, SearchNearestParameter, SearchParameter, SurfaceParameter, algo,
 };
 #[cfg(any(feature = "analyzers", feature = "filters"))]
 use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace, SquareMatrix};
@@ -67,6 +66,8 @@ mod common;
 /// Edits meshes. Add normals, optimizing data, and so on.
 #[cfg(feature = "filters")]
 pub mod filters;
+#[cfg(any(feature = "analyzers", feature = "tessellation"))]
+mod spatial_hierarchy;
 /// Tessellates shapes.
 #[cfg(feature = "tessellation")]
 pub mod tessellation;

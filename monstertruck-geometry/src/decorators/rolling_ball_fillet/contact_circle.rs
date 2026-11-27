@@ -27,27 +27,27 @@ impl<S: ParametricSurface3D + SearchParameter<SurfaceParameter, Point = Point3>>
 impl ContactCircle {
     /// center of the fillet circle
     #[inline]
-    #[must_use]
+    #[must_use = "The geometric center is returned; ignoring it discards the placement."]
     pub const fn center(self) -> Point3 { self.center }
     /// axis of the fillet circle
     #[inline]
-    #[must_use]
+    #[must_use = "The geometric axis is returned; ignoring it discards the orientation."]
     pub const fn axis(self) -> Vector3 { self.axis }
     /// angle of the fillet circle-arc
     #[inline]
-    #[must_use]
+    #[must_use = "The fillet arc angle is returned; ignoring it discards the angular extent."]
     pub const fn angle(self) -> Rad<f64> { self.angle }
     /// parameter of the edge curve
     #[inline]
-    #[must_use]
+    #[must_use = "The computed curve parameter quantity is reported through this return value."]
     pub const fn curve_parameter(self) -> f64 { self.t }
     /// contact point of the rolling ball and `surface0`.
     #[inline]
-    #[must_use]
+    #[must_use = "The contact point on the first surface is returned for fillet construction."]
     pub const fn contact_point0(self) -> ContactPoint { self.contact_point0 }
     /// contact point of the fillet circle and `surface1`.
     #[inline]
-    #[must_use]
+    #[must_use = "The contact point on the second surface is returned for fillet construction."]
     pub const fn contact_point1(self) -> ContactPoint { self.contact_point1 }
 
     pub(super) fn try_new(

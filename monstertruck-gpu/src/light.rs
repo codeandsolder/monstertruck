@@ -37,7 +37,7 @@ impl Light {
     /// };
     /// ```
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed `UNIFORM` buffer of light is returned rather than stored."]
     pub fn buffer(&self, device: &Device) -> BufferHandler {
         BufferHandler::from_slice(&[self.light_info()], device, BufferUsages::UNIFORM)
     }

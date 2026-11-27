@@ -1414,7 +1414,7 @@ pub fn normalize_shell_orientation<P, C, S>(
 /// Trimmed variant of [`normalize_shell_orientation`]. Flipping is a face
 /// orientation flag; the absolute-boundary trim layout is unaffected, so the
 /// stored trims stay valid.
-#[must_use]
+#[must_use = "use both the normalized trimmed shell and its orientation report"]
 pub fn normalize_trimmed_shell_orientation<P: Clone, C: Clone, S: Clone, T: Clone>(
     shell: TrimmedShell<P, C, S, T>,
 ) -> (TrimmedShell<P, C, S, T>, OrientationNormalization) {

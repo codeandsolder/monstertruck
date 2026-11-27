@@ -101,7 +101,7 @@ impl LossCategory {
     ];
 
     /// Lower-case singular noun, for messages.
-    #[must_use]
+    #[must_use = "The noun accessor exposes its value only through the returned reference."]
     pub const fn noun(self) -> &'static str {
         match self {
             Self::Face => "face",
@@ -116,7 +116,7 @@ impl LossCategory {
 
     /// Lower-case plural noun. Spelled out rather than `noun() + "s"` because
     /// "vertexs" in a diagnostic reads as a bug in the diagnostic.
-    #[must_use]
+    #[must_use = "The plural accessor exposes its value only through the returned reference."]
     pub const fn plural(self) -> &'static str {
         match self {
             Self::Face => "faces",
@@ -212,7 +212,7 @@ pub enum LossReason {
 
 impl LossReason {
     /// One-line explanation, for messages.
-    #[must_use]
+    #[must_use = "The description accessor exposes its value only through the returned reference."]
     pub const fn description(self) -> &'static str {
         match self {
             Self::FaceUnresolved => "the shell's face reference resolves to no face record",
@@ -278,7 +278,7 @@ pub struct CategoryCount {
 
 impl CategoryCount {
     /// `listed - kept`, saturating (they cannot legitimately invert).
-    #[must_use]
+    #[must_use = "The computed lost quantity is reported through this return value."]
     pub const fn lost(&self) -> usize { self.listed.saturating_sub(self.kept) }
 }
 
@@ -302,24 +302,24 @@ pub struct ShellLoadReport {
 
 impl ShellLoadReport {
     /// Listed/kept for one category.
-    #[must_use]
+    #[must_use = "The category count is returned to the reporting caller."]
     pub fn count(&self, category: LossCategory) -> CategoryCount {
         self.counts.get(&category).copied().unwrap_or_default()
     }
 
     /// How many items of `category` were lost.
-    #[must_use]
+    #[must_use = "The computed lost quantity is reported through this return value."]
     pub fn lost(&self, category: LossCategory) -> usize { self.count(category).lost() }
 
     /// How many items were lost across every category.
-    #[must_use]
+    #[must_use = "The computed total lost quantity is reported through this return value."]
     pub fn total_lost(&self) -> usize { LossCategory::ALL.iter().map(|c| self.lost(*c)).sum() }
 
     /// Did this conversion keep every single thing the STEP data listed?
     ///
     /// Note what this does NOT claim: a lossless conversion can still be
     /// geometrically wrong. It claims only that nothing silently vanished.
-    #[must_use]
+    #[must_use = "The returned boolean indicates whether the conversion lost source geometry."]
     pub fn is_lossless(&self) -> bool { self.total_lost() == 0 }
 
     /// Every (category, reason) that fired, in [`LossCategory::ALL`] order then
@@ -331,7 +331,7 @@ impl ShellLoadReport {
     }
 
     /// The tally for one (category, reason) pair; zeroed when it never fired.
-    #[must_use]
+    #[must_use = "The returned tally distinguishes observed losses from zero occurrences."]
     pub fn tally(&self, category: LossCategory, reason: LossReason) -> LossTally {
         self.reasons
             .get(&(category, reason))
@@ -340,7 +340,7 @@ impl ShellLoadReport {
     }
 
     /// How many items were lost for `reason`, across all categories.
-    #[must_use]
+    #[must_use = "The computed lost for quantity is reported through this return value."]
     pub fn lost_for(&self, reason: LossReason) -> usize {
         self.reasons
             .iter()
@@ -473,19 +473,19 @@ pub struct EntityLoadReport {
 
 impl EntityLoadReport {
     /// Did the table-building pass swallow nothing at all?
-    #[must_use]
+    #[must_use = "The boolean result of `is_empty` must be observed to use the predicate."]
     pub fn is_empty(&self) -> bool { self.total() == 0 }
 
     /// How many records were swallowed, both kinds together.
-    #[must_use]
+    #[must_use = "The computed total quantity is reported through this return value."]
     pub fn total(&self) -> usize { self.total_refused() + self.total_shape_unexpected() }
 
     /// How many records had a typed `Deserialize` refusal.
-    #[must_use]
+    #[must_use = "The computed total refused quantity is reported through this return value."]
     pub fn total_refused(&self) -> usize { self.refused.values().map(|t| t.count).sum() }
 
     /// How many records vanished in an arity-guarded arm with no `else`.
-    #[must_use]
+    #[must_use = "The computed total shape unexpected quantity is reported through this return value."]
     pub fn total_shape_unexpected(&self) -> usize {
         self.shape_unexpected.values().map(|t| t.count).sum()
     }
@@ -508,7 +508,7 @@ impl EntityLoadReport {
     }
 
     /// How many records of exactly this entity type were swallowed, either way.
-    #[must_use]
+    #[must_use = "The computed swallowed of quantity is reported through this return value."]
     pub fn swallowed_of(&self, entity_type: &str) -> usize {
         self.refused.get(entity_type).map_or(0, |t| t.count)
             + self

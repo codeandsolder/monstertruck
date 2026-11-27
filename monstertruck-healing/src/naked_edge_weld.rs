@@ -107,7 +107,7 @@ pub struct SnapReport {
 
 impl SnapReport {
     /// Whether the weld changed the shell.
-    #[must_use]
+    #[must_use = "check the report before assuming that a weld changed the shell"]
     pub const fn changed(&self) -> bool { self.merged_vertices > 0 || self.merged_edges > 0 }
 
     fn unchanged<P, C, S>(

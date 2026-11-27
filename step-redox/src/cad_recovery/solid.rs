@@ -1127,7 +1127,7 @@ fn recovered_extrusion_profile_loops(
     Profile2d { loops }
 }
 
-fn recovered_profile_curve_to_ir(curve: &RecoveredProfileCurve) -> Curve2d {
+pub(super) fn recovered_profile_curve_to_ir(curve: &RecoveredProfileCurve) -> Curve2d {
     match curve {
         RecoveredProfileCurve::Line {
             start_mm, end_mm, ..
@@ -1442,7 +1442,7 @@ fn angle_on_sweep(angle: f64, start: f64, end: f64) -> bool {
     }
 }
 
-const fn local_frame_transform(
+pub(super) const fn local_frame_transform(
     origin: [f64; 3],
     x_axis: [f64; 3],
     y_axis: [f64; 3],
@@ -1466,6 +1466,27 @@ fn normalize3(vector: [f64; 3]) -> Result<[f64; 3]> {
         bail!("cannot normalize zero or non-finite CAD frame vector");
     }
     Ok([vector[0] / length, vector[1] / length, vector[2] / length])
+}
+
+/// Form a source-derived analytic profile prism in its local orthonormal frame.
+pub(super) fn extrude_profile_in_frame(
+    model: &mut CadModel,
+    profile: Vec<Curve2d>,
+    height: f64,
+    origin: [f64; 3],
+    axes: [[f64; 3]; 3],
+) -> crate::cad_ir::NodeId {
+    let body = model.add_node(CadNode::Extrude {
+        profile: Profile2d {
+            loops: vec![ProfileLoop { curves: profile }],
+        },
+        vector_mm: [0.0, 0.0, height],
+    });
+    let [x, y, z] = axes;
+    model.add_node(CadNode::Transform {
+        child: body,
+        transform: local_frame_transform(origin, x, y, z),
+    })
 }
 
 #[cfg(test)]

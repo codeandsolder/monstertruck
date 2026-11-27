@@ -785,7 +785,7 @@ impl Table {
         }
     }
 
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub fn from_data_section(data_section: &DataSection) -> Self {
         Self::from_iter(&data_section.entities)
     }

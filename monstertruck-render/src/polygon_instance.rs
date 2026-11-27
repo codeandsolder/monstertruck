@@ -12,7 +12,7 @@ use crate::{
 impl PolygonInstance {
     /// Clone the instance as another drawn element.
     #[inline]
-    #[must_use]
+    #[must_use = "The cloned instance is returned; the original remains unchanged."]
     pub fn clone_instance(&self) -> Self {
         Self {
             polygon: self.polygon.clone(),
@@ -23,7 +23,7 @@ impl PolygonInstance {
     }
     /// Returns a reference to the instance descriptor.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards a reference to the instance descriptor."]
     pub const fn instance_state(&self) -> &PolygonState { &self.state }
     /// Returns the mutable reference to instance descriptor.
     #[inline]

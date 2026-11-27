@@ -1,0 +1,64 @@
+name: OCCT WASM validation bindings
+
+on:
+  pull_request:
+    paths:
+      - step-redox/tools/occt-wasm-validator/**
+      - step-redox/validation/fixtures.json
+      - step-redox/validation/fixtures/bundled/**
+      - .github/workflows/occt-wasm-validation-bindings.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: occt-wasm-validation-bindings-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: External crate release-age quarantine
+        if: github.event_name == 'pull_request'
+        uses: codeandsolder/ci-workflows/.github/actions/cargo-release-quarantine@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main
+        with:
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          lockfile: step-redox/tools/occt-wasm-validator/Cargo.lock
+          hours: "72"
+      - name: Resolve the repository compiler
+        run: rustup show active-toolchain
+      - name: Setup mandatory sccache
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main
+        with:
+          repository-path: step-redox/tools/occt-wasm-validator
+          cache-scope: occt-wasm-validation-bindings
+      - name: Exercise the fork's embedded kernel directly
+        run: cargo test --locked --release --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator"
+      - name: Lint the standalone validator
+        run: cargo clippy --locked --release --all-targets --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator" -- -D warnings
+      - name: Build the independently runnable validator
+        run: cargo build --locked --release --manifest-path step-redox/tools/occt-wasm-validator/Cargo.toml --target-dir "$RUNNER_TEMP/occt-validator"
+      - name: Verify real bundled fixtures and manifest-to-render execution
+        run: |
+          set -euo pipefail
+          validator="$RUNNER_TEMP/occt-validator/release/step-redox-occt-wasm-validator"
+          "$validator" fetch-fixtures --manifest step-redox/validation/fixtures.json --cache "$RUNNER_TEMP/step-fixtures" --case compact_header_2x24 --case compact_te_3_353293_4
+          jq '.cases = [.cases[] | select(.name == "compact_te_3_353293_4") | .command = ["{step_redox}", "{input}", "{output}"]]' step-redox/validation/fixtures.json > "$RUNNER_TEMP/smoke-manifest.json"
+          "$validator" run --manifest "$RUNNER_TEMP/smoke-manifest.json" --cache "$RUNNER_TEMP/step-fixtures" --out "$RUNNER_TEMP/step-compare" --step-redox /bin/cp
+          jq -e 'length == 1 and .[0].pass and (.[0].comparison.renders | length == 8)' "$RUNNER_TEMP/step-compare/report.json"
+      - name: Retain the qualified validator for fixture differential testing
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: occt-wasm-validator-linux
+          path: ${{ runner.temp }}/occt-validator/release/step-redox-occt-wasm-validator
+          retention-days: 1
+          if-no-files-found: error
+      - name: Finalize mandatory sccache
+        if: always()
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@4c7fc62a9f9ec37aaa7c155d263cd5025e446a53 # main

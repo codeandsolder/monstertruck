@@ -105,11 +105,11 @@ impl PolygonMesh {
     }
     /// Creates the bounding box of the polygon mesh.
     #[inline]
-    #[must_use]
+    #[must_use = "The constructed bounding box of the polygon mesh is returned rather than stored."]
     pub fn bounding_box(&self) -> BoundingBox<Point3> { self.positions().iter().collect() }
     /// Returns a polygon mesh with only positions information.
     #[inline]
-    #[must_use]
+    #[must_use = "The converted representation is returned; ignoring it discards the conversion."]
     pub fn to_positions_mesh(&self) -> PolygonMesh<usize, Vec<Point3>> {
         let faces = self.faces();
         let tri_faces = faces
@@ -160,7 +160,7 @@ impl Invertible for PolygonMesh {
 impl PolygonMesh {
     /// Returns the vector of all positions.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of all positions."]
     pub const fn positions(&self) -> &[Point3] { self.attributes.positions.as_slice() }
 
     /// Returns the mutable slice of all positions.
@@ -179,7 +179,7 @@ impl PolygonMesh {
 
     /// Returns the vector of all uv (texture) coordinates.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of all uv (texture) coordinates."]
     pub const fn uv_coords(&self) -> &[Vector2] { self.attributes.uv_coords.as_slice() }
 
     /// Returns the mutable slice of all uv (texture) coordinates.
@@ -198,7 +198,7 @@ impl PolygonMesh {
 
     /// Returns the vector of all normals.
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the vector of all normals."]
     pub const fn normals(&self) -> &[Vector3] { self.attributes.normals.as_slice() }
 
     /// Returns the mutable slice of all normals.

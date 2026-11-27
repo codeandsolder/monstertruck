@@ -17,7 +17,7 @@ pub struct CadModel {
 }
 
 impl CadModel {
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -285,7 +285,7 @@ pub enum CadNode {
 }
 
 impl CadNode {
-    #[must_use]
+    #[must_use = "The computed children collection is returned and must be retained or inspected."]
     pub fn children(&self) -> Vec<NodeId> {
         match self {
             Self::Boolean { children, .. } | Self::Assembly { children } => children.clone(),
@@ -428,12 +428,26 @@ impl Profile2d {
             .sum()
     }
 
-    #[must_use]
+    #[must_use = "The optional single polygon points outcome must be inspected to distinguish a value from absence."]
     pub fn single_polygon_points(&self) -> Option<Vec<[f64; 2]>> {
         if self.loops.len() != 1 {
             return None;
         }
-        let curves = &self.loops[0].curves;
+        self.loops[0].polygon_points()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProfileLoop {
+    pub curves: Vec<Curve2d>,
+}
+
+impl ProfileLoop {
+    /// Closed polygon in the authored correspondence order. Repeated
+    /// consecutive points are meaningful only to a ruled loft.
+    #[must_use = "The optional polygon points outcome must be inspected to distinguish a value from absence."]
+    pub fn polygon_points(&self) -> Option<Vec<[f64; 2]>> {
+        let curves = &self.curves;
         if curves.len() < 3 {
             return None;
         }
@@ -458,11 +472,6 @@ impl Profile2d {
         }
         Some(points)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ProfileLoop {
-    pub curves: Vec<Curve2d>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -588,7 +597,14 @@ pub enum BooleanOp {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub enum EdgeTreatmentProfile {
     Round,
+    /// Equal transverse setback on both planar carriers (not rolling radius).
     Chamfer,
+    /// Unequal planar setbacks, with the first dimension attached to its
+    /// unoriented carrier normal. Edge `radius_mm` specifies the first setback.
+    CarrierChamfer {
+        first_carrier_normal: [f64; 3],
+        second_setback_mm: f64,
+    },
     AsymmetricChamfer {
         first_setback_mm: f64,
         second_setback_mm: f64,
@@ -597,6 +613,18 @@ pub enum EdgeTreatmentProfile {
 
 impl EdgeTreatmentProfile {
     fn validate(self) -> Result<()> {
+        if let Self::CarrierChamfer {
+            first_carrier_normal,
+            second_setback_mm,
+        } = self
+            && (!second_setback_mm.is_finite()
+                || second_setback_mm <= 0.0
+                || !first_carrier_normal.iter().all(|x| x.is_finite())
+                || (crate::math3::norm(first_carrier_normal) - 1.0).abs()
+                    > DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit)
+        {
+            bail!("invalid carrier-bound chamfer dimensions or normal");
+        }
         if let Self::AsymmetricChamfer {
             first_setback_mm,
             second_setback_mm,
@@ -615,6 +643,7 @@ impl EdgeTreatmentProfile {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EdgeTreatmentEdge {
     pub selector: EdgeSelector,
+    /// Rolling radius for rounds; first physical setback for planar chamfers.
     pub radius_mm: f64,
 }
 
@@ -638,6 +667,16 @@ pub enum EdgeSelector {
         normal: [f64; 3],
         radius_mm: f64,
     },
+    /// A proper circular arc directed positively around `normal`, from
+    /// `start_mm` through `sweep_rad` (strictly between zero and one turn).
+    /// The entire selected chain must be present, possibly split into edges.
+    CircleArc {
+        center_mm: [f64; 3],
+        normal: [f64; 3],
+        radius_mm: f64,
+        start_mm: [f64; 3],
+        sweep_rad: f64,
+    },
 }
 
 impl EdgeSelector {
@@ -660,6 +699,38 @@ impl EdgeSelector {
                     <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_identity_zero_norm_squared
                 {
                     bail!("edge selector segment must have nonzero length");
+                }
+            }
+            Self::CircleArc {
+                center_mm,
+                normal,
+                radius_mm,
+                start_mm,
+                sweep_rad,
+            } => {
+                Self::Circle {
+                    center_mm: *center_mm,
+                    normal: *normal,
+                    radius_mm: *radius_mm,
+                }
+                .validate()?;
+                let unit = crate::math3::normalize(
+                    *normal,
+                    DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit,
+                )
+                .ok_or_else(|| anyhow::anyhow!("edge selector arc normal is invalid"))?;
+                let offset = crate::math3::sub(*start_mm, *center_mm);
+                let tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_edge_selector_mm;
+                if !start_mm.iter().all(|v| v.is_finite())
+                    || *radius_mm <= tolerance
+                    || !sweep_rad.is_finite()
+                    || *sweep_rad <= 0.0
+                    || *sweep_rad >= std::f64::consts::TAU
+                    || crate::math3::dot(offset, unit).abs() > tolerance
+                    || (crate::math3::norm(offset) - *radius_mm).abs() > tolerance
+                    || radius_mm * sweep_rad.min(std::f64::consts::TAU - sweep_rad) <= tolerance
+                {
+                    bail!("edge selector arc must be a finite proper bounded circle arc");
                 }
             }
             Self::Circle {
@@ -696,7 +767,7 @@ pub struct RigidTransform {
 }
 
 impl RigidTransform {
-    #[must_use]
+    #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
     pub const fn identity() -> Self {
         Self {
             matrix: [
@@ -708,7 +779,7 @@ impl RigidTransform {
         }
     }
 
-    #[must_use]
+    #[must_use = "The translation transform in millimeters is returned rather than applied to geometry."]
     pub const fn translation_mm(xyz: [f64; 3]) -> Self {
         let mut result = Self::identity();
         result.matrix[0][3] = xyz[0];
@@ -1222,6 +1293,31 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn bounded_circle_edge_selector_requires_proper_finite_geometry() {
+        let arc = |start_mm, sweep_rad| EdgeSelector::CircleArc {
+            center_mm: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+            radius_mm: 2.0,
+            start_mm,
+            sweep_rad,
+        };
+        assert!(
+            arc([2.0, 0.0, 0.0], std::f64::consts::PI)
+                .validate()
+                .is_ok()
+        );
+        for selector in [
+            arc([0.0; 3], 1.0),
+            arc([2.0, 0.0, 0.1], 1.0),
+            arc([2.0, 0.0, 0.0], 0.0),
+            arc([2.0, 0.0, 0.0], std::f64::consts::TAU),
+            arc([2.0, 0.0, 0.0], f64::NAN),
+        ] {
+            assert!(selector.validate().is_err());
+        }
     }
 
     #[test]

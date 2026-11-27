@@ -23,7 +23,7 @@ impl Default for WireFrameState {
 impl WireFrameInstance {
     /// Clone the instance as another drawn element.
     #[inline]
-    #[must_use]
+    #[must_use = "The cloned instance is returned; the original remains unchanged."]
     pub fn clone_instance(&self) -> Self {
         Self {
             vertices: Arc::clone(&self.vertices),
@@ -35,7 +35,7 @@ impl WireFrameInstance {
     }
     /// Returns the wireframe state
     #[inline]
-    #[must_use]
+    #[must_use = "Ignoring this result discards the wireframe state."]
     pub const fn instance_state(&self) -> &WireFrameState { &self.state }
     /// Returns the mutable reference to wireframe state
     #[inline]

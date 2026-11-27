@@ -10,12 +10,14 @@ use super::loops_store::{
     certified_circular_cylinder, common_circular_extrusion_cylinder, common_ruled_extrusion_strip,
 };
 use super::tolerance::BooleanTolerance;
-use super::weld::{node_selected_regions, point_lex_cmp};
+use super::weld::{
+    certified_alt_curve_box, node_selected_regions, point_inside_padded_box, point_lex_cmp,
+};
 use super::{AltCurve, AltRegion, ShapeOpsCurve, ShapeOpsSurface};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::*;
 use monstertruck_meshing::prelude::PolylineCurve;
-use monstertruck_topology::{Edge, EdgeId, VertexId, Wire};
+use monstertruck_topology::{Edge, EdgeId, Face, Shell, VertexId, Wire};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::BTreeSet;
 
@@ -332,38 +334,13 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 ) -> Option<Point3> {
     let lhs_curve = lhs.edge.oriented_curve();
     let rhs_curve = rhs.edge.oriented_curve();
-    let (lhs_min, lhs_max) = lhs_curve.range_tuple();
-    let (rhs_min, rhs_max) = rhs_curve.range_tuple();
-    let mut lhs_parameter = lhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    let mut rhs_parameter = rhs_curve.search_nearest_parameter(approximate, None, 100)?;
-    for _ in 0..32 {
-        let (lhs_point, rhs_point) = (
-            lhs_curve.evaluate(lhs_parameter),
-            rhs_curve.evaluate(rhs_parameter),
-        );
-        let gap = lhs_point - rhs_point;
-        if gap.magnitude() <= tol {
-            return Some(lhs_point.midpoint(rhs_point));
-        }
-        let (lhs_derivative, rhs_derivative) = (
-            lhs_curve.derivative(lhs_parameter),
-            rhs_curve.derivative(rhs_parameter),
-        );
-        let diagonal0 = lhs_derivative.dot(lhs_derivative);
-        let diagonal1 = rhs_derivative.dot(rhs_derivative);
-        let mixed = -lhs_derivative.dot(rhs_derivative);
-        let determinant = diagonal0.mul_add(diagonal1, -(mixed * mixed));
-        if !determinant.is_finite() || determinant <= f64::EPSILON * diagonal0 * diagonal1 {
-            return None;
-        }
-        let gradient0 = -lhs_derivative.dot(gap);
-        let gradient1 = rhs_derivative.dot(gap);
-        let step0 = gradient0.mul_add(diagonal1, -(gradient1 * mixed)) / determinant;
-        let step1 = diagonal0.mul_add(gradient1, -(mixed * gradient0)) / determinant;
-        lhs_parameter = (lhs_parameter + step0).clamp(lhs_min, lhs_max);
-        rhs_parameter = (rhs_parameter + step1).clamp(rhs_min, rhs_max);
-    }
-    None
+    let seeds = [
+        lhs_curve.search_nearest_parameter(approximate, None, 100)?,
+        rhs_curve.search_nearest_parameter(approximate, None, 100)?,
+    ];
+    let [u, v] = super::curve_refinement::crossing_parameters(&lhs_curve, &rhs_curve, seeds)?;
+    let (a, b) = (lhs_curve.evaluate(u), rhs_curve.evaluate(v));
+    (a.distance(b) <= tol).then(|| a.midpoint(b))
 }
 
 /// Gather real curve intersections and existing endpoints lying in another
@@ -373,15 +350,55 @@ fn exact_node_points<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     arrangement: &PlanarArrangement<C, S>,
     tol: f64,
 ) -> Option<Vec<Point3>> {
+    let tolerances = BooleanTolerance::new(tol);
+    // Cache exact spatial enclosures before the pairwise search. The
+    // tessellated UV traces alone are not exclusion evidence.
+    let bounds: Vec<_> = arrangement
+        .edges
+        .iter()
+        .map(|edge| {
+            let mut bounds = certified_alt_curve_box(&edge.edge.oriented_curve(), tolerances)?;
+            bounds.push(edge.edge.front().point());
+            bounds.push(edge.edge.back().point());
+            Some(bounds)
+        })
+        .collect();
+    let pad = DEFAULT_NUMERICAL_TOLERANCES.boolean_weld_projection_factor * tol;
     let mut nodes = Vec::<Point3>::new();
     for (index, lhs) in arrangement.edges.iter().enumerate() {
-        for rhs in arrangement.edges.iter().skip(index + 1) {
-            for (point, curve) in [
-                (lhs.edge.front().point(), rhs.edge.oriented_curve()),
-                (lhs.edge.back().point(), rhs.edge.oriented_curve()),
-                (rhs.edge.front().point(), lhs.edge.oriented_curve()),
-                (rhs.edge.back().point(), lhs.edge.oriented_curve()),
+        for (other, rhs) in arrangement.edges.iter().enumerate().skip(index + 1) {
+            if let (Some(a), Some(b)) = (bounds[index], bounds[other])
+                && (0..3).any(|axis| {
+                    a.max()[axis] + pad < b.min()[axis] || b.max()[axis] + pad < a.min()[axis]
+                })
+            {
+                continue;
+            }
+            for (point, curve, enclosure) in [
+                (
+                    lhs.edge.front().point(),
+                    rhs.edge.oriented_curve(),
+                    bounds[other],
+                ),
+                (
+                    lhs.edge.back().point(),
+                    rhs.edge.oriented_curve(),
+                    bounds[other],
+                ),
+                (
+                    rhs.edge.front().point(),
+                    lhs.edge.oriented_curve(),
+                    bounds[index],
+                ),
+                (
+                    rhs.edge.back().point(),
+                    lhs.edge.oriented_curve(),
+                    bounds[index],
+                ),
             ] {
+                if enclosure.is_some_and(|b| !point_inside_padded_box(b, point, pad)) {
+                    continue;
+                }
                 let on_curve = curve
                     .search_parameter(point, None, 100)
                     .or_else(|| curve.search_nearest_parameter(point, None, 100))
@@ -783,13 +800,6 @@ fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some(boundary)
 }
 
-fn selected_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-) -> Option<Vec<ProjectedEdge<AltCurve<C, S>>>> {
-    selected_boundary_with(arrangement, |point| covered(&arrangement.polygons, point))
-        .filter(|boundary| !boundary.is_empty())
-}
-
 /// Reconstruct exact-edge loops by choosing clockwise exits at junctions.
 fn trace_boundary<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     mut boundary: Vec<ProjectedEdge<AltCurve<C, S>>>,
@@ -894,25 +904,19 @@ fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })
 }
 
-fn validates_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    arrangement: &PlanarArrangement<C, S>,
-    loops: &[OverlayLoop<C, S>],
-) -> bool {
-    validates_occupancy_with(arrangement, loops, |point| {
-        covered(&arrangement.polygons, point)
-    })
-}
-
-fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
-    loops: Vec<OverlayLoop<C, S>>,
-    reference: &AltRegion<C, S>,
-    surface: &S,
-) -> Option<Vec<AltRegion<C, S>>> {
-    let mut outer = Vec::<(Vec<Wire<Point3, AltCurve<C, S>>>, Vec<Point2>)>::new();
+/// Group positive contours with their innermost containing negative contours.
+fn group_planar_contours<W>(
+    loops: impl IntoIterator<Item = (W, Vec<Point2>)>,
+) -> Option<Vec<Vec<W>>> {
+    let mut outer = Vec::new();
     let mut holes = Vec::new();
     for (wire, poly) in loops {
-        if signed_area(&poly) > 0.0 {
-            outer.push((vec![wire], poly));
+        let area = signed_area(&poly);
+        if !area.is_finite() || area == 0.0 {
+            return None;
+        }
+        if area > 0.0 {
+            outer.push((vec![wire], poly, area));
         } else {
             holes.push((wire, poly));
         }
@@ -922,16 +926,24 @@ fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let parent = outer
             .iter()
             .enumerate()
-            .filter(|(_, (_, poly))| winding(poly, point) != 0)
-            .min_by(|(_, lhs), (_, rhs)| signed_area(&lhs.1).total_cmp(&signed_area(&rhs.1)))
+            .filter(|(_, (_, poly, _))| winding(poly, point) != 0)
+            .min_by(|(_, lhs), (_, rhs)| lhs.2.total_cmp(&rhs.2))
             .map(|(index, _)| index)?;
         outer[parent].0.push(hole);
     }
+    Some(outer.into_iter().map(|(wires, _, _)| wires).collect())
+}
+
+fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    loops: Vec<OverlayLoop<C, S>>,
+    reference: &AltRegion<C, S>,
+    surface: &S,
+) -> Option<Vec<AltRegion<C, S>>> {
     Some(
-        outer
+        group_planar_contours(loops)?
             .into_iter()
             .enumerate()
-            .map(|(key, (wires, _))| {
+            .map(|(key, wires)| {
                 BooleanRegion::new(
                     wires,
                     surface.clone(),
@@ -944,36 +956,152 @@ fn assemble_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     )
 }
 
+/// A topologically materializable planar region can still contain several
+/// disconnected positive contours. `Face::new` validates wires, not their
+/// planar nesting. Keep each exterior with its own holes before producing
+/// the final B-rep. This does not split or approximate any original curve.
+pub(super) fn split_disconnected_planar_region<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    region: &AltRegion<C, S>,
+    tol: f64,
+) -> Option<Vec<AltRegion<C, S>>> {
+    let surface = region.surface();
+    let groups = split_disconnected_planar_wires(region.absolute_boundaries(), &surface, tol)?;
+    let parts = groups
+        .into_iter()
+        .map(|wires| {
+            BooleanRegion::new(
+                wires,
+                surface.clone(),
+                region.orientation(),
+                region.key(),
+                region.source_face(),
+            )
+        })
+        .collect::<Vec<_>>();
+    parts
+        .iter()
+        .all(|part| part.try_face().is_some())
+        .then_some(parts)
+}
+
+fn split_disconnected_planar_wires<C, S>(
+    boundaries: &[Wire<Point3, C>],
+    surface: &S,
+    tol: f64,
+) -> Option<Vec<Vec<Wire<Point3, C>>>>
+where
+    C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3> + Clone,
+    S: ShapeOpsSurface,
+{
+    if boundaries.len() < 2
+        || !matches!(
+            surface.try_into_analytic_surface_kind(),
+            Some(AnalyticSurfaceKind::Plane(_))
+        )
+    {
+        return None;
+    }
+    let mut samples = HashMap::default();
+    let loops = boundaries
+        .iter()
+        .map(|wire| {
+            let mut poly =
+                create_parameter_boundary_on_surface(surface, wire, None, &mut samples, tol)?.0;
+            reconcile_local_wire_uv_closure(surface, None, wire.front_vertex()?.point(), &mut poly);
+            Some((wire.clone(), poly))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let groups = group_planar_contours(loops)?;
+    (groups.len() > 1).then_some(groups)
+}
+
+/// Conversion and global topology repair can resolve an intermediate
+/// self-touching walk into multiple positive exterior wires. Reapply the
+/// same normalization to the final exact curves, after those repairs.
+pub(super) fn split_disconnected_planar_faces<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    shell: &Shell<Point3, C, S>,
+    tol: f64,
+) -> Shell<Point3, C, S> {
+    let mut faces = Vec::new();
+    for face in shell {
+        let surface = face.surface();
+        let parts = split_disconnected_planar_wires(face.absolute_boundaries(), &surface, tol)
+            .and_then(|groups| {
+                groups
+                    .into_iter()
+                    .map(|wires| {
+                        let mut part = Face::new(wires, surface.clone()).ok()?;
+                        if !face.orientation() {
+                            part.invert();
+                        }
+                        Some(part)
+                    })
+                    .collect::<Option<Vec<_>>>()
+            });
+        if let Some(parts) = parts {
+            faces.extend(parts);
+        } else {
+            faces.push(face.clone());
+        }
+    }
+    Shell::from(faces)
+}
+
 /// Union one source face's selected patches without changing exact edge curves.
-fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub(super) fn overlay_one_source<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     source: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
+    let regions = overlay_occupancy(source, tol, false, covered)?;
+    (!regions.is_empty()).then_some(regions)
+}
+
+/// Select bounded cells from a shared exact-curve arrangement. The caller
+/// supplies occupancy over the ordered input regions; noding and validation
+/// are independent of the material operation.
+fn overlay_occupancy<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    certified_curved: bool,
+    select: impl Fn(&[Vec<Vec<Point2>>], Point2) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
     let reference = source.first()?;
-    // Separate STEP faces may encode coincident curves with independent IDs.
-    // Canonicalize their exact geometric edge identities before computing
-    // occupancy; otherwise two independently encoded copies would be emitted
-    // as two exterior boundaries rather than one filled face.
-    let canonical_regions = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical_regions, tol, false)?;
+    let canonical = node_selected_regions(source, &[], BooleanTolerance::new(tol))?;
+    let initial = project_source(&canonical, tol, certified_curved)?;
     let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
         let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical_regions, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, false)?
+        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
+        project_source(&noded, tol, certified_curved)?
     } else {
         initial
     };
-    let boundary = selected_boundary(&arrangement)?;
-    // Crossings between edges entirely inside the union do not affect the
-    // extracted boundary. Reject only unresolved noding on surviving edges.
+    let membership = |point| select(&arrangement.polygons, point);
+    let boundary = selected_boundary_with(&arrangement, membership)?;
     if needs_exact_noding(&boundary, arrangement.span, tol) {
         return None;
     }
+    if boundary.is_empty() {
+        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
+    }
     let loops = trace_boundary(boundary)?;
-    if !validates_occupancy(&arrangement, &loops) {
+    if !validates_occupancy_with(&arrangement, &loops, membership) {
         return None;
     }
     assemble_regions(loops, reference, &arrangement.surface)
+}
+
+pub(super) fn overlay_profile_selection<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    source: &[AltRegion<C, S>],
+    tol: f64,
+    select: impl Fn(&[bool]) -> bool,
+) -> Option<Vec<AltRegion<C, S>>> {
+    overlay_occupancy(source, tol, false, |polygons, point| {
+        let occupied = polygons
+            .iter()
+            .map(|region| covered(std::slice::from_ref(region), point))
+            .collect::<Vec<_>>();
+        select(&occupied)
+    })
 }
 
 /// Verify coplanarity over the actual trimmed geometry, not just at a plane
@@ -1176,38 +1304,16 @@ pub(super) fn overlay_source_regions<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 /// Exact positive-minus-cutter occupancy on a certified common surface
 /// chart (planar or algebraically shared rational ruled). Operands can be independently parameterized or have
 /// partial edge overlaps. Intersections become shared exact curve nodes.
-fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+pub(super) fn overlay_planar_subtract<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     positive: &[AltRegion<C, S>],
     cutter: &[AltRegion<C, S>],
     tol: f64,
 ) -> Option<Vec<AltRegion<C, S>>> {
     let joined = positive.iter().chain(cutter).cloned().collect::<Vec<_>>();
-    let canonical = node_selected_regions(&joined, &[], BooleanTolerance::new(tol))?;
-    let initial = project_source(&canonical, tol, true)?;
-    let arrangement = if needs_exact_noding(&initial.edges, initial.span, tol) {
-        let points = exact_node_points(&initial, tol)?;
-        let noded = node_selected_regions(&canonical, &points, BooleanTolerance::new(tol))?;
-        project_source(&noded, tol, true)?
-    } else {
-        initial
-    };
     let positive_count = positive.len();
-    let membership = |point| {
-        covered(&arrangement.polygons[..positive_count], point)
-            && !covered(&arrangement.polygons[positive_count..], point)
-    };
-    let boundary = selected_boundary_with(&arrangement, membership)?;
-    if needs_exact_noding(&boundary, arrangement.span, tol) {
-        return None;
-    }
-    if boundary.is_empty() {
-        return validates_occupancy_with(&arrangement, &[], membership).then_some(Vec::new());
-    }
-    let loops = trace_boundary(boundary)?;
-    if !validates_occupancy_with(&arrangement, &loops, membership) {
-        return None;
-    }
-    assemble_regions(loops, &positive[0], &arrangement.surface)
+    overlay_occupancy(&joined, tol, true, |polygons, point| {
+        covered(&polygons[..positive_count], point) && !covered(&polygons[positive_count..], point)
+    })
 }
 
 /// Remove selected cutter patches that share a plane and *original outward
@@ -1384,6 +1490,72 @@ mod tests {
                 source_face,
             )
         }
+    }
+
+    #[test]
+    fn disconnected_planar_region_preserves_each_positive_island_and_its_holes() {
+        let mut fixture = PlanarFixture::new(&[
+            [0.0, 0.0],
+            [4.0, 0.0],
+            [4.0, 4.0],
+            [0.0, 4.0],
+            [6.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 4.0],
+            [6.0, 4.0],
+            [1.0, 1.0],
+            [1.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 1.0],
+            [7.0, 1.0],
+            [7.0, 3.0],
+            [9.0, 3.0],
+            [9.0, 1.0],
+        ]);
+        let wires = [
+            &[0, 1, 2, 3, 0][..],
+            &[4, 5, 6, 7, 4][..],
+            &[8, 9, 10, 11, 8][..],
+            &[12, 13, 14, 15, 12][..],
+        ]
+        .iter()
+        .map(|path| fixture.region(path).absolute_boundaries()[0].clone())
+        .collect::<Vec<_>>();
+        let region = BooleanRegion::new(wires.clone(), Surface::Plane(Plane::xy()), false, 0, 1);
+        assert!(
+            region.try_face().is_some(),
+            "topological constructor accepts multiple exterior contours"
+        );
+        let parts = split_disconnected_planar_region(&region, 1e-6).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(
+            parts
+                .iter()
+                .all(|part| part.absolute_boundaries().len() == 2 && !part.orientation())
+        );
+        let mut original_ids = wires
+            .iter()
+            .flat_map(|wire| wire.iter().map(Edge::id))
+            .collect::<Vec<_>>();
+        let mut output_ids = parts
+            .iter()
+            .flat_map(|part| part.absolute_boundaries())
+            .flat_map(|wire| wire.iter().map(Edge::id))
+            .collect::<Vec<_>>();
+        // Use equality rather than relying on stable allocation ordering of IDs.
+        assert_eq!(original_ids.len(), output_ids.len());
+        for id in original_ids.drain(..) {
+            let position = output_ids.iter().position(|other| *other == id).unwrap();
+            output_ids.swap_remove(position);
+        }
+        let annulus = BooleanRegion::new(
+            vec![wires[0].clone(), wires[2].clone()],
+            Surface::Plane(Plane::xy()),
+            true,
+            0,
+            1,
+        );
+        assert!(split_disconnected_planar_region(&annulus, 1e-6).is_none());
     }
 
     /// An analytic quadratic profile swept in x: every edge is an original
@@ -2282,6 +2454,60 @@ mod tests {
         )
         .unwrap();
         assert!((signed_area(&poly.0) - 7.0).abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn cubic_crossings_retain_exact_curve_endpoints_after_welding() {
+        let mut fixture = PlanarFixture::new(&[
+            [0., 0.],
+            [3., 2.],
+            [0., 2.],
+            [1., -1.],
+            [2., -1.],
+            [2., 3.],
+            [1., 3.],
+        ]);
+        // The cubic's x-coordinate is exactly 3t. Its crossing
+        // ordinates at x=1 and x=2 are 8/27 and 28/27.
+        let curve = Curve::BsplineCurve(BsplineCurve::new_unchecked(
+            KnotVector::bezier_knot(3),
+            vec![
+                Point3::new(0., 0., 0.),
+                Point3::new(1., 0., 0.),
+                Point3::new(2., 1., 0.),
+                Point3::new(3., 2., 0.),
+            ],
+        ));
+        let edge = Edge::new_unchecked(
+            &fixture.vertices[0],
+            &fixture.vertices[1],
+            Alternative::FirstType(curve),
+        );
+        fixture.edges.insert((0, 1), edge);
+        let left = fixture.region(&[0, 1, 2, 0]);
+        let vertical = fixture.region(&[3, 4, 5, 6, 3]);
+        let regions = overlay_source_regions(vec![left, vertical], 1.0e-6);
+        assert_eq!(regions.len(), 1);
+        let edges = regions[0]
+            .absolute_boundaries()
+            .iter()
+            .flat_map(|wire| wire.iter());
+        let expected = [
+            Point3::new(1., 8. / 27., 0.),
+            Point3::new(2., 28. / 27., 0.),
+        ];
+        let mut found = [false; 2];
+        for edge in edges {
+            let curve = edge.oriented_curve();
+            let front = edge.front().point();
+            let back = edge.back().point();
+            assert!(front.distance(curve.front()) < 1.0e-12);
+            assert!(back.distance(curve.back()) < 1.0e-12);
+            for (flag, expected) in found.iter_mut().zip(expected) {
+                *flag |= front.distance(expected) < 1.0e-12 || back.distance(expected) < 1.0e-12;
+            }
+        }
+        assert!(found.into_iter().all(|flag| flag));
     }
 
     #[test]

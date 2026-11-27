@@ -61,6 +61,16 @@ pub enum AnalyticSurfaceKind {
 pub trait TryIntoAnalyticSurfaceKind {
     /// Returns the recognized analytic kind.
     fn try_into_analytic_surface_kind(&self) -> Option<AnalyticSurfaceKind>;
+
+    /// For a bounded regular face on this carrier, every linear functional
+    /// attains its extrema on the trim boundary. Planes and straight-ruled
+    /// extrusions have this property, unlike a general curved surface.
+    fn has_boundary_linear_extrema(&self) -> bool {
+        matches!(
+            self.try_into_analytic_surface_kind(),
+            Some(AnalyticSurfaceKind::Plane(_) | AnalyticSurfaceKind::HomogeneousExtrusion(_))
+        )
+    }
 }
 
 impl TryIntoAnalyticSurfaceKind for Plane {
@@ -232,6 +242,94 @@ fn spherical_revolution_from_profile(
     })
 }
 
+impl<C> Processor<RevolutionSurface<C>, Matrix4>
+where C: ParametricCurve3D + TryIntoHomogeneousBsplineCurve
+{
+    /// Certify a bounded, single-cover spherical revolution, returning an
+    /// oriented analytic sphere with its pole axis preserved. The original
+    /// finite meridian is NOT the entire sphere: callers must retain the
+    /// face's spatial trim and must not reuse its old parameter-space curves.
+    /// Numerical samples only propose the sphere; whole-domain rational
+    /// circle incidence and angular coverage are mandatory for admission.
+    #[must_use = "The optional sphere represents a certified bounded revolution, not a whole-solid proof."]
+    pub fn try_certified_sphere(&self, tolerance: f64) -> Option<Processor<Sphere, Matrix4>> {
+        use crate::analytic_carrier::similarity_scale;
+        use crate::analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage};
+        let scale = similarity_scale(*self.transform())?;
+        let tolerance = tolerance / scale;
+        if !tolerance.is_finite() || tolerance <= 0.0 {
+            return None;
+        }
+        let revolution = self.entity();
+        if !revolution.entity_curve().homogeneous_net_covers_domain() {
+            return None;
+        }
+        let profile = revolution
+            .entity_curve()
+            .try_into_homogeneous_bspline_curve()?;
+        // Reject invalid weights and discontinuous/malformed rational spans
+        // before using the numeric candidate generator.
+        crate::proof_bezier_spans(&profile)?;
+        let candidate = spherical_revolution_from_profile(
+            &profile,
+            revolution.origin(),
+            revolution.axis(),
+            finite_range(revolution.try_range_tuple().1)?,
+        )?;
+        let SphericalRevolutionSurface {
+            center,
+            radius,
+            axis,
+            meridian_direction,
+            ..
+        } = candidate;
+        let transverse = axis.cross(meridian_direction);
+        let frame = CircularArcFrame::new(
+            center,
+            transverse,
+            radius,
+            center + meridian_direction * radius,
+            tolerance,
+        )?;
+        let rational = NurbsCurve::new(profile);
+        let coverage = certify_circular_arc_coverage(&rational, frame)?;
+        let half_pi = std::f64::consts::FRAC_PI_2;
+        let start = if coverage.start_rad > std::f64::consts::PI {
+            coverage.start_rad - std::f64::consts::TAU
+        } else {
+            coverage.start_rad
+        };
+        let angular_tolerance = frame.angle_tolerance();
+        // A meridian may touch either pole, but may not cross the axis
+        // into the opposite semicircle: doing so would fold the revolution.
+        if start < -half_pi - angular_tolerance
+            || start + coverage.sweep_rad > half_pi + angular_tolerance
+        {
+            return None;
+        }
+        let axial_traversal = (rational.back() - rational.front()).dot(axis);
+        if !axial_traversal.is_finite() || axial_traversal.abs() <= tolerance {
+            return None;
+        }
+        let pose = Matrix4::from_cols(
+            meridian_direction.extend(0.0),
+            transverse.extend(0.0),
+            axis.extend(0.0),
+            center.to_vec().extend(1.0),
+        );
+        let mut sphere = Processor::with_transform(
+            Sphere::new(Point3::origin(), radius),
+            *self.transform() * pose,
+        );
+        // The outward sphere chart traverses latitude from north to south.
+        // Original processor inversion swaps the two parameter axes.
+        if (axial_traversal < 0.0) != self.orientation() {
+            sphere.invert();
+        }
+        Some(sphere)
+    }
+}
+
 fn planar_bspline_surface(surface: &BsplineSurface<Point3>) -> Option<Plane> {
     let points = surface
         .control_points()
@@ -395,5 +493,73 @@ fn transform_analytic_surface_kind(
             .then(|| transform_spherical_revolution(&sphere, transform))
             .flatten()
             .map(AnalyticSurfaceKind::SphericalRevolution),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analytic_carrier::{AnalyticCarrier, AnalyticSupport};
+
+    #[test]
+    fn spherical_rechart_certifies_meridian_and_orientation() -> anyhow::Result<()> {
+        let meridian = Processor::with_transform(
+            TrimmedCurve::new(UnitCircle::<Point3>::new(), (-0.8, 1.2)),
+            Matrix4::from_angle_x(Rad(std::f64::consts::FRAC_PI_2)),
+        );
+        let revolution =
+            RevolutionSurface::by_revolution(meridian, Point3::origin(), Vector3::unit_z());
+        for reflected in [false, true] {
+            let transform = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0))
+                * Matrix4::from_nonuniform_scale(if reflected { -2.0 } else { 2.0 }, 2.0, 2.0);
+            let mut surface = Processor::with_transform(revolution, transform);
+            for inverted in [false, true] {
+                if inverted {
+                    surface.invert();
+                }
+                let sphere = surface
+                    .try_certified_sphere(1.0e-7)
+                    .ok_or_else(|| anyhow::anyhow!("certified meridian"))?;
+                let carrier = AnalyticCarrier::sphere(&sphere)
+                    .ok_or_else(|| anyhow::anyhow!("sphere carrier"))?;
+                let AnalyticSupport::Sphere { center, radius } = carrier.support() else {
+                    anyhow::bail!("not a sphere");
+                };
+                assert!((center - Point3::new(1.0, 2.0, 3.0)).magnitude() < 1.0e-9);
+                assert!((radius - 2.0).abs() < 1.0e-9);
+                for (u, v) in [(-0.3, 0.4), (0.5, 1.7), (1.1, 4.5)] {
+                    let (u, v) = if inverted { (v, u) } else { (u, v) };
+                    let point = surface.evaluate(u, v);
+                    let (s, t) = sphere
+                        .search_parameter(point, None, 20)
+                        .ok_or_else(|| anyhow::anyhow!("same spatial point"))?;
+                    assert!(surface.normal(u, v).dot(sphere.normal(s, t)) > 1.0 - 1.0e-9);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn spherical_rechart_refuses_folded_or_nonspherical_profiles() {
+        let rotation = Matrix4::from_angle_x(Rad(std::f64::consts::FRAC_PI_2));
+        for (range, matrix) in [
+            ((-0.5, 2.2), rotation),
+            (
+                (-0.8, 1.2),
+                Matrix4::from_nonuniform_scale(1.0, 1.0, 1.01) * rotation,
+            ),
+        ] {
+            let meridian = Processor::with_transform(
+                TrimmedCurve::new(UnitCircle::<Point3>::new(), range),
+                matrix,
+            );
+            let revolution = Processor::new(RevolutionSurface::by_revolution(
+                meridian,
+                Point3::origin(),
+                Vector3::unit_z(),
+            ));
+            assert!(revolution.try_certified_sphere(1.0e-7).is_none());
+        }
     }
 }

@@ -3,11 +3,13 @@
 //! Split out of the module file so the source stays readable; the module
 //! path is unchanged.
 
+use super::super::charted::TrimChart;
 use super::*;
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::{
-    Invertible, Line, Matrix4, ParameterCurve, ParametricSurface, Plane, Point2, Point3, Processor,
-    RevolutionSurface, Vector3,
+    Invertible, Line, Matrix4, ParameterCurve, ParameterDivision2D, ParametricSurface,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface, SearchParameter,
+    Vector3,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -154,16 +156,16 @@ fn full_period_cone_loop_closes_to_singular_side() {
     let boundary = PolyBoundary::new(vec![ring], &surface, 0.01);
 
     assert!(
-        boundary.uv_min.y <= -2.5 + KERNEL_EPSILON,
+        boundary.uv_min().y <= -2.5 + KERNEL_EPSILON,
         "expected cone cap to include the apex side, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
     assert!(
-        boundary.uv_max.y <= KERNEL_EPSILON,
+        boundary.uv_max().y <= KERNEL_EPSILON,
         "expected cone cap to end at the trim ring, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
 }
 
@@ -207,17 +209,17 @@ fn full_period_ring_pair_uses_shared_periodic_seam() {
         &surface,
         0.01,
     );
-    let span = boundary.uv_max.x - boundary.uv_min.x;
+    let span = boundary.uv_max().x - boundary.uv_min().x;
 
     assert!(
         span <= TAU + KERNEL_EPSILON,
         "expected full-period rings to share a seam, got {:?}..{:?}",
-        boundary.uv_min,
-        boundary.uv_max,
+        boundary.uv_min(),
+        boundary.uv_max(),
     );
     assert!(original_points.iter().all(|point| {
         boundary
-            .loops
+            .loops()
             .iter()
             .flatten()
             .any(|boundary_point| boundary_point.point.distance(*point) <= KERNEL_EPSILON)
@@ -299,20 +301,100 @@ fn cdt_insertion_splits_duplicate_seam_chords_through_existing_vertices() {
         .iter()
         .map(|(u, v)| Point2::new(f64::from_bits(*u), f64::from_bits(*v)))
         .collect::<Vec<_>>();
-    let boundary = PolyBoundary {
-        loops: vec![
-            loop_points
-                .into_iter()
-                .map(|uv| SurfacePoint::from((uv, Point3::new(uv.x, uv.y, 0.0))))
-                .collect(),
-        ],
-        uv_min: Point2::new(0.0, f64::from_bits(4585802930648964182)),
-        uv_max: Point2::new(TAU * 0.5, f64::from_bits(4591506709037279730)),
-    };
+    let boundary = PolyBoundary::from_closed_loops(vec![
+        loop_points
+            .into_iter()
+            .map(|uv| SurfacePoint::from((uv, Point3::new(uv.x, uv.y, 0.0))))
+            .collect(),
+    ]);
     let mut triangulation = Cdt::new();
     let mut boundary_map = HashMap::<FixedVertexHandle, Point3>::default();
 
     let (_, added_constraints, _) = boundary.insert_to(&mut triangulation, &mut boundary_map);
 
     assert!(added_constraints > 0);
+}
+
+#[test]
+fn unwrap_distant_periodic_branches_without_moving_local_samples() {
+    let previous = 0.31;
+    let actual = 0.42;
+    for turns in [-1_000_000.0_f64, -9.0, 0.0, 27.0, 1_000_000.0] {
+        let shifted = turns.mul_add(TAU, actual);
+        let normalized =
+            PolyBoundaryPiece::normalize_axis(shifted, Some(previous), Some(TAU), Some((0.0, TAU)))
+                .expect("finite periodic coordinate");
+        assert!((normalized - actual).abs() < 1e-8);
+    }
+}
+
+#[test]
+fn approximate_trim_inverse_is_refined_on_the_actual_carrier() {
+    let plane = Plane::xy();
+    let actual = Point2::new(-0.001535883247325, -0.018752671581139);
+    // Another nearby section of the same narrow bow is within the
+    // coarse chord tolerance but makes its projected loop cross itself.
+    let wrong = Point2::new(-0.004554913501238, -0.019176750771346);
+    let point = plane.evaluate(actual.x, actual.y);
+    let search = |surface: &Plane, point: Point3, _| surface.search_parameter(point, None, 100);
+    let refined = PolyBoundaryPiece::refine_trim_sample(
+        &TrimChart::new(&plane),
+        &search,
+        point,
+        wrong,
+        None,
+        0.005,
+    )
+    .expect("plane inverse should recover the actual spatial sample");
+    assert!(Point2::new(refined.0, refined.1).near(&actual));
+}
+
+#[test]
+fn closed_rational_chart_wraps_evaluation_instead_of_extrapolating() {
+    use monstertruck_geometry::prelude::{BsplineSurface, KnotVector, NurbsSurface, Vector4};
+    // Full circle in a finite clamped rational chart, not a periodic
+    // extension of its endpoint polynomial. The last quadrant is
+    // geometrically reachable by extrapolating the first knot span.
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let circle = [
+        (1., 0., 1.),
+        (1., 1., w),
+        (0., 1., 1.),
+        (-1., 1., w),
+        (-1., 0., 1.),
+        (-1., -1., w),
+        (0., -1., 1.),
+        (1., -1., w),
+        (1., 0., 1.),
+    ];
+    let knots = KnotVector::from(vec![
+        0., 0., 0., 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1., 1., 1.,
+    ]);
+    let net = [0., 1.]
+        .map(|z| {
+            circle
+                .iter()
+                .map(|&(x, y, w)| Vector4::new(x * w, y * w, z * w, w))
+                .collect::<Vec<_>>()
+        })
+        .to_vec();
+    let surface = NurbsSurface::new(BsplineSurface::new_unchecked(
+        (KnotVector::bezier_knot(1), knots),
+        net,
+    ));
+    let search = |surface: &NurbsSurface<Vector4>, point: Point3, hint: Option<(f64, f64)>| {
+        surface.search_parameter(point, hint, 100)
+    };
+    assert_eq!(surface.closed_chart_periods(), (None, Some(1.0)));
+    let chart = TrimChart::new(&surface);
+    assert!(chart.is_wrapped());
+    let target = surface.evaluate(0.0, 0.9);
+    let uv = PolyBoundaryPiece::search_trim_sample(&chart, &search, target, Some((0., 0.)), 1e-6)
+        .expect("in-domain inverse through wrapped chart");
+    assert!((uv.1 + 0.1).abs() < 1e-6);
+    assert!(chart.evaluate(uv.0, uv.1).near(&target));
+    assert!(chart.evaluate(0.5, 1.1).near(&surface.evaluate(0.5, 0.1)));
+    assert!(chart.evaluate(0.5, -0.1).near(&surface.evaluate(0.5, 0.9)));
+    let (_, vs) = chart.parameter_division(((0.0, 1.0), (0.9, 1.1)), 0.001);
+    assert!(vs.contains(&1.0));
 }
