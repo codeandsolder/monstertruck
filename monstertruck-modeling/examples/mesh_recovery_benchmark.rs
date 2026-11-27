@@ -201,6 +201,25 @@ struct RegionSummary {
     info: Vec<Value>,
 }
 
+fn planar_crossing_diagnostics(recovery: &RecoveredAnalyticMesh) -> Result<Vec<Value>> {
+    let partition = &recovery.reconciled.partition;
+    Ok(recovery.native.planar_crossings(partition,&recovery.trims,monstertruck_modeling::KERNEL_EPSILON*0.1)?
+        .into_iter().map(|crossing| {
+            let edges = crossing.edges.map(|(trim,ordinal)| {
+                let t = &recovery.trims.trims[trim];
+                let native = recovery.native.trims[trim].as_ref().ok().and_then(|edges|edges.get(ordinal));
+                json!({"trim":trim,"ordinal":ordinal,"regions":t.regions,"geometry":format!("{:?}",t.geometry),
+                    "native":native.map(|e|json!({"front":e.front().point(),"back":e.back().point(),"curve":format!("{:?}",e.curve())})),
+                    "source_edges":t.source_edges.iter().map(|e| {
+                        let supports = [Some(e.interior_polygon),e.exterior_polygon].map(|p|p.map(|id|recovery.evidence.source_planar_support[id]));
+                        json!({"vertices":e.vertices,"points":e.vertices.map(|id|recovery.reconciled.positions[id]),
+                            "supports":supports,"sizes":supports.map(|s|s.map(|id|recovery.evidence.planar_supports[id].source_face_indices.len()))})
+                    }).collect::<Vec<_>>()})
+            });
+            json!({"region":crossing.region,"edges":edges})
+        }).collect())
+}
+
 fn region_summary(recovery: &RecoveredAnalyticMesh) -> Result<RegionSummary> {
     let partition = &recovery.reconciled.partition;
     let mut errors = BTreeMap::new();
@@ -358,6 +377,7 @@ fn benchmark(
         "unresolved_contact_pairs":unresolved_contact_pairs,
         "unresolved_trims":unresolved_trims,
         "failed_native_trims":failed_native_trims,
+        "planar_crossings":planar_crossing_diagnostics(&recovery)?,
         "trim_absolute_tolerance":options.trim_options(&recovery.evidence).absolute_tolerance,
         "trim_relative_tolerance":options.trim_options(&recovery.evidence).relative_tolerance,
         "limited_partition_components":partition.limited_components,
