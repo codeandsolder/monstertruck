@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs::File,
-    io::BufReader,
+    io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -192,7 +192,12 @@ fn ambiguous_source_incidence(evidence: &MeshEvidence) -> Vec<Value> {
         .collect()
 }
 
-fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value> {
+fn benchmark(
+    path: &Path,
+    evidence_only: bool,
+    normalize: bool,
+    shell_output: Option<&Path>,
+) -> Result<Value> {
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
     let read_seconds = start.elapsed().as_secs_f64();
@@ -310,6 +315,19 @@ fn benchmark(path: &Path, evidence_only: bool, normalize: bool) -> Result<Value>
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
+    if let Some(path) = shell_output {
+        let export_start = Instant::now();
+        let exported = if let Some(shell) = complete {
+            let mut writer = BufWriter::new(File::create_new(path)?);
+            serde_json::to_writer(&mut writer, &shell.compress())?;
+            writer.flush()?;
+            true
+        } else {
+            false
+        };
+        result["shell_exported"] = json!(exported);
+        result["shell_export_seconds"] = json!(export_start.elapsed().as_secs_f64());
+    }
     Ok(result)
 }
 
@@ -323,15 +341,28 @@ fn main() -> Result<()> {
     } else {
         first
     });
+    let shell_output = args
+        .next()
+        .map(|flag| -> Result<PathBuf> {
+            anyhow::ensure!(
+                flag == "--shell-output" && !evidence_only,
+                "expected --shell-output after OBJ"
+            );
+            Ok(PathBuf::from(
+                args.next().context("expected shell output path")?,
+            ))
+        })
+        .transpose()?;
     anyhow::ensure!(
         args.next().is_none(),
-        "expected [--evidence-only | --normalize-coincident-sheets] OBJ"
+        "expected [--evidence-only | --normalize-coincident-sheets] OBJ [--shell-output JSON]"
     );
-    let result = benchmark(&path, evidence_only, normalize).unwrap_or_else(|error| {
-        json!({
-            "status":"recovery_error","source":path,"error":format!("{error:#}"),
-        })
-    });
+    let result = benchmark(&path, evidence_only, normalize, shell_output.as_deref())
+        .unwrap_or_else(|error| {
+            json!({
+                "status":"recovery_error","source":path,"error":format!("{error:#}"),
+            })
+        });
     println!("{result}");
     Ok(())
 }

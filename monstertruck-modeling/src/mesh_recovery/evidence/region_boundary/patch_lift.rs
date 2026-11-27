@@ -364,7 +364,7 @@ pub(super) mod tests {
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
     use monstertruck_topology::shell::ShellCondition;
 
-    pub(in crate::mesh_recovery::evidence::region_boundary) type SphericalFixture = (
+    type SphericalFixture = (
         crate::mesh_recovery::MeshEvidence,
         SurfaceRegionPartition,
         Vec<usize>,

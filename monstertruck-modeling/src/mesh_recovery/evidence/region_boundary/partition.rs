@@ -518,6 +518,7 @@ fn profile_is_tested(
     // Singleton samples from an inaccurate placed axis cannot manufacture
     // an independently tested profile.
     cluster_meridian(&samples, resolution)
+        .clusters
         .iter()
         .filter(|station| station.members.len() >= 3)
         .count()

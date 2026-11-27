@@ -48,9 +48,13 @@ struct Args {
     /// Write the STEP exchange to this path (one input only).
     #[arg(long)]
     step_output: Option<PathBuf>,
-    /// Validate STEP topology and endpoints without reimport tessellation.
+    /// Validate STEP topology and endpoints without native or restored tessellation.
     #[arg(long)]
     step_topology_only: bool,
+    /// Export shell surfaces without numerical tessellation or internal reimport.
+    /// Use when an independent external verifier will validate the exchange.
+    #[arg(long, requires = "step_output", conflicts_with_all = ["step_input", "step_topology_only"])]
+    export_only: bool,
     /// Inspect existing STEP files instead of recovering meshes.
     #[arg(long, conflicts_with_all = ["native_shell", "step_output"])]
     step_input: bool,
@@ -87,13 +91,7 @@ fn measure_polygon_volume(mut mesh: PolygonMesh, tolerance: f64) -> Value {
         "closed_signed_volume":(condition==ShellCondition::Closed).then_some(signed_integral)})
 }
 
-fn step_roundtrip(
-    shell: &Shell,
-    solid_eligible: bool,
-    tolerance: f64,
-    output: Option<&Path>,
-    topology_only: bool,
-) -> Result<Value> {
+fn step_roundtrip(shell: &Shell, solid_eligible: bool, args: &Args) -> Result<Value> {
     let step = if solid_eligible {
         let solid = Solid::new(vec![shell.clone()])?;
         let compressed = solid.compress_with_parameter_curves(KERNEL_EPSILON * 100.0);
@@ -108,18 +106,21 @@ fn step_roundtrip(
         let models = compressed.iter().collect::<StepModels<_, _, _>>();
         CompleteStepDisplay::new(models, Default::default()).to_string()
     };
-    let table = Table::from_step(&step)?;
-    if let Some(path) = output {
+    let table = (!args.export_only).then(|| Table::from_step(&step)).transpose()?;
+    if let Some(path) = args.step_output.as_deref() {
         let mut file = File::create_new(path).context("create STEP output")?;
         file.write_all(step.as_bytes())?;
         file.flush()?;
     }
+    let Some(table) = table else {
+        return Ok(json!({"bytes":step.len(),"validation":"not_requested","solid_brep":false}));
+    };
     inspect_step(
         &table,
         step.len(),
         Some(shell.len()),
-        tolerance,
-        !topology_only && shell.shell_condition() == ShellCondition::Closed,
+        args.tolerance * 0.25,
+        !args.step_topology_only && shell.shell_condition() == ShellCondition::Closed,
     )
 }
 
@@ -206,7 +207,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         summary["native_faces"] = json!(shell.len());
         summary["shell_condition"] = json!(format!("{condition:?}"));
         summary["shell_components"] = json!(shell.connected_components().len());
-        if condition == ShellCondition::Closed {
+        if condition == ShellCondition::Closed && !args.step_topology_only && !args.export_only {
             let coarse = numerical_volume(&shell, args.tolerance);
             let fine = numerical_volume(&shell, args.tolerance * 0.25);
             let converged = fine["closed_signed_volume"]
@@ -222,7 +223,9 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         }
         // Do not call a disconnected, open or unmeasurable shell a solid.
         // The numerical checks are still not a global self-intersection proof.
-        let solid_eligible = condition == ShellCondition::Closed
+        let solid_eligible = !args.step_topology_only
+            && !args.export_only
+            && condition == ShellCondition::Closed
             && shell.is_connected()
             && result
                 .evidence
@@ -231,13 +234,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
             && summary["volume"]["fine"]["closed_signed_volume"]
                 .as_f64()
                 .is_some_and(|v| v > 0.0);
-        summary["step"] = match step_roundtrip(
-            &shell,
-            solid_eligible,
-            args.tolerance * 0.25,
-            args.step_output.as_deref(),
-            args.step_topology_only,
-        ) {
+        summary["step"] = match step_roundtrip(&shell, solid_eligible, args) {
             Ok(info) => info,
             Err(error) => json!({"error":error.to_string()}),
         };
@@ -252,21 +249,17 @@ fn verify_native(path: &Path, args: &Args) -> Result<Value> {
     let shell = Shell::extract(compressed)?;
     let condition = shell.shell_condition();
     let components = shell.connected_components().len();
-    let coarse = numerical_volume(&shell, args.tolerance);
-    let fine = numerical_volume(&shell, args.tolerance * 0.25);
+    let mut summary = json!({"source":path,"native_faces":shell.len(),"shell_condition":format!("{condition:?}"),
+        "shell_components":components});
+    if !args.step_topology_only && !args.export_only {
+        let coarse = numerical_volume(&shell, args.tolerance);
+        let fine = numerical_volume(&shell, args.tolerance * 0.25);
+        summary["volume"] = json!({"coarse":coarse,"fine":fine});
+    }
     // The native JSON does not certify material classification.
-    let step = step_roundtrip(
-        &shell,
-        false,
-        args.tolerance * 0.25,
-        args.step_output.as_deref(),
-        args.step_topology_only,
-    )
-    .unwrap_or_else(|error| json!({"error":format!("{error:#}")}));
-    Ok(
-        json!({"source":path,"native_faces":shell.len(),"shell_condition":format!("{condition:?}"),
-        "shell_components":components,"volume":{"coarse":coarse,"fine":fine},"step":step}),
-    )
+    summary["step"] = step_roundtrip(&shell, false, args)
+        .unwrap_or_else(|error| json!({"error":format!("{error:#}")}));
+    Ok(summary)
 }
 
 fn verify_step_input(path: &Path, args: &Args) -> Result<Value> {

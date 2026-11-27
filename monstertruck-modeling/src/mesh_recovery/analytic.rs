@@ -398,17 +398,33 @@ fn refine_and_discover(
 ) -> Result<(MeshEvidence, Vec<SupportRefinementPass>, CandidateDiscovery), AnalyticRecoveryError> {
     let mut active = evidence.clone();
     let mut passes = Vec::new();
+    // Refinement changes support membership, never source vertex positions.
+    // Axes lacking two sampled stations remain impossible on every later pass.
+    let mut unsampled = vec![None; axes.len()];
     loop {
         let boundary = RegionBoundaryIndex::new(&active)?;
         let mut split = BTreeSet::new();
         let mut candidates = AxisCandidates::default();
-        for placed in axes {
-            let Some(graph) = MeridianStationGraph::new(
+        for (placed, cached) in axes.iter().zip(&mut unsampled) {
+            if let Some(count) = *cached {
+                if split.is_empty() {
+                    candidates.record_unsampled(placed, count);
+                }
+                continue;
+            }
+            let Some((count, graph)) = MeridianStationGraph::for_discovery(
                 &active,
                 placed.origin,
                 placed.axis,
                 graph_options(&active, placed, options),
             ) else {
+                continue;
+            };
+            let Some(graph) = graph else {
+                *cached = Some(count);
+                if split.is_empty() {
+                    candidates.record_unsampled(placed, count);
+                }
                 continue;
             };
             split.extend(graph.mixed_support_refinements());
@@ -751,6 +767,24 @@ struct AxisCandidates {
 }
 
 impl AxisCandidates {
+    fn record_unsampled(&mut self, placed: &PlacedAxis, stations: usize) {
+        // Non-circular axes without candidates were never reported.
+        if placed.circular_seed {
+            self.axes.push(AxisDiscoverySummary {
+                source_track: placed.source_track,
+                source_circle_group: placed.source_circle_group,
+                axis: placed.axis,
+                origin: placed.origin,
+                stations,
+                linear_candidates: 0,
+                circular_candidates: 0,
+                repeated_transitions: 0,
+                seed_count: 0,
+                profile_count: 0,
+            });
+        }
+    }
+
     fn discover(
         &mut self,
         placed: &PlacedAxis,

@@ -5,6 +5,7 @@
 use super::super::sample_fit::fit_circle_2d;
 use super::{MeshEvidence, spatial::source_meridian_samples};
 use crate::{InnerSpace, Point3, Vector3};
+use std::ops::Range;
 
 /// Independent measured circular meridian of a rotational carrier.
 ///
@@ -87,7 +88,8 @@ pub fn measure_circular_meridian(
         return None;
     }
     let samples = source_meridian_samples(evidence, support_ids, origin, axis)?;
-    let clusters = cluster_meridian(&samples, resolution);
+    let projection = cluster_meridian(&samples, resolution);
+    let clusters = &projection.clusters;
     let reference = clusters.first()?.center;
     let local = clusters
         .iter()
@@ -172,31 +174,38 @@ fn meridian_extent(samples: &[(f64, f64)], local: &[(f64, f64)]) -> (f64, f64) {
 /// Seed-anchored projected clusters, retaining exact sample provenance.
 pub(super) struct MeridianCluster {
     pub center: (f64, f64),
-    pub members: Vec<usize>,
+    pub members: Range<usize>,
 }
 
-pub(super) fn cluster_meridian(samples: &[(f64, f64)], resolution: f64) -> Vec<MeridianCluster> {
+pub(super) struct MeridianClusters {
+    pub order: Vec<usize>,
+    pub clusters: Vec<MeridianCluster>,
+}
+
+pub(super) fn cluster_meridian(samples: &[(f64, f64)], resolution: f64) -> MeridianClusters {
     let mut order = (0..samples.len()).collect::<Vec<_>>();
-    order.sort_unstable_by(|&a, &b| {
-        samples[a]
-            .0
-            .total_cmp(&samples[b].0)
-            .then(samples[a].1.total_cmp(&samples[b].1))
-            .then(a.cmp(&b))
-    });
+    // The radial sort below canonicalizes every axial group, including
+    // axial ties. Sorting by radius or ID here would repeat that work.
+    order.sort_unstable_by(|&a, &b| samples[a].0.total_cmp(&samples[b].0));
     let mut result = Vec::new();
     let mut axial_begin = 0;
     while axial_begin < order.len() {
         let anchor = samples[order[axial_begin]].0;
         let axial_end = axial_begin
-            + order[axial_begin..].partition_point(|&id| samples[id].0 - anchor <= resolution);
+            + order[axial_begin..]
+                .iter()
+                .take_while(|&&id| samples[id].0 - anchor <= resolution)
+                .count();
         let group = &mut order[axial_begin..axial_end];
         group.sort_unstable_by(|&a, &b| samples[a].1.total_cmp(&samples[b].1).then(a.cmp(&b)));
         let mut radial_begin = 0;
         while radial_begin < group.len() {
             let anchor = samples[group[radial_begin]].1;
             let radial_end = radial_begin
-                + group[radial_begin..].partition_point(|&id| samples[id].1 - anchor <= resolution);
+                + group[radial_begin..]
+                    .iter()
+                    .take_while(|&&id| samples[id].1 - anchor <= resolution)
+                    .count();
             let members = &group[radial_begin..radial_end];
             let reference = samples[members[0]];
             let (axial, radial) = members.iter().fold((0.0, 0.0), |(za, ra), &id| {
@@ -208,13 +217,16 @@ pub(super) fn cluster_meridian(samples: &[(f64, f64)], resolution: f64) -> Vec<M
             let count = crate::usize_to_f64(members.len());
             result.push(MeridianCluster {
                 center: (reference.0 + axial / count, reference.1 + radial / count),
-                members: members.to_vec(),
+                members: axial_begin + radial_begin..axial_begin + radial_end,
             });
             radial_begin = radial_end;
         }
         axial_begin = axial_end;
     }
-    result
+    MeridianClusters {
+        order,
+        clusters: result,
+    }
 }
 
 #[derive(Default)]
@@ -325,6 +337,60 @@ mod tests {
             max_circular_relative_chord_error: 1.0 - std::f64::consts::FRAC_1_SQRT_2,
             normal_tolerance_radians: 1.0e-6,
         }
+    }
+
+    #[test]
+    fn cluster_ranges_preserve_seed_anchored_membership_and_order() {
+        let samples = [
+            (0.0, 3.0),
+            (0.5, 1.0),
+            (0.8, 1.2),
+            (1.1, 1.0),
+            (0.0, 1.0),
+            (-0.0, 1.0),
+            (2.0, 1.5),
+            (2.2, 1.0),
+        ];
+        let projection = cluster_meridian(&samples, 1.0);
+        let members = projection
+            .clusters
+            .iter()
+            .map(|c| &projection.order[c.members.clone()])
+            .collect::<Vec<_>>();
+        // Neither axial nor radial clustering chains through later samples.
+        assert_eq!(members, [&[1, 4, 5, 2][..], &[0], &[3, 6], &[7]]);
+        assert!((projection.clusters[0].center.0 - 0.325).abs() < 1.0e-15);
+        assert!((projection.clusters[0].center.1 - 1.05).abs() < 1.0e-15);
+        assert!(cluster_meridian(&[], 1.0).clusters.is_empty());
+    }
+
+    #[test]
+    fn unsampled_axis_skips_discovery_but_preserves_diagnostic_station_count()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let evidence = analyze_mesh_evidence(&mesh(5)?, EvidenceOptions::default())?;
+        let boundary = RegionBoundaryIndex::new(&evidence)?;
+        let origin = Point3::new(0.123, 0.456, 0.789);
+        let axis = Vector3::new(1.0, 2.0, 3.0).normalize();
+        let full = MeridianStationGraph::new(&evidence, origin, axis, graph_options())
+            .ok_or("full graph")?;
+        let (count, fast) =
+            MeridianStationGraph::for_discovery(&evidence, origin, axis, graph_options())
+                .ok_or("discovery graph")?;
+        assert_eq!(count, full.stations().len());
+        assert!(fast.is_none());
+        assert!(full.mixed_support_refinements().is_empty());
+        assert!(full.discover_linear(&boundary).is_empty());
+        assert_eq!(full.discover_circular(&boundary).seed_count, 0);
+        let (count, fast) = MeridianStationGraph::for_discovery(
+            &evidence,
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            graph_options(),
+        )
+        .ok_or("sampled discovery graph")?;
+        assert_eq!(count, 5);
+        assert!(fast.is_some());
+        Ok(())
     }
 
     #[test]
