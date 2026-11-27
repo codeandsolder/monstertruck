@@ -582,7 +582,7 @@ fn unresolved_contact_trial(
 ) -> Result<Value> {
     // This explicit mode authorizes only a bounded number of original
     // source polygons, regardless of whether their fitted parent is a
-    // plane or a revolution. Search seeds come from failed contacts only.
+    // plane or a revolution. Search seeds come from failed contacts and certified crossing domains.
     let permitted = (0..recovery.evidence.planar_supports.len()).collect::<Vec<_>>();
     let options = HybridSupportSearchOptions {
         refinement: refinement_options(recovery, budget, limit),

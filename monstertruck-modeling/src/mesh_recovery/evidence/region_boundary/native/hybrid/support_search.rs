@@ -5,8 +5,8 @@
 //! source/patch certificates, not the combinatorial cover, decide admission.
 
 use super::{
-    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, RefinedHybridRecovery,
-    refinement::support_closure,
+    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, NativeTrimError,
+    NativeTrimGraph, RefinedHybridRecovery, SurfaceRegionPartition, refinement::support_closure,
 };
 use crate::mesh_recovery::RecoveredAnalyticMesh;
 use monstertruck_topology::shell::ShellCondition;
@@ -68,8 +68,7 @@ impl CoverSearch {
         sizes: Vec<usize>,
         options: HybridSupportSearchOptions,
     ) -> Result<Self, HybridRecoveryError> {
-        if contacts.is_empty()
-            || options.max_states == 0
+        if options.max_states == 0
             || options.max_trials == 0
             || closures.iter().any(|(&id, closure)| {
                 !closure.contains(&id) || closure.iter().any(|&member| member >= sizes.len())
@@ -128,11 +127,13 @@ impl CoverSearch {
             .iter()
             .try_fold(0_usize, |total, &id| total.checked_add(search.sizes[id]))
             .ok_or(HybridRecoveryError::InvalidInput)?;
-        search.enqueue(CoverCandidate {
-            cost,
-            selected,
-            seeds: mandatory,
-        });
+        if !search.choices.is_empty() {
+            search.enqueue(CoverCandidate {
+                cost,
+                selected,
+                seeds: mandatory,
+            });
+        }
         Ok(search)
     }
 
@@ -206,28 +207,52 @@ impl CoverSearch {
         }
     }
 
-    fn extend(&mut self, candidate: &CoverCandidate, support: usize) {
-        if candidate.selected.binary_search(&support).is_ok()
-            || self.visited.len() >= self.max_states
-        {
-            return;
-        }
+    fn expanded(&self, candidate: &CoverCandidate, supports: &[usize]) -> Option<CoverCandidate> {
         let mut next = candidate.clone();
-        for &member in &self.closures[&support] {
-            if let Err(at) = next.selected.binary_search(&member) {
-                let Some(cost) = next.cost.checked_add(self.sizes[member]) else {
-                    return;
-                };
-                if cost > self.max_polygons {
-                    return;
-                }
-                next.cost = cost;
-                next.selected.insert(at, member);
+        for &support in supports {
+            if next.selected.binary_search(&support).is_ok() {
+                continue;
             }
+            for &member in self.closures.get(&support)? {
+                if let Err(at) = next.selected.binary_search(&member) {
+                    next.cost = next.cost.checked_add(self.sizes[member])?;
+                    if next.cost > self.max_polygons {
+                        return None;
+                    }
+                    next.selected.insert(at, member);
+                }
+            }
+            let at = next.seeds.partition_point(|&id| id < support);
+            next.seeds.insert(at, support);
         }
-        let at = next.seeds.partition_point(|&id| id < support);
-        next.seeds.insert(at, support);
-        self.enqueue(next);
+        (next.selected != candidate.selected).then_some(next)
+    }
+
+    fn extend(&mut self, candidate: &CoverCandidate, support: usize) {
+        if self.visited.len() < self.max_states
+            && let Some(next) = self.expanded(candidate, &[support])
+        {
+            self.enqueue(next);
+        }
+    }
+
+    // Prioritize a specific, newly witnessed failure over enumerating
+    // unrelated supersets of the previous contact cover. The same closure,
+    // polygon and distinct-state budgets apply.
+    fn witnessed_followup(
+        &mut self,
+        candidate: &CoverCandidate,
+        supports: &[usize],
+    ) -> Option<CoverCandidate> {
+        if self.visited.len() >= self.max_states {
+            return None;
+        }
+        let next = self.expanded(candidate, supports)?;
+        if !self.visited.insert(next.selected.clone()) {
+            return None;
+        }
+        self.states += 1;
+        Some(next)
     }
 
     fn next_cover(&mut self) -> Option<CoverCandidate> {
@@ -263,6 +288,58 @@ impl CoverSearch {
                 break;
             }
         }
+    }
+}
+
+// The region errors are positive transverse-crossing witnesses, not a
+// generic instruction to release any failed region. Retain all other
+// analytic constraints and use original support ownership, even when the
+// preceding transaction has split the region into new IDs.
+fn crossing_supports(partition: &SurfaceRegionPartition, native: &NativeTrimGraph) -> Vec<usize> {
+    let regions = native
+        .regions
+        .iter()
+        .filter_map(|r| {
+            matches!(r.faces, Err(NativeTrimError::PlanarTrimCrossing)).then_some(r.region)
+        })
+        .collect::<BTreeSet<_>>();
+    partition
+        .region_by_support
+        .iter()
+        .enumerate()
+        .filter_map(|(id, region)| regions.contains(region).then_some(id))
+        .collect()
+}
+
+fn incomplete_recovery_error(
+    seeds: &[usize],
+    refined: &RefinedHybridRecovery,
+) -> HybridRecoveryError {
+    HybridRecoveryError::IncompleteSupportRecovery {
+        seed_supports: seeds.to_vec().into_boxed_slice(),
+        failed_regions: refined
+            .recovery
+            .native
+            .regions
+            .iter()
+            .filter_map(|r| r.faces.as_ref().err().map(|&error| (r.region, error)))
+            .collect(),
+        failed_trims: refined
+            .recovery
+            .native
+            .trims
+            .iter()
+            .enumerate()
+            .filter_map(|(id, t)| t.as_ref().err().map(|&error| (id, error)))
+            .collect(),
+        chart_cuts: refined
+            .recovery
+            .native
+            .regions
+            .iter()
+            .filter(|r| r.requires_chart_cut)
+            .map(|r| (r.region, refined.parent_by_region[r.region]))
+            .collect(),
     }
 }
 
@@ -350,12 +427,37 @@ impl RecoveredAnalyticMesh {
         Ok(closures)
     }
 
-    /// Try source support releases at failed shared native trims.
+    fn crossing_followup(
+        &self,
+        search: &mut CoverSearch,
+        candidate: &CoverCandidate,
+        supports: &[usize],
+        permitted: &[usize],
+        options: HybridRefinementOptions,
+    ) -> Option<CoverCandidate> {
+        for &support in supports {
+            if !search.closures.contains_key(&support) {
+                let closure = support_closure(
+                    &self.evidence,
+                    &self.reconciled.partition,
+                    support,
+                    permitted,
+                    options,
+                )
+                .ok()?;
+                search.closures.insert(support, closure);
+            }
+        }
+        search.witnessed_followup(candidate, supports)
+    }
+
+    /// Try source support releases at failed shared native trims and
+    /// positively witnessed crossing planar domains.
     ///
     /// Every failed contact must be covered by at least one explicitly
     /// permitted incident support. Enumerate smallest mandatory release costs
-    /// first, then use the existing witnessed expansion and full hybrid
-    /// certificates. A successful result is a complete closed shell, not
+    /// first, prioritizing newly witnessed crossing follow-ups over other
+    /// contact alternatives, then apply the full hybrid certificates. A successful result is a complete closed shell, not
     /// a material or self-intersection certificate. This bounded search
     /// does not assert global minimum total released polygons.
     ///
@@ -379,8 +481,23 @@ impl RecoveredAnalyticMesh {
         let mut search = CoverSearch::new(contacts, closures, sizes, options)?;
         let mut last = HybridRecoveryError::NoSupportCandidate;
         let mut trials = 0;
+        let mut followup = if search.choices.is_empty() {
+            self.crossing_followup(
+                &mut search,
+                &CoverCandidate {
+                    cost: 0,
+                    selected: Vec::new(),
+                    seeds: Vec::new(),
+                },
+                &crossing_supports(&self.reconciled.partition, &self.native),
+                permitted_supports,
+                options.refinement,
+            )
+        } else {
+            None
+        };
         while trials < options.max_trials {
-            let Some(candidate) = search.next_cover() else {
+            let Some(candidate) = followup.take().or_else(|| search.next_cover()) else {
                 break;
             };
             trials += 1;
@@ -408,32 +525,16 @@ impl RecoveredAnalyticMesh {
                             refined,
                         });
                     }
-                    last = HybridRecoveryError::IncompleteSupportRecovery {
-                        seed_supports: candidate.seeds.clone().into_boxed_slice(),
-                        failed_regions: refined
-                            .recovery
-                            .native
-                            .regions
-                            .iter()
-                            .filter_map(|r| r.faces.as_ref().err().map(|&error| (r.region, error)))
-                            .collect(),
-                        failed_trims: refined
-                            .recovery
-                            .native
-                            .trims
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(id, t)| t.as_ref().err().map(|&error| (id, error)))
-                            .collect(),
-                        chart_cuts: refined
-                            .recovery
-                            .native
-                            .regions
-                            .iter()
-                            .filter(|r| r.requires_chart_cut)
-                            .map(|r| (r.region, refined.parent_by_region[r.region]))
-                            .collect(),
-                    };
+                    if trials < options.max_trials {
+                        followup = self.crossing_followup(
+                            &mut search,
+                            &candidate,
+                            &crossing_supports(&refined.partition, &refined.recovery.native),
+                            permitted_supports,
+                            options.refinement,
+                        );
+                    }
+                    last = incomplete_recovery_error(&candidate.seeds, &refined);
                 }
                 Err(error) => last = error,
             }
@@ -490,6 +591,47 @@ mod tests {
 
     fn next_pair(search: &mut CoverSearch) -> Option<(usize, Vec<usize>)> {
         search.next_cover().map(|c| (c.cost, c.selected))
+    }
+
+    #[test]
+    fn witnessed_crossing_followup_preserves_budget_and_other_contact_covers()
+    -> Result<(), HybridRecoveryError> {
+        let mut search = CoverSearch::new(
+            BTreeSet::from([[0, 1]]),
+            identity_closures(0..4),
+            vec![1, 2, 1, 1],
+            options(3, 32),
+        )?;
+        let first = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        let extra = search
+            .witnessed_followup(&first, &[2, 3])
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!(extra.selected, vec![0, 2, 3]);
+        assert_eq!(extra.cost, 3);
+        assert!(search.witnessed_followup(&first, &[2, 3]).is_none());
+        assert_eq!(next_pair(&mut search), Some((2, vec![1])));
+        let mut crossing_only = CoverSearch::new(
+            BTreeSet::new(),
+            identity_closures([0, 1]),
+            vec![1, 1],
+            options(2, 1),
+        )?;
+        let empty = CoverCandidate {
+            cost: 0,
+            selected: Vec::new(),
+            seeds: Vec::new(),
+        };
+        assert_eq!(
+            crossing_only
+                .witnessed_followup(&empty, &[0, 1])
+                .map(|c| c.selected),
+            Some(vec![0, 1])
+        );
+        assert!(crossing_only.witnessed_followup(&empty, &[0]).is_none());
+        assert!(crossing_only.next_cover().is_none());
+        Ok(())
     }
 
     #[test]
