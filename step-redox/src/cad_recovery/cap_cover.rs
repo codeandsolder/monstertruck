@@ -5,7 +5,7 @@
 //! recovered solid.
 use super::{
     CadFragment, CadFragmentSource, SourceRecovery,
-    cap_assembly::{AssemblyFrame, proven_cap_assembly},
+    cap_assembly::{AssemblyFrame, proven_cap_assembly, proven_separated_cap_assembly},
 };
 use crate::cad_kernel::CadKernel;
 use crate::math3::{dot, sub};
@@ -179,6 +179,16 @@ pub(super) fn recover<K: CadKernel>(
         if let Some((model, root)) = proven_cap_assembly(parts, frame, source, ceiling)? {
             admitted = Some((model, root, parts));
             break;
+        }
+    }
+    if admitted.is_none() {
+        for frame in [None, centered] {
+            if let Some((model, root)) =
+                proven_separated_cap_assembly(&caps, frame, source, ceiling)?
+            {
+                admitted = Some((model, root, caps.as_slice()));
+                break;
+            }
         }
     }
     let Some((mut model, root, caps)) = admitted else {

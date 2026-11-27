@@ -16,6 +16,7 @@ use step_p21::ast::EntityInstance;
 
 mod cap_assembly;
 mod cap_cover;
+mod cap_separation;
 mod channel_round_ends;
 mod multi_axis_sheet;
 mod proposal_extent;
