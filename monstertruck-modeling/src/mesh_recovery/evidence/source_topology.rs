@@ -16,6 +16,7 @@ mod multiplicity;
 pub use forced::SourceForcedPair;
 pub use multiplicity::{
     SourceMultiplicityMethod, SourceMultiplicityPair, SourceMultiplicityResolution,
+    SourceTransverseCrossing,
 };
 
 /// A distinct topological copy of an exactly coincident source position.
@@ -260,7 +261,7 @@ pub(super) fn separate_closed_components(
     }
     if closed.contains(&false) {
         let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
-        let pairs = forced::necessary_joins(polygons.len(), &incidence);
+        let pairs = forced::necessary_joins(polygons.len(), &incidence, None);
         if !pairs.is_empty() {
             let mut selected = closed_components(
                 positions,

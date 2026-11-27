@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Profile = Vec<(usize, bool)>;
 
-fn polygon_key(polygon: &InputPolygon) -> Vec<usize> {
+pub(super) fn polygon_key(polygon: &InputPolygon) -> Vec<usize> {
     let vertices = &polygon.vertices;
     // Canonical oriented cycle, without allowing orientation reversal.
     let Some(minimum) = vertices.iter().min() else {
@@ -129,7 +129,10 @@ impl Plane {
                 boundary.extend(edges[edge]);
             }
         }
-        let mut points = boundary.into_iter().map(|id| positions[id]);
+        Self::from_points(boundary.into_iter().map(|id| positions[id]))
+    }
+
+    fn from_points(mut points: impl Iterator<Item = Point3>) -> Option<Self> {
         let first = points.next()?;
         let second = points.next()?;
         let third = points.find(|&p| !seams::on_line(first, second, p))?;
@@ -182,6 +185,21 @@ impl Plane {
         };
         signs.all(|sign| sign == Some(first))
     }
+}
+
+// An exactly reversed vertex cycle denotes an opposed copy only when the
+// source polygon is a simple, nonzero-area, exactly planar region.
+pub(super) fn simple_planar_polygon(positions: &[Point3], polygon: &InputPolygon) -> bool {
+    simple_planar_basis(positions, polygon).is_some()
+}
+
+pub(super) fn simple_planar_basis(
+    positions: &[Point3],
+    polygon: &InputPolygon,
+) -> Option<[Point3; 3]> {
+    let plane = Plane::from_points(polygon.vertices.iter().map(|&id| positions[id]))?;
+    plane.polygon_sign(positions, polygon)?;
+    Some(plane.basis)
 }
 
 const fn take_class(next: &mut usize) -> usize {

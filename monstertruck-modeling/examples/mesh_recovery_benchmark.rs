@@ -360,7 +360,7 @@ fn benchmark(
         "collapsed_source_facets":recovery.evidence.provenance.collapsed_facets.iter().map(|f|json!({"polygon":f.polygon,"vertices":f.vertices,"ordered_vertices":f.ordered_vertices})).collect::<Vec<_>>(),
         "separated_source_vertices":recovery.evidence.provenance.separated_vertices.iter().map(|v|json!([v.source_vertex,v.separated_vertex])).collect::<Vec<_>>(),
         "source_forced_pairs":recovery.evidence.provenance.forced_pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons})).collect::<Vec<_>>(),
-        "source_multiplicity_resolutions":recovery.evidence.provenance.multiplicity_resolutions.iter().map(|r|json!({"method":format!("{:?}",r.method),"states":r.states,"equivalent_fragments":r.equivalent_fragments,"pairs":r.pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "source_multiplicity_resolutions":recovery.evidence.provenance.multiplicity_resolutions.iter().map(|r|json!({"method":format!("{:?}",r.method),"states":r.states,"equivalent_fragments":r.equivalent_fragments,"opposed_faces":r.opposed_faces,"transverse_crossings":r.transverse_crossings.iter().map(|w|json!({"polygons":w.polygons,"edge":w.edge})).collect::<Vec<_>>(),"pairs":r.pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
         "source_sector_pairs":recovery.evidence.provenance.sector_pairs.iter().map(|p|json!({"edge":p.edge,"polygons":p.polygons,"positive_volume":p.positive_volume})).collect::<Vec<_>>(),
         "canceled_sheets":canceled_sheets,
         "normalize_coincident_sheets":normalize,
