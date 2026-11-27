@@ -770,14 +770,97 @@ fn noncollinear(points: &[Point3], ids: &BTreeSet<usize>, tolerance: f64) -> boo
             .any(|&id| direction.cross(points[id] - origin).magnitude() > tolerance * span)
 }
 
-// Gauss-Newton with a rank-revealing orthogonal constraint basis in R³.
-// Near-dependent directions do not add unstable displacement components.
+// Intersect the actual plane with the circular meridian containing the
+// source point. Unlike the linearized constraints, this construction is
+// well-conditioned when the surface normals become parallel at tangency.
+fn meridian_plane_seeds(
+    source: Point3,
+    curved: SurfaceCarrier,
+    plane: SurfaceCarrier,
+) -> Option<[Point3; 2]> {
+    let SurfaceCarrier::CircularRevolution {
+        axial_center,
+        axis,
+        radial_center,
+        profile_radius,
+    } = curved
+    else {
+        return None;
+    };
+    let SurfaceCarrier::Plane { origin, normal } = plane else {
+        return None;
+    };
+    let relative = source - axial_center;
+    let radial = relative - axis * relative.dot(axis);
+    let length = radial.magnitude();
+    if length <= f64::EPSILON || profile_radius <= 0.0 {
+        return None;
+    }
+    let radial = radial / length;
+    let a = radial.dot(normal);
+    let b = axis.dot(normal);
+    let projected_length = a.hypot(b);
+    if projected_length <= f64::EPSILON {
+        return None;
+    }
+    let center = axial_center + radial * radial_center;
+    let offset = (center - origin).dot(normal) / projected_length;
+    if offset.abs() > profile_radius {
+        return None;
+    }
+    let projected = radial * (a / projected_length) + axis * (b / projected_length);
+    let along = radial * (-b / projected_length) + axis * (a / projected_length);
+    let foot = center - projected * offset;
+    // Factor the discriminant to avoid cancellation near tangency.
+    let half_chord = ((profile_radius - offset.abs()) * (profile_radius + offset.abs())).sqrt();
+    Some([foot - along * half_chord, foot + along * half_chord])
+}
+
 pub(super) fn reconcile_point(
     source: Point3,
     carriers: &[SurfaceCarrier],
     options: ReconciliationOptions,
 ) -> Option<Point3> {
-    let mut point = source;
+    if let Some(point) = reconcile_from(source, source, carriers, options) {
+        return Some(point);
+    }
+    // Try both actual intersection branches. Each seed is merely a proposal:
+    // the same native residual and source displacement tests must still pass
+    // for the complete constraint set, including any third incident carrier.
+    let mut best = None::<Point3>;
+    for &curved in carriers {
+        if !matches!(curved, SurfaceCarrier::CircularRevolution { .. }) {
+            continue;
+        }
+        for &plane in carriers {
+            let Some(seeds) = meridian_plane_seeds(source, curved, plane) else {
+                continue;
+            };
+            for seed in seeds {
+                if (seed - source).magnitude() > options.max_displacement {
+                    continue;
+                }
+                if let Some(point) = reconcile_from(source, seed, carriers, options)
+                    && best.is_none_or(|previous| {
+                        (point - source).magnitude2() < (previous - source).magnitude2()
+                    })
+                {
+                    best = Some(point);
+                }
+            }
+        }
+    }
+    best
+}
+
+// Gauss-Newton with a rank-revealing orthogonal constraint basis in R³.
+// Near-dependent directions do not add unstable displacement components.
+fn reconcile_from(
+    source: Point3,
+    mut point: Point3,
+    carriers: &[SurfaceCarrier],
+    options: ReconciliationOptions,
+) -> Option<Point3> {
     for _ in 0..16 {
         let mut basis = Vec::<(Vector3, f64)>::new();
         let mut maximum = 0.0_f64;
@@ -897,6 +980,65 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(place_plane(seed, &constraints, options()).is_none());
+    }
+
+    #[test]
+    fn meridian_fallback_resolves_near_tangent_junction_within_source_budget()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let height = 0.049_999_96;
+        let source = Point3::new(0.600_000_000_1, 0.0, height);
+        let carriers = [
+            SurfaceCarrier::CircularRevolution {
+                axial_center: origin,
+                axis: Vector3::unit_z(),
+                radial_center: 0.6,
+                profile_radius: 0.05,
+            },
+            SurfaceCarrier::Plane {
+                origin: Point3::new(0.0, 0.0, height),
+                normal: Vector3::unit_z(),
+            },
+            SurfaceCarrier::Plane {
+                origin,
+                normal: Vector3::unit_y(),
+            },
+        ];
+        let policy = ReconciliationOptions {
+            max_displacement: 0.0001,
+            intersection_tolerance: 1.0e-12,
+            ..options()
+        };
+        assert!(reconcile_from(source, source, &carriers, policy).is_none());
+        let point =
+            reconcile_point(source, &carriers, policy).ok_or("near-tangent intersection")?;
+        assert!(point.x > 0.6);
+        assert!((point - source).magnitude() <= policy.max_displacement);
+        for carrier in carriers {
+            let (_, residual) = carrier.signed_constraint(point).ok_or("constraint")?;
+            assert!(residual.abs() <= policy.intersection_tolerance);
+        }
+        assert!(
+            reconcile_point(
+                source,
+                &carriers,
+                ReconciliationOptions {
+                    max_displacement: 0.00001,
+                    ..policy
+                }
+            )
+            .is_none()
+        );
+        let incompatible = [
+            carriers[0],
+            carriers[1],
+            SurfaceCarrier::Plane {
+                origin: source,
+                normal: Vector3::unit_x(),
+            },
+        ];
+        assert!(reconcile_point(source, &incompatible, policy).is_none());
+        Ok(())
     }
 
     #[test]
