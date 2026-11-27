@@ -1,0 +1,42 @@
+{
+  "format": 1,
+  "modules": [
+    {
+      "name": "sandbox",
+      "sources": [
+        "monstertruck-gpu/examples/sandbox-prefix.wgsl",
+        "monstertruck-gpu/examples/newton-cuberoot.wgsl",
+        "monstertruck-gpu/examples/sandbox-shader.wgsl"
+      ]
+    },
+    {
+      "name": "math-test",
+      "sources": [
+        "monstertruck-gpu/wgsl-utils/math.wgsl",
+        "monstertruck-gpu/tests/shaders/math-util.wgsl"
+      ]
+    },
+    {
+      "name": "polygon",
+      "sources": [
+        "monstertruck-render/src/shaders/microfacet-module.wgsl",
+        "monstertruck-render/src/shaders/polygon.wgsl"
+      ]
+    },
+    {
+      "name": "microfacet-test",
+      "sources": [
+        "monstertruck-render/src/shaders/microfacet-module.wgsl",
+        "monstertruck-render/tests/shaders/microfacet-module-test.wgsl"
+      ]
+    },
+    {
+      "name": "raytraces-test",
+      "sources": [
+        "monstertruck-render/src/shaders/microfacet-module.wgsl",
+        "monstertruck-render/tests/shaders/raytraces.wgsl"
+      ]
+    }
+  ],
+  "negative_tests": []
+}
