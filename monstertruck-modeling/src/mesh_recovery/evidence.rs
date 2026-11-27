@@ -62,7 +62,7 @@ pub use source_sectors::SourceSectorPair;
 pub use source_sheet::CanceledSourceSheet;
 pub use source_topology::{
     SeparatedSourceVertex, SourceForcedPair, SourceMultiplicityMethod, SourceMultiplicityPair,
-    SourceMultiplicityResolution,
+    SourceMultiplicityResolution, SourceTransverseCrossing,
 };
 pub use spatial::{
     AxialRadialStation, SpatialTrackEvidence, measure_curvature_spatial,

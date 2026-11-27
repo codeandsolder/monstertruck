@@ -16,6 +16,7 @@ mod multiplicity;
 pub use forced::SourceForcedPair;
 pub use multiplicity::{
     SourceMultiplicityMethod, SourceMultiplicityPair, SourceMultiplicityResolution,
+    SourceTransverseCrossing,
 };
 
 /// A distinct topological copy of an exactly coincident source position.

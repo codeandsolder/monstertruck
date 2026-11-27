@@ -190,8 +190,16 @@ impl Plane {
 // An exactly reversed vertex cycle denotes an opposed copy only when the
 // source polygon is a simple, nonzero-area, exactly planar region.
 pub(super) fn simple_planar_polygon(positions: &[Point3], polygon: &InputPolygon) -> bool {
-    Plane::from_points(polygon.vertices.iter().map(|&id| positions[id]))
-        .is_some_and(|plane| plane.polygon_sign(positions, polygon).is_some())
+    simple_planar_basis(positions, polygon).is_some()
+}
+
+pub(super) fn simple_planar_basis(
+    positions: &[Point3],
+    polygon: &InputPolygon,
+) -> Option<[Point3; 3]> {
+    let plane = Plane::from_points(polygon.vertices.iter().map(|&id| positions[id]))?;
+    plane.polygon_sign(positions, polygon)?;
+    Some(plane.basis)
 }
 
 const fn take_class(next: &mut usize) -> usize {

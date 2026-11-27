@@ -14,6 +14,7 @@ mod exclusions;
 mod peel;
 mod propagation;
 mod search;
+mod transverse;
 mod vertex_links;
 use equivalence::Profile;
 use search::Constraint;
@@ -32,10 +33,19 @@ pub struct SourceMultiplicityPair {
 pub enum SourceMultiplicityMethod {
     /// All anchored shells were necessarily closed on exact class incidence.
     ForcedClassClosure,
-    /// Global necessary joins under exact opposed-face constraints.
+    /// Global necessary joins under exact geometric incompatibility constraints.
     GlobalForcedMatching,
     /// Bounded exhaustive search of distinct geometric partitions.
     QuotientSearch,
+}
+
+/// A proper crossing of an original polygon edge through another face's interior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceTransverseCrossing {
+    /// Original polygon IDs, with the crossing segment belonging to the first.
+    pub polygons: [usize; 2],
+    /// Exact-welded endpoint IDs before source component separation.
+    pub edge: [usize; 2],
 }
 
 /// A source-incidence proof that found one geometric partition.
@@ -52,6 +62,8 @@ pub struct SourceMultiplicityResolution {
     pub pairs: Vec<SourceMultiplicityPair>,
     /// Original polygon pairs witnessing exact opposed-face exclusions.
     pub opposed_faces: Vec<[usize; 2]>,
+    /// Proper transverse crossings excluding same-shell assignments.
+    pub transverse_crossings: Vec<SourceTransverseCrossing>,
 }
 
 #[derive(Clone, Copy)]
@@ -211,18 +223,35 @@ impl<'a> ClusterInput<'a> {
         let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &[])?;
         let initial = self.solve(&classes, &graph);
         let mut opposed_faces = Vec::new();
+        let mut transverse_crossings = Vec::new();
         let (method, solution) = if let Some(result) = initial {
             result
         } else {
             let exclusions =
                 exclusions::opposed_faces(positions, polygons, &self.fragments, &classes);
-            if exclusions.is_empty() {
-                return None;
-            }
-            let labels = exclusions.iter().map(|e| e.classes).collect::<Vec<_>>();
-            let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &labels)?;
+            let mut labels = exclusions.iter().map(|e| e.classes).collect::<Vec<_>>();
             opposed_faces.extend(exclusions.into_iter().map(|e| e.polygons));
-            self.solve(&classes, &graph)?
+            let opposed = if labels.is_empty() {
+                None
+            } else {
+                let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &labels)?;
+                self.solve(&classes, &graph)
+            };
+            if let Some(result) = opposed {
+                result
+            } else {
+                let crossings =
+                    transverse::crossings(positions, polygons, &self.fragments, &classes, &labels);
+                if crossings.is_empty() {
+                    return None;
+                }
+                for (pair, witness) in crossings {
+                    labels.push(pair);
+                    transverse_crossings.push(witness);
+                }
+                let graph = class_graph::ClassGraph::new(&self.constraints, &classes, &labels)?;
+                self.solve(&classes, &graph)?
+            }
         };
         let mut pairs = Vec::new();
         for (&edge, uses) in self.edges.iter().zip(&self.uses) {
@@ -254,11 +283,15 @@ impl<'a> ClusterInput<'a> {
             equivalent_fragments,
             pairs,
             opposed_faces,
+            transverse_crossings,
         })
     }
 }
 
 fn original_ids(resolution: &mut SourceMultiplicityResolution, original: &[usize]) {
+    for witness in &mut resolution.transverse_crossings {
+        witness.polygons = witness.polygons.map(|id| original[id]);
+    }
     for witness in &mut resolution.opposed_faces {
         *witness = witness.map(|id| original[id]);
     }
