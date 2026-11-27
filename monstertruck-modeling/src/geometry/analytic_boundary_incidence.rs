@@ -53,8 +53,8 @@ pub struct BoundaryIncidenceError {
 /// necessary to derive the physical oriented surface normal.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeFaceIncidence {
-    pub carrier: AnalyticCarrier,
-    pub face_orientation: bool,
+    carrier: AnalyticCarrier,
+    face_orientation: bool,
 }
 
 /// A directed edge use in one face's ordered boundary traversal.
@@ -63,17 +63,17 @@ pub struct NativeFaceIncidence {
 /// The positions remain stable for the same stored B-rep topology.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeEdgeUse {
-    pub face_index: usize,
+    face_index: usize,
     /// Flat ordinal across all boundary wires on the face.
-    pub face_edge_index: usize,
+    face_edge_index: usize,
     /// Ordered wire ordinal on the face.
-    pub wire_index: usize,
+    wire_index: usize,
     /// Directed edge ordinal inside that wire.
-    pub wire_edge_index: usize,
+    wire_edge_index: usize,
     /// Shell-local topological vertex index, before the directed edge.
-    pub start_vertex: usize,
+    start_vertex: usize,
     /// Shell-local topological vertex index, after the directed edge.
-    pub end_vertex: usize,
+    end_vertex: usize,
 }
 
 /// A finite native topological vertex with an unrounded physical coordinate.
@@ -82,7 +82,7 @@ pub struct NativeEdgeUse {
 /// traversal ordinal, not a geometric equivalence key.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeVertexIncidence {
-    pub point: Point3,
+    point: Point3,
 }
 
 /// An ordered native face wire, retaining directed uses and both endpoints.
@@ -91,7 +91,7 @@ pub struct NativeVertexIncidence {
 /// establish a geometrically embedded or non-self-intersecting trim.
 #[derive(Clone, Debug)]
 pub struct NativeWireIncidence {
-    pub edges: Vec<NativeEdgeUse>,
+    edges: Vec<NativeEdgeUse>,
 }
 
 /// One topological edge's two boundary uses and their support relation.
@@ -104,33 +104,142 @@ pub struct NativeWireIncidence {
 #[derive(Clone, Copy, Debug)]
 pub struct NativeEdgeIncidence {
     /// Both oriented uses in ascending face/edge traversal order.
-    pub uses: [NativeEdgeUse; 2],
+    uses: [NativeEdgeUse; 2],
     /// True for one edge used in opposite directions by a single periodic face.
-    pub seam: bool,
+    seam: bool,
     /// True when adjacent face normals and geometric supports coincide.
-    pub same_oriented_support: bool,
+    same_oriented_support: bool,
     /// The complete spatial curve has a certified finite physical locus
     /// bounded by this topological edge's two vertices (both directed uses).
     /// Segment evidence remains a tolerance bound, not occupied-solid equality.
-    pub finite_segment_locus: bool,
+    finite_segment_locus: bool,
 }
 
 /// Complete native *incidence* evidence for one manifold boundary shell.
 #[derive(Clone, Debug)]
 pub struct NativeShellIncidence {
-    pub faces: Vec<NativeFaceIncidence>,
+    faces: Vec<NativeFaceIncidence>,
     /// First-seen topological vertices in deterministic face/wire/edge order.
-    pub vertices: Vec<NativeVertexIncidence>,
+    vertices: Vec<NativeVertexIncidence>,
     /// Ordered wires for each face, indexed identically to the face list.
-    pub face_wires: Vec<Vec<NativeWireIncidence>>,
-    pub edges: Vec<NativeEdgeIncidence>,
+    face_wires: Vec<Vec<NativeWireIncidence>>,
+    edges: Vec<NativeEdgeIncidence>,
 }
 
 /// Per-shell native incidence evidence. Zero shells is a valid empty B-rep;
 /// this is not a certificate that another solid has the same occupied set.
+/// The exposed tolerances are requested proof thresholds, not a verified
+/// outward-rounded interval certificate for extreme floating-point input.
+/// Nor does this snapshot track subsequent mutation of the source solid.
 #[derive(Clone, Debug)]
 pub struct NativeAnalyticBoundaryIncidence {
-    pub shells: Vec<NativeShellIncidence>,
+    shells: Vec<NativeShellIncidence>,
+    linear_tolerance: f64,
+    angular_tolerance: f64,
+}
+
+// Proof evidence is opaque to downstream crates: public field constructors
+// would permit fabricating a successful geometric certificate without running
+// the checked kernel validator. All accessors are read-only. The stored
+// tolerances are part of the proof's provenance and must not be silently
+// promoted to exact geometry during later boundary comparison.
+
+impl NativeFaceIncidence {
+    /// Whole-surface analytic carrier checked by the kernel.
+    #[must_use]
+    pub const fn carrier(self) -> AnalyticCarrier { self.carrier }
+
+    /// Native face orientation relative to its surface chart.
+    #[must_use]
+    pub const fn face_orientation(self) -> bool { self.face_orientation }
+}
+
+impl NativeEdgeUse {
+    /// Face ordinal within the certified shell.
+    #[must_use]
+    pub const fn face_index(self) -> usize { self.face_index }
+
+    /// Flattened directed edge ordinal across this face's wires.
+    #[must_use]
+    pub const fn face_edge_index(self) -> usize { self.face_edge_index }
+
+    /// Containing wire ordinal within its face.
+    #[must_use]
+    pub const fn wire_index(self) -> usize { self.wire_index }
+
+    /// Directed edge ordinal within the containing wire.
+    #[must_use]
+    pub const fn wire_edge_index(self) -> usize { self.wire_edge_index }
+
+    /// Shell-local topological index of the directed start vertex.
+    #[must_use]
+    pub const fn start_vertex(self) -> usize { self.start_vertex }
+
+    /// Shell-local topological index of the directed end vertex.
+    #[must_use]
+    pub const fn end_vertex(self) -> usize { self.end_vertex }
+}
+
+impl NativeVertexIncidence {
+    /// Original physical coordinate; no rounding or snapping was applied.
+    #[must_use]
+    pub const fn point(self) -> Point3 { self.point }
+}
+
+impl NativeWireIncidence {
+    /// Certified shared-edge incidences or directed uses in traversal order.
+    #[must_use]
+    pub fn edges(&self) -> &[NativeEdgeUse] { &self.edges }
+}
+
+impl NativeEdgeIncidence {
+    /// Both opposite directed incidences of this topological edge.
+    #[must_use]
+    pub const fn uses(self) -> [NativeEdgeUse; 2] { self.uses }
+
+    /// Whether the two uses belong to the same periodic face.
+    #[must_use]
+    pub const fn is_seam(self) -> bool { self.seam }
+
+    /// Whether both oriented carriers agree within recorded tolerances.
+    #[must_use]
+    pub const fn same_oriented_support(self) -> bool { self.same_oriented_support }
+
+    /// Whether this full physical edge is within the finite segment tolerance.
+    #[must_use]
+    pub const fn finite_segment_locus(self) -> bool { self.finite_segment_locus }
+}
+
+impl NativeShellIncidence {
+    /// All certified face carriers in native traversal order.
+    #[must_use]
+    pub fn faces(&self) -> &[NativeFaceIncidence] { &self.faces }
+
+    /// Distinct topological vertices with original physical coordinates.
+    #[must_use]
+    pub fn vertices(&self) -> &[NativeVertexIncidence] { &self.vertices }
+
+    /// Ordered wire loops of each face, including holes and separate trims.
+    #[must_use]
+    pub fn face_wires(&self) -> &[Vec<NativeWireIncidence>] { &self.face_wires }
+
+    /// Certified shared-edge incidences or directed uses in traversal order.
+    #[must_use]
+    pub fn edges(&self) -> &[NativeEdgeIncidence] { &self.edges }
+}
+
+impl NativeAnalyticBoundaryIncidence {
+    /// All certified manifold boundary shells, with their native orientations.
+    #[must_use]
+    pub fn shells(&self) -> &[NativeShellIncidence] { &self.shells }
+
+    /// Requested physical-coordinate threshold used by the kernel's local proofs.
+    #[must_use]
+    pub fn linear_tolerance(&self) -> f64 { self.linear_tolerance }
+
+    /// Requested angular threshold for carrier relations and transversality.
+    #[must_use]
+    pub fn angular_tolerance(&self) -> f64 { self.angular_tolerance }
 }
 
 #[derive(Clone, Copy)]
@@ -543,7 +652,11 @@ pub fn certify_native_analytic_boundary_incidence(
         .enumerate()
         .map(|(index, shell)| certify_shell(shell, index, linear_tolerance, angular_tolerance))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(NativeAnalyticBoundaryIncidence { shells })
+    Ok(NativeAnalyticBoundaryIncidence {
+        shells,
+        linear_tolerance,
+        angular_tolerance,
+    })
 }
 
 #[cfg(test)]
@@ -675,6 +788,61 @@ mod tests {
                 .map(|v| v.point)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn proof_snapshot_exposes_read_only_graph_and_original_tolerances() {
+        let result = certify_native_analytic_boundary_incidence(&cube(), LINEAR, ANGULAR);
+        assert!(result.is_ok(), "cube should certify");
+        let Ok(proof) = result else { return };
+        assert_eq!(proof.linear_tolerance(), LINEAR);
+        assert_eq!(proof.angular_tolerance(), ANGULAR);
+        assert_eq!(proof.shells().len(), 1);
+        let shell = &proof.shells()[0];
+        assert_eq!(shell.faces().len(), 6);
+        assert_eq!(shell.vertices().len(), 8);
+        assert_eq!(shell.face_wires().len(), shell.faces().len());
+        assert_eq!(shell.edges().len(), 12);
+        let mut directed_uses = Vec::new();
+        for (face_index, wires) in shell.face_wires().iter().enumerate() {
+            for (wire_index, wire) in wires.iter().enumerate() {
+                for (wire_edge_index, edge) in wire.edges().iter().copied().enumerate() {
+                    assert_eq!(edge.face_index(), face_index);
+                    assert_eq!(edge.wire_index(), wire_index);
+                    assert_eq!(edge.wire_edge_index(), wire_edge_index);
+                    assert!(edge.face_edge_index() < 4);
+                    let start = shell.vertices()[edge.start_vertex()].point();
+                    let end = shell.vertices()[edge.end_vertex()].point();
+                    assert!(finite(start) && finite(end));
+                    directed_uses.push(edge);
+                }
+            }
+        }
+        assert_eq!(directed_uses.len(), 24);
+        for face in shell.faces().iter().copied() {
+            let _ = face.carrier();
+            let _ = face.face_orientation();
+        }
+        for edge in shell.edges().iter().copied() {
+            let [first, second] = edge.uses();
+            assert_eq!(first.start_vertex(), second.end_vertex());
+            assert_eq!(first.end_vertex(), second.start_vertex());
+            assert!(!edge.is_seam());
+            assert!(!edge.same_oriented_support());
+            assert!(edge.finite_segment_locus());
+            assert!(directed_uses.contains(&first));
+            assert!(directed_uses.contains(&second));
+        }
+        let empty = certify_native_analytic_boundary_incidence(
+            &Solid::empty(),
+            LINEAR * 4.0,
+            ANGULAR * 2.0,
+        );
+        assert!(empty.is_ok());
+        let Ok(empty) = empty else { return };
+        assert!(empty.shells().is_empty());
+        assert_eq!(empty.linear_tolerance(), LINEAR * 4.0);
+        assert_eq!(empty.angular_tolerance(), ANGULAR * 2.0);
     }
 
     #[test]
