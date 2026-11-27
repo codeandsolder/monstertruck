@@ -195,3 +195,13 @@ quadrature estimates are not interval arithmetic or a bound on the total
 geometric volume error. Measurement consistency is separate from the
 unchanged paired-volume acceptance gate; the command exit status indicates
 execution success, not geometric equivalence.
+
+For elementary plane/cylinder-only bodies, the report also provides a
+`closed_boundary_measurement`. Native coedges are connected to their actual
+topological vertices; each carrier projection is connected back to the shared
+3-D spatial boundary by an explicitly integrated ruled ribbon. This removes
+artificial gaps caused by independently projecting a slightly off-carrier
+edge onto two incident faces. The separate projected measurement and each
+face's incidence/closure residual remain available. This is one documented
+closed-boundary interpretation of inexact STEP geometry, not a claim that
+the original carriers and trims were mathematically exact.

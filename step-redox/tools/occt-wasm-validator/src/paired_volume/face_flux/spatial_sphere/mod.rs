@@ -10,7 +10,7 @@
 
 use super::super::accurate_sum;
 use super::{
-    spatial_boundary::{self as boundary, ClosedWire, Span, cartesian, point_derivative},
+    spatial_boundary::{self as boundary, ClosedWire, Span, SpanEvaluator, cartesian},
     spatial_quadrature as quadrature,
 };
 use crate::vector::{Point, cross, dot, norm, scale, sub};
@@ -84,8 +84,8 @@ fn gauges(spans: &[Span], radial: f64) -> Result<[Gauge; 2]> {
     Ok([first, second])
 }
 
-fn integrand(span: &Span, t: f64, gauges: &[Gauge; 2]) -> Result<[f64; 5]> {
-    let (q, dq) = point_derivative(span, t);
+fn integrand(span: &SpanEvaluator, t: f64, gauges: &[Gauge; 2]) -> Result<[f64; 5]> {
+    let (q, dq) = span.evaluate(t);
     let length = norm(q);
     ensure!(
         length.is_finite() && length > 0.0,
@@ -130,7 +130,10 @@ fn sample(
 ) -> Result<Sample> {
     let integrals = spans
         .iter()
-        .map(|span| quadrature::integrate(&|t| integrand(span, t, gauges), tolerance))
+        .map(|span| {
+            let evaluator = SpanEvaluator::new(span)?;
+            quadrature::integrate(&|t| integrand(&evaluator, t, gauges), tolerance)
+        })
         .collect::<Result<Vec<_>>>()?;
     let sums = (0..5)
         .map(|i| accurate_sum(integrals.iter().map(|r| r.value[i])))
