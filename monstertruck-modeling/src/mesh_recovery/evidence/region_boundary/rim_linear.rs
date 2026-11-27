@@ -841,8 +841,8 @@ mod tests {
         };
         assert_eq!(origin, Point3::new(0.0, 0.0, 0.0));
         assert_eq!(axis, Vector3::unit_z());
-        assert!(radius_at_origin.to_bits() == 1.0_f64.to_bits());
-        assert!(slope.to_bits() == 0.0_f64.to_bits());
+        assert_eq!(radius_at_origin.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(slope.to_bits(), 0.0_f64.to_bits());
         Ok(())
     }
 
