@@ -51,14 +51,12 @@ where
     C: PolylineableCurve + Clone,
     S: MeshableSurface + Clone + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
-    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
-
     let shell = Shell::from(vec![face.clone()]);
     let triangulated = shell.triangulation(BooleanTolerance::new(tol).mesh_seed);
     let polygon = triangulated.first()?.surface()?;
     let positions = polygon.positions();
     let minimum_triangle_area = BooleanTolerance::new(tol).area_floor;
-    let mut candidates = polygon
+    let candidates = polygon
         .faces()
         .triangle_iter()
         .filter_map(|triangle| {
@@ -84,24 +82,42 @@ where
         );
     }
 
+    Some(spread_face_samples(candidates))
+}
+
+/// Preserve the stable area ordering and swap-removal tie policy while
+/// updating each candidate's distance to the selected witness set once per
+/// new witness, rather than rescanning all preceding witnesses.
+fn spread_face_samples(mut candidates: Vec<(f64, Point3)>) -> Vec<Point3> {
+    const MAX_CLASSIFICATION_SAMPLES: usize = 9;
+    if candidates.is_empty() {
+        return Vec::new();
+    }
     candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
-    let mut samples = vec![candidates.swap_remove(0).1];
-    while samples.len() < MAX_CLASSIFICATION_SAMPLES && !candidates.is_empty() {
-        let next = candidates
-            .iter()
+    let mut latest = candidates.swap_remove(0).1;
+    let mut samples = vec![latest];
+    // Area is no longer needed after choosing the first witness. Reuse its
+    // slot for the minimum squared distance to any selected witness.
+    for (nearest, _) in &mut candidates {
+        *nearest = f64::INFINITY;
+    }
+    while samples.len() < MAX_CLASSIFICATION_SAMPLES {
+        let Some(next) = candidates
+            .iter_mut()
             .enumerate()
-            .map(|(index, (_, point))| {
-                let distance2 = samples
-                    .iter()
-                    .map(|sample| sample.distance2(*point))
-                    .fold(f64::INFINITY, f64::min);
-                (index, distance2)
+            .map(|(index, (nearest, point))| {
+                *nearest = nearest.min(latest.distance2(*point));
+                (index, *nearest)
             })
             .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
-            .map(|(index, _)| index)?;
-        samples.push(candidates.swap_remove(next).1);
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        latest = candidates.swap_remove(next).1;
+        samples.push(latest);
     }
-    Some(samples)
+    samples
 }
 
 fn strict_majority(inside: usize, outside: usize) -> Option<bool> {
@@ -331,6 +347,50 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
 #[cfg(test)]
 mod vote_tests {
     use super::*;
+
+    #[test]
+    fn incremental_witness_distances_preserve_exhaustive_selection() {
+        fn reference(mut candidates: Vec<(f64, Point3)>) -> Vec<Point3> {
+            candidates.sort_by(|lhs, rhs| rhs.0.total_cmp(&lhs.0));
+            if candidates.is_empty() {
+                return Vec::new();
+            }
+            let mut samples = vec![candidates.swap_remove(0).1];
+            while samples.len() < 9 && !candidates.is_empty() {
+                let (next, _) = candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, point))| {
+                        let distance = samples.iter().fold(f64::INFINITY, |nearest, sample| {
+                            nearest.min(sample.distance2(*point))
+                        });
+                        (index, distance)
+                    })
+                    .max_by(|lhs, rhs| lhs.1.total_cmp(&rhs.1))
+                    .expect("nonempty candidates");
+                samples.push(candidates.swap_remove(next).1);
+            }
+            samples
+        }
+
+        // Distinct areas, equal areas, coincident centroids and symmetric
+        // distances exercise both initial ordering and last-maximum ties.
+        for count in 0..=63 {
+            for offset in 0..7 {
+                let candidates = (0..count)
+                    .map(|i| {
+                        let x = f64::from((i + offset) % 5) - 2.0;
+                        let y = f64::from((i / 5 + offset) % 5) - 2.0;
+                        (f64::from((i + offset) % 3), Point3::new(x, y, 0.0))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    spread_face_samples(candidates.clone()),
+                    reference(candidates)
+                );
+            }
+        }
+    }
 
     #[test]
     fn curved_two_edge_face_samples_from_its_trimmed_interior() {
