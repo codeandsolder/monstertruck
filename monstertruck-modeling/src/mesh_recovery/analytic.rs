@@ -511,6 +511,18 @@ pub fn construct_analytic_recovery(
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
     let (joint_fits, joint_fit_rejections) =
         joint_recovery::repair(&evidence, &mut assembly, options)?;
+    let trim = options.trim_options(&evidence);
+    RegionBoundaryIndex::new(&evidence)?.repair_planar_crossings(
+        &assembly.reconciled.partition,
+        &assembly.reconciled.positions,
+        &mut assembly.trims,
+        &mut assembly.native,
+        NativeTrimOptions {
+            max_vertex_displacement: trim.absolute_tolerance,
+            intersection_tolerance: KERNEL_EPSILON * 0.1,
+            angular_resolution: options.axis_relative_resolution,
+        },
+    )?;
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,

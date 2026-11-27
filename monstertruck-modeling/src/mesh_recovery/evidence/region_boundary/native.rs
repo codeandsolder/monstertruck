@@ -22,6 +22,7 @@ use std::{
 
 mod band;
 mod hybrid;
+mod planar_repair;
 pub use hybrid::{
     HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
