@@ -436,7 +436,9 @@ impl RecoveredAnalyticMesh {
         options: HybridRefinementOptions,
     ) -> Option<CoverCandidate> {
         for &support in supports {
-            if !search.closures.contains_key(&support) {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                search.closures.entry(support)
+            {
                 let closure = support_closure(
                     &self.evidence,
                     &self.reconciled.partition,
@@ -445,7 +447,7 @@ impl RecoveredAnalyticMesh {
                     options,
                 )
                 .ok()?;
-                search.closures.insert(support, closure);
+                entry.insert(closure);
             }
         }
         search.witnessed_followup(candidate, supports)
