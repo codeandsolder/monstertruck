@@ -826,18 +826,26 @@ impl HybridSource<'_> {
                         });
                     }
                     if trials < options.max_trials {
-                        followup = self.crossing_followup(
-                            &mut search,
-                            &candidate,
-                            &mut self.domain_choices(
-                                &refined.partition,
-                                &refined.trims,
-                                &refined.recovery.native,
-                                options.refinement.strict.intersection_tolerance,
-                            )?,
-                            permitted_supports,
-                            options.refinement,
-                        );
+                        match self.domain_choices(
+                            &refined.partition,
+                            &refined.trims,
+                            &refined.recovery.native,
+                            options.refinement.strict.intersection_tolerance,
+                        ) {
+                            Ok(mut choices) => {
+                                followup = self.crossing_followup(
+                                    &mut search,
+                                    &candidate,
+                                    &mut choices,
+                                    permitted_supports,
+                                    options.refinement,
+                                );
+                            }
+                            Err(error) => {
+                                last = error;
+                                break;
+                            }
+                        }
                     }
                     last = incomplete_recovery_error(&candidate.seeds, &refined);
                 }
@@ -847,6 +855,7 @@ impl HybridSource<'_> {
         }
         Err(HybridRecoveryError::SupportSearch {
             states: search.states,
+            queued_states: search.visited.len(),
             trials,
             last: Box::new(last),
         })
@@ -892,9 +901,18 @@ impl RecoveredAnalyticMesh {
                 Ok(result)
             }
             Err(alternative_error) => {
+                let (states, queued_states, trials) = match &alternative_error {
+                    HybridRecoveryError::SupportSearch {
+                        states,
+                        queued_states,
+                        trials,
+                        ..
+                    } => (*states, *queued_states, *trials),
+                    _ => (0, 0, 0),
+                };
                 let remaining = HybridSupportSearchOptions {
-                    max_trials: options.max_trials - alternative_trials,
-                    max_states: options.max_states - alternative_states,
+                    max_trials: options.max_trials - trials,
+                    max_states: options.max_states - queued_states,
                     ..options
                 };
                 if remaining.max_trials == 0 || remaining.max_states == 0 {
@@ -902,12 +920,6 @@ impl RecoveredAnalyticMesh {
                 }
                 match primary.search_contacts(permitted_supports, remaining) {
                     Ok(mut result) => {
-                        let (states, trials) = match &alternative_error {
-                            HybridRecoveryError::SupportSearch { states, trials, .. } => {
-                                (*states, *trials)
-                            }
-                            _ => (0, 0),
-                        };
                         result.trials += trials;
                         result.states += states;
                         Ok(result)

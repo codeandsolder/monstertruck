@@ -180,11 +180,13 @@ pub enum HybridRecoveryError {
     },
     /// Bounded support-cover search exhausted its proposals.
     #[error(
-        "hybrid support search exhausted after {states} states and {trials} transactions: {last}"
+        "hybrid support search exhausted after {states} visited / {queued_states} queued states and {trials} transactions: {last}"
     )]
     SupportSearch {
         /// Number of visited candidate states.
         states: usize,
+        /// Number of distinct states admitted to the frontier, including unvisited ones.
+        queued_states: usize,
         /// Number of attempted full native transactions.
         trials: usize,
         /// Most recent geometric rejection or missing admissible cover.
