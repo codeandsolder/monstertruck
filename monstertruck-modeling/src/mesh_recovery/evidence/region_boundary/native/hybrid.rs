@@ -848,7 +848,7 @@ mod tests {
             let fraction = crate::usize_to_f64(i) / crate::usize_to_f64(stations - 1);
             for j in 0..ring {
                 let angle = TAU * crate::usize_to_f64(j) / crate::usize_to_f64(ring);
-                let fixed = fraction * (1.0 + 0.15 * (3.0 * angle).sin());
+                let fixed = fraction * (0.15_f64.mul_add((3.0 * angle).sin(), 1.0));
                 let [u, v] = if varying == 0 {
                     [angle, fixed]
                 } else {

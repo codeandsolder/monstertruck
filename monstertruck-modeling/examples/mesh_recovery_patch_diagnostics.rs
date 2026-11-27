@@ -674,6 +674,43 @@ fn replay_facet(path: &Path) -> Result<()> {
     Ok(())
 }
 
+type TrialMode = (std::ffi::OsString, usize, Vec<usize>);
+
+fn read_trial_mode(
+    args: &mut impl Iterator<Item = std::ffi::OsString>,
+) -> Result<Option<TrialMode>> {
+    args.next()
+        .map(|flag| -> Result<_> {
+            anyhow::ensure!(
+                flag == "--release-conflicts"
+                    || flag == "--resolve-crossings"
+                    || flag == "--release-unresolved"
+                    || flag == "--replay-supports",
+                "unknown trial mode"
+            );
+            let limit = args
+                .next()
+                .context("expected additional polygon limit")?
+                .to_str()
+                .context("non-UTF8 limit")?
+                .parse::<usize>()
+                .context("numeric polygon limit")?;
+            let seeds = if flag == "--replay-supports" {
+                args.next()
+                    .context("expected comma-separated support IDs")?
+                    .to_str()
+                    .context("non-UTF8 support IDs")?
+                    .split(',')
+                    .map(str::parse::<usize>)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
+            Ok((flag, limit, seeds))
+        })
+        .transpose()
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("expected OBJ path or --replay-facet")?);
@@ -706,37 +743,7 @@ fn main() -> Result<()> {
         })
         .then(|| args.next().map(PathBuf::from))
         .flatten();
-    let mode = args
-        .next()
-        .map(|flag| -> Result<_> {
-            anyhow::ensure!(
-                flag == "--release-conflicts"
-                    || flag == "--resolve-crossings"
-                    || flag == "--release-unresolved"
-                    || flag == "--replay-supports",
-                "unknown trial mode"
-            );
-            let limit = args
-                .next()
-                .context("expected additional polygon limit")?
-                .to_str()
-                .context("non-UTF8 limit")?
-                .parse::<usize>()
-                .context("numeric polygon limit")?;
-            let seeds = if flag == "--replay-supports" {
-                args.next()
-                    .context("expected comma-separated support IDs")?
-                    .to_str()
-                    .context("non-UTF8 support IDs")?
-                    .split(',')
-                    .map(str::parse::<usize>)
-                    .collect::<std::result::Result<Vec<_>, _>>()?
-            } else {
-                Vec::new()
-            };
-            Ok((flag, limit, seeds))
-        })
-        .transpose()?;
+    let mode = read_trial_mode(&mut args)?;
     anyhow::ensure!(
         args.next().is_none()
             && vertex.is_finite()

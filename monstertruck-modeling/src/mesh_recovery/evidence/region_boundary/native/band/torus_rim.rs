@@ -165,7 +165,7 @@ impl BandContext<'_> {
         }
         let fixed = 1 - ring.axis;
         let h0 = (side * (start[fixed] - ring.fixed)).rem_euclid(TAU);
-        let h1 = h0 + side * delta[fixed];
+        let h1 = side.mul_add(delta[fixed], h0);
         let height = [h0, h1];
         if height
             .iter()
@@ -210,7 +210,9 @@ impl BandContext<'_> {
             let uv = self.torus_chart(point)?;
             let phase = (direction * (uv[ring.axis] - first)).rem_euclid(TAU);
             let [lo, hi] = ranges[i];
-            let angle = phase + ((lo.midpoint(hi) - phase) / TAU).round() * TAU;
+            let angle = ((lo.midpoint(hi) - phase) / TAU)
+                .round()
+                .mul_add(TAU, phase);
             if angle <= lo + resolution || angle >= hi - resolution {
                 continue;
             }
@@ -218,7 +220,7 @@ impl BandContext<'_> {
             // rim just once, including any backwards-going steps.
             if ranges.iter().enumerate().any(|(j, &[a, b])| {
                 j != i && {
-                    let p = angle + ((a.midpoint(b) - angle) / TAU).round() * TAU;
+                    let p = ((a.midpoint(b) - angle) / TAU).round().mul_add(TAU, angle);
                     p >= a.min(b) - resolution && p <= a.max(b) + resolution
                 }
             }) {
