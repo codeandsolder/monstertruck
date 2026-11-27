@@ -338,14 +338,34 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let (rhs_min, rhs_max) = rhs_curve.range_tuple();
     let mut lhs_parameter = lhs_curve.search_nearest_parameter(approximate, None, 100)?;
     let mut rhs_parameter = rhs_curve.search_nearest_parameter(approximate, None, 100)?;
+    // The operation tolerance admits a crossing; it is not the desired
+    // numerical accuracy of the computed point. Continue refining an
+    // admitted local solution while its residual decreases. Keep the
+    // accepted branch if further refinement is singular or cannot improve.
+    let mut accepted: Option<(Point3, f64)> = None;
+    let mut anchor: Option<Point3> = None;
     for _ in 0..32 {
         let (lhs_point, rhs_point) = (
             lhs_curve.evaluate(lhs_parameter),
             rhs_curve.evaluate(rhs_parameter),
         );
         let gap = lhs_point - rhs_point;
-        if gap.magnitude() <= tol {
-            return Some(lhs_point.midpoint(rhs_point));
+        let residual = gap.magnitude();
+        if !residual.is_finite() {
+            break;
+        }
+        if residual <= tol {
+            let point = lhs_point.midpoint(rhs_point);
+            let first = *anchor.get_or_insert(point);
+            if point.distance(first) > tol || accepted.is_some_and(|(_, best)| residual >= best) {
+                break;
+            }
+            accepted = Some((point, residual));
+            if residual <= f64::MIN_POSITIVE {
+                break;
+            }
+        } else if accepted.is_some() {
+            break;
         }
         let (lhs_derivative, rhs_derivative) = (
             lhs_curve.derivative(lhs_parameter),
@@ -356,7 +376,7 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let mixed = -lhs_derivative.dot(rhs_derivative);
         let determinant = diagonal0.mul_add(diagonal1, -(mixed * mixed));
         if !determinant.is_finite() || determinant <= f64::EPSILON * diagonal0 * diagonal1 {
-            return None;
+            break;
         }
         let gradient0 = -lhs_derivative.dot(gap);
         let gradient1 = rhs_derivative.dot(gap);
@@ -365,7 +385,7 @@ fn exact_curve_crossing<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         lhs_parameter = (lhs_parameter + step0).clamp(lhs_min, lhs_max);
         rhs_parameter = (rhs_parameter + step1).clamp(rhs_min, rhs_max);
     }
-    None
+    accepted.map(|(point, _)| point)
 }
 
 /// Gather real curve intersections and existing endpoints lying in another
@@ -1831,6 +1851,22 @@ mod tests {
             !needs_exact_noding(&edges, 1.0, 1.0e-6),
             "inverse-mapping drift at the SAME analytic 3D endpoint is not an interior cut"
         );
+    }
+
+    #[test]
+    fn exact_crossing_refines_an_already_admissible_seed() {
+        let mut fixture = PlanarFixture::new(&[[-1., 0.], [1., 0.], [0., -1.], [0., 1.]]);
+        let lhs = ProjectedEdge {
+            edge: fixture.edge(0, 1),
+            uv: Vec::new(),
+        };
+        let rhs = ProjectedEdge {
+            edge: fixture.edge(2, 3),
+            uv: Vec::new(),
+        };
+        let seed = Point3::new(2e-7, -3e-7, 0.);
+        let point = exact_curve_crossing(&lhs, &rhs, seed, 1e-6).expect("crossing");
+        assert!(point.distance(Point3::new(0., 0., 0.)) <= DEFAULT_NUMERICAL_TOLERANCES.structural);
     }
 
     #[test]
