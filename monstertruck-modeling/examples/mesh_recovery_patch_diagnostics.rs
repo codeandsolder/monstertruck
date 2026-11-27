@@ -597,6 +597,7 @@ fn unresolved_contact_trial(
             report["released_polygons"] = json!(search.released_polygons);
             report["states"] = json!(search.states);
             report["trials"] = json!(search.trials);
+            report["ownership_alternative"] = json!(search.ownership_alternative);
             report
         }
         Err(error) => {

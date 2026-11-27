@@ -10,8 +10,8 @@ use crate::{
     mesh_recovery::{
         MeshEvidence,
         evidence::{
-            JointFitCandidate, JointFitContext, JointFitMethod, JointFitOptions, JointFitRejection,
-            fit_neighborhood,
+            FrozenSourceFit, JointFitCandidate, JointFitContext, JointFitMethod, JointFitOptions,
+            JointFitRejection, fit_neighborhood,
         },
     },
 };
@@ -29,6 +29,8 @@ pub struct JointFitReport {
     pub refitted_regions: usize,
     /// Original failed source edges repaired by this transaction.
     pub repaired_edges: usize,
+    /// Additional original supports absorbed at witnessed failed contacts.
+    pub ownership_additions: usize,
     /// Maximum actual displacement of an affected source vertex, including native assembly.
     pub max_displacement: f64,
     /// Largest local allowance supplied by sampled chord evidence or caller uncertainty.
@@ -170,7 +172,7 @@ fn dependent_neighborhoods(
     result
 }
 
-fn native_displacement(
+pub(super) fn native_displacement(
     evidence: &MeshEvidence,
     assembly: &NativeAssembly,
     candidate: &JointFitCandidate,
@@ -358,6 +360,7 @@ fn try_fit(
         regions: regions.to_vec(),
         refitted_regions,
         repaired_edges: before.len() - after.len(),
+        ownership_additions: 0,
         max_displacement,
         max_allowance,
         max_additional_carrier_residual,
@@ -368,6 +371,7 @@ pub(super) fn repair(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
     options: AnalyticRecoveryOptions,
+    frozen: Option<&FrozenSourceFit>,
 ) -> Result<(Vec<JointFitReport>, Vec<JointFitAttempt>), AnalyticRecoveryError> {
     let mut reports = Vec::new();
     let mut rejected = Vec::new();
@@ -377,15 +381,17 @@ pub(super) fn repair(
     if failed_neighborhoods(assembly).is_empty() {
         return Ok((reports, rejected));
     }
-    let Some(mut context) = JointFitContext::new(
-        evidence,
-        &assembly.reconciled.partition,
-        JointFitOptions {
-            maximum_adjustment: options.max_reconstruction_adjustment,
-            declared_uncertainty: options.source_position_uncertainty,
-            angular_resolution: options.axis_relative_resolution,
-        },
-    ) else {
+    let policy = JointFitOptions {
+        maximum_adjustment: options.max_reconstruction_adjustment,
+        declared_uncertainty: options.source_position_uncertainty,
+        angular_resolution: options.axis_relative_resolution,
+    };
+    let partition = &assembly.reconciled.partition;
+    let context = frozen.map_or_else(
+        || JointFitContext::new(evidence, partition, policy),
+        |fit| fit.context(evidence, partition, policy),
+    );
+    let Some(mut context) = context else {
         return Ok((reports, rejected));
     };
     let mut trials = 0;

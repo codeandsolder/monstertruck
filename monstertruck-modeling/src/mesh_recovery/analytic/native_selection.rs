@@ -9,8 +9,11 @@ use super::{
     assemble_native,
 };
 use std::collections::BTreeSet;
+mod feedback;
+mod ownership;
+use ownership::OwnershipTrial;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct PartitionAlternative {
     pub partition: SurfaceRegionPartition,
     pub selected: Vec<SelectedSurfaceProposal>,
@@ -215,12 +218,26 @@ pub(super) struct NativeSelection {
     pub assembly: super::NativeAssembly,
     pub compared_neighborhoods: usize,
     pub expanded_neighborhoods: usize,
+    pub ownership: Option<OwnershipTrial>,
+    pub ownership_rejection: Option<super::JointFitAttempt>,
+    pub pending_ownership: Option<super::NativeAssembly>,
 }
 
-/// Select the more complete native reconstruction per independent affected
-/// neighborhood, with valid curved coverage as the secondary objective.
-/// Reassemble mixed choices once to verify the joint result. No additional
-/// geometric recognition or tolerance relaxation is involved.
+enum RawChoice {
+    Core,
+    Expanded,
+    Combined(Box<(PartitionAlternative, super::NativeAssembly)>),
+}
+
+struct RawDecision {
+    choice: RawChoice,
+    compared_neighborhoods: usize,
+    expanded_neighborhoods: usize,
+}
+
+/// Compare independent ownership alternatives. Reconcile displaced source
+/// junctions on a competing expanded partition before accepting it, without
+/// allowing new native failures or invalidating previously successful supports.
 pub(super) fn select_native(
     evidence: &MeshEvidence,
     core: PartitionAlternative,
@@ -229,7 +246,73 @@ pub(super) fn select_native(
 ) -> Result<NativeSelection, AnalyticRecoveryError> {
     let core_assembly = assemble_native(evidence, core.partition.clone(), options)?;
     let expanded_assembly = assemble_native(evidence, expanded.partition.clone(), options)?;
-    let groups = affected_groups(evidence, &core, &expanded);
+    let decision = select_raw(
+        evidence,
+        &core,
+        &expanded,
+        &core_assembly,
+        &expanded_assembly,
+        options,
+    )?;
+    let baseline = match &decision.choice {
+        RawChoice::Core => &core_assembly,
+        RawChoice::Expanded => &expanded_assembly,
+        RawChoice::Combined(combined) => &combined.1,
+    };
+    let outcome = ownership::attempt(
+        evidence,
+        &core,
+        &expanded,
+        &expanded_assembly,
+        baseline,
+        options,
+    )?;
+    let mut ownership_rejection = None;
+    let mut pending_ownership = None;
+    if let Some(trial) = outcome {
+        match trial {
+            Ok((alternative, assembly, fit)) => {
+                return Ok(NativeSelection {
+                    alternative,
+                    assembly,
+                    compared_neighborhoods: decision.compared_neighborhoods,
+                    expanded_neighborhoods: decision.compared_neighborhoods,
+                    ownership: Some(fit),
+                    ownership_rejection: None,
+                    pending_ownership: None,
+                });
+            }
+            Err(rejected) => {
+                ownership_rejection = Some(rejected.attempt);
+                pending_ownership = rejected.pending.map(|assembly| *assembly);
+            }
+        }
+    }
+    let (alternative, assembly) = match decision.choice {
+        RawChoice::Core => (core, core_assembly),
+        RawChoice::Expanded => (expanded, expanded_assembly),
+        RawChoice::Combined(combined) => *combined,
+    };
+    Ok(NativeSelection {
+        alternative,
+        assembly,
+        compared_neighborhoods: decision.compared_neighborhoods,
+        expanded_neighborhoods: decision.expanded_neighborhoods,
+        ownership: None,
+        ownership_rejection,
+        pending_ownership,
+    })
+}
+
+fn select_raw(
+    evidence: &MeshEvidence,
+    core: &PartitionAlternative,
+    expanded: &PartitionAlternative,
+    core_assembly: &super::NativeAssembly,
+    expanded_assembly: &super::NativeAssembly,
+    options: AnalyticRecoveryOptions,
+) -> Result<RawDecision, AnalyticRecoveryError> {
+    let groups = affected_groups(evidence, core, expanded);
     let core_scores = group_coverage(evidence, &core.partition, &core_assembly.native, &groups);
     let expanded_scores = group_coverage(
         evidence,
@@ -250,7 +333,7 @@ pub(super) fn select_native(
         }
     }
     // Different carriers on the same exact membership also count.
-    for (alternative, other) in [(&core, &expanded), (&expanded, &core)] {
+    for (alternative, other) in [(core, expanded), (expanded, core)] {
         for (&id, proposal) in alternative
             .partition
             .selected_proposals
@@ -272,12 +355,12 @@ pub(super) fn select_native(
         .iter()
         .filter(|&&group| take_expanded[group])
         .count();
-    let (alternative, assembly, expanded_neighborhoods) = if expanded_neighborhoods == 0 {
-        (core, core_assembly, 0)
+    let (choice, expanded_neighborhoods) = if expanded_neighborhoods == 0 {
+        (RawChoice::Core, 0)
     } else if expanded_neighborhoods == compared_neighborhoods {
-        (expanded, expanded_assembly, expanded_neighborhoods)
+        (RawChoice::Expanded, expanded_neighborhoods)
     } else {
-        let combined = combine(evidence, &core, &expanded, &take_expanded)?;
+        let combined = combine(evidence, core, expanded, &take_expanded)?;
         let assembly = assemble_native(evidence, combined.partition.clone(), options)?;
         // Reconciliation and native chart seams may affect other regions.
         // Validate the actual combined assembly against both candidates.
@@ -286,16 +369,18 @@ pub(super) fn select_native(
         let expanded_score =
             total_coverage(evidence, &expanded.partition, &expanded_assembly.native);
         if score >= core_score.max(expanded_score) {
-            (combined, assembly, expanded_neighborhoods)
+            (
+                RawChoice::Combined(Box::new((combined, assembly))),
+                expanded_neighborhoods,
+            )
         } else if expanded_score > core_score {
-            (expanded, expanded_assembly, compared_neighborhoods)
+            (RawChoice::Expanded, compared_neighborhoods)
         } else {
-            (core, core_assembly, 0)
+            (RawChoice::Core, 0)
         }
     };
-    Ok(NativeSelection {
-        alternative,
-        assembly,
+    Ok(RawDecision {
+        choice,
         compared_neighborhoods,
         expanded_neighborhoods,
     })
