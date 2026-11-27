@@ -26,9 +26,36 @@ pub(in crate::mesh_recovery::analytic) struct OwnershipTrial {
     pub frozen: FrozenSourceFit,
 }
 
-type TrialResult = Result<(PartitionAlternative, NativeAssembly, OwnershipTrial), JointFitAttempt>;
+pub(super) struct RejectedOwnership {
+    pub attempt: JointFitAttempt,
+    pub pending: Option<Box<NativeAssembly>>,
+}
 
-pub(super) fn rejection(regions: Vec<usize>, rejection: JointFitRejection) -> JointFitAttempt {
+type TrialResult =
+    Result<(PartitionAlternative, NativeAssembly, OwnershipTrial), RejectedOwnership>;
+
+fn improves_contacts(baseline: &NativeAssembly, candidate: &NativeAssembly) -> bool {
+    let before = failed_edges(baseline);
+    let after = failed_edges(candidate);
+    before.len() > after.len()
+        && after.is_subset(&before)
+        && baseline.trims.ambiguous_edges == candidate.trims.ambiguous_edges
+}
+
+fn quality(
+    evidence: &MeshEvidence,
+    assembly: &NativeAssembly,
+) -> (std::cmp::Reverse<usize>, super::Coverage) {
+    (
+        std::cmp::Reverse(failed_edges(assembly).len()),
+        total_coverage(evidence, &assembly.reconciled.partition, &assembly.native),
+    )
+}
+
+pub(super) const fn rejection(
+    regions: Vec<usize>,
+    rejection: JointFitRejection,
+) -> JointFitAttempt {
     JointFitAttempt {
         regions,
         method: JointFitMethod::OwnershipJunctions,
@@ -53,7 +80,7 @@ fn changed_regions(
         .collect()
 }
 
-fn speculative_error(
+const fn speculative_error(
     error: AnalyticRecoveryError,
 ) -> Result<JointFitRejection, AnalyticRecoveryError> {
     match error {
@@ -84,6 +111,7 @@ pub(super) fn attempt(
     let mut partition = raw.reconciled.partition.clone();
     let mut best = None::<(PartitionAlternative, NativeAssembly, OwnershipTrial)>;
     let mut last_rejection = None;
+    let mut pending = None::<Box<NativeAssembly>>;
     let mut additions = 0;
     for _ in 0..options.max_joint_fit_trials {
         let (assembly, mut fit) = match fit_partition(evidence, raw, &partition, &regions, options)
@@ -115,22 +143,29 @@ pub(super) fn attempt(
         match accept(evidence, baseline, &assembly) {
             Ok(repaired_edges) => {
                 fit.report.repaired_edges = repaired_edges;
-                let quality = |a: &NativeAssembly| {
-                    (
-                        total_coverage(evidence, &a.reconciled.partition, &a.native),
-                        std::cmp::Reverse(failed_edges(a).len()),
-                    )
-                };
-                if best
-                    .as_ref()
-                    .is_none_or(|(_, previous, _)| quality(&assembly) > quality(previous))
-                {
+                if best.as_ref().is_none_or(|(_, previous, _)| {
+                    let candidate = quality(evidence, &assembly);
+                    let old = quality(evidence, previous);
+                    (candidate.1, candidate.0) > (old.1, old.0)
+                }) {
                     let mut alternative = expanded.clone();
                     alternative.partition = partition.clone();
                     best = Some((alternative, assembly, fit));
                 }
             }
-            Err(reason) => last_rejection = Some(rejection(fit.report.regions, reason)),
+            Err(reason) => {
+                last_rejection = Some(rejection(fit.report.regions, reason));
+                // A failed strict chart is not a reason to discard a
+                // source-bounded candidate with strictly better contacts.
+                // Keep it separately for an explicitly budgeted hybrid trial.
+                if improves_contacts(baseline, &assembly)
+                    && pending
+                        .as_ref()
+                        .is_none_or(|old| quality(evidence, &assembly) > quality(evidence, old))
+                {
+                    pending = Some(Box::new(assembly));
+                }
+            }
         }
         let Some((next_partition, next_regions, added)) = next else {
             break;
@@ -139,7 +174,9 @@ pub(super) fn attempt(
         regions = next_regions;
         additions += added;
     }
-    Ok(best.map(Ok).or_else(|| last_rejection.map(Err)))
+    Ok(best
+        .map(Ok)
+        .or_else(|| last_rejection.map(|attempt| Err(RejectedOwnership { attempt, pending }))))
 }
 
 fn fit_partition(

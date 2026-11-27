@@ -12,6 +12,7 @@ use monstertruck_geometry::analytic_curve_incidence::{
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
 use std::f64::consts::{PI, TAU};
+mod simplicity;
 
 #[derive(Clone, Copy, Debug)]
 enum PathKind {
@@ -78,6 +79,7 @@ fn simple_cycle(paths: &[RimPath], resolution: f64) -> bool {
         PathKind::Circle => p.advance > resolution,
     }) || shear_feasible(paths, 1.0, resolution)
         || shear_feasible(paths, -1.0, resolution)
+        || simplicity::simple_periodic_cycle(paths, resolution)
 }
 
 // A full meridional winding requires a ring torus. An azimuthal
@@ -291,7 +293,11 @@ impl BandContext<'_> {
             }
         }
         let resolution = self.options.angular_resolution;
-        if !simple_cycle(&paths, resolution)
+        if rim
+            .iter()
+            .zip(rim.iter().cycle().skip(1))
+            .any(|(a, b)| a.back() != b.front())
+            || !simple_cycle(&paths, resolution)
             || paths
                 .iter()
                 .zip(paths.iter().cycle().skip(1))

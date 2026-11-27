@@ -5,7 +5,7 @@
 //! lifted edge cannot fix that. Release only the adjacent observed support
 //! (if explicitly permitted), not the whole independently fitted region.
 
-use super::{HybridInput, HybridRecovery, HybridRecoveryError};
+use super::{HybridInput, HybridRecovery, HybridRecoveryError, HybridSource};
 use crate::mesh_recovery::{
     MeshEvidence, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryError,
     RegionBoundaryIndex, RegionPatchOptions, SharedTrimGraph, SharedTrimOptions, SurfaceCarrier,
@@ -281,7 +281,7 @@ fn split_partition(
 }
 
 fn check_original_retention(
-    original: &RecoveredAnalyticMesh,
+    original: &HybridSource<'_>,
     refined: &RefinedPartition,
     graph: &crate::mesh_recovery::SharedTrimGraph,
     result: &HybridRecovery,
@@ -367,10 +367,21 @@ impl RecoveredAnalyticMesh {
         permitted_supports: &[usize],
         options: HybridRefinementOptions,
     ) -> Result<RefinedHybridRecovery, HybridRecoveryError> {
-        let index = RegionBoundaryIndex::new(&self.evidence)?;
+        HybridSource::primary(self).construct_refined_hybrid(seed, permitted_supports, options)
+    }
+}
+
+impl HybridSource<'_> {
+    pub(super) fn construct_refined_hybrid(
+        &self,
+        seed: HybridRefinementSeed<'_>,
+        permitted_supports: &[usize],
+        options: HybridRefinementOptions,
+    ) -> Result<RefinedHybridRecovery, HybridRecoveryError> {
+        let index = RegionBoundaryIndex::new(self.evidence)?;
         let original = &self.reconciled.partition;
         let selection =
-            expand_supports(&self.evidence, original, seed, permitted_supports, options)?;
+            expand_supports(self.evidence, original, seed, permitted_supports, options)?;
         let selected_parents = selection
             .selected
             .iter()
@@ -406,7 +417,7 @@ impl RecoveredAnalyticMesh {
                 recovery,
             });
         }
-        let refined = split_partition(&index, &self.evidence, original, &selection.selected)?;
+        let refined = split_partition(&index, self.evidence, original, &selection.selected)?;
         let mut graph = index.assemble_shared_trims(
             &refined.partition,
             &self.reconciled.positions,
@@ -426,7 +437,7 @@ impl RecoveredAnalyticMesh {
             options.strict,
         )?;
         let recovery = HybridInput {
-            evidence: &self.evidence,
+            evidence: self.evidence,
             partition: &refined.partition,
             graph: &graph,
             baseline: &baseline,

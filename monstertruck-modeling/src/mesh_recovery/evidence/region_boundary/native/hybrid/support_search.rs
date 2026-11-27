@@ -5,8 +5,9 @@
 //! source/patch certificates, not the combinatorial cover, decide admission.
 
 use super::{
-    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, NativeTrimError,
-    NativeTrimGraph, RefinedHybridRecovery, SurfaceRegionPartition, refinement::support_closure,
+    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, HybridSource,
+    NativeTrimError, NativeTrimGraph, RefinedHybridRecovery, SurfaceRegionPartition,
+    refinement::support_closure,
 };
 use crate::mesh_recovery::{RecoveredAnalyticMesh, SharedTrimGeometry, SharedTrimGraph};
 use monstertruck_topology::shell::ShellCondition;
@@ -38,6 +39,8 @@ pub struct HybridSupportSearchRecovery {
     pub states: usize,
     /// Number of complete native transactions attempted.
     pub trials: usize,
+    /// Whether the starting partition was a competing ownership fit.
+    pub ownership_alternative: bool,
     /// Native result with its refined partition and source certificates.
     pub refined: RefinedHybridRecovery,
 }
@@ -469,7 +472,7 @@ fn incomplete_recovery_error(
     }
 }
 
-impl RecoveredAnalyticMesh {
+impl HybridSource<'_> {
     fn failed_support_contacts(&self) -> Result<BTreeSet<[usize; 2]>, HybridRecoveryError> {
         if !self.trims.ambiguous_edges.is_empty()
             || self.trims.trims.len() != self.native.trims.len()
@@ -522,7 +525,7 @@ impl RecoveredAnalyticMesh {
         let mut rejected = BTreeMap::new();
         for id in endpoints.intersection(&allowed).copied() {
             match support_closure(
-                &self.evidence,
+                self.evidence,
                 &self.reconciled.partition,
                 id,
                 permitted,
@@ -630,6 +633,84 @@ impl RecoveredAnalyticMesh {
         Ok(choices.into_iter().collect())
     }
 
+    // A regular annular torus with a variable rim can be blocked by
+    // plane/torus section curves from dependent faceted neighbors. Releasing
+    // those supports makes the shared rim a bounded exact single-carrier
+    // lift. Retain the alternative of releasing the curved region itself;
+    // the same explicit permission and polygon budget apply to both.
+    fn chart_choices(
+        &self,
+        partition: &SurfaceRegionPartition,
+        graph: &SharedTrimGraph,
+        native: &NativeTrimGraph,
+    ) -> CrossingChoices {
+        use crate::mesh_recovery::SurfaceCarrier;
+        let mut choices = Vec::new();
+        for region in native.regions.iter().filter(|r| r.requires_chart_cut) {
+            if !matches!(partition.carriers[region.region],Some(SurfaceCarrier::CircularRevolution {radial_center,..}) if radial_center > crate::KERNEL_EPSILON)
+            {
+                continue;
+            }
+            let Some(boundary) = graph
+                .regions
+                .iter()
+                .find(|r| r.region == region.region)
+                .and_then(|r| r.boundary.as_ref().ok())
+            else {
+                continue;
+            };
+            if boundary.loops.len() != 2 {
+                continue;
+            }
+            let mut adjacent = BTreeSet::new();
+            for reference in boundary.loops.iter().flatten() {
+                let trim = &graph.trims[reference.trim];
+                if !matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)) {
+                    continue;
+                }
+                for edge in &trim.source_edges {
+                    for polygon in
+                        std::iter::once(edge.interior_polygon).chain(edge.exterior_polygon)
+                    {
+                        let support = self.evidence.source_planar_support[polygon];
+                        let owner = partition.region_by_support[support];
+                        if owner != region.region
+                            && matches!(
+                                partition.carriers[owner],
+                                Some(SurfaceCarrier::Plane { .. })
+                            )
+                        {
+                            adjacent.insert(support);
+                        }
+                    }
+                }
+            }
+            if adjacent.is_empty() {
+                continue;
+            }
+            let whole = partition
+                .region_by_support
+                .iter()
+                .enumerate()
+                .filter_map(|(id, &r)| (r == region.region).then_some(id))
+                .collect();
+            choices.push(vec![adjacent.into_iter().collect(), whole]);
+        }
+        choices
+    }
+
+    fn domain_choices(
+        &self,
+        partition: &SurfaceRegionPartition,
+        graph: &SharedTrimGraph,
+        native: &NativeTrimGraph,
+        tolerance: f64,
+    ) -> Result<CrossingChoices, HybridRecoveryError> {
+        let mut choices = self.crossing_choices(partition, graph, native, tolerance)?;
+        choices.extend(self.chart_choices(partition, graph, native));
+        Ok(choices)
+    }
+
     fn ensure_crossing_closures(
         &self,
         search: &mut CoverSearch,
@@ -645,7 +726,7 @@ impl RecoveredAnalyticMesh {
                 search.closures.entry(support)
             {
                 let Ok(closure) = support_closure(
-                    &self.evidence,
+                    self.evidence,
                     &self.reconciled.partition,
                     support,
                     permitted,
@@ -677,20 +758,7 @@ impl RecoveredAnalyticMesh {
         search.witnessed_cover(candidate, choices)
     }
 
-    /// Try source support releases at failed shared native trims and
-    /// positively witnessed crossing planar domains.
-    ///
-    /// Every failed contact must be covered by at least one explicitly
-    /// permitted incident support. Enumerate smallest mandatory release costs
-    /// first, prioritizing newly witnessed crossing follow-ups over other
-    /// contact alternatives, then apply the full hybrid certificates. A successful result is a complete closed shell, not
-    /// a material or self-intersection certificate. This bounded search
-    /// does not assert global minimum total released polygons.
-    ///
-    /// # Errors
-    /// Invalid inputs, open or ambiguous source contact incidence, no
-    /// permitted cover, exhausted budgets, or failed geometric transactions.
-    pub fn construct_unresolved_contact_hybrid(
+    fn search_contacts(
         &self,
         permitted_supports: &[usize],
         options: HybridSupportSearchOptions,
@@ -715,10 +783,10 @@ impl RecoveredAnalyticMesh {
                     selected: Vec::new(),
                     seeds: Vec::new(),
                 },
-                &mut self.crossing_choices(
+                &mut self.domain_choices(
                     &self.reconciled.partition,
-                    &self.trims,
-                    &self.native,
+                    self.trims,
+                    self.native,
                     options.refinement.strict.intersection_tolerance,
                 )?,
                 permitted_supports,
@@ -753,6 +821,7 @@ impl RecoveredAnalyticMesh {
                             released_polygons: seed_cost + refined.added_polygons,
                             states: search.states,
                             trials,
+                            ownership_alternative: false,
                             refined,
                         });
                     }
@@ -760,7 +829,7 @@ impl RecoveredAnalyticMesh {
                         followup = self.crossing_followup(
                             &mut search,
                             &candidate,
-                            &mut self.crossing_choices(
+                            &mut self.domain_choices(
                                 &refined.partition,
                                 &refined.trims,
                                 &refined.recovery.native,
@@ -781,6 +850,75 @@ impl RecoveredAnalyticMesh {
             trials,
             last: Box::new(last),
         })
+    }
+}
+
+impl RecoveredAnalyticMesh {
+    /// Try source support releases at failed shared native trims and
+    /// positively witnessed crossing planar domains.
+    ///
+    /// Every failed contact must be covered by at least one explicitly
+    /// permitted incident support. Enumerate smallest mandatory release costs
+    /// first, prioritizing newly witnessed crossing follow-ups over other
+    /// contact alternatives, then apply the full hybrid certificates. A successful result is a complete closed shell, not
+    /// a material or self-intersection certificate. This bounded search
+    /// does not assert global minimum total released polygons.
+    ///
+    /// # Errors
+    /// Invalid inputs, open or ambiguous source contact incidence, no
+    /// permitted cover, exhausted budgets, or failed geometric transactions.
+    pub fn construct_unresolved_contact_hybrid(
+        &self,
+        permitted_supports: &[usize],
+        options: HybridSupportSearchOptions,
+    ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
+        let primary = HybridSource::primary(self);
+        let Some(alternative) = HybridSource::alternative(self) else {
+            return primary.search_contacts(permitted_supports, options);
+        };
+        // Both candidate searches share the caller's total work budget.
+        // Reserve half for the strict starting partition, except when
+        // only one trial is authorized and the alternate has fewer failures.
+        let alternative_trials = options.max_trials.div_ceil(2);
+        let alternative_states = options.max_states.div_ceil(2);
+        let alternative_options = HybridSupportSearchOptions {
+            max_trials: alternative_trials,
+            max_states: alternative_states,
+            ..options
+        };
+        match alternative.search_contacts(permitted_supports, alternative_options) {
+            Ok(mut result) => {
+                result.ownership_alternative = true;
+                Ok(result)
+            }
+            Err(alternative_error) => {
+                let remaining = HybridSupportSearchOptions {
+                    max_trials: options.max_trials - alternative_trials,
+                    max_states: options.max_states - alternative_states,
+                    ..options
+                };
+                if remaining.max_trials == 0 || remaining.max_states == 0 {
+                    return Err(alternative_error);
+                }
+                match primary.search_contacts(permitted_supports, remaining) {
+                    Ok(mut result) => {
+                        let (states, trials) = match &alternative_error {
+                            HybridRecoveryError::SupportSearch { states, trials, .. } => {
+                                (*states, *trials)
+                            }
+                            _ => (0, 0),
+                        };
+                        result.trials += trials;
+                        result.states += states;
+                        Ok(result)
+                    }
+                    Err(primary) => Err(HybridRecoveryError::OwnershipAlternatives {
+                        alternative: Box::new(alternative_error),
+                        primary: Box::new(primary),
+                    }),
+                }
+            }
+        }
     }
 }
 

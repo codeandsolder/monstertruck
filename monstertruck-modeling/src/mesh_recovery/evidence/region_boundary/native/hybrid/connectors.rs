@@ -259,6 +259,7 @@ mod tests {
             coplanar_reassignments: Vec::new(),
             joint_fits: Vec::new(),
             joint_fit_rejections: Vec::new(),
+            ownership_alternative: None,
         };
         let options = HybridConnectorOptions {
             patch: RegionPatchOptions {

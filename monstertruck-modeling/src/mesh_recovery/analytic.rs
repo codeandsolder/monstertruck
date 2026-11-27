@@ -329,6 +329,7 @@ pub struct RecoveredAnalyticMesh {
     pub joint_fits: Vec<JointFitReport>,
     /// Rejected local reconstruction attempts with actionable diagnostics.
     pub joint_fit_rejections: Vec<JointFitAttempt>,
+    pub(in crate::mesh_recovery) ownership_alternative: Option<NativeAssembly>,
 }
 
 impl RecoveredAnalyticMesh {
@@ -498,6 +499,7 @@ pub fn construct_analytic_recovery(
     } = discovered;
     let mut ownership = None;
     let mut ownership_rejection = None;
+    let mut ownership_alternative = None;
     let mut assembly = if let Some(core) = core_alternative {
         let expanded = PartitionAlternative {
             partition,
@@ -516,6 +518,7 @@ pub fn construct_analytic_recovery(
             .count();
         ownership = selection.ownership;
         ownership_rejection = selection.ownership_rejection;
+        ownership_alternative = selection.pending_ownership;
         selection.assembly
     } else {
         assemble_native(&evidence, partition, options)?
@@ -554,13 +557,15 @@ pub fn construct_analytic_recovery(
         coplanar_reassignments,
         joint_fits,
         joint_fit_rejections,
+        ownership_alternative,
     })
 }
 
-struct NativeAssembly {
-    reconciled: ReconciledPartition,
-    trims: SharedTrimGraph,
-    native: NativeTrimGraph,
+#[derive(Debug)]
+pub(in crate::mesh_recovery) struct NativeAssembly {
+    pub reconciled: ReconciledPartition,
+    pub trims: SharedTrimGraph,
+    pub native: NativeTrimGraph,
 }
 
 fn assemble_native(

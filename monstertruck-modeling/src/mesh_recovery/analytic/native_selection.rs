@@ -220,6 +220,7 @@ pub(super) struct NativeSelection {
     pub expanded_neighborhoods: usize,
     pub ownership: Option<OwnershipTrial>,
     pub ownership_rejection: Option<super::JointFitAttempt>,
+    pub pending_ownership: Option<super::NativeAssembly>,
 }
 
 enum RawChoice {
@@ -267,6 +268,7 @@ pub(super) fn select_native(
         options,
     )?;
     let mut ownership_rejection = None;
+    let mut pending_ownership = None;
     if let Some(trial) = outcome {
         match trial {
             Ok((alternative, assembly, fit)) => {
@@ -277,9 +279,13 @@ pub(super) fn select_native(
                     expanded_neighborhoods: decision.compared_neighborhoods,
                     ownership: Some(fit),
                     ownership_rejection: None,
+                    pending_ownership: None,
                 });
             }
-            Err(rejection) => ownership_rejection = Some(rejection),
+            Err(rejected) => {
+                ownership_rejection = Some(rejected.attempt);
+                pending_ownership = rejected.pending.map(|assembly| *assembly);
+            }
         }
     }
     let (alternative, assembly) = match decision.choice {
@@ -294,6 +300,7 @@ pub(super) fn select_native(
         expanded_neighborhoods: decision.expanded_neighborhoods,
         ownership: None,
         ownership_rejection,
+        pending_ownership,
     })
 }
 

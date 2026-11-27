@@ -387,10 +387,10 @@ pub(super) fn repair(
         angular_resolution: options.axis_relative_resolution,
     };
     let partition = &assembly.reconciled.partition;
-    let context = match frozen {
-        Some(fit) => fit.context(evidence, partition, policy),
-        None => JointFitContext::new(evidence, partition, policy),
-    };
+    let context = frozen.map_or_else(
+        || JointFitContext::new(evidence, partition, policy),
+        |fit| fit.context(evidence, partition, policy),
+    );
     let Some(mut context) = context else {
         return Ok((reports, rejected));
     };
