@@ -16,6 +16,11 @@ struct Closure<'a> {
     pending: BTreeSet<(usize, usize)>,
 }
 
+enum ClosureResult {
+    Closed(Vec<usize>),
+    Unresolved,
+}
+
 enum Choice {
     Forced(usize),
     Ambiguous,
@@ -72,16 +77,16 @@ impl<'a> Closure<'a> {
         anchor: usize,
         remaining: &mut usize,
         states: &mut usize,
-    ) -> Option<Option<Vec<usize>>> {
+    ) -> Option<ClosureResult> {
         if !self.add(anchor, remaining)? {
-            return Some(None);
+            return Some(ClosureResult::Unresolved);
         }
         *states += 1;
         while !self.pending.is_empty() {
             let mut forced = None;
             for &(edge, side) in &self.pending {
                 match self.choice(edge, side, remaining)? {
-                    Choice::Impossible => return Some(None),
+                    Choice::Impossible => return Some(ClosureResult::Unresolved),
                     Choice::Ambiguous => {}
                     Choice::Forced(class) => {
                         forced = Some(class);
@@ -90,15 +95,15 @@ impl<'a> Closure<'a> {
                 }
             }
             let Some(class) = forced else {
-                return Some(None);
+                return Some(ClosureResult::Unresolved);
             };
             if !self.add(class, remaining)? {
-                return Some(None);
+                return Some(ClosureResult::Unresolved);
             }
             *states += 1;
         }
         self.chosen.sort_unstable();
-        Some(Some(self.chosen))
+        Some(ClosureResult::Closed(self.chosen))
     }
 }
 
@@ -129,7 +134,9 @@ pub(super) fn solve(graph: &ClassGraph) -> Option<Solution> {
         if consumed[anchor] != 0 {
             continue;
         }
-        let Some(shell) = Closure::new(graph).close(anchor, &mut remaining, &mut states)? else {
+        let ClosureResult::Closed(shell) =
+            Closure::new(graph).close(anchor, &mut remaining, &mut states)?
+        else {
             continue;
         };
         for &class in &shell {
