@@ -1,0 +1,88 @@
+{
+  "base": "e370cc522320caef1e598abe7a470a11e65aa521",
+  "worktrees": [
+    {
+      "path": "/home/jan/worktrees/monstertruck-authored-profile-conics-20261126",
+      "head": "8c0d87a7be9396acf78b07c7120474a0227da3f4",
+      "snapshot": "8c0d87a7be9396acf78b07c7120474a0227da3f4",
+      "changed": [],
+      "unmerged": [
+        "8c0d87a7be9396acf78b07c7120474a0227da3f4",
+        "8d18b8472e2e94384ed70ec5fe0f4c5176b448c0"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-cad-stage-audit-20261123",
+      "head": "3a592e8badaf3995c84c1ea3fbbecdf30e488945",
+      "snapshot": "9d7dbe1a48d0ea9b5a3b92810b5a6f708b13ade3",
+      "changed": [
+        "step-redox/src/bin/step-cad-rebuild.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-contact-replay-diag-20261122",
+      "head": "0588c0116882c92b7e64094791393fa21596a63e",
+      "snapshot": "8448a876b37944da22b60abc4fa7fb5c00cb0697",
+      "changed": [
+        "step-redox/src/cad_kernel.rs",
+        "step-redox/src/complete_ir.rs",
+        "step-redox/validation/fixtures/native_relief_curved_1c75cccd.step",
+        "step-redox/validation/fixtures/native_relief_curved_224fa2f0.step",
+        "step-redox/validation/fixtures/native_relief_curved_7a4544b3.step"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-great-circle-charts-20261123",
+      "head": "d2ba6b8ec6ec700c94c8018ddc872998cb0d74b7",
+      "snapshot": "22635907728410135267fcf20eb5dbc83a42f731",
+      "changed": [
+        "step-redox/src/boundary_proof/sphere_chart.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-incomplete-relief-20261122",
+      "head": "740c99cd235e78dca2b05ddc08886a06583e1e32",
+      "snapshot": "740c99cd235e78dca2b05ddc08886a06583e1e32",
+      "changed": [],
+      "unmerged": [
+        "740c99cd235e78dca2b05ddc08886a06583e1e32",
+        "5f7b05d7d5d16961cc65d19e503fb62f47707fb0"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-oblique-clip-diagnostic-20261122",
+      "head": "0d51221bdc607031a65bf629bb8d52d53aa872a6",
+      "snapshot": "4fc98bb7089aa42d2dd22159c0810e03387917bb",
+      "changed": [
+        "step-redox/src/boundary_proof.rs",
+        "step-redox/src/boundary_proof/bounded.rs",
+        "step-redox/src/boundary_proof/direction_cells.rs",
+        "step-redox/src/brep.rs",
+        "step-redox/src/cad_kernel.rs"
+      ],
+      "unmerged": []
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-oblique-shoulder-integration-20261122",
+      "head": "31b8e18bc6a0d5243e634193fc4dd90ecaf2189d",
+      "snapshot": "31b8e18bc6a0d5243e634193fc4dd90ecaf2189d",
+      "changed": [],
+      "unmerged": [
+        "31b8e18bc6a0d5243e634193fc4dd90ecaf2189d",
+        "39bb9e8152d535b27aff5b21aa9224fe2843d7b3"
+      ]
+    },
+    {
+      "path": "/home/jan/worktrees/monstertruck-stable-spatial-derivatives-20261126",
+      "head": "52fd7dfc91fb1b88152ff6db7e76fc521794661b",
+      "snapshot": "52fd7dfc91fb1b88152ff6db7e76fc521794661b",
+      "changed": [],
+      "unmerged": [
+        "52fd7dfc91fb1b88152ff6db7e76fc521794661b"
+      ]
+    }
+  ]
+}

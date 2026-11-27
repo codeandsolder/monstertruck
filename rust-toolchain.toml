@@ -1,6 +1,0 @@
-# Pinned nightly for step-p21-fast's portable SIMD and unstable rustfmt options.
-# Use this compiler consistently across native tests, Clippy, and wasm builds.
-[toolchain]
-channel = "nightly-2026-11-19"
-components = ["clippy", "rustfmt"]
-targets = ["wasm32-unknown-unknown"]
