@@ -464,11 +464,37 @@ fn refinement_options(
     }
 }
 
+fn pending_chart_diagnostics(
+    refined: &monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
+) -> Vec<Value> {
+    refined.recovery.native.regions.iter().filter(|r| r.requires_chart_cut).map(|r| {
+        let boundary = refined.trims.regions.iter().find(|b| b.region == r.region);
+        let loops = boundary.and_then(|b| b.boundary.as_ref().ok()).map(|b| {
+            b.loops.iter().map(|cycle| {
+                cycle.iter().map(|reference| {
+                    let trim = &refined.trims.trims[reference.trim];
+                    let native = refined.recovery.native.trims[reference.trim].as_ref().ok().map(|edges| {
+                        edges.iter().map(|edge| json!({"front":edge.front().point(),"back":edge.back().point(),"curve":format!("{:?}",edge.curve())})).collect::<Vec<_>>()
+                    });
+                    json!({"trim":reference.trim,"reversed":reference.reversed,
+                        "source_edges":trim.source_edges.iter().map(|e|e.vertices).collect::<Vec<_>>(),
+                        "regions":trim.regions,"geometry":format!("{:?}",trim.geometry),"native_edges":native})
+                }).collect::<Vec<_>>()
+            }).collect::<Vec<_>>()
+        });
+        json!({"region":r.region,"parent":refined.parent_by_region[r.region],
+            "carrier":format!("{:?}",refined.partition.carriers[r.region]),
+            "supports":refined.partition.region_by_support.iter().enumerate().filter_map(|(id,&region)|(region==r.region).then_some(id)).collect::<Vec<_>>(),
+            "loops":loops})
+    }).collect()
+}
+
 fn refined_result_report(
     refined: monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
     shell_output: Option<&Path>,
     simplify: bool,
 ) -> Result<Value> {
+    let pending_charts = pending_chart_diagnostics(&refined);
     let mut result = refined.recovery;
     let planar_simplification = simplify_report(&mut result, simplify);
     let shell = result.complete_shell();
@@ -488,7 +514,7 @@ fn refined_result_report(
         "planar_simplification":planar_simplification,"patches":result.patches.len(),"coalesced_cells":result.patches.iter().map(|p|p.coalesced_cells).sum::<usize>(),"lifted_trims":result.lifted_trims.len(),
         "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).map(|r|json!({"region":r.region,"error":r.faces.as_ref().err().map(ToString::to_string)})).collect::<Vec<_>>(),
         "failed_trims":result.native.trims.iter().filter(|r|r.is_err()).count(),
-        "chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
+        "chart_cuts":pending_charts.len(),"pending_charts":pending_charts,
         "approximate_polygons":result.patches.iter().map(|p|p.polygons.len()).sum::<usize>(),
         "max_deviation":result.patches.iter().map(|p|p.deviation_upper_bound).fold(0.0_f64,f64::max),
         "max_seam_deviation":result.patches.iter().map(|p|p.seam_deviation_upper_bound).fold(0.0_f64,f64::max),
@@ -581,6 +607,58 @@ fn unresolved_contact_trial(
     Ok(report)
 }
 
+fn replay_support_trial(
+    recovery: &RecoveredAnalyticMesh,
+    budget: SurfaceRegionBudget,
+    limit: usize,
+    seeds: &[usize],
+    shell_output: Option<&Path>,
+    simplify: bool,
+) -> Result<Value> {
+    let seeds = seeds
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    anyhow::ensure!(!seeds.is_empty(), "expected nonempty seed set");
+    let seed_cost = seeds.iter().try_fold(0_usize, |total, &id| {
+        let support = recovery
+            .evidence
+            .planar_supports
+            .get(id)
+            .context("invalid support ID")?;
+        total
+            .checked_add(support.source_face_indices.len())
+            .context("seed cost overflow")
+    })?;
+    anyhow::ensure!(
+        seed_cost <= limit,
+        "seed cost exceeds authorized polygon limit"
+    );
+    let permitted = (0..recovery.evidence.planar_supports.len()).collect::<Vec<_>>();
+    let options = refinement_options(recovery, budget, limit - seed_cost);
+    let start = Instant::now();
+    let mut report = match recovery.construct_refined_hybrid(
+        HybridRefinementSeed::Supports(&seeds),
+        &permitted,
+        options,
+    ) {
+        Ok(refined) => {
+            let released = seed_cost + refined.added_polygons;
+            let mut report = refined_result_report(refined, shell_output, simplify)?;
+            report["released_polygons"] = json!(released);
+            report
+        }
+        Err(error) => {
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error)})
+        }
+    };
+    report["seed_supports"] = json!(seeds);
+    report["seconds"] = json!(start.elapsed().as_secs_f64());
+    Ok(report)
+}
+
 fn replay_facet(path: &Path) -> Result<()> {
     let input: BoundaryFacetInput = serde_json::from_reader(BufReader::new(File::open(path)?))?;
     let start = Instant::now();
@@ -594,6 +672,43 @@ fn replay_facet(path: &Path) -> Result<()> {
         json!({"source":path,"seconds":start.elapsed().as_secs_f64(),"facet":report})
     );
     Ok(())
+}
+
+type TrialMode = (std::ffi::OsString, usize, Vec<usize>);
+
+fn read_trial_mode(
+    args: &mut impl Iterator<Item = std::ffi::OsString>,
+) -> Result<Option<TrialMode>> {
+    args.next()
+        .map(|flag| -> Result<_> {
+            anyhow::ensure!(
+                flag == "--release-conflicts"
+                    || flag == "--resolve-crossings"
+                    || flag == "--release-unresolved"
+                    || flag == "--replay-supports",
+                "unknown trial mode"
+            );
+            let limit = args
+                .next()
+                .context("expected additional polygon limit")?
+                .to_str()
+                .context("non-UTF8 limit")?
+                .parse::<usize>()
+                .context("numeric polygon limit")?;
+            let seeds = if flag == "--replay-supports" {
+                args.next()
+                    .context("expected comma-separated support IDs")?
+                    .to_str()
+                    .context("non-UTF8 support IDs")?
+                    .split(',')
+                    .map(str::parse::<usize>)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
+            Ok((flag, limit, seeds))
+        })
+        .transpose()
 }
 
 fn main() -> Result<()> {
@@ -624,35 +739,18 @@ fn main() -> Result<()> {
             arg != "--release-conflicts"
                 && arg != "--resolve-crossings"
                 && arg != "--release-unresolved"
+                && arg != "--replay-supports"
         })
         .then(|| args.next().map(PathBuf::from))
         .flatten();
-    let mode = args
-        .next()
-        .map(|flag| -> Result<_> {
-            anyhow::ensure!(
-                flag == "--release-conflicts"
-                    || flag == "--resolve-crossings"
-                    || flag == "--release-unresolved",
-                "unknown trial mode"
-            );
-            let limit = args
-                .next()
-                .context("expected additional polygon limit")?
-                .to_str()
-                .context("non-UTF8 limit")?
-                .parse::<usize>()
-                .context("numeric polygon limit")?;
-            Ok((flag, limit))
-        })
-        .transpose()?;
+    let mode = read_trial_mode(&mut args)?;
     anyhow::ensure!(
         args.next().is_none()
             && vertex.is_finite()
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans]"
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans]; replay: --replay-supports MAX_POLYGONS ID,ID,..."
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
@@ -660,13 +758,21 @@ fn main() -> Result<()> {
     let recovery_seconds = start.elapsed().as_secs_f64();
     let budget = SurfaceRegionBudget { vertex, chord };
     let report = match mode {
-        Some((flag, limit)) if flag == "--release-conflicts" => {
+        Some((flag, limit, _)) if flag == "--release-conflicts" => {
             refined_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
         }
-        Some((flag, limit)) if flag == "--release-unresolved" => {
+        Some((flag, limit, _)) if flag == "--release-unresolved" => {
             unresolved_contact_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
         }
-        Some((_, limit)) => census(
+        Some((flag, limit, seeds)) if flag == "--replay-supports" => replay_support_trial(
+            &recovery,
+            budget,
+            limit,
+            &seeds,
+            shell_output.as_deref(),
+            simplify,
+        )?,
+        Some((_, limit, _)) => census(
             &recovery,
             budget,
             shell_output.as_deref(),

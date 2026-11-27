@@ -17,6 +17,7 @@ use crate::{
 use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 
+mod torus_rim;
 mod variable_rim;
 
 #[derive(Clone, Copy)]
@@ -89,6 +90,7 @@ pub(super) struct BandContext<'a> {
     pub supports: &'a [usize],
     pub positions: &'a [Point3],
     pub graph: &'a SharedTrimGraph,
+    pub lifted_deviations: &'a [Option<f64>],
     pub options: NativeTrimOptions,
 }
 

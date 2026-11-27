@@ -409,27 +409,30 @@ impl RecoveredAnalyticMesh {
                         });
                     }
                     last = HybridRecoveryError::IncompleteSupportRecovery {
+                        seed_supports: candidate.seeds.clone().into_boxed_slice(),
                         failed_regions: refined
                             .recovery
                             .native
                             .regions
                             .iter()
-                            .filter(|r| r.faces.is_err())
-                            .count(),
+                            .filter_map(|r| r.faces.as_ref().err().map(|&error| (r.region, error)))
+                            .collect(),
                         failed_trims: refined
                             .recovery
                             .native
                             .trims
                             .iter()
-                            .filter(|t| t.is_err())
-                            .count(),
+                            .enumerate()
+                            .filter_map(|(id, t)| t.as_ref().err().map(|&error| (id, error)))
+                            .collect(),
                         chart_cuts: refined
                             .recovery
                             .native
                             .regions
                             .iter()
                             .filter(|r| r.requires_chart_cut)
-                            .count(),
+                            .map(|r| (r.region, refined.parent_by_region[r.region]))
+                            .collect(),
                     };
                 }
                 Err(error) => last = error,
