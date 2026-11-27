@@ -9,7 +9,8 @@ use super::super::{
 };
 use super::normal_basis;
 use super::{
-    NativeTrimError, NativeTrimOptions, chart_point, native_circle_edge, periodic_coordinate,
+    NativeChartObstacle, NativeTrimError, NativeTrimOptions, chart_point, native_circle_edge,
+    periodic_coordinate,
 };
 use crate::{
     Edge, Face, IncludeCurve, InnerSpace, Point3, Surface, Vector3, Vertex, Wire, builder,
@@ -99,14 +100,19 @@ impl BandContext<'_> {
         &self,
         boundary: &RegionTrimLoops,
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+        obstacles: &mut Vec<NativeChartObstacle>,
     ) -> Option<BandPlan> {
         let [first, second] = boundary.loops.as_slice() else {
             return self.cap(boundary, trims);
         };
         let rings = match (self.ring(first), self.ring(second)) {
             (Some(a), Some(b)) => [a, b],
-            (Some(ring), None) => return self.variable_band([first, second], 0, ring, trims),
-            (None, Some(ring)) => return self.variable_band([first, second], 1, ring, trims),
+            (Some(ring), None) => {
+                return self.variable_band([first, second], 0, ring, trims, obstacles);
+            }
+            (None, Some(ring)) => {
+                return self.variable_band([first, second], 1, ring, trims, obstacles);
+            }
             (None, None) => return None,
         };
         if rings[0].axis != rings[1].axis || rings[0].positive == rings[1].positive {

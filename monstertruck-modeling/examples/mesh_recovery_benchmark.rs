@@ -248,7 +248,7 @@ fn region_summary(recovery: &RecoveredAnalyticMesh) -> Result<RegionSummary> {
         chart_cuts += usize::from(region.requires_chart_cut);
         region_info.push(
             json!({"id":region.region,"carrier":carrier_summary(carrier),
-            "native_faces":faces,"pending_chart_cut":region.requires_chart_cut,"error":error}),
+            "native_faces":faces,"pending_chart_cut":region.requires_chart_cut,"chart_obstacles":region.chart_obstacles.iter().map(|obstacle|format!("{obstacle:?}")).collect::<Vec<_>>(),"error":error}),
         );
     }
     Ok(RegionSummary {

@@ -12,7 +12,11 @@ use monstertruck_geometry::analytic_curve_incidence::{
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
 use monstertruck_geometry::proof_bezier_spans;
-use std::f64::consts::{PI, TAU};
+use std::{
+    collections::BTreeMap,
+    f64::consts::{PI, TAU},
+};
+mod rational;
 mod simplicity;
 
 #[derive(Clone, Copy, Debug)]
@@ -26,6 +30,12 @@ struct RimPath {
     advance: f64,
     height: [f64; 2],
     kind: PathKind,
+}
+
+struct RimInputs {
+    edges: Vec<Edge>,
+    sources: Vec<(usize, usize)>,
+    tensor_spans: Option<Vec<(RimPath, Point3)>>,
 }
 
 fn signed_delta(a: f64, b: f64) -> f64 { (b - a + PI).rem_euclid(TAU) - PI }
@@ -293,12 +303,101 @@ impl BandContext<'_> {
         (distance(&second) > resolution).then_some([first, second])
     }
 
+    fn collect_rim(
+        &self,
+        cycle: &[OrientedTrim],
+        changed: &BTreeMap<usize, Vec<Edge>>,
+        ring: Ring,
+        side: f64,
+    ) -> Option<RimInputs> {
+        let mut rim = Vec::new();
+        let mut rim_sources = Vec::new();
+        let mut spans = Vec::new();
+        let mut tensor_only = true;
+        for reference in cycle {
+            let edges = changed.get(&reference.trim)?;
+            let trim = self.graph.trims.get(reference.trim)?;
+            let kind = if self
+                .lifted_deviations
+                .get(reference.trim)
+                .is_some_and(Option::is_some)
+            {
+                if edges.len() != trim.source_edges.len() {
+                    return None;
+                }
+                Some(PathKind::Lifted)
+            } else if matches!(trim.geometry, SharedTrimGeometry::Circle(_)) {
+                Some(PathKind::Circle)
+            } else {
+                None
+            };
+            let oriented: Vec<_> = if reference.reversed {
+                edges.iter().rev().map(Edge::inverse).collect()
+            } else {
+                edges.clone()
+            };
+            for (ordinal, edge) in oriented.into_iter().enumerate() {
+                let ordinal = if reference.reversed {
+                    edges.len() - 1 - ordinal
+                } else {
+                    ordinal
+                };
+                rim_sources.push((reference.trim, ordinal));
+                if tensor_only {
+                    if let Some(parts) =
+                        kind.and_then(|kind| self.torus_spans(&edge, kind, ring, side))
+                    {
+                        spans.extend(parts);
+                    } else {
+                        tensor_only = false;
+                    }
+                }
+                rim.push(edge);
+            }
+        }
+        if rim
+            .iter()
+            .zip(rim.iter().cycle().skip(1))
+            .any(|(a, b)| a.back() != b.front())
+        {
+            return None;
+        }
+        Some(RimInputs {
+            edges: rim,
+            sources: rim_sources,
+            tensor_spans: tensor_only.then_some(spans),
+        })
+    }
+
+    fn tensor_rim_proof(&self, inputs: &RimInputs, ring: Ring) -> Option<rational::RimProof> {
+        let (paths, midpoints): (Vec<_>, Vec<_>) =
+            inputs.tensor_spans.as_ref()?.iter().copied().unzip();
+        let resolution = self.options.angular_resolution;
+        if !simple_cycle(&paths, resolution)
+            || paths
+                .iter()
+                .zip(paths.iter().cycle().skip(1))
+                .any(|(a, b)| (a.height[1] - b.height[0]).abs() > resolution)
+        {
+            return None;
+        }
+        let extent = paths.iter().flat_map(|p| p.height).fold(0.0_f64, f64::max);
+        let cuts = self.torus_cuts(
+            inputs.edges.first()?.front().point(),
+            &paths,
+            &midpoints,
+            ring,
+        )?;
+        Some(rational::RimProof { extent, cuts })
+    }
+
     pub(super) fn variable_torus_band(
         &self,
         cycles: [&[OrientedTrim]; 2],
         ring_index: usize,
         ring: Ring,
         trims: &mut [Result<Vec<Edge>, super::NativeTrimError>],
+        obstacles: &mut Vec<super::NativeChartObstacle>,
     ) -> Option<BandPlan> {
         let SurfaceCarrier::CircularRevolution {
             radial_center,
@@ -317,50 +416,17 @@ impl BandContext<'_> {
         } else {
             -1.0
         };
-        let mut rim = Vec::new();
-        let mut spans = Vec::new();
-        for reference in cycles[1 - ring_index] {
-            let edges = changed.get(&reference.trim)?;
-            let trim = self.graph.trims.get(reference.trim)?;
-            let kind = if self
-                .lifted_deviations
-                .get(reference.trim)
-                .is_some_and(Option::is_some)
-            {
-                if edges.len() != trim.source_edges.len() {
+        let inputs = self.collect_rim(cycles[1 - ring_index], &changed, ring, side)?;
+        let rational::RimProof { extent, cuts } = match self.tensor_rim_proof(&inputs, ring) {
+            Some(proof) => proof,
+            None => match rational::prove(self, &inputs.edges, ring, side) {
+                Ok(proof) => proof,
+                Err(error) => {
+                    obstacles.extend(chart_obstacles(error, &inputs.sources));
                     return None;
                 }
-                PathKind::Lifted
-            } else if matches!(trim.geometry, SharedTrimGeometry::Circle(_)) {
-                PathKind::Circle
-            } else {
-                return None;
-            };
-            let oriented: Vec<_> = if reference.reversed {
-                edges.iter().rev().map(Edge::inverse).collect()
-            } else {
-                edges.clone()
-            };
-            for edge in oriented {
-                spans.extend(self.torus_spans(&edge, kind, ring, side)?);
-                rim.push(edge);
-            }
-        }
-        let (paths, midpoints): (Vec<_>, Vec<_>) = spans.into_iter().unzip();
-        let resolution = self.options.angular_resolution;
-        if rim
-            .iter()
-            .zip(rim.iter().cycle().skip(1))
-            .any(|(a, b)| a.back() != b.front())
-            || !simple_cycle(&paths, resolution)
-            || paths
-                .iter()
-                .zip(paths.iter().cycle().skip(1))
-                .any(|(a, b)| (a.height[1] - b.height[0]).abs() > resolution)
-        {
-            return None;
-        }
-        let extent = paths.iter().flat_map(|p| p.height).fold(0.0_f64, f64::max);
+            },
+        };
         let lower = if side > 0.0 {
             ring.fixed
         } else {
@@ -385,10 +451,49 @@ impl BandContext<'_> {
                     })
             })
         {
+            obstacles.push(super::NativeChartObstacle::Coverage);
             return None;
         }
-        let cuts = self.torus_cuts(rim.first()?.front().point(), &paths, &midpoints, ring)?;
-        self.finish_variable_band(cycles, ring_index, ring, changed, cuts, trims)
+        let plan = self.finish_variable_band(cycles, ring_index, ring, changed, cuts, trims);
+        if plan.is_none() {
+            obstacles.push(super::NativeChartObstacle::SeamConstruction);
+        }
+        plan
+    }
+}
+
+fn chart_obstacles(
+    error: rational::Rejection,
+    sources: &[(usize, usize)],
+) -> Vec<super::NativeChartObstacle> {
+    use super::NativeChartObstacle as Obstacle;
+    use rational::Rejection;
+    match error {
+        Rejection::Span(id) => vec![
+            sources
+                .get(id)
+                .copied()
+                .map_or(Obstacle::Invalid, Obstacle::Span),
+        ],
+        Rejection::Ring(id) => vec![
+            sources
+                .get(id)
+                .copied()
+                .map_or(Obstacle::Invalid, Obstacle::RingContact),
+        ],
+        Rejection::Pair(pairs) => {
+            let mut result = pairs
+                .into_iter()
+                .filter_map(|[a, b]| Some(Obstacle::RimPair([*sources.get(a)?, *sources.get(b)?])))
+                .collect::<Vec<_>>();
+            if result.is_empty() {
+                result.push(Obstacle::Invalid);
+            }
+            result
+        }
+        Rejection::Winding => vec![Obstacle::Winding],
+        Rejection::Cuts => vec![Obstacle::CutSelection],
+        Rejection::Invalid => vec![Obstacle::Invalid],
     }
 }
 
