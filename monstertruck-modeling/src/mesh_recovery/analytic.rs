@@ -929,21 +929,8 @@ fn choose_partition(
         circular_proposals(boundary, &candidates.circular, options, absolute_tolerance);
     let mut seen = BTreeSet::new();
     let curved_count = proposals.len();
-    let mut measured_linear = Vec::new();
-    for candidate in &candidates.linear {
-        if let Some(proposal) = boundary.measure_surface_region(
-            &candidate.supports,
-            candidate.carrier,
-            SurfaceRegionBudget {
-                vertex: candidate.vertex_tolerance,
-                chord: candidate.chord_tolerance,
-            },
-        ) {
-            seen.insert(candidate.supports.clone());
-            measured_linear.push(candidate);
-            proposals.push(proposal);
-        }
-    }
+    let measured_linear =
+        append_station_linear_proposals(boundary, &candidates.linear, &mut seen, &mut proposals);
     let direct_linear_count = proposals.len() - curved_count;
     append_growth_proposals(
         evidence,
@@ -1030,6 +1017,30 @@ fn choose_partition(
         linear_proposals: proposals.len() - curved_count - expanded_circular_count,
         selected_curved,
     })
+}
+
+fn append_station_linear_proposals<'a, 'b>(
+    boundary: &RegionBoundaryIndex<'a>,
+    candidates: &'b [StationLinearCandidate],
+    seen: &mut BTreeSet<Vec<usize>>,
+    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
+) -> Vec<&'b StationLinearCandidate> {
+    let mut measured_linear = Vec::new();
+    for candidate in candidates {
+        if let Some(proposal) = boundary.measure_surface_region(
+            &candidate.supports,
+            candidate.carrier,
+            SurfaceRegionBudget {
+                vertex: candidate.vertex_tolerance,
+                chord: candidate.chord_tolerance,
+            },
+        ) {
+            seen.insert(candidate.supports.clone());
+            measured_linear.push(candidate);
+            proposals.push(proposal);
+        }
+    }
+    measured_linear
 }
 
 fn circular_proposals<'a>(
