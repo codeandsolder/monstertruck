@@ -942,6 +942,10 @@ fn finish_native_boundary_feature_replay<
     replay: &[RecoveredBoundaryFeatureFamily],
     proof: Option<&SourceRecovery<'_, K>>,
 ) -> Result<Option<KernelRecoveryCandidate>> {
+    let base = std::env::var("MT_TRACE_DIR")?;
+    let snapshot = kernel.edited_source_to_step(edited)?;
+    std::fs::write(format!("{base}/peeled-{}.step", source.id), &snapshot)?;
+    eprintln!("FEATURE PEELED source={} faces={} families={}", source.id, kernel.inspect_edited_source(edited)?.faces, replay.len());
     let Some(mut host) = recognize_edited_host_with_fallback(kernel, edited, || {
         // Rare non-native analytic families still use one final snapshot, not
         // a serialization/reimport on every feature-peeling round.
@@ -956,6 +960,8 @@ fn finish_native_boundary_feature_replay<
     };
     host.model.provenance.clear();
     let fragment = compose_boundary_feature_fragment(source.id, &host, replay)?;
+    let base = std::env::var("MT_TRACE_DIR")?;
+    std::fs::write(format!("{base}/fragment-{}.json", source.id), serde_json::to_vec_pretty(&fragment)?)?;
     let evaluated = kernel.evaluate(&fragment.model, fragment.root)?;
     if !kernel.summarize(&evaluated).is_single_solid() {
         return Ok(None);
@@ -4199,6 +4205,21 @@ END-ISO-10303-21;
         assert_source_verified_relief(include_bytes!(
             "../validation/fixtures/native_relief_boolean_host_22bfe2fc.step"
         ))
+    }
+
+    // A native revolution cutter must retain affine planar caps so that
+    // the contact interface can be rebuilt before the lettering is replayed.
+    #[cfg(feature = "cad-kernel-monstertruck")]
+    #[test]
+    fn native_relief_with_circular_recesses_is_source_verified() -> Result<()> {
+        for bytes in [
+            include_bytes!("../validation/fixtures/native_relief_curved_1c75cccd.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_7a4544b3.step").as_slice(),
+            include_bytes!("../validation/fixtures/native_relief_curved_224fa2f0.step").as_slice(),
+        ] {
+            assert_source_verified_relief(bytes)?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cad-kernel-monstertruck")]
