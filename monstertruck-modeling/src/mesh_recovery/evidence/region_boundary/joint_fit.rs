@@ -7,6 +7,7 @@ use super::{
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
+mod fillet;
 
 /// Strategy used to resolve a local analytic reconstruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +16,8 @@ pub enum JointFitMethod {
     FixedCarriers,
     /// Eliminate dependent triangular planes and reconstruct them through shared vertices.
     DependentPlanes,
+    /// Anchor a toroidal fillet to adjacent independent analytic carriers.
+    AnchoredFillet,
     /// Optimize independent analytic carrier parameters and junctions jointly.
     JointRefit,
 }
@@ -102,6 +105,7 @@ pub(in crate::mesh_recovery) struct JointFitContext {
     samples: Vec<VertexSample>,
     vertex_supports: Vec<Vec<usize>>,
     region_vertices: Vec<Vec<usize>>,
+    region_neighbors: Vec<Vec<usize>>,
     carrier_change: Vec<f64>,
     options: JointFitOptions,
 }
@@ -137,12 +141,21 @@ impl JointFitContext {
             }
         }
         let mut boundary_vertices = vec![false; evidence.positions.len()];
+        let mut region_neighbors = vec![Vec::new(); partition.carriers.len()];
         for path in &partition.contacts.paths {
+            if let Some(right) = path.regions.1 {
+                region_neighbors[path.regions.0].push(right);
+                region_neighbors[right].push(path.regions.0);
+            }
             for edge in &path.edges {
                 for id in edge.vertices {
                     boundary_vertices[id] = true;
                 }
             }
+        }
+        for neighbors in &mut region_neighbors {
+            neighbors.sort_unstable();
+            neighbors.dedup();
         }
         let samples = incidence
             .into_iter()
@@ -175,9 +188,23 @@ impl JointFitContext {
             samples,
             vertex_supports,
             region_vertices,
+            region_neighbors,
             carrier_change: vec![0.0; partition.carriers.len()],
             options,
         })
+    }
+
+    pub(in crate::mesh_recovery) fn anchored_fillet_possible(
+        &self,
+        partition: &SurfaceRegionPartition,
+        region: usize,
+    ) -> bool {
+        fillet::eligible(
+            partition,
+            region,
+            &self.region_neighbors[region],
+            self.options.angular_resolution,
+        )
     }
 
     pub(in crate::mesh_recovery) fn dependent_at<'a>(
@@ -977,6 +1004,12 @@ pub(in crate::mesh_recovery) fn fit_neighborhood(
     }
     let neighborhood = Neighborhood::new(evidence, partition, regions, context)
         .ok_or(JointFitRejection::Neighborhood)?;
+    if method == JointFitMethod::AnchoredFillet {
+        let [region] = regions else {
+            return Err(JointFitRejection::Neighborhood);
+        };
+        return fillet::fit(&neighborhood, *region, prior);
+    }
     let mut partition = partition.clone();
     let mut refitted_regions = 0;
     let mut carrier_changes = Vec::new();
