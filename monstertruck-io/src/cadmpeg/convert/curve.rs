@@ -129,7 +129,7 @@ fn solved_curve(
                 (endpoints.0.distance(endpoints.1) <= monstertruck_core::tolerance::KERNEL_EPSILON)
                     .then(|| geometry.closed_traversal_range())
                     .flatten()
-                    .map(|range| range.endpoints())
+                    .map(cadmpeg_ir::topology::IncreasingParameterInterval::endpoints)
             });
             let Some([start, end]) = interval else {
                 return Err(context.malformed(
@@ -219,7 +219,7 @@ fn full_circle(
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2};
     let control: Vec<Vector4> = (0..=8)
         .map(|index| {
-            let angle = start + index as f64 * FRAC_PI_2 / 2.0;
+            let angle = f64::from(index).mul_add(FRAC_PI_2 / 2.0, start);
             // Odd control points are the tangent intersections, sqrt(2) radii
             // out, carrying the quarter arc's cos(pi/4) weight.
             let (distance, weight) = match index % 2 {
@@ -234,18 +234,18 @@ fn full_circle(
         .collect();
     let mut knots = vec![start; 3];
     (1..4).for_each(|segment| {
-        let knot = start + segment as f64 * FRAC_PI_2;
+        let knot = f64::from(segment).mul_add(FRAC_PI_2, start);
         knots.push(knot);
         knots.push(knot);
     });
-    knots.extend([start + 2.0 * std::f64::consts::PI; 3]);
+    knots.extend([start + std::f64::consts::TAU; 3]);
     Ok(Curve::NurbsCurve(NurbsCurve::new(built(
         BsplineCurve::new(KnotVector::from(knots), control),
         context,
     )?)))
 }
 
-fn unsupported(kind: &'static str, context: &Context<'_>) -> Error {
+const fn unsupported(kind: &'static str, context: &Context<'_>) -> Error {
     Error::UnsupportedCurveKind {
         format: context.format,
         kind,
@@ -353,9 +353,7 @@ fn clamp_onto_domain<P: ControlPoint<f64> + Tolerance>(
 ) -> Result<(f64, f64)> {
     let count = net.control_points().len();
     let knots = net.knot_vector();
-    let (low, high) = (knots[degree], knots[count]);
-    let front = knots[..=degree].iter().all(|knot| *knot == low);
-    let back = knots[count..].iter().all(|knot| *knot == high);
+    let (low, high, (front, back)) = super::knot_domain(knots, count, degree);
     if !back {
         let _beyond = net.cut(high);
     }
@@ -397,7 +395,7 @@ fn periodic_span<P: ControlPoint<f64> + Tolerance>(
         )));
     }
     let turns = ((from - low) / period).floor();
-    let (mut from, mut to) = (from - turns * period, to - turns * period);
+    let (mut from, mut to) = (turns.mul_add(-period, from), turns.mul_add(-period, to));
     if high - from <= slack {
         // Starts at the seam from below: the same point as the domain's start.
         from -= period;

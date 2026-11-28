@@ -26,5 +26,5 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 [workspace]
 
 [patch.crates-io]
-png = { git = "https://github.com/codeandsolder/cargo-patches.git", branch = "generated/ksp-image-codecs" }
+png = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "ksp-image-codecs-v0.0.2" }
 zlib-rs = { git = "https://github.com/codeandsolder/zlib-rs-fast.git", rev = "9bcb777d447db3f8ad343c61254c5f24981d5745" }

@@ -105,7 +105,7 @@ fn custom_header_template() {
     let cshell = Shell::new().compress();
     let header = StepHeaderDescriptor {
         file_name: "AMAZING_PRODUCT.step".to_string(),
-        time_stamp: chrono::Utc::now().naive_local().to_string(),
+        time_stamp: "2026-01-02 03:04:05.123456789".to_owned(),
         authors: vec![
             "Tensai".to_string(),
             "Genius".to_string(),

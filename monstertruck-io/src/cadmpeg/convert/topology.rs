@@ -134,7 +134,7 @@ impl<'a, 'd> ShellBuilder<'a, 'd> {
     }
 
     /// Whether anything was built at all.
-    pub(super) fn is_empty(&self) -> bool { self.faces.is_empty() }
+    pub(super) const fn is_empty(&self) -> bool { self.faces.is_empty() }
 
     fn build_face(&mut self, face: &IrFace) -> Result<CompressedFace<Surface>> {
         let carrier = self.context.surface(face.surface.as_str())?;
@@ -148,7 +148,7 @@ impl<'a, 'd> ShellBuilder<'a, 'd> {
         // is where `Face::try_new` reads the outer boundary; an unclassified
         // face keeps source order. So the order is taken as given.
         let mut boundaries = Vec::with_capacity(face.loops.len());
-        for identifier in face.loops.iter() {
+        for identifier in &face.loops {
             let ring = self.context.boundary_loop(identifier.as_str())?;
             let LoopBoundary::Ring(ring) = &ring.boundary else {
                 // A loop that is one vertex is a surface singularity -- a pole,
@@ -186,9 +186,9 @@ impl<'a, 'd> ShellBuilder<'a, 'd> {
             // kernel a boundary wound against its own face.
             if !orientation {
                 edges.reverse();
-                edges
-                    .iter_mut()
-                    .for_each(|edge_use| edge_use.orientation = !edge_use.orientation);
+                for edge_use in &mut edges {
+                    edge_use.orientation = !edge_use.orientation;
+                }
             }
             boundaries.push(edges);
         }
@@ -227,7 +227,7 @@ impl<'a, 'd> ShellBuilder<'a, 'd> {
         let carrier = self.context.curve(carrier.as_str())?;
         let curve = curve::convert(
             &carrier.geometry,
-            edge.param_range().map(|range| range.get()),
+            edge.param_range().map(cadmpeg_ir::units::FiniteVector::get),
             (self.vertices[front], self.vertices[back]),
             self.context,
         )?;

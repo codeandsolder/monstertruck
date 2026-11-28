@@ -76,7 +76,7 @@ pub(super) struct Oriented {
 }
 
 impl Oriented {
-    fn forward(surface: Surface) -> Self {
+    const fn forward(surface: Surface) -> Self {
         Self {
             surface,
             reversed: false,
@@ -326,7 +326,7 @@ fn admissible<T: TryIntoHomogeneousBsplineSurface>(
     }
 }
 
-fn unsupported(kind: &'static str, context: &Context<'_>) -> crate::Error {
+const fn unsupported(kind: &'static str, context: &Context<'_>) -> crate::Error {
     crate::Error::UnsupportedSurfaceKind {
         format: context.format,
         kind,
@@ -412,15 +412,9 @@ fn clamped_onto_domain<P: ControlPoint<f64> + Tolerance>(
     (u_degree, v_degree): (usize, usize),
     context: &Context<'_>,
 ) -> Result<BsplineSurface<P>> {
-    let domain = |knots: &KnotVector, count: usize, degree: usize| {
-        (knots[degree], knots[count], {
-            let front = knots[..=degree].iter().all(|knot| *knot == knots[degree]);
-            let back = knots[count..].iter().all(|knot| *knot == knots[count]);
-            (front, back)
-        })
-    };
+    use super::knot_domain;
     let (u_low, u_high, (u_front, u_back)) =
-        domain(net.knot_vector_u(), net.control_points().len(), u_degree);
+        knot_domain(net.knot_vector_u(), net.control_points().len(), u_degree);
     if !u_back {
         let _beyond = net.cut_u(u_high);
     }
@@ -428,7 +422,7 @@ fn clamped_onto_domain<P: ControlPoint<f64> + Tolerance>(
         net = net.cut_u(u_low);
     }
     let (v_low, v_high, (v_front, v_back)) =
-        domain(net.knot_vector_v(), net.control_points()[0].len(), v_degree);
+        knot_domain(net.knot_vector_v(), net.control_points()[0].len(), v_degree);
     if !v_back {
         let _beyond = net.cut_v(v_high);
     }
@@ -438,11 +432,12 @@ fn clamped_onto_domain<P: ControlPoint<f64> + Tolerance>(
     // Read back what the cuts produced rather than trusting them: `cut_u`
     // snaps a parameter near a domain end onto it, and a net whose range moved
     // is not the carrier.
-    let (u_now, v_now) = (
-        domain(net.knot_vector_u(), net.control_points().len(), u_degree),
-        domain(net.knot_vector_v(), net.control_points()[0].len(), v_degree),
+    let (actual_u, actual_v) = (
+        knot_domain(net.knot_vector_u(), net.control_points().len(), u_degree),
+        knot_domain(net.knot_vector_v(), net.control_points()[0].len(), v_degree),
     );
-    let range_holds = (u_now.0, u_now.1, v_now.0, v_now.1) == (u_low, u_high, v_low, v_high);
+    let range_holds =
+        (actual_u.0, actual_u.1, actual_v.0, actual_v.1) == (u_low, u_high, v_low, v_high);
     if !net.is_clamped() || !range_holds {
         return Err(context.malformed(format!(
             "a NURBS surface's knot vectors could not be clamped onto their effective domain \

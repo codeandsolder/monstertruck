@@ -12,6 +12,19 @@ the two do not line up -- upstream `truck v0.4` has nothing to do with
 monstertruck 0.4.0.
 
 
+## Unreleased
+
+### Breaking
+
+- **`monstertruck-io`: remove `cadmpeg::to_solids`.** Use `to_bodies` for
+  strict conversion, or `import` for explicitly reported partial conversion.
+  The former solids-only API could silently discard sheet bodies.
+
+### Changed
+
+- Consolidate CAD and PNG DEFLATE on zlib-rs. The STEP header uses Jiff;
+  its serialization fixture uses a fixed timestamp and no longer needs Chrono.
+
 ## 0.4.1 -- 2026-09-19
 
 ### Added
