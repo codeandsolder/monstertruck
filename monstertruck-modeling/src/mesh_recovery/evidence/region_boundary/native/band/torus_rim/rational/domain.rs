@@ -54,18 +54,18 @@ fn chart_budget(frame: Frame, budget: f64) -> Option<Interval> {
     Some(Interval::point(budget).mul(Interval::point(norm2).sqrt()?))
 }
 
-fn source_ball(frame: Frame, p: Point3, budget: Interval) -> Option<ChartBox> {
-    let [x, y, z, _] = frame.local([p.x, p.y, p.z, 1.0].map(Interval::point));
+fn source_ball(frame: Frame, point: Point3, budget: Interval) -> Option<ChartBox> {
+    let [x, y, z, _] = frame.local([point.x, point.y, point.z, 1.0].map(Interval::point));
     let rho = x.square().add(y.square()).sqrt()?;
-    let u = angular_ball(angle(x, y)?, rho, budget)?;
-    let v = if let Some(major) = frame.major {
+    let azimuth = angular_ball(angle(x, y)?, rho, budget)?;
+    let meridian = if let Some(major) = frame.major {
         let radial = rho.sub(Interval::point(major));
         let norm = radial.square().add(z.square()).sqrt()?;
         angular_ball(angle(radial, z)?, norm, budget)?
     } else {
         z.add(Interval::range(-budget.hi, budget.hi))
     };
-    Some(frame.orient([u, v]))
+    Some(frame.orient([azimuth, meridian]))
 }
 
 struct Domain {

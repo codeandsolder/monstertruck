@@ -713,6 +713,37 @@ impl HybridSource<'_> {
         result.map(|side| side.into_iter().collect())
     }
 
+    fn source_domain_releases(
+        &self,
+        partition: &SurfaceRegionPartition,
+        region: usize,
+        vertex: usize,
+    ) -> Vec<Vec<usize>> {
+        let implicated = self
+            .evidence
+            .source_planar_support
+            .iter()
+            .enumerate()
+            .filter(|(polygon, _)| {
+                self.evidence
+                    .source_polygon_vertices(*polygon)
+                    .is_some_and(|ids| ids.contains(&vertex))
+            })
+            .map(|(_, &support)| support)
+            .collect::<BTreeSet<_>>();
+        let local = implicated
+            .iter()
+            .copied()
+            .filter(|&support| partition.region_by_support[support] == region)
+            .collect::<Vec<_>>();
+        if local.is_empty() {
+            return Vec::new();
+        }
+        std::iter::once(local)
+            .chain(implicated.into_iter().map(|support| vec![support]))
+            .collect()
+    }
+
     fn chart_choices(
         &self,
         partition: &SurfaceRegionPartition,
@@ -738,27 +769,7 @@ impl HybridSource<'_> {
             // not assertions that a chart proof failed for geometric reasons.
             let mut fallback = vec![whole];
             if let Err(NativeTrimError::SourceDomainCoverage(vertex)) = region.faces {
-                let implicated = self
-                    .evidence
-                    .source_planar_support
-                    .iter()
-                    .enumerate()
-                    .filter(|(polygon, _)| {
-                        self.evidence
-                            .source_polygon_vertices(*polygon)
-                            .is_some_and(|ids| ids.contains(&vertex))
-                    })
-                    .map(|(_, &support)| support)
-                    .collect::<BTreeSet<_>>();
-                let local = implicated
-                    .iter()
-                    .copied()
-                    .filter(|&support| partition.region_by_support[support] == region.region)
-                    .collect::<Vec<_>>();
-                if !local.is_empty() {
-                    fallback.push(local);
-                    fallback.extend(implicated.iter().map(|&support| vec![support]));
-                }
+                fallback.extend(self.source_domain_releases(partition, region.region, vertex));
             }
             if let Some(boundary) = graph
                 .regions
