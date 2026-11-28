@@ -51,7 +51,7 @@ pub mod tolerance;
 
 pub use crate::cgmath_extend_traits::*;
 pub use crate::derivatives::*;
-pub use crate::numerical::{affine_qr3, affine_qr4, monic_cubic_roots, monic_quartic_roots};
+pub use crate::numerical::{affine_qr, monic_cubic_roots, monic_quartic_roots};
 pub use cgmath;
 pub use cgmath::prelude::*;
 pub use cgmath::{Deg, Rad, frustum, ortho, perspective};

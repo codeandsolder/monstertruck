@@ -10,7 +10,7 @@ use super::{
     ParametricSurface3D, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
     SearchParameterHint1D, SearchParameterHint2D, SquareMatrix, SurfaceParameter,
     SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed, Vector3, VectorSpace,
-    affine_qr3, affine_qr4, algo,
+    affine_qr, algo,
 };
 use algo::surface::SearchNearestParameterVector;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
@@ -19,7 +19,7 @@ use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 const fn undefined_vector3() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
 
 fn matrix3_scale_bound(a: Matrix3) -> f64 {
-    if let Some((_, k)) = affine_qr3(a.into()) {
+    if let Some((_, k)) = affine_qr::<3>(a.into()) {
         return f64::abs(k[(0, 0)])
             .max(f64::abs(k[(1, 1)]))
             .max(f64::abs(k[(2, 2)]))
@@ -39,7 +39,7 @@ fn matrix3_scale_bound(a: Matrix3) -> f64 {
 }
 
 fn matrix4_scale_bound(a: Matrix4) -> f64 {
-    if let Some((_, k)) = affine_qr4(a.into()) {
+    if let Some((_, k)) = affine_qr::<4>(a.into()) {
         let homogeneous = f64::abs(k[(3, 3)]);
         if homogeneous > f64::EPSILON {
             return f64::abs(k[(0, 0)])
@@ -571,7 +571,7 @@ where C: ParameterDivision1D<Point = Point2> + BoundedCurve<Point = Point2>
         } else {
             (self.curve_parameter(range.1), self.curve_parameter(range.0))
         };
-        let (_, k) = affine_qr3(a.into())?;
+        let (_, k) = affine_qr::<3>(a.into())?;
         let n = f64::abs(k[(0, 0)])
             .max(f64::abs(k[(1, 1)]))
             .max(f64::abs(k[(2, 2)]));
@@ -628,7 +628,7 @@ where C: ParameterDivision1D<Point = Point3> + BoundedCurve<Point = Point3>
         } else {
             (self.curve_parameter(range.1), self.curve_parameter(range.0))
         };
-        let (_, k) = affine_qr4(a.into())?;
+        let (_, k) = affine_qr::<4>(a.into())?;
         let n = f64::abs(k[(0, 0)])
             .max(f64::abs(k[(1, 1)]))
             .max(f64::abs(k[(2, 2)]))

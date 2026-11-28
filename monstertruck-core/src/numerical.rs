@@ -1,24 +1,15 @@
 //! Small dense numerical operations for CAD parameter and transform analysis.
-use nalgebra::{Matrix3, Matrix4, linalg::Schur};
+use nalgebra::{Const, DimMin, Matrix3, Matrix4, SMatrix, linalg::Schur};
 
-/// Factor a finite full-rank 3D homogeneous transform into orthogonal and
-/// upper-triangular factors with nonnegative diagonal scales.
-#[must_use]
-pub fn affine_qr3(columns: [[f64; 3]; 3]) -> Option<(Matrix3<f64>, Matrix3<f64>)> {
-    let matrix = Matrix3::from(columns);
-    if !matrix.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    let (q, r) = matrix.qr().unpack();
-    (r.diagonal().iter().all(|v| v.is_finite() && *v > 0.0) && q.iter().all(|v| v.is_finite()))
-        .then_some((q, r))
-}
+/// Orthogonal and upper-triangular factors of a fixed-size square matrix.
+pub type QrFactors<const N: usize> = (SMatrix<f64, N, N>, SMatrix<f64, N, N>);
 
-/// Factor a finite full-rank 4D homogeneous transform into orthogonal and
-/// upper-triangular factors with nonnegative diagonal scales.
+/// Factor a finite full-rank homogeneous transform into orthogonal and
+/// upper-triangular factors with positive diagonal scales.
 #[must_use]
-pub fn affine_qr4(columns: [[f64; 4]; 4]) -> Option<(Matrix4<f64>, Matrix4<f64>)> {
-    let matrix = Matrix4::from(columns);
+pub fn affine_qr<const N: usize>(columns: [[f64; N]; N]) -> Option<QrFactors<N>>
+where Const<N>: DimMin<Const<N>, Output = Const<N>> {
+    let matrix = SMatrix::from(columns);
     if !matrix.iter().all(|v| v.is_finite()) {
         return None;
     }
@@ -99,7 +90,7 @@ mod tests {
         let transform = Matrix4::new(
             -2.0, 1.0, 0.0, 3.0, 0.0, 3.0, 2.0, 4.0, 0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 0.0, 1.0,
         );
-        let Some((q, r)) = affine_qr4(transform.into()) else {
+        let Some((q, r)) = affine_qr::<4>(transform.into()) else {
             panic!("full rank affine transform")
         };
         assert!((q.transpose() * q - Matrix4::identity()).norm() < 1e-12);

@@ -985,7 +985,7 @@ where C: StepLength + Transformed<Matrix4> + StepFormat
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let surface = self.entity();
         let transform = self.transform();
-        let Some((k, a)) = monstertruck_core::numerical::affine_qr4((*transform).into()) else {
+        let Some((k, a)) = monstertruck_core::numerical::affine_qr::<4>((*transform).into()) else {
             f.write_str("Transform is not regular")?;
             return ERR;
         };
