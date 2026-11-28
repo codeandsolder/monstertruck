@@ -795,6 +795,30 @@ pub fn detect_sectioned_planar_lofts(
         .collect()
 }
 
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+fn recover_proven_test_loft(
+    step: &str,
+    kernel: &crate::cad_kernel::monstertruck::MonstertruckKernel,
+) -> anyhow::Result<CadFragment> {
+    use crate::step_graph::build_index;
+    use monstertruck_io::step::load::ParsedStepSource;
+    let source = ParsedStepSource::parse(step.as_bytes())?.exchange;
+    let entities = &source.data[0].entities;
+    let index = build_index(entities);
+    let ids = crate::brep::manifold_solid_ids(entities);
+    let [id] = ids.as_slice() else {
+        anyhow::bail!("expected a single source solid");
+    };
+    let reduced = ReducedSolid::from_step(*id, entities, &index)
+        .ok_or_else(|| anyhow::anyhow!("source B-rep missing"))?;
+    let recovered = detect_sectioned_planar_loft(&reduced)
+        .ok_or_else(|| anyhow::anyhow!("source ring correspondence not recognized"))?;
+    let proof = crate::cad_recovery::SourceRecovery::new(*id, entities, &index, kernel)
+        .ok_or_else(|| anyhow::anyhow!("source boundary certificate unavailable"))?;
+    assert!(proof.proves(&recovered.model, recovered.root, None)?);
+    Ok(recovered)
+}
+
 #[cfg(test)]
 mod terminal_extension_tests {
     use super::*;
@@ -876,23 +900,10 @@ mod terminal_extension_tests {
         let step = kernel
             .to_step(&authored)?
             .replace("FACE_OUTER_BOUND(", "FACE_BOUND(");
-        let exchange = ParsedStepSource::parse(step.as_bytes())?.exchange;
-        let entities = &exchange.data[0].entities;
-        let index = build_index(entities);
-        let ids = crate::brep::manifold_solid_ids(entities);
-        let [id] = ids.as_slice() else {
-            anyhow::bail!("drafted rectangle must export exactly one solid");
-        };
-        let reduced = ReducedSolid::from_step(*id, entities, &index)
-            .ok_or_else(|| anyhow::anyhow!("no source B-rep"))?;
-        let recovered = detect_sectioned_planar_loft(&reduced)
-            .ok_or_else(|| anyhow::anyhow!("two-section taper not recognized"))?;
+        let recovered = recover_proven_test_loft(&step, &kernel)?;
         assert!(
             matches!(recovered.model.node(recovered.root)?, CadNode::Loft { sections } if sections.len() == 2)
         );
-        let proof = crate::cad_recovery::SourceRecovery::new(*id, entities, &index, &kernel)
-            .ok_or_else(|| anyhow::anyhow!("no original boundary certificate"))?;
-        assert!(proof.proves(&recovered.model, recovered.root, None)?);
         Ok(())
     }
 
