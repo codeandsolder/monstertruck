@@ -1,6 +1,6 @@
 use crate::brep::{
-    append_refs_to_list_param, bound_loop_edges, face_edge_curves, face_loops, face_sense,
-    face_surface, manifold_shell, ref_list_param, remove_refs_from_list_param, toggle_tf,
+    append_refs_to_list_param, bound_loop_edges, face_loops, face_sense, face_surface,
+    manifold_shell, ref_list_param, remove_refs_from_list_param, toggle_tf,
 };
 use crate::instances::{StyleRef, collect_styles_by_target};
 use crate::math2::rotate_quarter_xy as rotate_xy;
@@ -10,8 +10,8 @@ use crate::patterns::{
 };
 use crate::shape_identity::{face_topology_signature, oriented_edge_signature};
 use crate::step_entities::{
-    cartesian_point, direction_components, entity_ref, named_entity_parameters,
-    patch_presentation_lists, push_point, push_simple, representation_items_and_context,
+    cartesian_point, entity_ref, patch_presentation_lists, push_point, push_simple,
+    representation_items_and_context,
 };
 use crate::step_graph::{
     ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record, simple_record_mut,
@@ -22,14 +22,10 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use step_p21::ast::{EntityInstance, Parameter};
 
+mod interface_graph;
 mod mapped_emitter;
 pub use mapped_emitter::instance_boundary_features;
 
-const MIN_GROUP: usize = 8;
-const MAX_FEATURE_FACES: usize = 128;
-const MAX_BOUNDARY_FEATURE_FACES: usize = 4096;
-const MIN_BOUNDARY_HOST_BOUNDS: usize = 2;
-const MIN_BOUNDARY_HOST_EDGES: usize = 6;
 const SIDE_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.planar_feature_side;
 
 #[derive(Debug, Default, Clone)]
@@ -70,11 +66,15 @@ impl ShellTopology {
         let mut face_edges = HashMap::<u64, HashSet<u64>>::with_capacity(faces.len());
         let mut edge_faces = HashMap::<u64, Vec<u64>>::new();
         for &face in &faces {
-            let Some(edges) = face_edge_curves(face, entities, index) else {
+            let Some(loops) = face_loops(face, entities, index) else {
                 continue;
             };
-            for &edge in &edges {
-                edge_faces.entry(edge).or_default().push(face);
+            let mut edges = HashSet::new();
+            for edge in loops.iter().flat_map(|loop_| &loop_.edges) {
+                edges.insert(edge.edge_id);
+                // Keep both uses of a periodic seam on one face. Manifold
+                // incidence is about coedges, not the number of face IDs.
+                edge_faces.entry(edge.edge_id).or_default().push(face);
             }
             face_edges.insert(face, edges);
         }
@@ -122,23 +122,12 @@ impl ShellTopology {
         component_interface_edges(component, host, &self.face_edges, &self.edge_faces)
     }
 
-    /// Compute all actual interfaces in one incidence traversal. A single
-    /// requested host needs only its own indexed boundary edges.
+    /// Compute all actual interfaces in one incidence traversal.
     fn component_interfaces(
         &self,
         component: &HashSet<u64>,
         hosts: &HashSet<u64>,
     ) -> HashMap<u64, HashSet<u64>> {
-        if hosts.len() == 1
-            && let Some(&host) = hosts.iter().next()
-        {
-            let edges = self.interface_edges(component, host);
-            return if edges.is_empty() {
-                HashMap::new()
-            } else {
-                HashMap::from([(host, edges)])
-            };
-        }
         let mut interfaces = HashMap::<u64, HashSet<u64>>::new();
         let mut visited = HashSet::new();
         for face in component {
@@ -234,6 +223,26 @@ pub struct BoundaryFeaturePeelPlan {
     pub shell_face_removals: Vec<BoundaryFeatureShellFaceRemoval>,
     pub host_bound_removals: Vec<BoundaryFeatureHostBoundRemoval>,
     pub stats: BoundaryFeaturePeelStats,
+}
+
+impl BoundaryFeaturePeelPlan {
+    /// Each committed reduction must remove at least one original shell
+    /// face. Apply preflight rejects repeated or missing face identities, so
+    /// this strictly decreasing measure guarantees fixed-point termination.
+    ///
+    /// # Errors
+    /// The plan does not remove a positive, consistent number of faces.
+    pub fn require_progress(&self) -> Result<()> {
+        let count = self
+            .shell_face_removals
+            .iter()
+            .map(|edit| edit.face_ids.len())
+            .sum::<usize>();
+        if count == 0 || count != self.stats.faces_removed_from_shells {
+            bail!("boundary peel has no consistent strict shell-face reduction");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1322,6 +1331,8 @@ fn diagnose_boundary_features_with_index_filtered(
                 .interfaces
                 .iter()
                 .map(|interface| interface.host_face_id)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect();
             let signature = first.signature.clone();
             let centers = members
@@ -1372,10 +1383,6 @@ fn diagnose_boundary_features_with_index_filtered(
     report
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "topology recovery keeps sequential fail-closed proof stages explicit for auditability"
-)]
 fn grouped_boundary_features_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
@@ -1405,67 +1412,44 @@ fn grouped_boundary_features_with_index(
             continue;
         }
 
-        let hosts = shell_faces
-            .iter()
-            .copied()
-            .filter_map(|face| {
-                let frame = plane_frame(face, entities, index)?;
-                let bounds = ref_list_param(face, 1, entities, index)?;
-                let boundary_edges = topology.face_edges.get(&face).map_or(0, HashSet::len);
-                (bounds.len() >= MIN_BOUNDARY_HOST_BOUNDS
-                    || boundary_edges >= MIN_BOUNDARY_HOST_EDGES)
-                    .then_some((face, frame, bounds))
-            })
-            .collect::<Vec<_>>();
-        report.planar_hosts += hosts.len();
-
-        let frames = hosts
-            .iter()
-            .map(|(face, frame, _)| (*face, frame.clone()))
-            .collect::<HashMap<_, _>>();
-        let lookups = hosts
-            .iter()
-            .map(|(face, _, bounds)| (*face, host_bound_lookup(*face, bounds, entities, index)))
-            .collect::<HashMap<_, _>>();
-        for (host_face, _, _) in &hosts {
-            if lookups[host_face].is_empty() {
+        let mut frames = HashMap::new();
+        let mut lookups = HashMap::new();
+        for &face in shell_faces {
+            let Some(bounds) = ref_list_param(face, 1, entities, index) else {
+                continue;
+            };
+            if bounds.len() < 2 {
                 continue;
             }
-            let host_set = HashSet::from([*host_face]);
-            for component in topology.components_without_hosts(&host_set) {
-                let Some(candidate) = boundary_feature_candidate(
-                    &context, component, &host_set, &frames, &lookups, &topology, entities, index,
-                ) else {
-                    continue;
-                };
-                candidates.push(candidate);
+            let Some(frame) = plane_frame(face, entities, index) else {
+                continue;
+            };
+            let lookup = host_bound_lookup(face, &bounds, entities, index);
+            if !lookup.is_empty() {
+                frames.insert(face, frame);
+                lookups.insert(face, lookup);
             }
         }
+        report.planar_hosts += frames.len();
 
-        // Treat all qualified host faces as graph separators in one pass. A
-        // surviving component records the interfaces it actually touches, so
-        // two-host holes and N-host edge/tunnel features use the same model.
-        if hosts.len() >= 2 {
-            let host_set = hosts
-                .iter()
-                .map(|(face, _, _)| *face)
-                .collect::<HashSet<_>>();
-
-            for component in topology.components_without_hosts(&host_set) {
-                let Some(candidate) = boundary_feature_candidate(
-                    &context, component, &host_set, &frames, &lookups, &topology, entities, index,
-                ) else {
-                    continue;
-                };
-                if candidate.interfaces.len() >= 2 {
-                    candidates.push(candidate);
-                }
+        for (component, hosts) in interface_graph::components_for_interfaces(&topology, &lookups) {
+            if let Some(candidate) = boundary_feature_candidate(
+                &context, component, &hosts, &frames, &lookups, &topology, entities, index,
+            ) {
+                candidates.push(candidate);
             }
         }
     }
 
-    // Prefer the richer interface proof when the same face patch is discovered
-    // through both a single-host and an all-host graph cut.
+    let grouped = group_boundary_candidates(candidates, &mut report);
+    (report, grouped)
+}
+
+fn group_boundary_candidates(
+    mut candidates: Vec<BoundaryFeatureCandidate>,
+    report: &mut BoundaryFeatureDiagnostics,
+) -> Vec<Vec<BoundaryFeatureCandidate>> {
+    // Canonicalize candidate ownership independently of hash-map order.
     candidates.sort_by(|a, b| {
         a.context
             .shell_id
@@ -1493,11 +1477,23 @@ fn grouped_boundary_features_with_index(
         .count();
     report.single_host_candidates = deduped
         .iter()
-        .filter(|candidate| candidate.interfaces.len() == 1)
+        .filter(|candidate| {
+            candidate
+                .interfaces
+                .first()
+                .zip(candidate.interfaces.last())
+                .is_some_and(|(first, last)| first.host_face_id == last.host_face_id)
+        })
         .count();
     report.multi_host_candidates = deduped
         .iter()
-        .filter(|candidate| candidate.interfaces.len() > 1)
+        .filter(|candidate| {
+            candidate
+                .interfaces
+                .first()
+                .zip(candidate.interfaces.last())
+                .is_some_and(|(first, last)| first.host_face_id != last.host_face_id)
+        })
         .count();
 
     deduped.sort_by(|a, b| {
@@ -1530,44 +1526,33 @@ fn grouped_boundary_features_with_index(
         }
     }
 
-    (report, grouped)
+    grouped
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "topology proof keeps all evidence inputs explicit at the candidate boundary"
 )]
-#[expect(
-    clippy::type_complexity,
-    reason = "nested STEP lookup maps preserve their source-domain structure"
-)]
 fn boundary_feature_candidate(
     context: &ShellContext,
     component: HashSet<u64>,
     requested_hosts: &HashSet<u64>,
     frames: &HashMap<u64, PlaneFrame>,
-    bound_lookups: &HashMap<u64, HashMap<Vec<u64>, Vec<(u64, u64, String)>>>,
+    bound_lookups: &HashMap<u64, HostBoundLookup>,
     topology: &ShellTopology,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<BoundaryFeatureCandidate> {
-    if component.is_empty() || component.len() > MAX_BOUNDARY_FEATURE_FACES {
+    if component.is_empty() {
         return None;
     }
     let mut interfaces = Vec::new();
     for (host, interface_edges) in topology.component_interfaces(&component, requested_hosts) {
-        let matches = bound_lookups
-            .get(&host)?
-            .get(&edge_set_key(&interface_edges))?;
-        let [(bound_id, loop_id, bound_orientation)] = matches.as_slice() else {
-            return None;
-        };
-        interfaces.push(FeatureInterface {
-            host_face_id: host,
-            bound_id: *bound_id,
-            loop_id: *loop_id,
-            bound_orientation: bound_orientation.clone(),
-        });
+        interfaces.extend(matched_host_bounds(
+            host,
+            &interface_edges,
+            bound_lookups.get(&host)?,
+        )?);
     }
     if interfaces.is_empty()
         || !topology.component_is_two_manifold_with_hosts(&component, requested_hosts)
@@ -1588,7 +1573,7 @@ fn boundary_feature_candidate(
         return None;
     };
 
-    interfaces.sort_by_key(|interface| interface.host_face_id);
+    interfaces.sort_by_key(|interface| (interface.host_face_id, interface.bound_id));
     let center = bbox_center(&vertices)?;
     let (signature, normalized_quarter) = component_signature(&component, center, entities, index)?;
     let mut face_ids = component.into_iter().collect::<Vec<_>>();
@@ -1680,20 +1665,12 @@ pub fn diagnose_planar_features(entities: &[EntityInstance]) -> PlanarFeatureDia
             continue;
         };
         let shell_faces = &topology.faces;
-        if shell_faces.len() < MIN_GROUP + 2 {
-            continue;
-        }
-
         let host_faces = shell_faces
             .iter()
             .copied()
             .filter(|face| {
-                face_surface(*face, entities, &index)
-                    .and_then(|surface| index.get(&surface).copied())
-                    .and_then(|idx| simple_record(&entities[idx]))
-                    .is_some_and(|record| record.name == "PLANE")
-                    && ref_list_param(*face, 1, entities, &index)
-                        .is_some_and(|bounds| bounds.len() > MIN_GROUP)
+                ref_list_param(*face, 1, entities, &index).is_some_and(|bounds| bounds.len() >= 2)
+                    && plane_frame(*face, entities, &index).is_some()
             })
             .collect::<Vec<_>>();
 
@@ -1721,7 +1698,7 @@ pub fn diagnose_planar_features(entities: &[EntityInstance]) -> PlanarFeatureDia
             let mut negative_groups = HashMap::<String, usize>::new();
 
             for component in components {
-                if component.is_empty() || component.len() > MAX_FEATURE_FACES {
+                if component.is_empty() {
                     report.rejected_empty_or_large += 1;
                     continue;
                 }
@@ -1875,13 +1852,15 @@ fn is_closed_shell(
         .is_some_and(|record| record.name == "CLOSED_SHELL")
 }
 
+type HostBoundLookup = HashMap<Vec<u64>, Vec<(u64, u64, String)>>;
+
 fn host_bound_lookup(
     host_face: u64,
     bounds: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-) -> HashMap<Vec<u64>, Vec<(u64, u64, String)>> {
-    let mut out = HashMap::<Vec<u64>, Vec<(u64, u64, String)>>::new();
+) -> HostBoundLookup {
+    let mut out = HostBoundLookup::new();
     if bounds.len() < 2 {
         return out;
     }
@@ -1928,6 +1907,36 @@ fn host_bound_lookup(
             .push((bound, loop_id, orientation));
     }
     out
+}
+
+/// A connected feature may touch multiple disjoint inner bounds of one
+/// retained face. The union of complete, unambiguous cycles must account
+/// for every crossing edge; partial cycles are never healed.
+fn matched_host_bounds(
+    host: u64,
+    interface_edges: &HashSet<u64>,
+    lookup: &HostBoundLookup,
+) -> Option<Vec<FeatureInterface>> {
+    let mut covered = HashSet::new();
+    let mut interfaces = Vec::new();
+    for (edges, matches) in lookup {
+        if edges.is_empty() || !edges.iter().all(|edge| interface_edges.contains(edge)) {
+            continue;
+        }
+        let [(bound_id, loop_id, bound_orientation)] = matches.as_slice() else {
+            return None;
+        };
+        if edges.iter().any(|edge| !covered.insert(*edge)) {
+            return None;
+        }
+        interfaces.push(FeatureInterface {
+            host_face_id: host,
+            bound_id: *bound_id,
+            loop_id: *loop_id,
+            bound_orientation: bound_orientation.clone(),
+        });
+    }
+    (covered == *interface_edges && !interfaces.is_empty()).then_some(interfaces)
 }
 
 fn edge_set_key(edges: &HashSet<u64>) -> Vec<u64> {
@@ -2027,22 +2036,11 @@ fn plane_frame(
     index: &HashMap<u64, usize>,
 ) -> Option<PlaneFrame> {
     let surface_id = face_surface(host_face, entities, index)?;
-    let surface_params = named_entity_parameters(surface_id, "PLANE", entities, index)?;
-    let axis_id = entity_ref_value(surface_params.get(1)?)?;
-    let axis_params = named_entity_parameters(axis_id, "AXIS2_PLACEMENT_3D", entities, index)?;
-    let origin_id = entity_ref_value(axis_params.get(1)?)?;
-    let direction_id = entity_ref_value(axis_params.get(2)?)?;
-    let origin = cartesian_point(origin_id, entities, index)?;
-    let direction = direction_components(direction_id, entities, index)?;
-    let length = f64::mul_add(
-        direction[2],
-        direction[2],
-        f64::mul_add(direction[1], direction[1], direction[0] * direction[0]),
-    )
-    .sqrt();
-    if !length.is_finite() || length <= 0.0 {
+    let crate::brep::SurfaceSupport::Plane(plane) =
+        crate::brep::surface_support(surface_id, entities, index)
+    else {
         return None;
-    }
+    };
     let sense = face_sense(host_face, entities, index)?;
     let sign = match sense.as_str() {
         "T" => 1.0,
@@ -2052,13 +2050,19 @@ fn plane_frame(
     Some(PlaneFrame {
         surface_id,
         sense,
-        origin,
-        outward: [
-            sign * direction[0] / length,
-            sign * direction[1] / length,
-            sign * direction[2] / length,
-        ],
+        origin: plane.origin_mm,
+        outward: plane.normal.map(|value| sign * value),
     })
+}
+
+/// Use the same parameter-oriented analytic support for feature proposals
+/// and Boolean tool validation, regardless of the authored STEP carrier.
+pub fn host_outward_direction(
+    face: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> Option<[f64; 3]> {
+    Some(plane_frame(face, entities, index)?.outward)
 }
 
 fn plane_side(points: &[[f64; 3]], frame: &PlaneFrame) -> PlaneSide {
