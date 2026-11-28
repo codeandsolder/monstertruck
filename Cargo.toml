@@ -127,3 +127,6 @@ debug = false
 
 [profile.release.package.monstertruck-wasm]
 opt-level = "z"
+
+[patch.crates-io]
+quick-xml = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "vtkio-xml-security-v0.0.1" }
