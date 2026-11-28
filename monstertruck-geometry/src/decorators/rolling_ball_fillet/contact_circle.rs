@@ -96,7 +96,7 @@ impl ParametricCurveTrait for ContactCircle {
             2 => PI,
             _ => 3.0 * PI / 2.0,
         };
-        let angle = phase + self.angle * t;
+        let angle = self.angle.mul_add(t, phase);
         let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(self.axis), angle).into_inner();
         let c = self.center.position_vector() * if n == 0 { 1.0 } else { 0.0 };
         c + rot * radius * crate::pow_usize(self.angle, n)

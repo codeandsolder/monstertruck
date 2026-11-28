@@ -158,7 +158,7 @@ where
     C: BoundedCurve,
     C::Point: AffinePoint<Diff = C::Vector>,
     C::Vector: LinearVector<Scalar = f64>,
-    T: GeometryTransform<C::Point> + Clone,
+    T: GeometryTransform<C::Point>,
 {
     type Point = C::Point;
     type Vector = C::Vector;
@@ -197,7 +197,7 @@ where
     C: BoundedCurve,
     C::Point: AffinePoint<Diff = C::Vector>,
     C::Vector: LinearVector<Scalar = f64>,
-    T: GeometryTransform<C::Point> + Clone,
+    T: GeometryTransform<C::Point>,
 {
     fn range_tuple(&self) -> (f64, f64) { self.entity.range_tuple() }
 }
@@ -207,7 +207,7 @@ where
     C: BoundedCurve + Cut,
     C::Point: AffinePoint<Diff = C::Vector>,
     C::Vector: LinearVector<Scalar = f64>,
-    T: GeometryTransform<C::Point> + Clone,
+    T: GeometryTransform<C::Point>,
 {
     fn cut(&mut self, t: f64) -> Self {
         let t = self.curve_parameter(t);
@@ -217,7 +217,7 @@ where
         }
         Self {
             entity,
-            transform: self.transform.clone(),
+            transform: self.transform,
             orientation: self.orientation,
         }
     }
@@ -227,7 +227,7 @@ impl<S, T> ParametricSurface for Processor<S, T>
 where
     S: ParametricSurface,
     S::Point: AffinePoint<Scalar = f64, Diff = S::Vector>,
-    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64>,
 {
     type Point = S::Point;
     type Vector = S::Vector;
@@ -326,7 +326,7 @@ where
 impl<S, T> ParametricSurface3D for Processor<S, T>
 where
     S: ParametricSurface3D,
-    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
         let (u, v) = self.entity.closed_chart_periods();
@@ -355,7 +355,7 @@ where
 impl<S, T> BoundedSurface for Processor<S, T>
 where
     S: BoundedSurface<Point = Point3, Vector = Vector3>,
-    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64>,
 {
     fn range_tuple(&self) -> SurfaceParameterRange {
         let (u_range, v_range) = self.entity.range_tuple();
@@ -374,7 +374,7 @@ use monstertruck_traits::v2;
 impl<S, T> v2::ParametricSurface for Processor<S, T>
 where
     S: ParametricSurface<Point = Point3, Vector = Vector3>,
-    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     type Scalar = f64;
     type Point = Point3;
@@ -411,7 +411,7 @@ where
 impl<S, T> v2::BoundedSurface for Processor<S, T>
 where
     S: BoundedSurface<Point = Point3, Vector = Vector3>,
-    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { BoundedSurface::range_tuple(self) }
@@ -420,7 +420,7 @@ where
 impl<S, T> v2::ParametricSurface3D for Processor<S, T>
 where
     S: ParametricSurface3D,
-    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { ParametricSurface3D::normal(self, u, v) }
@@ -449,7 +449,7 @@ where
     E: BoundedCurve<Point = P> + SearchNearestParameter<CurveParameter, Point = P>,
     P: AffinePoint<Scalar = f64, Diff = E::Vector>,
     E::Vector: InnerProduct<Scalar = f64> + Tolerance,
-    T: GeometryTransform<P> + Clone,
+    T: GeometryTransform<P>,
 {
     type Point = P;
     #[inline]
@@ -486,7 +486,7 @@ where
     E: ParametricSurface<Point = P> + SearchNearestParameter<SurfaceParameter, Point = P>,
     P: AffinePoint<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
     E::Vector: SearchNearestParameterVector<Point = P>,
-    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64>,
 {
     type Point = P;
     #[inline]
@@ -773,7 +773,7 @@ where
     E: BoundedCurve<Point = P> + SearchNearestParameter<CurveParameter, Point = P>,
     P: AffinePoint<Scalar = f64, Diff = E::Vector>,
     E::Vector: InnerProduct<Scalar = f64> + Tolerance,
-    T: GeometryTransform<P> + Clone,
+    T: GeometryTransform<P>,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -796,7 +796,7 @@ where
     E: ParametricSurface<Point = P> + SearchNearestParameter<SurfaceParameter, Point = P>,
     P: AffinePoint<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
     E::Vector: SearchNearestParameterVector<Point = P>,
-    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64> + Clone,
+    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64>,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(

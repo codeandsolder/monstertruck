@@ -5,9 +5,9 @@
 
 use super::{
     AffinePoint, ContactCircle, CurveDerivatives, Debug, HashGen, Matrix2, Matrix3, MetricSpace,
-    Mul, PI, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point3, RadiusFunction,
-    RollingBallFilletSurface, SearchParameter, SurfaceDerivatives, SurfaceParameter, Vector2,
-    Vector3, Zero,
+    Mul, PI, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    RadiusFunction, RollingBallFilletSurface, SearchParameter, SurfaceDerivatives,
+    SurfaceParameter, Vector2, Vector3, Zero,
 };
 use monstertruck_core::{Rotation3, Unit};
 const MUL: fn(f64, f64) -> f64 = f64::mul;
@@ -67,10 +67,8 @@ where
         rders: &CurveDerivatives<f64>,
         n: usize,
     ) -> Option<CenterContactDers> {
-        let [u0, v0] = <[f64; 2]>::from(cc.contact_point0.uv);
-        let mut s0info = SurfaceInfo::new(&self.surface0, (u0, v0), n + 1);
-        let [u1, v1] = <[f64; 2]>::from(cc.contact_point1.uv);
-        let mut s1info = SurfaceInfo::new(&self.surface1, (u1, v1), n + 1);
+        let mut s0info = SurfaceInfo::new(&self.surface0, cc.contact_point0.uv, n + 1);
+        let mut s1info = SurfaceInfo::new(&self.surface1, cc.contact_point1.uv, n + 1);
 
         let cders = self.edge_curve.derivatives(n + 1, cc.t);
 
@@ -474,7 +472,8 @@ struct SurfaceInfo {
 }
 
 impl SurfaceInfo {
-    fn new(surface: &impl ParametricSurface3D, (u, v): (f64, f64), n: usize) -> Self {
+    fn new(surface: &impl ParametricSurface3D, uv: Point2, n: usize) -> Self {
+        let (u, v) = (uv.x, uv.y);
         let ders = surface.derivatives(n, u, v);
 
         let mut tders = CurveDerivatives::new(n);
@@ -496,7 +495,7 @@ impl SurfaceInfo {
         nders[0] = surface.normal(u, v);
 
         let mut uvders = CurveDerivatives::new(n);
-        uvders[0] = Vector2::new(u, v);
+        uvders[0] = uv.coords;
 
         Self {
             ders,
