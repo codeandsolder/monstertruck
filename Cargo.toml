@@ -43,13 +43,14 @@ array-macro = "2"
 bytemuck = { version = "1", features = ["derive"] }
 cgmath = { version = "0.18", features = ["serde"] }
 chrono = { version = "0.4", features = ["wasmbind"] }
+jiff = { version = "0.2.46", default-features = false, features = ["std", "js"] }
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 console_error_panic_hook = "0.1"
 console_log = "1"
-derive_more = { version = "2", features = ["full"] }
+derive_more = "2"
 env_logger = "0.11"
-futures-intrusive = "0.5"
+futures-channel = "0.3"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 gloo-console = "0.4"
 image = { version = "0.25", default-features = false }
