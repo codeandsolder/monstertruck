@@ -8,6 +8,7 @@ use super::{
     translated_profile_edge_residual,
 };
 use crate::brep::{CircleSupport, CurveSupport, CylinderSupport, SurfaceSupport};
+use crate::line_edges::line_chain;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -166,35 +167,6 @@ fn side_cap_runs<'a>(side: &'a FaceInfo, context: &SideProofContext<'_>) -> Opti
 
 fn run_ends(edges: &[&OrientedEdgeUse]) -> Option<[[f64; 3]; 2]> {
     Some([edges.first()?.start_mm, edges.last()?.end_mm])
-}
-
-/// Each straight piece advances along one geometric segment. This is enough
-/// to establish complete coverage of that segment, irrespective of splits.
-fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
-    let [start, end] = run_ends(edges)?;
-    let direction = normalize(sub(end, start))?;
-    let mut max_residual = 0.0_f64;
-    for edge in edges {
-        let CurveSupport::Line(line) = &edge.support else {
-            return None;
-        };
-        let support_axis = normalize(line.direction)?;
-        let move_axis = sub(edge.end_mm, edge.start_mm);
-        if dot(move_axis, direction) <= GEOM_TOL_MM
-            || dot(support_axis, direction).abs() < 1.0 - DIR_TOL
-        {
-            return None;
-        }
-        for point in [edge.start_mm, edge.end_mm] {
-            let deviation = norm(cross(sub(point, start), direction))
-                .max(norm(cross(sub(point, line.origin_mm), support_axis)));
-            if deviation > GEOM_TOL_MM {
-                return None;
-            }
-            max_residual = max_residual.max(deviation);
-        }
-    }
-    Some(max_residual)
 }
 
 struct CircleChain {
