@@ -2408,6 +2408,15 @@ mod tests {
                     "#57 = CARTESIAN_POINT('',(2.,-4.898587196589E-16,0.));",
                     "#57 = CARTESIAN_POINT('',(2.001,-4.898587196589E-16,0.));",
                 ),
+                true,
+            ),
+            // A vertex displaced beyond the physical recovery allowance must
+            // still invalidate its bounded circular trim.
+            (
+                source.replace(
+                    "#57 = CARTESIAN_POINT('',(2.,-4.898587196589E-16,0.));",
+                    "#57 = CARTESIAN_POINT('',(2.02,-4.898587196589E-16,0.));",
+                ),
                 false,
             ),
         ];

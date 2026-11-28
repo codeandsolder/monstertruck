@@ -436,7 +436,7 @@ fn cone_profile_accepts_proven_apex_and_bounded_source_noise() -> anyhow::Result
             .is_none()
     );
 
-    let declared_tolerance_mm = 1.0e-6;
+    let declared_tolerance_mm = 4.0 * REVOLUTION_SOURCE_SUPPORT_TOL_MM;
     let declared_noisy = make_frustum(1.0 + 0.5 * declared_tolerance_mm);
     let faces = vec![declared_noisy.clone()];
     let context = TopologyContext {

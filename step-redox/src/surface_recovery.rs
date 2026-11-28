@@ -139,7 +139,7 @@ pub fn recover_v_extrusion_surfaces(entities: &mut Vec<EntityInstance>) -> VExtr
 
     for candidate in candidates {
         let length = norm(candidate.extrusion);
-        if !length.is_finite() || length <= GEOMETRY_TOLERANCE {
+        if !length.is_finite() || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
             continue;
         }
         let direction = [
@@ -425,7 +425,9 @@ fn detect_v_extrusion(
         let p0 = cartesian_point(point_row[0], entities, index)?;
         let p1 = cartesian_point(point_row[1], entities, index)?;
         let delta = sub(p1, p0);
-        if norm(delta) <= geometry_tolerance_mm {
+        // The fit allowance does not define the minimum thickness of an
+        // authored wall. Only a numerically degenerate extrusion is invalid.
+        if norm(delta) <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
             return None;
         }
         if let Some(expected) = shared_delta {

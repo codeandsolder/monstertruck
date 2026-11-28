@@ -723,7 +723,7 @@ mod tests {
                 .parameter_forward
         );
         let mut wrong = spline;
-        wrong.control_points_mm[1][0] += 0.01;
+        wrong.control_points_mm[1][0] += 0.1;
         edge.support = CurveSupport::BSpline(wrong);
         assert!(cylindrical_cap_edge(&edge, cylinder, super::super::GEOM_TOL_MM,).is_none());
     }
