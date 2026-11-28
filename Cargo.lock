@@ -2550,7 +2550,7 @@ dependencies = [
 [[package]]
 name = "png"
 version = "0.18.1"
-source = "git+https://github.com/codeandsolder/cargo-patches.git?branch=generated%2Fksp-image-codecs#a159bab49cc6fa31e453f2ec862beb83f6d9c777"
+source = "git+https://github.com/codeandsolder/cargo-patches.git?tag=ksp-image-codecs-v0.0.2#a159bab49cc6fa31e453f2ec862beb83f6d9c777"
 dependencies = [
  "bitflags 2.13.2",
  "crc32fast",

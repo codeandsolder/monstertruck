@@ -1416,7 +1416,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "png"
 version = "0.18.1"
-source = "git+https://github.com/codeandsolder/cargo-patches.git?branch=generated%2Fksp-image-codecs#74abf6d69e759ebabdf9b71273424e62ac5c02ae"
+source = "git+https://github.com/codeandsolder/cargo-patches.git?tag=ksp-image-codecs-v0.0.2#a159bab49cc6fa31e453f2ec862beb83f6d9c777"
 dependencies = [
  "bitflags",
  "crc32fast",
