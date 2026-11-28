@@ -9,7 +9,7 @@ pub type QrFactors<const N: usize> = (SMatrix<f64, N, N>, SMatrix<f64, N, N>);
 #[must_use]
 pub fn affine_qr<const N: usize>(columns: [[f64; N]; N]) -> Option<QrFactors<N>>
 where Const<N>: DimMin<Const<N>, Output = Const<N>> {
-    let matrix = SMatrix::from(columns);
+    let matrix = SMatrix::<f64, N, N>::from(columns);
     if !matrix.iter().all(|v| v.is_finite()) {
         return None;
     }
