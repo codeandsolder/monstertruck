@@ -14,9 +14,9 @@
 //!
 //! [OCCT tutorial]: https://dev.opencascade.org/doc/overview/html/occt__tutorial.html
 
-use monstertruck_modeling::{AffinePoint, Point3, Shell, Solid, Vector3, builder};
 #[cfg(feature = "fillet")]
 use monstertruck_modeling::{Curve, Edge, FilletOptions, RadiusSpec, fillet_edges};
+use monstertruck_modeling::{Point3, Shell, Solid, Vector3, builder};
 use std::f64::consts::PI;
 
 type ExampleResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;

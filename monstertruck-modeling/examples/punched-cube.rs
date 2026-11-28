@@ -3,7 +3,7 @@
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
 use monstertruck_modeling::builder::SweepAngle;
-use monstertruck_modeling::{AffinePoint, Edge, Point3, Solid, Vector3, Wire, builder};
+use monstertruck_modeling::{Edge, Point3, Solid, Vector3, Wire, builder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         edge0.back(),
         Point3::origin(),
         Vector3::z(),
-        SweepAngle::Partial((std::f64::consts::PI / 2.0)),
+        SweepAngle::Partial(std::f64::consts::PI / 2.0),
         2,
     )?;
     let back_vertex = wire1
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         edge2.back(),
         Point3::origin(),
         Vector3::z(),
-        SweepAngle::Partial((std::f64::consts::PI / 2.0)),
+        SweepAngle::Partial(std::f64::consts::PI / 2.0),
         2,
     )?;
     let back_edge = wire3
