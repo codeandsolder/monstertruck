@@ -96,8 +96,8 @@ impl From<&Plane> for geom::Plane {
     fn from(plane: &Plane) -> Self {
         let mat = Matrix4::from(&plane.position);
         let o = Point3::from_homogeneous(mat.column(3).into_owned());
-        let p = o + mat.column(0).into_owned().spatial();
-        let q = o + mat.column(1).into_owned().spatial();
+        let p = o + mat.fixed_view::<3, 1>(0, 0).into_owned();
+        let q = o + mat.fixed_view::<3, 1>(0, 1).into_owned();
         Self::new(o, p, q)
     }
 }
@@ -137,8 +137,8 @@ pub struct CylindricalSurface {
 impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
     fn from(cs: &CylindricalSurface) -> Self {
         let mat = Matrix4::from(&cs.position);
-        let x = mat.column(0).into_owned().spatial();
-        let z = mat.column(2).into_owned().spatial();
+        let x = mat.fixed_view::<3, 1>(0, 0).into_owned();
+        let z = mat.fixed_view::<3, 1>(0, 2).into_owned();
         let center = Point3::from_homogeneous(mat.column(3).into_owned());
         let radius = cs.radius;
         let p = center + x * radius;

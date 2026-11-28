@@ -11,7 +11,7 @@ use super::{
 #[cfg(test)]
 use monstertruck_core::assert_near;
 #[cfg(test)]
-use monstertruck_geometry::prelude::KnotVector;
+use monstertruck_geometry::prelude::{KnotVector, Vector2};
 #[cfg(test)]
 use std::f64::consts::TAU;
 
@@ -64,7 +64,7 @@ impl IncludeCurve<Curve3D> for Plane {
             Curve3D::NurbsCurve(bsp) => self.include(bsp),
             Curve3D::Conic(conic) => {
                 let mat = conic.posture();
-                let axis = mat.column(2).into_owned().spatial();
+                let axis = mat.fixed_view::<3, 1>(0, 2).into_owned();
                 axis.cross(&self.normal()).so_small()
             }
             Curve3D::Polyline(poly) => poly

@@ -14,7 +14,7 @@ impl StepFormat for Point2 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         f.write_fmt(format_args!(
             "#{idx} = CARTESIAN_POINT('', {coordinates});\n",
-            coordinates = SliceDisplay(AsRef::<[f64; 2]>::as_ref(self)),
+            coordinates = SliceDisplay(self.coords.as_slice()),
         ))
     }
 }
@@ -24,7 +24,7 @@ impl StepFormat for Point3 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         f.write_fmt(format_args!(
             "#{idx} = CARTESIAN_POINT('', {coordinates});\n",
-            coordinates = SliceDisplay(AsRef::<[f64; 3]>::as_ref(self)),
+            coordinates = SliceDisplay(self.coords.as_slice()),
         ))
     }
 }
