@@ -59,6 +59,8 @@ fn main() -> Result<()> {
                 },
                 hybrid: None,
             };
+            let remaining = candidate.remaining_recovery_options(&options)?;
+            report["remaining_chord_budget"] = json!(remaining.analytic.source_chord_budget);
             let start = std::time::Instant::now();
             let native = candidate.recover_native(&options, |_| {})?;
             report["native_seconds"] = json!(start.elapsed().as_secs_f64());

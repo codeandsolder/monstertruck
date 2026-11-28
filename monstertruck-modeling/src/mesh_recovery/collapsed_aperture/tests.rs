@@ -110,7 +110,7 @@ fn collapsed_aperture_preserves_floor_and_reopens_contact() -> Result<(), Box<dy
             },
             hybrid: None,
         };
-        let policy = candidate.remaining_options(&options)?;
+        let policy = candidate.remaining_recovery_options(&options)?;
         let remaining = policy
             .analytic
             .source_chord_budget
@@ -118,7 +118,7 @@ fn collapsed_aperture_preserves_floor_and_reopens_contact() -> Result<(), Box<dy
         assert!(remaining + candidate.evidence.deviation_upper_bound <= 0.2);
         assert!(
             candidate
-                .remaining_options(&NativeRecoveryOptions::default())
+                .remaining_recovery_options(&NativeRecoveryOptions::default())
                 .is_err()
         );
         let recovery = candidate.recover_native(&options, |_| {})?;

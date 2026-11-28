@@ -73,7 +73,12 @@ impl CollapsedApertureCandidate {
     #[must_use = "the allowance is required for subsequent recovery"]
     pub const fn evidence(&self) -> &CollapsedApertureEvidence { &self.evidence }
 
-    fn remaining_options(
+    /// Return the subsequent native recovery policy with the local repair
+    /// allowance reserved from both declared source error budgets.
+    ///
+    /// # Errors
+    /// Missing, inconsistent or insufficient geometric budgets.
+    pub fn remaining_recovery_options(
         &self,
         options: &NativeRecoveryOptions,
     ) -> Result<NativeRecoveryOptions, AnalyticRecoveryError> {
@@ -112,7 +117,11 @@ impl CollapsedApertureCandidate {
         options: &NativeRecoveryOptions,
         observe: impl FnMut(NativeComponentReport<'_>),
     ) -> Result<NativeMeshRecovery, AnalyticRecoveryError> {
-        recover_native_mesh(&self.mesh, &self.remaining_options(options)?, observe)
+        recover_native_mesh(
+            &self.mesh,
+            &self.remaining_recovery_options(options)?,
+            observe,
+        )
     }
 }
 
