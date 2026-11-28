@@ -406,6 +406,17 @@ mod tests {
             MeridianStationGraph::for_discovery(&evidence, origin, axis, graph_options())
                 .ok_or("discovery graph")?;
         assert_eq!(count, full.stations().len());
+        let mut ids = (0..count)
+            .map(|id| full.station_vertices(id).ok_or("station vertices"))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..evidence.positions.len()).collect::<Vec<_>>());
+        assert!(full.station_vertices(count).is_none());
+
         assert!(fast.is_none());
         assert!(full.mixed_support_refinements().is_empty());
         assert!(full.discover_linear(&boundary).is_empty());

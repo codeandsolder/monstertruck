@@ -215,6 +215,10 @@ pub struct ChainPairEvidence {
 pub struct PlanarSupport {
     /// Indices into the original source polygon sequence.
     pub source_face_indices: Vec<usize>,
+    /// Sorted, unique canonical vertex IDs of all member polygons,
+    /// including interior tessellation vertices. Measured once when
+    /// building or refining the planar support, not for each carrier.
+    source_vertex_indices: Vec<usize>,
     /// Oriented normal of the fixed seed polygon.
     pub normal: Vector3,
     /// Seed origin in the source coordinate frame.
@@ -225,6 +229,12 @@ pub struct PlanarSupport {
     pub max_vertex_plane_residual: f64,
     /// Maximum angular deviation from the fixed seed normal in radians.
     pub max_normal_angle_radians: f64,
+}
+
+impl PlanarSupport {
+    /// Complete original vertex membership, including interior vertices.
+    #[must_use = "these samples preserve full source coverage"]
+    pub fn source_vertices(&self) -> &[usize] { &self.source_vertex_indices }
 }
 
 /// Three observed planar supports whose central support touches both
@@ -958,10 +968,12 @@ fn measure_planar_support(
     seed: &InputPolygon,
 ) -> PlanarSupport {
     let mut area = 0.0;
+    let mut source_vertex_indices = Vec::new();
     let mut max_vertex_plane_residual = 0.0_f64;
     let mut max_normal_angle_radians = 0.0_f64;
     for &face_id in &source_face_indices {
         let face = &polygons[face_id];
+        source_vertex_indices.extend_from_slice(&face.vertices);
         let reference = positions[face.vertices[0]];
         // Signed fan contributions cancel for concave polygons;
         // summing triangle magnitudes would overestimate their area.
@@ -984,8 +996,11 @@ fn measure_planar_support(
             .atan2(face.normal.dot(seed.normal));
         max_normal_angle_radians = max_normal_angle_radians.max(angular);
     }
+    source_vertex_indices.sort_unstable();
+    source_vertex_indices.dedup();
     PlanarSupport {
         source_face_indices,
+        source_vertex_indices,
         normal: seed.normal,
         origin: seed.origin,
         area,

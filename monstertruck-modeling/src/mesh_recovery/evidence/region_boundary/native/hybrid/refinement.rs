@@ -114,7 +114,6 @@ pub(super) struct ReleaseContext<'a> {
     partition: &'a SurfaceRegionPartition,
     permitted: BTreeSet<usize>,
     options: HybridRefinementOptions,
-    support_vertices: Vec<Vec<usize>>,
     vertex_supports: Vec<Vec<usize>>,
     vertex_conflicts: Vec<Vec<PatchSupportConflict>>,
 }
@@ -138,7 +137,6 @@ impl<'a> ReleaseContext<'a> {
         {
             return Err(HybridRecoveryError::InvalidInput);
         }
-        let mut support_vertices = Vec::with_capacity(count);
         let mut vertex_supports = vec![Vec::new(); evidence.positions.len()];
         let mut vertex_conflicts = vec![Vec::new(); evidence.positions.len()];
         for (support, plane) in evidence.planar_supports.iter().enumerate() {
@@ -149,17 +147,7 @@ impl<'a> ReleaseContext<'a> {
                 .copied()
                 .flatten()
                 .ok_or(HybridRecoveryError::InvalidInput)?;
-            let mut ids = BTreeSet::new();
-            for &polygon in &plane.source_face_indices {
-                ids.extend(
-                    evidence
-                        .source_polygon_vertices(polygon)
-                        .ok_or(HybridRecoveryError::InvalidInput)?
-                        .iter()
-                        .copied(),
-                );
-            }
-            for &vertex in &ids {
+            for &vertex in plane.source_vertices() {
                 let point = *evidence
                     .positions
                     .get(vertex)
@@ -177,14 +165,12 @@ impl<'a> ReleaseContext<'a> {
                     });
                 }
             }
-            support_vertices.push(ids.into_iter().collect());
         }
         Ok(Self {
             evidence,
             partition,
             permitted: permitted.iter().copied().collect(),
             options,
-            support_vertices,
             vertex_supports,
             vertex_conflicts,
         })
@@ -351,7 +337,10 @@ impl<'a> ReleaseContext<'a> {
                     .collect::<BTreeSet<_>>()
             }
             HybridRefinementSeed::Supports(supports) => {
-                if supports.iter().any(|&id| id >= self.support_vertices.len()) {
+                if supports
+                    .iter()
+                    .any(|&id| id >= self.evidence.planar_supports.len())
+                {
                     return Err(HybridRecoveryError::InvalidInput);
                 }
                 supports.iter().copied().collect::<BTreeSet<_>>()
@@ -410,7 +399,8 @@ impl<'a> ReleaseContext<'a> {
             // is constrained to the same displacement ball, even if it
             // meets the patch only at a point. Releasing another support
             // can expose new junctions; compute the transitive closure.
-            let vertex_conflicts = self.support_vertices[support]
+            let vertex_conflicts = self.evidence.planar_supports[support]
+                .source_vertices()
                 .iter()
                 .flat_map(|&id| self.vertex_conflicts[id].iter().cloned());
             let chord_conflicts = self.chord_conflicts(support, &selected);
@@ -923,7 +913,8 @@ mod tests {
         let permitted = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
         let policy = options(0.25, 10);
         let context = ReleaseContext::new(&evidence, &partition, &permitted, policy)?;
-        let (vertex, sphere_supports) = context.support_vertices[selected[0]]
+        let (vertex, sphere_supports) = context.evidence.planar_supports[selected[0]]
+            .source_vertices()
             .iter()
             .find_map(|&vertex| {
                 let supports = context.vertex_supports[vertex]
@@ -1035,7 +1026,8 @@ mod tests {
             .ok_or("source polygon")?;
         assert!(choices.iter().flatten().all(|&support| {
             support != left
-                && context.support_vertices[support]
+                && context.evidence.planar_supports[support]
+                    .source_vertices()
                     .iter()
                     .any(|id| source.contains(id))
         }));
