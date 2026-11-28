@@ -2500,9 +2500,12 @@ fn feature_host_outward_directions(
     let mut out = Vec::with_capacity(host_face_ids.len());
     for &face_id in host_face_ids {
         let surface_id = crate::brep::face_surface(face_id, entities, index)?;
-        let crate::brep::SurfaceSupport::Plane(plane) =
-            crate::brep::surface_support(surface_id, entities, index)
-        else {
+        let crate::brep::SurfaceSupport::Plane(plane) = crate::brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) else {
             return None;
         };
         let sign = match crate::brep::face_sense(face_id, entities, index)?.as_str() {

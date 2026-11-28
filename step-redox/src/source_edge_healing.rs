@@ -229,8 +229,12 @@ fn source_analytic_carriers(
     {
         bail!("source conical face must have a literal authored STEP CONICAL_SURFACE");
     }
-    let SurfaceSupport::Cone(cone) = brep::surface_support(cone_surface_id, source.entities, index)
-    else {
+    let SurfaceSupport::Cone(cone) = brep::surface_support(
+        cone_surface_id,
+        source.entities,
+        index,
+        monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+    ) else {
         bail!("source conical carrier is numerically unsupported");
     };
     Ok((plane, cone))

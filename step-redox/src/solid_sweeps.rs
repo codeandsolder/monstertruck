@@ -341,7 +341,12 @@ fn detect_one_open_round_sweep(
     let mut radius_samples = Vec::new();
     for &face_id in &face_ids {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
+        match brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) {
             SurfaceSupport::Cylinder(support) => {
                 let mut run = canonical_cylinder(support)?;
                 radius_samples.push(run.radius_mm);
@@ -569,7 +574,12 @@ fn detect_one_revolved_round_tail(
     let mut spheres = Vec::<SphereEnd>::new();
     for &face_id in &face_ids {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
+        match brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) {
             SurfaceSupport::Cylinder(support) => {
                 let mut run = canonical_cylinder(support)?;
                 if let Some(existing) = cylinders
@@ -813,6 +823,7 @@ fn prove_hemispherical_end(
             brep::face_surface(face_id, entities, index)?,
             entities,
             index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
         ) else {
             return None;
         };
@@ -877,7 +888,12 @@ fn collect_closed_round_supports(
 
     for &face_id in face_ids {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
+        match brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) {
             SurfaceSupport::Cylinder(support) => {
                 let mut run = canonical_cylinder(support)?;
                 radius_samples.push(run.radius_mm);

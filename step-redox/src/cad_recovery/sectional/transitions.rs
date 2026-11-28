@@ -133,6 +133,7 @@ fn events(
             [frame.x, frame.y, frame.axis],
             entities,
             index,
+            solid.recovery_tolerance_mm(),
         )?;
         events.push(Event {
             face_id: face.id,

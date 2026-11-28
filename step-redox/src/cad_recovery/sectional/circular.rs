@@ -56,7 +56,7 @@ pub(super) fn transverse_arc(edge: &OrientedEdgeUse, frame: Frame) -> Option<Tra
         start_angle_rad: start,
         end_angle_rad: end,
         ..
-    } = recovered_profile_curve(edge, frame.origin, frame.x, frame.y, frame.axis)?
+    } = recovered_profile_curve(edge, frame.origin, frame.x, frame.y, frame.axis, LENGTH)?
     else {
         return None;
     };

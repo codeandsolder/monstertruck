@@ -27,6 +27,7 @@ mod convex;
 fn cap(prism: &RecoveredSolidExtrusion) -> RecoveredSourceCapExtrusion {
     RecoveredSourceCapExtrusion {
         solid_id: prism.solid_id,
+        source_tolerance_mm: prism.source_tolerance_mm,
         cap_face_id: prism.cap_face_ids[0],
         profile_curves: prism.profile_curves.clone(),
         inner_profile_loops: prism.inner_profile_loops.clone(),

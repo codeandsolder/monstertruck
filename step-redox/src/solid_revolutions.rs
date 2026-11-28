@@ -190,6 +190,7 @@ fn source_face_infos(
     face_ids: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> Option<Vec<FaceInfo>> {
     face_ids
         .iter()
@@ -200,6 +201,7 @@ fn source_face_infos(
                     brep::face_surface(id, entities, index)?,
                     entities,
                     index,
+                    tolerance_mm,
                 ),
                 loops: brep::face_loops(id, entities, index)?,
             })
@@ -278,6 +280,8 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<SolidSurfaceSignature> {
     let mut out = Vec::new();
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     for entity in entities {
         let Some(record) = simple_record(entity) else {
             continue;
@@ -289,7 +293,11 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
         let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
             continue;
         };
-        let Some(faces) = source_face_infos(&face_ids, entities, index) else {
+        let tolerance_mm = source_tolerances
+            .get(&solid_id)
+            .copied()
+            .unwrap_or(GEOM_TOL_MM);
+        let Some(faces) = source_face_infos(&face_ids, entities, index, tolerance_mm) else {
             continue;
         };
 
@@ -436,7 +444,7 @@ fn detect_one_solid(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredSolidRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = source_face_infos(&face_ids, entities, index)?;
+    let faces = source_face_infos(&face_ids, entities, index, source_tolerance_mm)?;
     detect_one_solid_from_faces(
         solid_id,
         face_ids,
@@ -460,11 +468,7 @@ pub(crate) fn detect_solid_revolution_from_reduced(
             loops: face.loops.clone(),
         })
         .collect::<Vec<_>>();
-    let source_tolerance_mm =
-        crate::source_accuracy::source_tolerance_by_representation_item(entities, index)
-            .get(&solid.solid_id())
-            .copied()
-            .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
+    let source_tolerance_mm = solid.recovery_tolerance_mm();
     detect_one_solid_from_faces(
         solid.solid_id(),
         face_ids,
@@ -476,7 +480,7 @@ pub(crate) fn detect_solid_revolution_from_reduced(
 }
 
 /// Recover a native edited solid without requiring a serialized STEP source
-/// table. The default geometry tolerance applies to these new topology IDs.
+/// table. The edited solid retains the original body's accuracy budget.
 pub(crate) fn detect_native_solid_revolution_from_reduced(
     solid: &ReducedSolid,
 ) -> Option<RecoveredSolidRevolution> {
@@ -589,7 +593,9 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     if selected_face_ids.len() < 3 {
         return None;
     }
-    let faces = source_face_infos(selected_face_ids, entities, index)?;
+    let source_tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
+    let faces = source_face_infos(selected_face_ids, entities, index, source_tolerance_mm)?;
     let edge_faces = face_edge_uses(&faces)?;
     if !selected_faces_connected(faces.len(), &edge_faces) {
         return None;
@@ -657,11 +663,6 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
         entities,
         index,
     };
-    let source_tolerance_mm =
-        crate::source_accuracy::source_tolerance_by_representation_item(entities, index)
-            .get(&solid_id)
-            .copied()
-            .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     let mut recovered = detect_mixed_curved_revolution_with_synthetic(
         solid_id,
         selected_face_ids,
@@ -689,7 +690,7 @@ fn detect_one_radial_slot(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredRadialSlotRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = source_face_infos(&face_ids, entities, index)?;
+    let faces = source_face_infos(&face_ids, entities, index, source_tolerance_mm)?;
 
     let edge_faces = closed_shell_edge_uses(&faces)?;
     let context = TopologyContext {

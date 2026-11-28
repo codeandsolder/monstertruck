@@ -29,6 +29,9 @@ pub(super) fn recover_source_cap_extrusion_model(
         || cap.height_mm <= 0.0
         || !cap.max_residual_mm.is_finite()
         || cap.max_residual_mm < 0.0
+        || !cap.source_tolerance_mm.is_finite()
+        || cap.source_tolerance_mm < NATIVE_STEP_RECOVERY_MM
+        || cap.max_residual_mm > cap.source_tolerance_mm
     {
         bail!("source-cap extrusion has invalid identity, station or support residual");
     }
@@ -1278,10 +1281,12 @@ fn validate_solid_extrusion(extrusion: &RecoveredSolidExtrusion) -> Result<()> {
     if !extrusion.height_mm.is_finite() || extrusion.height_mm <= 0.0 {
         bail!("solid extrusion height must be finite and positive");
     }
-    if !extrusion.max_residual_mm.is_finite()
+    if !extrusion.source_tolerance_mm.is_finite()
+        || extrusion.source_tolerance_mm < NATIVE_STEP_RECOVERY_MM
+        || !extrusion.max_residual_mm.is_finite()
         || extrusion.max_residual_mm < 0.0
         || extrusion.max_residual_mm
-            > NATIVE_STEP_RECOVERY_MM
+            > extrusion.source_tolerance_mm
                 + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tolerance_slack_mm
     {
         bail!("solid extrusion has invalid proof residual");
@@ -1495,6 +1500,7 @@ mod tests {
     fn solid_extrusion_becomes_local_extrude_plus_world_frame() -> Result<()> {
         let extrusion = RecoveredSolidExtrusion {
             solid_id: 10,
+            source_tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             cap_face_ids: [20, 21],
             side_face_ids: vec![30, 31, 32, 33],
             profile_curves: vec![
@@ -1897,6 +1903,7 @@ mod tests {
     fn malformed_spline_extrusions_fail_closed() {
         let base = RecoveredSolidExtrusion {
             solid_id: 10,
+            source_tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             cap_face_ids: [20, 21],
             side_face_ids: vec![30],
             profile_curves: vec![RecoveredProfileCurve::Bezier {

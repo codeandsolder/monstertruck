@@ -1828,9 +1828,12 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
         }
         let surface_id = brep::face_surface(face_id, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing surface"))?;
-        let brep::SurfaceSupport::Plane(plane) =
-            brep::surface_support(surface_id, entities, &index)
-        else {
+        let brep::SurfaceSupport::Plane(plane) = brep::surface_support(
+            surface_id,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             continue;
         };
         let origin = Point3::new(plane.origin_mm[0], plane.origin_mm[1], plane.origin_mm[2]);
@@ -1902,8 +1905,12 @@ fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> a
         );
         let surface_id = brep::face_surface(cone_face_id, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing authored conical surface"))?;
-        let brep::SurfaceSupport::Cone(cone) = brep::surface_support(surface_id, entities, &index)
-        else {
+        let brep::SurfaceSupport::Cone(cone) = brep::surface_support(
+            surface_id,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             anyhow::bail!("incident source face is not a cone");
         };
         let origin = Point3::new(

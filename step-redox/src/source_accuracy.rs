@@ -30,6 +30,24 @@ pub fn source_recovery_tolerance_mm(
         .unwrap_or(NATIVE_STEP_RECOVERY_MM)
 }
 
+/// The effective recovery allowance of a face whose caller has no body ID.
+/// A shared face receives the largest applicable original-body allowance.
+pub fn source_face_recovery_tolerance_mm(
+    face_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+) -> f64 {
+    let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    source_tolerances
+        .into_iter()
+        .filter(|(solid, _)| {
+            crate::brep::solid_face_ids(*solid, entities, index)
+                .is_some_and(|faces| faces.contains(&face_id))
+        })
+        .map(|(_, tolerance)| tolerance)
+        .fold(NATIVE_STEP_RECOVERY_MM, f64::max)
+}
+
 /// Literal author-declared length uncertainty (including unit conversion),
 /// without any fallback to the kernel's own recovery geometry tolerance.
 pub fn declared_source_uncertainty_by_representation_item(

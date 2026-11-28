@@ -312,7 +312,12 @@ fn prove_source_supports_covered(
 
     for &face_id in face_ids {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
+        match brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) {
             brep::SurfaceSupport::Plane(plane) => {
                 let source = canonical_plane(plane.normal, plane.origin_mm)?;
                 if !planes.iter().any(|expected| same_plane(source, *expected))
@@ -429,7 +434,12 @@ fn source_planar_polygon(
 ) -> Option<Vec<[f64; 3]>> {
     let surface_id = brep::face_surface(face_id, entities, index)?;
     if !matches!(
-        brep::surface_support(surface_id, entities, index),
+        brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ),
         brep::SurfaceSupport::Plane(_)
     ) {
         return None;
@@ -495,8 +505,12 @@ fn find_taper_terminal_section(
     let mut candidates = Vec::new();
     for &face_id in face_ids {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        let brep::SurfaceSupport::Plane(plane) = brep::surface_support(surface_id, entities, index)
-        else {
+        let brep::SurfaceSupport::Plane(plane) = brep::surface_support(
+            surface_id,
+            entities,
+            index,
+            crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+        ) else {
             continue;
         };
         let plane_normal = normalize(plane.normal, 0.0)?;

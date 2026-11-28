@@ -3,9 +3,9 @@
 //! the number of STEP edges representing them.
 
 use super::{
-    ANGLE_TOL_RAD, DIR_TOL, FaceInfo, GEOM_TOL_MM, OrientedEdgeUse, TAU, add, circle_edge_sweep,
-    cross, distance, dot, norm, normalize, raw_loop_is_continuous, side_support_residual, sub,
-    translated_profile_edge_residual,
+    ANGLE_TOL_RAD, DIR_TOL, FaceInfo, NUMERICAL_GEOMETRY_MM, OrientedEdgeUse, TAU, add,
+    circle_edge_sweep, cross, distance, dot, norm, normalize, raw_loop_is_continuous,
+    side_support_residual, sub, translated_profile_edge_residual,
 };
 use crate::brep::{CircleSupport, CurveSupport, CylinderSupport, SurfaceSupport};
 use std::collections::{HashMap, HashSet};
@@ -170,7 +170,7 @@ fn run_ends(edges: &[&OrientedEdgeUse]) -> Option<[[f64; 3]; 2]> {
 
 /// Each straight piece advances along one geometric segment. This is enough
 /// to establish complete coverage of that segment, irrespective of splits.
-fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
+fn line_chain(edges: &[&OrientedEdgeUse], tolerance_mm: f64) -> Option<f64> {
     let [start, end] = run_ends(edges)?;
     let direction = normalize(sub(end, start))?;
     let mut max_residual = 0.0_f64;
@@ -180,7 +180,7 @@ fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
         };
         let support_axis = normalize(line.direction)?;
         let move_axis = sub(edge.end_mm, edge.start_mm);
-        if dot(move_axis, direction) <= GEOM_TOL_MM
+        if dot(move_axis, direction) <= NUMERICAL_GEOMETRY_MM
             || dot(support_axis, direction).abs() < 1.0 - DIR_TOL
         {
             return None;
@@ -188,7 +188,7 @@ fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
         for point in [edge.start_mm, edge.end_mm] {
             let deviation = norm(cross(sub(point, start), direction))
                 .max(norm(cross(sub(point, line.origin_mm), support_axis)));
-            if deviation > GEOM_TOL_MM {
+            if deviation > tolerance_mm {
                 return None;
             }
             max_residual = max_residual.max(deviation);
@@ -206,7 +206,7 @@ struct CircleChain {
 /// The signed sum of consecutive supported arcs is the exact complete arc.
 /// Forbid reversals and repeat traversal; merely matching endpoints would
 /// confuse the complementary semicircle with the intended trim.
-fn circle_chain(edges: &[&OrientedEdgeUse]) -> Option<CircleChain> {
+fn circle_chain(edges: &[&OrientedEdgeUse], tolerance_mm: f64) -> Option<CircleChain> {
     let CurveSupport::Circle(reference) = &edges.first()?.support else {
         return None;
     };
@@ -221,10 +221,10 @@ fn circle_chain(edges: &[&OrientedEdgeUse]) -> Option<CircleChain> {
         let residual = distance(reference.center_mm, circle.center_mm)
             .max((reference.radius_mm - circle.radius_mm).abs())
             .max(norm(cross(reference.normal, circle.normal)) * reference.radius_mm);
-        if residual > GEOM_TOL_MM || axis_cos.abs() < 1.0 - DIR_TOL {
+        if residual > tolerance_mm || axis_cos.abs() < 1.0 - DIR_TOL {
             return None;
         }
-        let angle = circle_edge_sweep(edge, *circle)? * axis_cos.signum();
+        let angle = circle_edge_sweep(edge, *circle, tolerance_mm)? * axis_cos.signum();
         if angle.abs() <= ANGLE_TOL_RAD
             || sign.is_some_and(|positive| positive != angle.is_sign_positive())
         {
@@ -248,6 +248,7 @@ fn circle_chain(edges: &[&OrientedEdgeUse]) -> Option<CircleChain> {
 fn cylindrical_cap_edge(
     edge: &OrientedEdgeUse,
     cylinder: CylinderSupport,
+    tolerance_mm: f64,
 ) -> Option<OrientedEdgeUse> {
     use monstertruck_geometry::{
         analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage},
@@ -266,8 +267,8 @@ fn cylindrical_cap_edge(
     } else {
         (back, front)
     };
-    if distance(point(start), edge.start_mm) > GEOM_TOL_MM
-        || distance(point(end), edge.end_mm) > GEOM_TOL_MM
+    if distance(point(start), edge.start_mm) > tolerance_mm
+        || distance(point(end), edge.end_mm) > tolerance_mm
     {
         return None;
     }
@@ -280,7 +281,7 @@ fn cylindrical_cap_edge(
         axis_vector,
         cylinder.radius_mm,
         front,
-        GEOM_TOL_MM,
+        tolerance_mm,
     )?;
     // This proves both the plane and radius polynomial identities and
     // unambiguous single angular traversal on every positive-weight span.
@@ -302,7 +303,7 @@ fn cylindrical_cap_edge(
     let mut normalized = edge.clone();
     normalized.support = CurveSupport::Circle(circle);
     normalized.parameter_forward = sign == edge.parameter_forward;
-    let sweep = circle_edge_sweep(&normalized, circle)?;
+    let sweep = circle_edge_sweep(&normalized, circle, tolerance_mm)?;
     if (sweep.abs() - coverage.sweep_rad).abs() > ANGLE_TOL_RAD {
         return None;
     }
@@ -318,20 +319,20 @@ fn cylindrical_chains(
     let normalize = |edges: &[&OrientedEdgeUse]| {
         edges
             .iter()
-            .map(|edge| cylindrical_cap_edge(edge, cylinder))
+            .map(|edge| cylindrical_cap_edge(edge, cylinder, side.tolerance_mm))
             .collect::<Option<Vec<_>>>()
     };
     let bottom = normalize(&runs.bottom)?;
     let top = normalize(&runs.top)?;
     let bottom = bottom.iter().collect::<Vec<_>>();
     let top = top.iter().collect::<Vec<_>>();
-    let residual = translated_chains(&bottom, &top, extrusion)?;
+    let residual = translated_chains(&bottom, &top, extrusion, side.tolerance_mm)?;
     bottom
         .into_iter()
         .chain(top)
         .try_fold(residual, |maximum, edge| {
             let value = side_support_residual(side, edge, extrusion)?;
-            (value <= GEOM_TOL_MM).then_some(maximum.max(value))
+            (value <= side.tolerance_mm).then_some(maximum.max(value))
         })
 }
 
@@ -342,11 +343,12 @@ fn translated_chains(
     bottom: &[&OrientedEdgeUse],
     top: &[&OrientedEdgeUse],
     extrusion: [f64; 3],
+    tolerance_mm: f64,
 ) -> Option<f64> {
     let [b0, b1] = run_ends(bottom)?;
     let [t0, t1] = run_ends(top)?;
     let endpoint_residual = distance(add(b0, extrusion), t1).max(distance(add(b1, extrusion), t0));
-    if endpoint_residual > GEOM_TOL_MM {
+    if endpoint_residual > tolerance_mm {
         return None;
     }
     if bottom.len() == top.len() {
@@ -356,8 +358,8 @@ fn translated_chains(
             .try_fold(0.0_f64, |max, (a, b)| {
                 let ends = distance(add(a.start_mm, extrusion), b.end_mm)
                     .max(distance(add(a.end_mm, extrusion), b.start_mm));
-                let support = translated_profile_edge_residual(a, b, extrusion)?;
-                (ends.max(support) <= GEOM_TOL_MM).then_some(max.max(ends.max(support)))
+                let support = translated_profile_edge_residual(a, b, extrusion, tolerance_mm)?;
+                (ends.max(support) <= tolerance_mm).then_some(max.max(ends.max(support)))
             });
         if let Some(residual) = pairwise {
             return Some(residual.max(endpoint_residual));
@@ -370,22 +372,22 @@ fn translated_chains(
             .iter()
             .all(|e| matches!(e.support, CurveSupport::Line(_)))
     {
-        let b = line_chain(bottom)?;
-        let t = line_chain(top)?;
+        let b = line_chain(bottom, tolerance_mm)?;
+        let t = line_chain(top, tolerance_mm)?;
         return Some(endpoint_residual.max(b).max(t));
     }
-    let b = circle_chain(bottom)?;
-    let t = circle_chain(top)?;
+    let b = circle_chain(bottom, tolerance_mm)?;
+    let t = circle_chain(top, tolerance_mm)?;
     let residual = distance(add(b.support.center_mm, extrusion), t.support.center_mm)
         .max((b.support.radius_mm - t.support.radius_mm).abs())
         .max(norm(cross(b.support.normal, t.support.normal)) * b.support.radius_mm);
-    if residual > GEOM_TOL_MM || dot(b.support.normal, t.support.normal).abs() < 1.0 - DIR_TOL {
+    if residual > tolerance_mm || dot(b.support.normal, t.support.normal).abs() < 1.0 - DIR_TOL {
         return None;
     }
     let top_sign = dot(b.support.normal, t.support.normal).signum();
     let angle_delta = top_sign.mul_add(t.sweep, b.sweep).abs();
     let angular_residual = angle_delta * b.support.radius_mm;
-    (angular_residual <= GEOM_TOL_MM && angle_delta <= ANGLE_TOL_RAD).then_some(
+    (angular_residual <= tolerance_mm && angle_delta <= ANGLE_TOL_RAD).then_some(
         endpoint_residual
             .max(residual)
             .max(angular_residual)
@@ -396,15 +398,19 @@ fn translated_chains(
 
 /// A generator can itself have multiple collinear pieces. Their ordered union
 /// must traverse the complete bottom-to-top axial interval exactly once.
-fn generator_chain(edges: &[&OrientedEdgeUse], extrusion: [f64; 3]) -> Option<f64> {
+fn generator_chain(
+    edges: &[&OrientedEdgeUse],
+    extrusion: [f64; 3],
+    tolerance_mm: f64,
+) -> Option<f64> {
     let [start, end] = run_ends(edges)?;
     let forward = distance(sub(end, start), extrusion);
     let reverse = distance(sub(start, end), extrusion);
     let endpoint_residual = forward.min(reverse);
-    if endpoint_residual > GEOM_TOL_MM {
+    if endpoint_residual > tolerance_mm {
         return None;
     }
-    Some(endpoint_residual.max(line_chain(edges)?))
+    Some(endpoint_residual.max(line_chain(edges, tolerance_mm)?))
 }
 
 /// Every cap edge is consumed exactly once; every side creates one consistent
@@ -432,14 +438,23 @@ pub(super) fn prove_side_face(
     let mut residual = if let SurfaceSupport::Cylinder(cylinder) = side.surface {
         cylindrical_chains(side, &runs, cylinder, context.extrusion)?
     } else {
-        let residual = translated_chains(&runs.bottom, &runs.top, context.extrusion)?;
+        let residual = translated_chains(
+            &runs.bottom,
+            &runs.top,
+            context.extrusion,
+            side.tolerance_mm,
+        )?;
         runs.bottom.iter().try_fold(residual, |maximum, edge| {
             let value = side_support_residual(side, edge, context.extrusion)?;
-            (value <= GEOM_TOL_MM).then_some(maximum.max(value))
+            (value <= side.tolerance_mm).then_some(maximum.max(value))
         })?
     };
     for generator in &runs.generators {
-        residual = residual.max(generator_chain(generator, context.extrusion)?);
+        residual = residual.max(generator_chain(
+            generator,
+            context.extrusion,
+            side.tolerance_mm,
+        )?);
     }
     if runs
         .bottom
@@ -512,6 +527,7 @@ mod tests {
     fn face(id: u64, surface: SurfaceSupport, edges: Vec<OrientedEdgeUse>) -> FaceInfo {
         FaceInfo {
             id,
+            tolerance_mm: super::super::GEOM_TOL_MM,
             surface,
             surface_forward: true,
             loops: vec![FaceLoop {
@@ -591,7 +607,7 @@ mod tests {
             let mut used_top = HashSet::new();
             assert!(
                 prove_side_face(&side, &mut context, &mut used_bottom, &mut used_top)
-                    .is_some_and(|residual| residual <= GEOM_TOL_MM)
+                    .is_some_and(|residual| residual <= super::super::GEOM_TOL_MM)
             );
             assert_eq!(used_bottom, HashSet::from([1, 2]));
             assert_eq!(used_top, HashSet::from([5]));
@@ -686,21 +702,30 @@ mod tests {
             weights: Some(vec![1., 0.5_f64.sqrt(), 1.]),
         };
         edge.support = CurveSupport::BSpline(spline.clone());
-        let normalized = cylindrical_cap_edge(&edge, cylinder).expect("certified rational cap");
+        let normalized = cylindrical_cap_edge(&edge, cylinder, super::super::GEOM_TOL_MM)
+            .expect("certified rational cap");
         assert!(normalized.parameter_forward);
         let upper = circle(2, [0., 1., 1.], [1., 0., 1.], false);
-        assert!(translated_chains(&[&normalized], &[&upper], [0., 0., 1.]).is_some());
+        assert!(
+            translated_chains(
+                &[&normalized],
+                &[&upper],
+                [0., 0., 1.],
+                super::super::GEOM_TOL_MM,
+            )
+            .is_some()
+        );
         edge.parameter_forward = false;
         std::mem::swap(&mut edge.start_mm, &mut edge.end_mm);
         assert!(
-            !cylindrical_cap_edge(&edge, cylinder)
+            !cylindrical_cap_edge(&edge, cylinder, super::super::GEOM_TOL_MM,)
                 .expect("reversed cap")
                 .parameter_forward
         );
         let mut wrong = spline;
         wrong.control_points_mm[1][0] += 0.01;
         edge.support = CurveSupport::BSpline(wrong);
-        assert!(cylindrical_cap_edge(&edge, cylinder).is_none());
+        assert!(cylindrical_cap_edge(&edge, cylinder, super::super::GEOM_TOL_MM,).is_none());
     }
 
     #[test]
@@ -757,7 +782,7 @@ mod tests {
             .unwrap_or_else(|| panic!("cap mapping"));
             prove_side_face(side, &mut context, &mut HashSet::new(), &mut HashSet::new())
         };
-        assert!(validate(&side).is_some_and(|residual| residual <= GEOM_TOL_MM));
+        assert!(validate(&side).is_some_and(|residual| residual <= super::super::GEOM_TOL_MM));
         side.loop_edges[3].parameter_forward = true;
         assert!(
             validate(&side).is_none(),

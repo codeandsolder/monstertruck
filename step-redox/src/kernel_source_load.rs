@@ -648,7 +648,7 @@ mod monstertruck_adapter {
     /// A positive-weight B-spline lies exactly in a plane when every one of
     /// its Euclidean control points lies in that plane. Preserve the U x V
     /// normal rather than canonicalizing away the native chart orientation.
-    fn native_planar_net(net: &BsplineSurface<Vector4>) -> Option<PlaneSupport> {
+    fn native_planar_net(net: &BsplineSurface<Vector4>, tolerance_mm: f64) -> Option<PlaneSupport> {
         let rows = net.control_points();
         let first = rows.first()?;
         let origin = native_net_point(*first.first()?)?;
@@ -670,7 +670,7 @@ mod monstertruck_adapter {
         for pole in rows.iter().flatten() {
             let point = native_net_point(*pole)?;
             let residual = (point - origin).dot(normal).abs();
-            if !residual.is_finite() || residual > 1.0e-7 {
+            if !residual.is_finite() || residual > tolerance_mm {
                 return None;
             }
             max_residual_mm = max_residual_mm.max(residual);
@@ -685,7 +685,10 @@ mod monstertruck_adapter {
     /// Recognize exact ruled spline surfaces independently of which parameter
     /// runs along the profile. The native B-rep lets us transpose this *view*
     /// without modifying STEP parameter curves or their trims.
-    fn native_spline_extrusion(net: &BsplineSurface<Vector4>) -> Option<SplineExtrusionSupport> {
+    fn native_spline_extrusion(
+        net: &BsplineSurface<Vector4>,
+        tolerance_mm: f64,
+    ) -> Option<SplineExtrusionSupport> {
         let control = net.control_points();
         let (profile_degree, profile_knots, sweep_knots, rows) = if net.vdegree() == 1
             && net.udegree() > 0
@@ -748,7 +751,7 @@ mod monstertruck_adapter {
             }
             if let Some(expected) = sweep {
                 let residual = (delta - expected).magnitude();
-                if residual > 1.0e-7 {
+                if residual > tolerance_mm {
                     return None;
                 }
                 max_residual_mm = max_residual_mm.max(residual);
@@ -818,7 +821,7 @@ mod monstertruck_adapter {
 
     /// Convert full checked analytic carriers from the edited native B-rep.
     /// Unknown geometry stays unknown, with no fitted or sampled replacement.
-    fn native_surface_support(surface: &Surface, id: u64) -> SurfaceSupport {
+    fn native_surface_support(surface: &Surface, id: u64, tolerance_mm: f64) -> SurfaceSupport {
         if let Some(support) = native_exact_sweep_surface(surface) {
             return support;
         }
@@ -888,10 +891,10 @@ mod monstertruck_adapter {
                 let Some(net) = surface.try_into_homogeneous_bspline_surface() else {
                     return SurfaceSupport::Other { entity_id: id };
                 };
-                if let Some(plane) = native_planar_net(&net) {
+                if let Some(plane) = native_planar_net(&net, tolerance_mm) {
                     return SurfaceSupport::Plane(plane);
                 }
-                native_spline_extrusion(&net).map_or(
+                native_spline_extrusion(&net, tolerance_mm).map_or(
                     SurfaceSupport::Other { entity_id: id },
                     SurfaceSupport::SplineExtrusion,
                 )
@@ -979,6 +982,7 @@ mod monstertruck_adapter {
     /// downstream consumer explicitly requests a STEP snapshot.
     pub struct MonstertruckEditedSource {
         source: SourceEntity,
+        recovery_tolerance_mm: f64,
         imported: StepSolidImport<StepCompressedTrimmedSolid>,
         source_topology: KernelTopologyProvenance,
     }
@@ -1063,6 +1067,11 @@ mod monstertruck_adapter {
             let source_topology = map_topology_provenance(&imported.provenance, section_source)?;
             let mut edited = MonstertruckEditedSource {
                 source,
+                recovery_tolerance_mm: crate::source_accuracy::source_recovery_tolerance_mm(
+                    source.id,
+                    &section.entities,
+                    &index,
+                ),
                 imported,
                 source_topology,
             };
@@ -1129,7 +1138,11 @@ mod monstertruck_adapter {
                     .context("missing face StableIds")?;
                 for (face, stable_id) in shell.faces.iter().zip(face_ids) {
                     let face_id = stable_id.raw();
-                    let surface = native_surface_support(&face.surface, face_id);
+                    let surface = native_surface_support(
+                        &face.surface,
+                        face_id,
+                        edited.recovery_tolerance_mm,
+                    );
                     let loops = face
                         .boundaries
                         .iter()
@@ -1189,7 +1202,11 @@ mod monstertruck_adapter {
                     });
                 }
             }
-            Ok(ReducedSolid::from_native_faces(edited.source.id, faces))
+            Ok(ReducedSolid::from_native_faces(
+                edited.source.id,
+                faces,
+                edited.recovery_tolerance_mm,
+            ))
         }
 
         fn inspect_edited_source(
@@ -1740,7 +1757,11 @@ mod monstertruck_adapter {
             let circle_wall = Surface::Sweep(SweepSurface::ExtrusionSurface(
                 StepExtrusionSurface::by_extrusion(circle, Vector3::new(0.0, 0.0, 4.0)),
             ));
-            let SurfaceSupport::Cylinder(cylinder) = native_surface_support(&circle_wall, 1) else {
+            let SurfaceSupport::Cylinder(cylinder) = native_surface_support(
+                &circle_wall,
+                1,
+                monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+            ) else {
                 anyhow::bail!("native radius-three circular sweep did not become a cylinder");
             };
             assert!((cylinder.radius_mm - 3.0).abs() < 1.0e-12);
@@ -1753,7 +1774,11 @@ mod monstertruck_adapter {
                 ),
             ));
             assert!(matches!(
-                native_surface_support(&plane_wall, 2),
+                native_surface_support(
+                    &plane_wall,
+                    2,
+                    monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+                ),
                 SurfaceSupport::Plane(_)
             ));
 
@@ -1770,9 +1795,11 @@ mod monstertruck_adapter {
                     .map(|point| vec![*point, *point + Vector3::new(0.0, 0.0, 4.0)])
                     .collect(),
             )?;
-            let SurfaceSupport::SplineExtrusion(polynomial) =
-                native_surface_support(&Surface::Bspline(polynomial_net), 3)
-            else {
+            let SurfaceSupport::SplineExtrusion(polynomial) = native_surface_support(
+                &Surface::Bspline(polynomial_net),
+                3,
+                monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+            ) else {
                 anyhow::bail!("polynomial native net did not supply spline extrusion support");
             };
             assert_eq!(polynomial.profile.degree, 2);
@@ -1801,9 +1828,11 @@ mod monstertruck_adapter {
                     })
                     .collect(),
             )?;
-            let SurfaceSupport::SplineExtrusion(rational) =
-                native_surface_support(&Surface::Nurbs(NurbsSurface::new(rational_net)), 4)
-            else {
+            let SurfaceSupport::SplineExtrusion(rational) = native_surface_support(
+                &Surface::Nurbs(NurbsSurface::new(rational_net)),
+                4,
+                monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+            ) else {
                 anyhow::bail!("rational native net did not supply spline extrusion support");
             };
             assert_eq!(rational.profile.weights, Some(vec![1.0, 0.75, 1.0]));

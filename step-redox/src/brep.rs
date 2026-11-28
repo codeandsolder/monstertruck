@@ -7,7 +7,9 @@ use crate::step_entities::{
 };
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut};
 use crate::surface_recovery;
-use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+#[cfg(test)]
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
@@ -295,6 +297,7 @@ pub fn surface_support(
     surface_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> SurfaceSupport {
     if let Some(record) = index
         .get(&surface_id)
@@ -424,12 +427,9 @@ pub fn surface_support(
         }
     }
 
-    if let Some(evidence) = surface_recovery::analyze_v_extrusion_surface(
-        surface_id,
-        entities,
-        index,
-        NATIVE_STEP_RECOVERY_MM,
-    ) {
+    if let Some(evidence) =
+        surface_recovery::analyze_v_extrusion_surface(surface_id, entities, index, tolerance_mm)
+    {
         return SurfaceSupport::SplineExtrusion(SplineExtrusionSupport {
             profile: BSplineSupport {
                 degree: evidence.degree,
@@ -441,12 +441,9 @@ pub fn surface_support(
             max_residual_mm: evidence.max_residual_mm,
         });
     }
-    if let Some(evidence) = surface_recovery::analyze_planar_surface(
-        surface_id,
-        entities,
-        index,
-        NATIVE_STEP_RECOVERY_MM,
-    ) {
+    if let Some(evidence) =
+        surface_recovery::analyze_planar_surface(surface_id, entities, index, tolerance_mm)
+    {
         return SurfaceSupport::Plane(PlaneSupport {
             origin_mm: evidence.origin_mm,
             normal: evidence.normal,
@@ -1156,7 +1153,9 @@ END-ISO-10303-21;
             .map(|(index, entity)| (entity_id(entity), index))
             .collect::<HashMap<_, _>>();
 
-        let SurfaceSupport::Cone(cone) = surface_support(5, entities, &index) else {
+        let SurfaceSupport::Cone(cone) =
+            surface_support(5, entities, &index, NATIVE_STEP_RECOVERY_MM)
+        else {
             anyhow::bail!("expected cone support");
         };
         assert_eq!(cone.reference_origin_mm, [1.0, 2.0, 3.0]);
@@ -1164,20 +1163,26 @@ END-ISO-10303-21;
         assert_eq!(cone.reference_radius_mm, 2.0);
         assert_eq!(cone.semi_angle_rad, 0.25);
 
-        let SurfaceSupport::Sphere(sphere) = surface_support(6, entities, &index) else {
+        let SurfaceSupport::Sphere(sphere) =
+            surface_support(6, entities, &index, NATIVE_STEP_RECOVERY_MM)
+        else {
             anyhow::bail!("expected sphere support");
         };
         assert_eq!(sphere.center_mm, [1.0, 2.0, 3.0]);
         assert_eq!(sphere.radius_mm, 4.0);
 
-        let SurfaceSupport::Torus(torus) = surface_support(7, entities, &index) else {
+        let SurfaceSupport::Torus(torus) =
+            surface_support(7, entities, &index, NATIVE_STEP_RECOVERY_MM)
+        else {
             anyhow::bail!("expected torus support");
         };
         assert_eq!(torus.center_mm, [1.0, 2.0, 3.0]);
         assert_eq!(torus.major_radius_mm, 5.0);
         assert_eq!(torus.minor_radius_mm, 1.0);
 
-        let SurfaceSupport::Revolution(revolution) = surface_support(11, entities, &index) else {
+        let SurfaceSupport::Revolution(revolution) =
+            surface_support(11, entities, &index, NATIVE_STEP_RECOVERY_MM)
+        else {
             anyhow::bail!("expected surface-of-revolution support");
         };
         assert_eq!(revolution.axis_origin_mm, [1.0, 2.0, 3.0]);
@@ -1225,7 +1230,7 @@ END-ISO-10303-21;
             .map(|(index, entity)| (entity_id(entity), index))
             .collect::<HashMap<_, _>>();
         assert!(matches!(
-            surface_support(10, entities, &index),
+            surface_support(10, entities, &index, NATIVE_STEP_RECOVERY_MM,),
             SurfaceSupport::SplineExtrusion(_)
         ));
         Ok(())
@@ -1249,7 +1254,9 @@ END-ISO-10303-21;
             .enumerate()
             .map(|(index, entity)| (entity_id(entity), index))
             .collect::<HashMap<_, _>>();
-        let SurfaceSupport::Plane(plane) = surface_support(10, entities, &index) else {
+        let SurfaceSupport::Plane(plane) =
+            surface_support(10, entities, &index, NATIVE_STEP_RECOVERY_MM)
+        else {
             anyhow::bail!("expected planar fallback");
         };
         assert!((plane.origin_mm[2] - 3.0).abs() <= 1.0e-12);

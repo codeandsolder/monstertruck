@@ -177,6 +177,8 @@ fn detect_solid_edge_treatments(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<EdgeTreatmentEvidence> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let Some(faces) = face_ids
         .iter()
         .copied()
@@ -184,7 +186,7 @@ fn detect_solid_edge_treatments(
             let surface_id = brep::face_surface(face_id, entities, index)?;
             Some(FaceInfo {
                 face_id,
-                surface: brep::surface_support(surface_id, entities, index),
+                surface: brep::surface_support(surface_id, entities, index, tolerance_mm),
                 loops: brep::face_loops(face_id, entities, index)?,
             })
         })

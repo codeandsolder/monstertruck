@@ -92,9 +92,12 @@ fn incident_cylinders(
         {
             bail!("incident source face is not an authored CYLINDRICAL_SURFACE");
         }
-        let SurfaceSupport::Cylinder(cylinder) =
-            brep::surface_support(surface_id, source.entities, index)
-        else {
+        let SurfaceSupport::Cylinder(cylinder) = brep::surface_support(
+            surface_id,
+            source.entities,
+            index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             bail!("unsupported authored cylindrical carrier");
         };
         let carrier = CylinderCarrier::new(

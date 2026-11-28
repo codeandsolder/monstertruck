@@ -1448,7 +1448,7 @@ fn boundary_surface_support(
     index: &HashMap<u64, usize>,
     tolerance_mm: f64,
 ) -> SurfaceSupport {
-    let constructive = brep::surface_support(surface_id, entities, index);
+    let constructive = brep::surface_support(surface_id, entities, index, tolerance_mm);
     if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
         && let Some(plane) = crate::surface_recovery::analyze_planar_surface(
             surface_id,
