@@ -27,6 +27,7 @@ mod instances;
 pub(crate) mod inverse_edge_treatment;
 pub mod kernel_source_load;
 pub mod kernel_topology;
+mod line_edges;
 mod line_recovery;
 mod math2;
 mod math3;

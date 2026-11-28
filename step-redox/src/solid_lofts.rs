@@ -5,9 +5,9 @@
 use crate::brep::{CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
+use crate::line_edges::line_chain;
 use crate::math3::{add, cross, distance, dot, mul, normalize, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
-use crate::solid_extrusions::line_chain;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use step_p21::ast::EntityInstance;
