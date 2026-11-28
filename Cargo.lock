@@ -41,7 +41,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fca89247609239eeb6915e6991111866b92d7b31025e69302bbf430cc4d2c38"
 dependencies = [
  "cfg-if",
- "getrandom 0.4.3",
+ "getrandom",
  "once_cell",
  "serde",
  "version_check",
@@ -1152,20 +1152,6 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
-dependencies = [
- "cfg-if",
- "js-sys",
- "libc",
- "r-efi 5.3.0",
- "wasip2",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
@@ -1173,7 +1159,7 @@ dependencies = [
  "cfg-if",
  "js-sys",
  "libc",
- "r-efi 6.0.0",
+ "r-efi",
  "rand_core",
  "wasm-bindgen",
 ]
@@ -1485,7 +1471,7 @@ version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
- "getrandom 0.4.3",
+ "getrandom",
  "libc",
 ]
 
@@ -1727,8 +1713,7 @@ version = "0.4.1"
 dependencies = [
  "ahash",
  "derive_more",
- "getrandom 0.3.4",
- "getrandom 0.4.3",
+ "getrandom",
  "itertools 0.15.0",
  "monstertruck-core",
  "monstertruck-geometry",
@@ -1747,7 +1732,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "criterion",
- "getrandom 0.4.3",
+ "getrandom",
  "monstertruck-core",
  "monstertruck-traits",
  "num-traits",
@@ -1788,7 +1773,6 @@ name = "monstertruck-healing"
 version = "0.4.1"
 dependencies = [
  "ahash",
- "getrandom 0.3.4",
  "itertools 0.15.0",
  "monstertruck-core",
  "monstertruck-geometry",
@@ -1861,7 +1845,7 @@ dependencies = [
  "anyhow",
  "array-macro",
  "derive_more",
- "getrandom 0.4.3",
+ "getrandom",
  "itertools 0.15.0",
  "log",
  "monstertruck-core",
@@ -1934,7 +1918,7 @@ name = "monstertruck-solid"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "getrandom 0.4.3",
+ "getrandom",
  "monstertruck-core",
  "monstertruck-geometry",
  "monstertruck-meshing",
@@ -1969,7 +1953,7 @@ dependencies = [
 name = "monstertruck-traits"
 version = "0.4.1"
 dependencies = [
- "getrandom 0.4.3",
+ "getrandom",
  "monstertruck-core",
  "monstertruck-derive",
  "num-traits",
@@ -2848,12 +2832,6 @@ dependencies = [
 
 [[package]]
 name = "r-efi"
-version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
@@ -2874,7 +2852,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20",
- "getrandom 0.4.3",
+ "getrandom",
  "rand_core",
 ]
 
@@ -3485,7 +3463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.52.0",
@@ -3781,15 +3759,6 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
-]
-
-[[package]]
-name = "wasip2"
-version = "1.0.4+wasi-0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
-dependencies = [
- "wit-bindgen",
 ]
 
 [[package]]
@@ -4453,12 +4422,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wit-bindgen"
-version = "0.57.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
-
-[[package]]
 name = "x11-dl"
 version = "2.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4576,7 +4539,7 @@ dependencies = [
  "constant_time_eq",
  "crc32fast",
  "flate2",
- "getrandom 0.4.3",
+ "getrandom",
  "indexmap",
  "libc",
  "memchr 2.8.3",

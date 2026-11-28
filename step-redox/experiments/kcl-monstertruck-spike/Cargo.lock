@@ -2507,7 +2507,6 @@ version = "0.4.1"
 dependencies = [
  "ahash",
  "derive_more",
- "getrandom 0.3.4",
  "itertools 0.15.0",
  "monstertruck-core",
  "monstertruck-geometry",
