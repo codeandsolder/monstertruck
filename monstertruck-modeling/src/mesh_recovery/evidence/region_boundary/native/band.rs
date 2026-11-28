@@ -682,6 +682,10 @@ impl BandContext<'_> {
             }
             edges
         } else {
+            let length = (back.point() - front.point()).magnitude();
+            if !length.is_finite() || length <= 0.0 {
+                return None;
+            }
             vec![builder::line(front, back)]
         };
         edges

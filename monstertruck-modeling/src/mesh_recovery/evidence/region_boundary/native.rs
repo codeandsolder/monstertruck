@@ -1021,7 +1021,15 @@ fn native_edge(
         .and_then(Option::as_ref)
         .ok_or(NativeTrimError::UnresolvedVertex(b))?;
     let edge = match trim.geometry {
-        SharedTrimGeometry::Line(_) => builder::line(front, back),
+        SharedTrimGeometry::Line(_) => {
+            // Topological identity is not a geometric length proof. A
+            // collapsed line has no STEP direction and is not a valid trim.
+            let length = (back.point() - front.point()).magnitude();
+            if !length.is_finite() || length <= 0.0 {
+                return Err(NativeTrimError::EdgeGeometry);
+            }
+            builder::line(front, back)
+        }
         SharedTrimGeometry::Circle(circle) => native_circle_edge(
             front,
             back,
@@ -2123,6 +2131,37 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn distinct_vertex_identities_do_not_certify_collapsed_line() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let trim = SharedAnalyticTrim {
+            contact_path: 0,
+            regions: (0, Some(1)),
+            source_edges: Vec::new(),
+            geometry: SharedTrimGeometry::Line(super::super::ContactLineEvidence {
+                endpoints: [a, b],
+                direction: Vector3::unit_x(),
+                chord_length: 1.0,
+                max_vertex_offset: 0.0,
+                max_reverse_step: 0.0,
+                exactly_collinear: true,
+            }),
+        };
+        let interval = TrimInterval {
+            endpoints: [0, 1],
+            sweep: 0.0,
+        };
+        let vertices = [Some(builder::vertex(a)), Some(builder::vertex(a))];
+        assert_ne!(vertices[0], vertices[1]);
+        assert!(matches!(
+            native_edge(&trim, interval, &vertices, native_options()),
+            Err(NativeTrimError::EdgeGeometry)
+        ));
+        let vertices = [Some(builder::vertex(a)), Some(builder::vertex(b))];
+        assert!(native_edge(&trim, interval, &vertices, native_options()).is_ok());
     }
 
     #[test]
