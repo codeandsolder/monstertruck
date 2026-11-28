@@ -170,7 +170,7 @@ fn run_ends(edges: &[&OrientedEdgeUse]) -> Option<[[f64; 3]; 2]> {
 
 /// Each straight piece advances along one geometric segment. This is enough
 /// to establish complete coverage of that segment, irrespective of splits.
-fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
+pub fn line_chain(edges: &[&OrientedEdgeUse]) -> Option<f64> {
     let [start, end] = run_ends(edges)?;
     let direction = normalize(sub(end, start))?;
     let mut max_residual = 0.0_f64;

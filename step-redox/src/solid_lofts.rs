@@ -1,14 +1,13 @@
-//! Exact recognition of planar, sectioned polyhedra as editable ruled lofts.
-//!
-//! A section is inferred from actual source `EDGE_CURVE` vertices. No faceting
-//! or interpolation is used: every claimed loft wall is a matching source
-//! planar quadrilateral with identical topology and geometric vertices.
+//! Recover planar ruled lofts by following the source edge correspondence.
+//! Whole solids and partial terminal features use the same wall-ring proof.
+//! A section is not required to be rectangular or aligned to world axes.
 
 use crate::brep::{CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
 use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
-use crate::math3::{cross, distance, dot, normalize, sub};
+use crate::math3::{add, cross, distance, dot, mul, normalize, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
+use crate::solid_extrusions::line_chain;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use step_p21::ast::EntityInstance;
@@ -22,609 +21,687 @@ struct Vertex {
     point: [f64; 3],
 }
 
-struct Section {
+struct Ring {
+    vertices: Vec<Vertex>,
+    edge_ids: Vec<Vec<u64>>,
     level: f64,
-    corners: [Vertex; 4],
-    bounds: [[f64; 2]; 2],
-    profile: Profile2d,
 }
 
-fn plane_quad(face: &ReducedFace) -> bool {
-    matches!(face.surface, SurfaceSupport::Plane(_))
-        && face.loops.len() == 1
-        && face.loops[0].edges.len() == 4
-        && face.loops[0]
-            .edges
-            .iter()
-            .all(|e| matches!(e.support, CurveSupport::Line(_)))
-}
-
-fn points(solid: &ReducedSolid) -> Option<BTreeMap<u64, [f64; 3]>> {
-    let mut points = BTreeMap::new();
-    for face in solid.faces() {
-        if !plane_quad(face) {
-            return None;
-        }
-        let SurfaceSupport::Plane(plane) = &face.surface else {
-            return None;
-        };
-        for edge in face.loop_edges() {
-            for (vertex, point) in [
-                (edge.start_vertex, edge.start_mm),
-                (edge.end_vertex, edge.end_mm),
-            ] {
-                if !point.iter().all(|v| v.is_finite())
-                    || dot(sub(point, plane.origin_mm), plane.normal).abs() > TOL_MM
-                {
-                    return None;
-                }
-                if points
-                    .insert(vertex, point)
-                    .is_some_and(|prior| distance(prior, point) > TOL_MM)
-                {
-                    return None;
-                }
-            }
-        }
-    }
-    Some(points)
-}
-
-fn section(
-    level: f64,
-    vertices: &[Vertex],
+#[derive(Clone, Copy)]
+struct Frame {
     origin: [f64; 3],
+    axis: [f64; 3],
     x: [f64; 3],
     y: [f64; 3],
-) -> Option<Section> {
-    if vertices.len() != 4 {
-        return None;
-    }
-    let coords = vertices
-        .iter()
-        .map(|v| (dot(sub(v.point, origin), x), dot(sub(v.point, origin), y)))
-        .collect::<Vec<_>>();
-    let xmin = coords.iter().map(|v| v.0).min_by(f64::total_cmp)?;
-    let xmax = coords.iter().map(|v| v.0).max_by(f64::total_cmp)?;
-    let ymin = coords.iter().map(|v| v.1).min_by(f64::total_cmp)?;
-    let ymax = coords.iter().map(|v| v.1).max_by(f64::total_cmp)?;
-    if xmax - xmin <= TOL_MM || ymax - ymin <= TOL_MM {
-        return None;
-    }
-    let corners_2d = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)];
-    let mut matched = [None; 4];
-    for (v, (cx, cy)) in vertices.iter().zip(coords) {
-        let index = corners_2d
-            .iter()
-            .position(|(x, y)| (x - cx).abs() <= TOL_MM && (y - cy).abs() <= TOL_MM)?;
-        if matched[index].replace(*v).is_some() {
+}
+
+impl Frame {
+    fn from_cap(cap: &ReducedFace, planes: &BTreeMap<u64, Vec<PlaneSupport>>) -> Option<Self> {
+        let SurfaceSupport::Plane(plane) = cap.surface else {
+            return None;
+        };
+        let first = planar_loop(cap)?.first()?;
+        let origin = planar_corner(planes.get(&first.start_vertex)?, first.start_mm)?;
+        let axis = normalize(plane.normal, DIR_TOL)?;
+        let CurveSupport::Line(line) = first.support else {
+            return None;
+        };
+        let direction = normalize(line.direction, DIR_TOL)?;
+        if dot(axis, direction).abs() > DIR_TOL {
             return None;
         }
+        let y = normalize(cross(axis, direction), DIR_TOL)?;
+        let x = normalize(cross(y, axis), DIR_TOL)?;
+        Some(Self { origin, axis, x, y })
     }
-    let corners = matched
-        .into_iter()
-        .collect::<Option<Vec<_>>>()?
-        .try_into()
-        .ok()?;
-    let profile = Profile2d::polygon(corners_2d.map(Into::into).to_vec()).ok()?;
-    Some(Section {
-        level,
-        corners,
-        bounds: [[xmin, xmax], [ymin, ymax]],
-        profile,
-    })
-}
 
-const fn edge_pair(a: u64, b: u64) -> (u64, u64) { if a < b { (a, b) } else { (b, a) } }
+    fn level(self, point: [f64; 3]) -> f64 { dot(sub(point, self.origin), self.axis) }
 
-fn source_face_has_edges(face: &ReducedFace, expected: &[(u64, u64); 4]) -> bool {
-    face.loops[0]
-        .edges
-        .iter()
-        .map(|edge| edge_pair(edge.start_vertex, edge.end_vertex))
-        .collect::<BTreeSet<_>>()
-        == expected.iter().copied().collect::<BTreeSet<_>>()
-}
-
-fn face_partition_proven(
-    solid: &ReducedSolid,
-    sections: &[Section],
-    axis: [f64; 3],
-) -> Option<[u64; 2]> {
-    let mut vertex_section = BTreeMap::<u64, (usize, usize)>::new();
-    for (stage, section) in sections.iter().enumerate() {
-        for (corner, vertex) in section.corners.iter().enumerate() {
-            vertex_section.insert(vertex.id, (stage, corner));
-        }
-    }
-    let mut caps = [None; 2];
-    let mut sides = BTreeSet::new();
-    for face in solid.faces() {
-        let verts = face.loops[0]
-            .edges
+    fn section(self, ring: &Ring) -> Option<LoftSection> {
+        let points = ring
+            .vertices
             .iter()
-            .map(|edge| edge.start_vertex)
+            .map(|vertex| {
+                let local = sub(vertex.point, self.origin);
+                [dot(local, self.x), dot(local, self.y)]
+            })
             .collect::<Vec<_>>();
-        if verts.iter().copied().collect::<BTreeSet<_>>().len() != 4 {
-            return None;
-        }
-        let mut indices = verts
-            .iter()
-            .map(|v| vertex_section.get(v).copied())
-            .collect::<Option<Vec<_>>>()?;
-        indices.sort_unstable();
-        let (stage0, _) = indices[0];
-        if indices.iter().all(|(stage, _)| *stage == stage0) {
-            let which = if stage0 == 0 {
-                0
-            } else if stage0 == sections.len() - 1 {
-                1
-            } else {
-                return None;
-            };
-            let SurfaceSupport::Plane(plane) = face.surface else {
-                return None;
-            };
-            if dot(normalize(plane.normal, DIR_TOL)?, axis).abs() < 1.0 - DIR_TOL {
-                return None;
-            }
-            let c = &sections[stage0].corners;
-            let edges = std::array::from_fn(|i| edge_pair(c[i].id, c[(i + 1) % 4].id));
-            if !source_face_has_edges(face, &edges) || caps[which].replace(face.id).is_some() {
-                return None;
-            }
-        } else {
-            let next = stage0 + 1;
-            if next >= sections.len()
-                || indices.iter().filter(|(s, _)| *s == stage0).count() != 2
-                || indices.iter().filter(|(s, _)| *s == next).count() != 2
-                || indices.iter().any(|(s, _)| *s != stage0 && *s != next)
-            {
-                return None;
-            }
-            let bottom = indices
-                .iter()
-                .filter_map(|(s, i)| (*s == stage0).then_some(*i))
-                .collect::<Vec<_>>();
-            let top = indices
-                .iter()
-                .filter_map(|(s, i)| (*s == next).then_some(*i))
-                .collect::<Vec<_>>();
-            let side = (0..4).find(|&i| {
-                let target = [i, (i + 1) % 4];
-                bottom.iter().all(|v| target.contains(v)) && top.iter().all(|v| target.contains(v))
-            })?;
-            if !sides.insert((stage0, side)) {
-                return None;
-            }
-            let a = &sections[stage0].corners;
-            let b = &sections[next].corners;
-            let other = (side + 1) % 4;
-            let expected = [
-                edge_pair(a[side].id, a[other].id),
-                edge_pair(a[other].id, b[other].id),
-                edge_pair(b[other].id, b[side].id),
-                edge_pair(b[side].id, a[side].id),
-            ];
-            if !source_face_has_edges(face, &expected) {
-                return None;
-            }
-        }
-    }
-    if sides.len() != 4 * (sections.len() - 1) {
-        return None;
-    }
-    Some([caps[0]?, caps[1]?])
-}
-
-fn candidate(
-    solid: &ReducedSolid,
-    vertices: &BTreeMap<u64, [f64; 3]>,
-    cap: &ReducedFace,
-) -> Option<(f64, CadFragment)> {
-    let SurfaceSupport::Plane(plane) = cap.surface else {
-        return None;
-    };
-    let axis = normalize(plane.normal, DIR_TOL)?;
-    let origin = cap.loops[0].edges[0].start_mm;
-    let x = normalize(sub(cap.loops[0].edges[0].end_mm, origin), DIR_TOL)?;
-    if dot(x, axis).abs() > DIR_TOL {
-        return None;
-    }
-    let y = normalize(cross(axis, x), DIR_TOL)?;
-    let mut ranked = vertices
-        .iter()
-        .map(|(&id, &point)| (dot(sub(point, origin), axis), Vertex { id, point }))
-        .collect::<Vec<_>>();
-    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut groups = Vec::<(f64, Vec<Vertex>)>::new();
-    for (level, vertex) in ranked {
-        if let Some((at, vs)) = groups.last_mut()
-            && (level - *at).abs() <= TOL_MM
-        {
-            vs.push(vertex);
-        } else {
-            groups.push((level, vec![vertex]));
-        }
-    }
-    if groups.len() < 2 || groups.iter().any(|(_, group)| group.len() != 4) {
-        return None;
-    }
-    let sections = groups
-        .into_iter()
-        .map(|(level, group)| section(level, &group, origin, x, y))
-        .collect::<Option<Vec<_>>>()?;
-    let cap_ids = face_partition_proven(solid, &sections, axis)?;
-    let span = sections.last()?.level - sections.first()?.level;
-    if span <= TOL_MM {
-        return None;
-    }
-    let transforms = sections
-        .iter()
-        .map(|section| LoftSection {
-            profile: section.profile.clone(),
+        let origin = add(self.origin, mul(self.axis, ring.level));
+        Some(LoftSection {
+            profile: Profile2d::polygon(points).ok()?,
             transform: RigidTransform {
                 matrix: [
-                    [
-                        x[0],
-                        y[0],
-                        axis[0],
-                        axis[0].mul_add(section.level, origin[0]),
-                    ],
-                    [
-                        x[1],
-                        y[1],
-                        axis[1],
-                        axis[1].mul_add(section.level, origin[1]),
-                    ],
-                    [
-                        x[2],
-                        y[2],
-                        axis[2],
-                        axis[2].mul_add(section.level, origin[2]),
-                    ],
+                    [self.x[0], self.y[0], self.axis[0], origin[0]],
+                    [self.x[1], self.y[1], self.axis[1], origin[1]],
+                    [self.x[2], self.y[2], self.axis[2], origin[2]],
                     [0.0, 0.0, 0.0, 1.0],
                 ],
             },
         })
-        .collect();
-    let mut model = CadModel::new();
-    let root = model.add_node(CadNode::Loft {
-        sections: transforms,
-    });
-    model.add_root(root).ok()?;
-    model.validate().ok()?;
-    let source = CadFragmentSource::SolidLoft {
-        solid_id: solid.solid_id(),
-        cap_face_ids: cap_ids,
-        side_face_ids: solid
-            .faces()
-            .filter_map(|f| (!cap_ids.contains(&f.id)).then_some(f.id))
-            .collect(),
+    }
+}
+
+/// A planar polygon is a geometric condition, not a particular cap arity or
+/// STEP outer-bound spelling. A wall slot is a quad, unless a source edge
+/// has been split or a carrier continues beyond the recovered section.
+fn planar_loop(face: &ReducedFace) -> Option<&[OrientedEdgeUse]> {
+    let SurfaceSupport::Plane(plane) = face.surface else {
+        return None;
     };
-    Some((
-        span,
-        CadFragment {
+    let [loop_] = face.loops.as_slice() else {
+        return None;
+    };
+    let edges = &loop_.edges;
+    (edges.len() >= 3
+        && edges.iter().all(|edge| {
+            matches!(edge.support, CurveSupport::Line(_))
+                && [edge.start_mm, edge.end_mm].into_iter().all(|point| {
+                    point.iter().all(|value| value.is_finite())
+                        && dot(sub(point, plane.origin_mm), plane.normal).abs() <= TOL_MM
+                })
+        }))
+    .then_some(edges)
+}
+
+impl Ring {
+    fn from_cap(cap: &ReducedFace, frame: Frame, topology: &Topology<'_>) -> Option<Self> {
+        let edges = planar_loop(cap)?;
+        let consumed = BTreeSet::from([cap.id]);
+        let neighbors = edges
+            .iter()
+            .map(|edge| Some(topology.neighbor(edge.edge_id, &consumed)?.id))
+            .collect::<Option<Vec<_>>>()?;
+        let n = edges.len();
+        // Begin at a real wall transition so wraparound subdivisions are
+        // assigned to the same geometric chain.
+        let first = (0..n).find(|&i| neighbors[i] != neighbors[(i + n - 1) % n])?;
+        let mut chains = Vec::<Vec<&OrientedEdgeUse>>::new();
+        let mut previous = None;
+        for i in (0..n).map(|offset| (first + offset) % n) {
+            if previous == Some(neighbors[i]) {
+                chains.last_mut()?.push(&edges[i]);
+            } else {
+                chains.push(vec![&edges[i]]);
+            }
+            previous = Some(neighbors[i]);
+        }
+        let vertices = chains
+            .iter()
+            .map(|chain| {
+                line_chain(chain)?;
+                let edge = chain.first()?;
+                Some(Vertex {
+                    id: edge.start_vertex,
+                    point: planar_corner(topology.planes.get(&edge.start_vertex)?, edge.start_mm)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Self::new(
+            vertices,
+            chains
+                .iter()
+                .map(|chain| chain.iter().map(|edge| edge.edge_id).collect())
+                .collect(),
+            frame,
+        )
+    }
+
+    fn new(vertices: Vec<Vertex>, edge_ids: Vec<Vec<u64>>, frame: Frame) -> Option<Self> {
+        let level = frame.level(vertices.first()?.point);
+        if vertices.len() < 3
+            || vertices.iter().map(|v| v.id).collect::<BTreeSet<_>>().len() != vertices.len()
+            || edge_ids.len() != vertices.len()
+            || edge_ids.iter().any(Vec::is_empty)
+            || edge_ids
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != edge_ids.iter().map(Vec::len).sum::<usize>()
+            || vertices
+                .iter()
+                .any(|v| (frame.level(v.point) - level).abs() > TOL_MM)
+        {
+            return None;
+        }
+        Some(Self {
+            vertices,
+            edge_ids,
+            level,
+        })
+    }
+}
+
+/// Index the source adjacency once. Looking up an incident wall never scans
+/// every face, and ambiguity is rejected rather than resolved by face order.
+struct Topology<'a> {
+    solid: &'a ReducedSolid,
+    edge_faces: HashMap<u64, Vec<&'a ReducedFace>>,
+    planes: BTreeMap<u64, Vec<PlaneSupport>>,
+}
+
+impl<'a> Topology<'a> {
+    fn new(solid: &'a ReducedSolid) -> Self {
+        let mut edge_faces = HashMap::<u64, Vec<&ReducedFace>>::new();
+        for face in solid.faces() {
+            for edge in face.loop_edges() {
+                edge_faces.entry(edge.edge_id).or_default().push(face);
+            }
+        }
+        Self {
+            solid,
+            edge_faces,
+            planes: incident_planar_supports(solid),
+        }
+    }
+
+    fn neighbor(&self, edge: u64, consumed: &BTreeSet<u64>) -> Option<&'a ReducedFace> {
+        let mut faces = self
+            .edge_faces
+            .get(&edge)?
+            .iter()
+            .copied()
+            .filter(|face| !consumed.contains(&face.id));
+        let face = faces.next()?;
+        faces.next().is_none().then_some(face)
+    }
+
+    fn closing_cap(&self, ring: &Ring, consumed: &BTreeSet<u64>, frame: Frame) -> Option<u64> {
+        let face = self.neighbor(*ring.edge_ids.first()?.first()?, consumed)?;
+        let SurfaceSupport::Plane(plane) = face.surface else {
+            return None;
+        };
+        let edges = planar_loop(face)?;
+        (dot(normalize(plane.normal, DIR_TOL)?, frame.axis).abs() >= 1.0 - DIR_TOL
+            && edges
+                .iter()
+                .map(|edge| edge.edge_id)
+                .collect::<BTreeSet<_>>()
+                == ring
+                    .edge_ids
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<BTreeSet<_>>())
+        .then_some(face.id)
+    }
+
+    fn walls(&self, ring: &Ring, consumed: &BTreeSet<u64>) -> Option<Vec<&'a ReducedFace>> {
+        let walls = ring
+            .edge_ids
+            .iter()
+            .map(|chain| {
+                let first = self.neighbor(*chain.first()?, consumed)?;
+                chain
+                    .iter()
+                    .all(|&id| {
+                        self.neighbor(id, consumed)
+                            .is_some_and(|face| face.id == first.id)
+                    })
+                    .then_some(first)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if walls
+            .iter()
+            .map(|face| face.id)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != walls.len()
+        {
+            return None;
+        }
+        Some(walls)
+    }
+}
+
+/// One source wall supplies the opposite edge and the two corresponding
+/// generator endpoints. No geometric sorting or nearest-point matching.
+struct WallSlot {
+    far_edges: Vec<u64>,
+    start: Vertex,
+    end: Vertex,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WallRegion {
+    Near,
+    PreviousGenerator,
+    NextGenerator,
+    Far,
+}
+
+fn wall_region(
+    edge: u64,
+    near: &BTreeSet<u64>,
+    previous: &BTreeSet<u64>,
+    next: &BTreeSet<u64>,
+) -> Option<WallRegion> {
+    match (
+        near.contains(&edge),
+        previous.contains(&edge),
+        next.contains(&edge),
+    ) {
+        (true, false, false) => Some(WallRegion::Near),
+        (false, true, false) => Some(WallRegion::PreviousGenerator),
+        (false, false, true) => Some(WallRegion::NextGenerator),
+        (false, false, false) => Some(WallRegion::Far),
+        _ => None,
+    }
+}
+
+/// Partition an authored wall loop by actual incidence with the near ring
+/// and adjacent walls. Each of the four regions is a complete straight
+/// chain, not necessarily a single edge.
+fn wall_slot(
+    wall: &ReducedFace,
+    previous_wall: &ReducedFace,
+    next_wall: &ReducedFace,
+    near_edges: &[u64],
+    start: Vertex,
+    end: Vertex,
+) -> Option<WallSlot> {
+    let edges = planar_loop(wall)?;
+    let near = near_edges.iter().copied().collect::<BTreeSet<_>>();
+    let previous = previous_wall
+        .loop_edges()
+        .map(|edge| edge.edge_id)
+        .collect::<BTreeSet<_>>();
+    let next = next_wall
+        .loop_edges()
+        .map(|edge| edge.edge_id)
+        .collect::<BTreeSet<_>>();
+    let regions = edges
+        .iter()
+        .map(|edge| wall_region(edge.edge_id, &near, &previous, &next))
+        .collect::<Option<Vec<_>>>()?;
+    let n = edges.len();
+    let first = (0..n).find(|&i| {
+        regions[i] == WallRegion::Near && regions[(i + n - 1) % n] != WallRegion::Near
+    })?;
+    let mut chains = Vec::<(WallRegion, Vec<&OrientedEdgeUse>)>::new();
+    for i in (0..n).map(|offset| (first + offset) % n) {
+        if let Some((_, chain)) = chains
+            .last_mut()
+            .filter(|(region, _)| *region == regions[i])
+        {
+            chain.push(&edges[i]);
+        } else {
+            chains.push((regions[i], vec![&edges[i]]));
+        }
+    }
+    let [
+        (WallRegion::Near, near_chain),
+        (first_generator, _),
+        (WallRegion::Far, far_chain),
+        (last_generator, _),
+    ] = chains.as_slice()
+    else {
+        return None;
+    };
+    if near_chain.len() != near.len() {
+        return None;
+    }
+    for (_, chain) in &chains {
+        line_chain(chain)?;
+    }
+    let near_first = near_chain.first()?;
+    let near_last = near_chain.last()?;
+    let far_first = far_chain.first()?;
+    let far_last = far_chain.last()?;
+    let far_start = Vertex {
+        id: far_first.start_vertex,
+        point: far_first.start_mm,
+    };
+    let far_end = Vertex {
+        id: far_last.end_vertex,
+        point: far_last.end_mm,
+    };
+    let (start, end) = if near_first.start_vertex == start.id
+        && near_last.end_vertex == end.id
+        && *first_generator == WallRegion::NextGenerator
+        && *last_generator == WallRegion::PreviousGenerator
+    {
+        (far_end, far_start)
+    } else if near_first.start_vertex == end.id
+        && near_last.end_vertex == start.id
+        && *first_generator == WallRegion::PreviousGenerator
+        && *last_generator == WallRegion::NextGenerator
+    {
+        (far_start, far_end)
+    } else {
+        return None;
+    };
+    Some(WallSlot {
+        far_edges: far_chain.iter().map(|edge| edge.edge_id).collect(),
+        start,
+        end,
+    })
+}
+
+/// Refine section corners using the actual incident wall equations, measured
+/// axial station and previous exact corner. This is the general form of
+/// propagating drafted wall slopes; it avoids amplifying STEP vertex noise
+/// into a short wall's angle. A collinear split has rank two, so retain its
+/// source witness instead of inventing an additional constraint.
+fn propagate_corner(
+    previous: [f64; 3],
+    witness: [f64; 3],
+    before: PlaneSupport,
+    after: PlaneSupport,
+    frame: Frame,
+    delta: f64,
+) -> Option<[f64; 3]> {
+    let displacement = intersect_three_planes(
+        (frame.axis, mul(frame.axis, delta)),
+        (before.normal, [0.0; 3]),
+        (after.normal, [0.0; 3]),
+    );
+    let point = displacement.map_or(witness, |offset| add(previous, offset));
+    (distance(point, witness) <= TOL_MM
+        && [before, after].iter().all(|plane| {
+            [previous, point]
+                .into_iter()
+                .all(|p| dot(sub(p, plane.origin_mm), plane.normal).abs() <= TOL_MM)
+        }))
+    .then_some(point)
+}
+
+fn wall_planes(walls: &[&ReducedFace]) -> Option<Vec<PlaneSupport>> {
+    walls
+        .iter()
+        .map(|face| match face.surface {
+            SurfaceSupport::Plane(plane) => Some(plane),
+            _ => None,
+        })
+        .collect()
+}
+
+fn next_ring(
+    current: &Ring,
+    walls: &[&ReducedFace],
+    topology: &Topology<'_>,
+    frame: Frame,
+) -> Option<Ring> {
+    let n = current.vertices.len();
+    let slots = walls
+        .iter()
+        .enumerate()
+        .map(|(i, wall)| {
+            wall_slot(
+                wall,
+                walls[(i + n - 1) % n],
+                walls[(i + 1) % n],
+                &current.edge_ids[i],
+                current.vertices[i],
+                current.vertices[(i + 1) % n],
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let witnesses = slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            let previous = &slots[(i + n - 1) % n].end;
+            let v = slot.start;
+            if previous.id != v.id || distance(previous.point, v.point) > TOL_MM {
+                return None;
+            }
+            Some(Vertex {
+                id: v.id,
+                point: planar_corner(topology.planes.get(&v.id)?, v.point)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let level = frame.level(witnesses.first()?.point);
+    let delta = level - current.level;
+    if delta.abs() <= TOL_MM
+        || witnesses
+            .iter()
+            .any(|v| (frame.level(v.point) - level).abs() > TOL_MM)
+    {
+        return None;
+    }
+    let planes = wall_planes(walls)?;
+    let vertices = witnesses
+        .into_iter()
+        .enumerate()
+        .map(|(i, vertex)| {
+            let point = propagate_corner(
+                current.vertices[i].point,
+                vertex.point,
+                planes[(i + n - 1) % n],
+                planes[i],
+                frame,
+                delta,
+            )?;
+            Some(Vertex { point, ..vertex })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Ring::new(
+        vertices,
+        slots.into_iter().map(|slot| slot.far_edges).collect(),
+        frame,
+    )
+}
+
+/// When a wall continues into the core, its authored plane and the nearest
+/// actual incident non-ring vertex witness a candidate section. This is not
+/// a source-face ownership proof; the caller must certify the resulting
+/// Boolean against the original solid. It uses the same cyclic wall order
+/// and section construction as an exact ring transition.
+fn extended_ring(current: &Ring, walls: &[&ReducedFace], frame: Frame) -> Option<Ring> {
+    let vertices = current
+        .vertices
+        .iter()
+        .map(|v| v.id)
+        .collect::<BTreeSet<_>>();
+    let delta = walls
+        .iter()
+        .flat_map(|wall| wall.loop_edges())
+        .flat_map(|edge| {
+            [
+                (edge.start_vertex, edge.start_mm),
+                (edge.end_vertex, edge.end_mm),
+            ]
+        })
+        .filter(|(id, _)| !vertices.contains(id))
+        .map(|(_, p)| frame.level(p) - current.level)
+        .filter(|depth| depth.abs() > TOL_MM && depth.is_finite())
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
+    let level = current.level + delta;
+    let planes = wall_planes(walls)?;
+    let n = planes.len();
+    let vertices = current
+        .vertices
+        .iter()
+        .enumerate()
+        .map(|(i, vertex)| {
+            let prior = planes[(i + n - 1) % n];
+            let next = planes[i];
+            let point = add(
+                vertex.point,
+                intersect_three_planes(
+                    (frame.axis, mul(frame.axis, delta)),
+                    (prior.normal, [0.0; 3]),
+                    (next.normal, [0.0; 3]),
+                )?,
+            );
+            point
+                .iter()
+                .all(|v| v.is_finite())
+                .then_some(Vertex { point, ..*vertex })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Ring {
+        vertices,
+        edge_ids: Vec::new(),
+        level,
+    })
+}
+
+struct LoftWalk {
+    frame: Frame,
+    sections: Vec<LoftSection>,
+    wall_ids: Vec<u64>,
+    closing_cap: Option<u64>,
+    depth: f64,
+}
+
+impl LoftWalk {
+    fn model(self, source: CadFragmentSource) -> Option<CadFragment> {
+        let mut model = CadModel::new();
+        let root = model.add_node(CadNode::Loft {
+            sections: self.sections,
+        });
+        model.add_root(root).ok()?;
+        model.validate().ok()?;
+        Some(CadFragment {
             source,
             model,
             root,
-        },
-    ))
+        })
+    }
 }
 
-/// Recognize any number of exact rectangular stages and bevel transitions,
-/// without imposing source axis, position, scale, face IDs or section count.
-///
-/// Candidate faces establish a local frame, but the widest valid loft axis
-/// is selected so a long chamfered bar is represented along its long axis.
+/// Walk from a source cap through every witnessed wall ring. Each step
+/// consumes previously unseen source faces, giving a topology-derived
+/// termination invariant, not an arbitrary number of stages.
+fn walk_loft(topology: &Topology<'_>, cap: &ReducedFace, allow_extended: bool) -> Option<LoftWalk> {
+    let frame = Frame::from_cap(cap, &topology.planes)?;
+    let mut ring = Ring::from_cap(cap, frame, topology)?;
+    let mut sections = vec![frame.section(&ring)?];
+    let mut consumed = BTreeSet::from([cap.id]);
+    let mut wall_ids = Vec::new();
+    let mut direction = 0.0_f64;
+    let mut closing_cap = None;
+    let mut extended = false;
+    loop {
+        if let Some(id) = topology.closing_cap(&ring, &consumed, frame) {
+            closing_cap = Some(id);
+            break;
+        }
+        let Some(walls) = topology.walls(&ring, &consumed) else {
+            break;
+        };
+        let next = if let Some(next) = next_ring(&ring, &walls, topology, frame) {
+            next
+        } else if allow_extended && let Some(next) = extended_ring(&ring, &walls, frame) {
+            extended = true;
+            next
+        } else {
+            break;
+        };
+        let delta = next.level - ring.level;
+        if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
+            break;
+        }
+        direction = delta;
+        wall_ids.extend(walls.iter().map(|face| face.id));
+        consumed.extend(walls.iter().map(|face| face.id));
+        sections.push(frame.section(&next)?);
+        ring = next;
+        if extended {
+            break;
+        }
+    }
+    if sections.len() < 2 {
+        return None;
+    }
+    let depth = ring.level;
+    if depth < 0.0 {
+        sections.reverse();
+    }
+    Some(LoftWalk {
+        frame,
+        sections,
+        wall_ids,
+        closing_cap,
+        depth,
+    })
+}
+
+/// Recognize a complete planar ruled loft using source cap-to-cap wall
+/// correspondence. A general polygon and any number of stages are supported.
 pub fn detect_sectioned_planar_loft(solid: &ReducedSolid) -> Option<CadFragment> {
     solid.validate_closed_topology()?;
-    let vertices = points(solid)?;
-    let mut candidates = solid
+    let topology = Topology::new(solid);
+    solid
         .faces()
-        .filter_map(|cap| candidate(solid, &vertices, cap))
-        .collect::<Vec<_>>();
-    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
-    candidates.into_iter().next().map(|(_, fragment)| fragment)
+        .filter_map(|cap| {
+            let walk = walk_loft(&topology, cap, false)?;
+            let other = walk.closing_cap?;
+            if walk.wall_ids.len() + 2 != solid.faces().count() {
+                return None;
+            }
+            let span = walk.depth.abs();
+            // Keep cap ordering canonical in the loft's positive axial direction.
+            let cap_face_ids = if walk.depth < 0.0 {
+                [other, cap.id]
+            } else {
+                [cap.id, other]
+            };
+            let side_face_ids = solid
+                .faces()
+                .filter_map(|f| (!cap_face_ids.contains(&f.id)).then_some(f.id))
+                .collect();
+            let source = CadFragmentSource::SolidLoft {
+                solid_id: solid.solid_id(),
+                cap_face_ids,
+                side_face_ids,
+            };
+            Some((span, walk.model(source)?))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, fragment)| fragment)
 }
 
-/// An exact planar end treatment, whose terminal face and one or more
-/// four-sided ruled wall rings are real source topology. The shoulder section is an implied interface,
-/// never an invented source face.
+/// An exact or source-witnessed planar end treatment. The shoulder section
+/// is an implied interface, not an invented source face.
 pub struct RuledEndExtension {
     pub fragment: CadFragment,
     pub tip_face_id: u64,
     pub axis: [f64; 3],
-    /// Section plane at the connection to preceding source material.
     pub shoulder_point_mm: [f64; 3],
-    /// A point on the actual terminal source cap plane.
     pub tip_point_mm: [f64; 3],
 }
 
-/// Discover terminal four-sided ruled caps. Unlike the whole-solid loft
-/// recognizer, this works with a mixed analytic source: curved elbow walls
-/// remain untouched while the exact planar tip treatment is recovered.
-pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
-    solid
-        .faces()
-        .filter_map(|cap| terminal_ruled_extension(solid, cap))
-        .collect()
-}
-
-/// Discover source-witnessed ruled end sections, including multi-stage
-/// planar strips and analytic walls continuing into an earlier core.
-pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
-    let planes = incident_planar_supports(solid);
+fn terminal_extensions(solid: &ReducedSolid, allow_extended: bool) -> Vec<RuledEndExtension> {
+    let topology = Topology::new(solid);
     solid
         .faces()
         .filter_map(|cap| {
-            terminal_sectioned_ruled_extension(solid, cap, &planes)
-                .or_else(|| terminal_ruled_extension(solid, cap))
-                .or_else(|| terminal_extended_planar_ruled_extension(solid, cap))
+            let walk = walk_loft(&topology, cap, allow_extended)?;
+            if walk.closing_cap.is_some() {
+                return None;
+            }
+            let frame = walk.frame;
+            let shoulder_point_mm = add(frame.origin, mul(frame.axis, walk.depth));
+            let source = CadFragmentSource::RuledEndExtension {
+                solid_id: topology.solid.solid_id(),
+                tip_face_id: cap.id,
+                wall_face_ids: walk.wall_ids.clone(),
+            };
+            Some(RuledEndExtension {
+                fragment: walk.model(source)?,
+                tip_face_id: cap.id,
+                axis: frame.axis,
+                shoulder_point_mm,
+                tip_point_mm: frame.origin,
+            })
         })
         .collect()
 }
 
-fn matching_ruled_end_shoulder(
-    solid: &ReducedSolid,
-    cap: &ReducedFace,
-    cap_vertices: &BTreeMap<u64, [f64; 3]>,
-) -> Option<(BTreeMap<u64, Vertex>, [u64; 4])> {
-    let cap_edges = &cap.loops[0].edges;
-    let mut matching_shoulder = BTreeMap::<u64, Vertex>::new();
-    let mut walls = Vec::new();
-    let mut shoulder_edges = BTreeSet::new();
-    for edge in cap_edges {
-        let adjacent = solid
-            .faces()
-            .filter(|f| f.id != cap.id && f.loop_edges().any(|use_| use_.edge_id == edge.edge_id))
-            .collect::<Vec<_>>();
-        let [wall] = adjacent.as_slice() else {
-            return None;
-        };
-        if !plane_quad(wall) || walls.contains(&wall.id) {
-            return None;
-        }
-        walls.push(wall.id);
-        let opposite = wall
-            .loop_edges()
-            .filter(|other| {
-                !cap_vertices.contains_key(&other.start_vertex)
-                    && !cap_vertices.contains_key(&other.end_vertex)
-            })
-            .collect::<Vec<_>>();
-        let [shoulder_edge] = opposite.as_slice() else {
-            return None;
-        };
-        shoulder_edges.insert(shoulder_edge.edge_id);
-        for end_id in [edge.start_vertex, edge.end_vertex] {
-            let connectors = wall
-                .loop_edges()
-                .filter_map(|other| {
-                    if other.start_vertex == end_id && !cap_vertices.contains_key(&other.end_vertex)
-                    {
-                        Some(Vertex {
-                            id: other.end_vertex,
-                            point: other.end_mm,
-                        })
-                    } else if other.end_vertex == end_id
-                        && !cap_vertices.contains_key(&other.start_vertex)
-                    {
-                        Some(Vertex {
-                            id: other.start_vertex,
-                            point: other.start_mm,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
-            let [shoulder_vertex] = connectors.as_slice() else {
-                return None;
-            };
-            if matching_shoulder
-                .insert(end_id, *shoulder_vertex)
-                .is_some_and(|prior| {
-                    prior.id != shoulder_vertex.id
-                        || distance(prior.point, shoulder_vertex.point) > TOL_MM
-                })
-            {
-                return None;
-            }
-        }
-    }
-    if walls.len() != 4
-        || matching_shoulder.len() != 4
-        || matching_shoulder
-            .values()
-            .map(|v| v.id)
-            .collect::<BTreeSet<_>>()
-            .len()
-            != 4
-        || shoulder_edges.len() != 4
-    {
-        return None;
-    }
-    // If the shoulder itself is another source cap, this is already a
-    // complete simple prism/loft, not a terminal added material feature.
-    if solid.faces().any(|f| {
-        plane_quad(f)
-            && f.loop_edges().map(|e| e.edge_id).collect::<BTreeSet<_>>() == shoulder_edges
-    }) {
-        return None;
-    }
-
-    Some((matching_shoulder, walls.try_into().ok()?))
+/// Terminal features with fully witnessed source wall rings.
+pub fn detect_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    terminal_extensions(solid, false)
 }
 
-fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<RuledEndExtension> {
-    if !plane_quad(cap) {
-        return None;
-    }
-    let SurfaceSupport::Plane(plane) = &cap.surface else {
-        return None;
-    };
-    let cap_edges = &cap.loops[0].edges;
-    let cap_vertices = cap_edges
-        .iter()
-        .map(|e| (e.start_vertex, e.start_mm))
-        .collect::<BTreeMap<_, _>>();
-    if cap_vertices.len() != 4 {
-        return None;
-    }
-
-    let (matching_shoulder, wall_face_ids) =
-        matching_ruled_end_shoulder(solid, cap, &cap_vertices)?;
-    let axis = normalize(plane.normal, DIR_TOL)?;
-    let origin = cap_edges[0].start_mm;
-    let x = normalize(sub(cap_edges[0].end_mm, origin), DIR_TOL)?;
-    if dot(axis, x).abs() > DIR_TOL {
-        return None;
-    }
-    let y = normalize(cross(axis, x), DIR_TOL)?;
-    let tip_vertices = cap_edges
-        .iter()
-        .map(|edge| Vertex {
-            id: edge.start_vertex,
-            point: edge.start_mm,
-        })
-        .collect::<Vec<_>>();
-    let shoulder_vertices = cap_edges
-        .iter()
-        .map(|edge| matching_shoulder.get(&edge.start_vertex).copied())
-        .collect::<Option<Vec<_>>>()?;
-    let depth = dot(sub(shoulder_vertices[0].point, origin), axis);
-    if depth.abs() <= TOL_MM
-        || shoulder_vertices
-            .iter()
-            .any(|v| (dot(sub(v.point, origin), axis) - depth).abs() > TOL_MM)
-    {
-        return None;
-    }
-    let tip = section(0.0, &tip_vertices, origin, x, y)?;
-    let shoulder = section(depth, &shoulder_vertices, origin, x, y)?;
-    // The STEP tip face's outward normal points *away* from its shoulder.
-    // Builder::try_skin_wires and its start/end cap conventions assume the
-    // sections progress in the positive local axis direction. Reversing a
-    // negative-depth pair here is essential: both solids can be closed while
-    // the loft's oriented material is inverted, so a Boolean would then keep
-    // the entire shared interface as an external face.
-    let ordered = if depth < 0.0 {
-        [shoulder, tip]
-    } else {
-        [tip, shoulder]
-    };
-    let sections = ordered
-        .into_iter()
-        .map(|section| LoftSection {
-            profile: section.profile,
-            transform: RigidTransform {
-                matrix: [
-                    [
-                        x[0],
-                        y[0],
-                        axis[0],
-                        axis[0].mul_add(section.level, origin[0]),
-                    ],
-                    [
-                        x[1],
-                        y[1],
-                        axis[1],
-                        axis[1].mul_add(section.level, origin[1]),
-                    ],
-                    [
-                        x[2],
-                        y[2],
-                        axis[2],
-                        axis[2].mul_add(section.level, origin[2]),
-                    ],
-                    [0.0, 0.0, 0.0, 1.0],
-                ],
-            },
-        })
-        .collect::<Vec<_>>();
-    let mut model = CadModel::new();
-    let root = model.add_node(CadNode::Loft { sections });
-    model.add_root(root).ok()?;
-    model.validate().ok()?;
-    Some(RuledEndExtension {
-        fragment: CadFragment {
-            source: CadFragmentSource::RuledEndExtension {
-                solid_id: solid.solid_id(),
-                tip_face_id: cap.id,
-                wall_face_ids: wall_face_ids.to_vec(),
-            },
-            model,
-            root,
-        },
-        tip_face_id: cap.id,
-        axis,
-        shoulder_point_mm: crate::math3::add(origin, crate::math3::mul(axis, depth)),
-        tip_point_mm: origin,
-    })
-}
-
-/// Follow a source four-sided planar wall ring, preserving the actual STEP
-/// vertex and edge identities instead of extrapolating an idealized shoulder.
-/// Previous walls are excluded; a cap or a non-quad continuation ends the
-/// strip rather than being interpreted as another section.
-fn next_quad_wall_ring(
-    solid: &ReducedSolid,
-    ring: &[OrientedEdgeUse],
-    consumed: &BTreeSet<u64>,
-) -> Option<(Vec<OrientedEdgeUse>, Vec<u64>)> {
-    let vertices = ring
-        .iter()
-        .flat_map(|edge| [edge.start_vertex, edge.end_vertex])
-        .collect::<BTreeSet<_>>();
-    if ring.len() != 4 || vertices.len() != 4 {
-        return None;
-    }
-    let mut next = Vec::with_capacity(4);
-    let mut walls = Vec::with_capacity(4);
-    for edge in ring {
-        let adjacent = solid
-            .faces()
-            .filter(|face| {
-                !consumed.contains(&face.id)
-                    && face.loop_edges().any(|used| used.edge_id == edge.edge_id)
-            })
-            .collect::<Vec<_>>();
-        let [wall] = adjacent.as_slice() else {
-            return None;
-        };
-        if !plane_quad(wall) || walls.contains(&wall.id) {
-            return None;
-        }
-        let opposite = wall
-            .loop_edges()
-            .filter(|used| {
-                !vertices.contains(&used.start_vertex) && !vertices.contains(&used.end_vertex)
-            })
-            .collect::<Vec<_>>();
-        let [far_edge] = opposite.as_slice() else {
-            return None;
-        };
-        walls.push(wall.id);
-        next.push((*far_edge).clone());
-    }
-    let mut degrees = BTreeMap::<u64, usize>::new();
-    for edge in &next {
-        *degrees.entry(edge.start_vertex).or_default() += 1;
-        *degrees.entry(edge.end_vertex).or_default() += 1;
-    }
-    if degrees.len() != 4
-        || degrees.values().any(|&degree| degree != 2)
-        || next
-            .iter()
-            .map(|edge| edge.edge_id)
-            .collect::<BTreeSet<_>>()
-            .len()
-            != 4
-    {
-        return None;
-    }
-    Some((next, walls))
+/// Terminal features including an implied section on continuing source
+/// carriers. The proposal still requires independent Boolean proof.
+pub fn detect_extended_ruled_end_extensions(solid: &ReducedSolid) -> Vec<RuledEndExtension> {
+    terminal_extensions(solid, true)
 }
 
 /// Index the actual analytic plane equations incident to each source vertex.
@@ -677,362 +754,6 @@ fn planar_corner(planes: &[PlaneSupport], witness: [f64; 3]) -> Option<[f64; 3]>
             .iter()
             .all(|plane| dot(sub(point, plane.origin_mm), plane.normal).abs() <= TOL_MM))
     .then_some(point)
-}
-
-fn section_from_wall_ring(
-    ring: &[OrientedEdgeUse],
-    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
-    origin: [f64; 3],
-    axis: [f64; 3],
-    x: [f64; 3],
-    y: [f64; 3],
-) -> Option<Section> {
-    let mut seen = BTreeMap::<u64, [f64; 3]>::new();
-    for edge in ring {
-        for (id, point) in [
-            (edge.start_vertex, edge.start_mm),
-            (edge.end_vertex, edge.end_mm),
-        ] {
-            if seen
-                .insert(id, point)
-                .is_some_and(|old| distance(old, point) > TOL_MM)
-            {
-                return None;
-            }
-        }
-    }
-    let vertices = seen
-        .into_iter()
-        .map(|(id, witness)| {
-            let point = planar_corner(planes.get(&id)?.as_slice(), witness)?;
-            Some(Vertex { id, point })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let level = dot(sub(vertices.first()?.point, origin), axis);
-    if vertices
-        .iter()
-        .any(|vertex| (dot(sub(vertex.point, origin), axis) - level).abs() > TOL_MM)
-    {
-        return None;
-    }
-    section(level, &vertices, origin, x, y)
-}
-
-/// Each wall owns one of the four rectangular bounds. The measured
-/// section station controls its depth, while the authored plane normal
-/// controls the slope. Propagate bounds from the previous exact section:
-/// subtracting noisy independent vertex coordinates across a short bevel
-/// otherwise magnifies their positional uncertainty into angular error.
-fn propagate_wall_slopes(
-    solid: &ReducedSolid,
-    walls: &[u64],
-    previous: &Section,
-    stage: &mut Section,
-    frame_basis: [[f64; 3]; 3],
-    origin: [f64; 3],
-) -> Option<()> {
-    let [x, y, axis] = frame_basis;
-    let delta = stage.level - previous.level;
-    let mut bounds = [[None; 2]; 2];
-    for &wall_id in walls {
-        let wall = solid.faces().find(|face| face.id == wall_id)?;
-        let SurfaceSupport::Plane(plane) = wall.surface else {
-            return None;
-        };
-        let corners = previous
-            .corners
-            .iter()
-            .enumerate()
-            .filter_map(|(index, vertex)| {
-                wall.loop_edges()
-                    .any(|edge| edge.start_vertex == vertex.id || edge.end_vertex == vertex.id)
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        let (coord, end) = match corners.as_slice() {
-            [0, 1] => (1, 0),
-            [1, 2] => (0, 1),
-            [2, 3] => (1, 1),
-            [0, 3] => (0, 0),
-            _ => return None,
-        };
-        let basis = [x, y];
-        let normal = dot(plane.normal, basis[coord]);
-        if normal.abs() <= DIR_TOL || dot(plane.normal, basis[1 - coord]).abs() > DIR_TOL {
-            return None;
-        }
-        let slope = -dot(plane.normal, axis) / normal;
-        let bound = slope.mul_add(delta, previous.bounds[coord][end]);
-        if !bound.is_finite()
-            || (bound - stage.bounds[coord][end]).abs() > TOL_MM
-            || bounds[coord][end].replace(bound).is_some()
-        {
-            return None;
-        }
-    }
-    let [[Some(xmin), Some(xmax)], [Some(ymin), Some(ymax)]] = bounds else {
-        return None;
-    };
-    if xmax - xmin <= TOL_MM || ymax - ymin <= TOL_MM {
-        return None;
-    }
-    let corners = [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]];
-    let frame_origin = crate::math3::add(origin, crate::math3::mul(axis, stage.level));
-    for (corner, witness) in corners.iter().zip(stage.corners) {
-        let point = crate::math3::add(
-            crate::math3::add(frame_origin, crate::math3::mul(x, corner[0])),
-            crate::math3::mul(y, corner[1]),
-        );
-        if distance(point, witness.point) > TOL_MM {
-            return None;
-        }
-    }
-    stage.bounds = [[xmin, xmax], [ymin, ymax]];
-    stage.profile = Profile2d::polygon(corners.to_vec()).ok()?;
-    Some(())
-}
-
-/// A source terminal cap may lead into several real four-quad rings before
-/// disappearing into a larger solid. Each ring yields an *editable* loft
-/// section; no fictitious shoulder/cap is introduced into source provenance.
-fn terminal_sectioned_ruled_extension(
-    solid: &ReducedSolid,
-    cap: &ReducedFace,
-    planes: &BTreeMap<u64, Vec<PlaneSupport>>,
-) -> Option<RuledEndExtension> {
-    if !plane_quad(cap) {
-        return None;
-    }
-    let SurfaceSupport::Plane(plane) = cap.surface else {
-        return None;
-    };
-    let first_edge = cap.loops.first()?.edges.first()?;
-    let origin = planar_corner(planes.get(&first_edge.start_vertex)?, first_edge.start_mm)?;
-    let axis = normalize(plane.normal, DIR_TOL)?;
-    let CurveSupport::Line(line) = first_edge.support else {
-        return None;
-    };
-    let direction = normalize(line.direction, DIR_TOL)?;
-    if dot(direction, axis).abs() > DIR_TOL {
-        return None;
-    }
-    let direction = if dot(direction, sub(first_edge.end_mm, first_edge.start_mm)) < 0.0 {
-        crate::math3::mul(direction, -1.0)
-    } else {
-        direction
-    };
-    let y = normalize(cross(axis, direction), DIR_TOL)?;
-    let x = normalize(cross(y, axis), DIR_TOL)?;
-    let mut current = cap.loops.first()?.edges.clone();
-    let mut sections = vec![section_from_wall_ring(
-        &current, planes, origin, axis, x, y,
-    )?];
-    let mut consumed = BTreeSet::from([cap.id]);
-    let mut wall_ids = Vec::new();
-    let mut direction = 0.0_f64;
-    while let Some((next, walls)) = next_quad_wall_ring(solid, &current, &consumed) {
-        let Some(mut stage) = section_from_wall_ring(&next, planes, origin, axis, x, y) else {
-            break;
-        };
-        let previous = sections.last()?;
-        let delta = stage.level - previous.level;
-        if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
-            break;
-        }
-        if propagate_wall_slopes(solid, &walls, previous, &mut stage, [x, y, axis], origin)
-            .is_none()
-        {
-            break;
-        }
-        direction = delta;
-        wall_ids.extend(&walls);
-        consumed.extend(walls);
-        current = next;
-        sections.push(stage);
-    }
-    // The ordinary terminal extension already owns a single transition.
-    // This recognizer is for actual multi-stage walls only.
-    if sections.len() < 3 {
-        return None;
-    }
-    let depth = sections.last()?.level;
-    if depth < 0.0 {
-        sections.reverse();
-    }
-    let sections = sections
-        .into_iter()
-        .map(|s| LoftSection {
-            profile: s.profile,
-            transform: RigidTransform {
-                matrix: [
-                    [x[0], y[0], axis[0], axis[0].mul_add(s.level, origin[0])],
-                    [x[1], y[1], axis[1], axis[1].mul_add(s.level, origin[1])],
-                    [x[2], y[2], axis[2], axis[2].mul_add(s.level, origin[2])],
-                    [0.0, 0.0, 0.0, 1.0],
-                ],
-            },
-        })
-        .collect();
-    let mut model = CadModel::new();
-    let root = model.add_node(CadNode::Loft { sections });
-    model.add_root(root).ok()?;
-    model.validate().ok()?;
-    Some(RuledEndExtension {
-        fragment: CadFragment {
-            source: CadFragmentSource::RuledEndExtension {
-                solid_id: solid.solid_id(),
-                tip_face_id: cap.id,
-                wall_face_ids: wall_ids,
-            },
-            model,
-            root,
-        },
-        tip_face_id: cap.id,
-        axis,
-        shoulder_point_mm: crate::math3::add(origin, crate::math3::mul(axis, depth)),
-        tip_point_mm: origin,
-    })
-}
-
-/// Nearest non-tip axial station witnessed by source vertices on actual
-/// incident wall faces, not by extrapolation of the planar carriers.
-fn source_witnessed_terminal_depth(
-    solid: &ReducedSolid,
-    cap_edges: &[OrientedEdgeUse],
-    wall_face_ids: &[u64],
-    origin: [f64; 3],
-    axis: [f64; 3],
-) -> Option<f64> {
-    let cap_vertices = cap_edges
-        .iter()
-        .map(|edge| edge.start_vertex)
-        .collect::<BTreeSet<_>>();
-    let depth = solid
-        .faces()
-        .filter(|wall| wall_face_ids.contains(&wall.id))
-        .flat_map(ReducedFace::loop_edges)
-        .flat_map(|edge| {
-            [
-                (edge.start_vertex, edge.start_mm),
-                (edge.end_vertex, edge.end_mm),
-            ]
-        })
-        .filter(|(id, _)| !cap_vertices.contains(id))
-        .filter_map(|(_, point)| {
-            let distance = dot(sub(point, origin), axis);
-            (distance.abs() > TOL_MM).then_some(distance)
-        })
-        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
-    (depth.abs() > TOL_MM).then_some(depth)
-}
-
-// A terminal loft may share its side carriers with a preceding extrusion.
-// In that case two side faces extend past the shoulder and are not four-edge
-// quads. Their analytic planes still determine the exact bounded shoulder.
-fn terminal_extended_planar_ruled_extension(
-    solid: &ReducedSolid,
-    cap: &ReducedFace,
-) -> Option<RuledEndExtension> {
-    if !plane_quad(cap) {
-        return None;
-    }
-    let SurfaceSupport::Plane(cap_plane) = cap.surface else {
-        return None;
-    };
-    let cap_edges = &cap.loops[0].edges;
-    let mut wall_planes = Vec::with_capacity(cap_edges.len());
-    let mut wall_face_ids = Vec::with_capacity(cap_edges.len());
-    for edge in cap_edges {
-        let mut touching = solid.faces().filter(|face| {
-            face.id != cap.id && face.loop_edges().any(|used| used.edge_id == edge.edge_id)
-        });
-        let wall = touching.next()?;
-        if touching.next().is_some() || wall_face_ids.contains(&wall.id) {
-            return None;
-        }
-        let SurfaceSupport::Plane(plane) = wall.surface else {
-            return None;
-        };
-        wall_face_ids.push(wall.id);
-        wall_planes.push(plane);
-    }
-
-    let axis = normalize(cap_plane.normal, DIR_TOL)?;
-    let origin = cap_edges.first()?.start_mm;
-    let x = normalize(sub(cap_edges.first()?.end_mm, origin), DIR_TOL)?;
-    let y = normalize(cross(axis, x), DIR_TOL)?;
-    let depth = source_witnessed_terminal_depth(solid, cap_edges, &wall_face_ids, origin, axis)?;
-    let shoulder_origin = crate::math3::add(origin, crate::math3::mul(axis, depth));
-    let mut shoulder = Vec::with_capacity(4);
-    for i in 0..4 {
-        let prior = wall_planes[(i + 3) % 4];
-        let next = wall_planes[i];
-        let point = intersect_three_planes(
-            (axis, shoulder_origin),
-            (prior.normal, prior.origin_mm),
-            (next.normal, next.origin_mm),
-        )?;
-        if !point.iter().all(|v| v.is_finite()) {
-            return None;
-        }
-        shoulder.push(point);
-    }
-
-    let profile = |points: &[[f64; 3]]| {
-        Profile2d::polygon(
-            points
-                .iter()
-                .map(|&p| [dot(sub(p, origin), x), dot(sub(p, origin), y)])
-                .collect(),
-        )
-        .ok()
-    };
-    let tip = cap_edges
-        .iter()
-        .map(|edge| edge.start_mm)
-        .collect::<Vec<_>>();
-    let tip_profile = profile(&tip)?;
-    let shoulder_profile = profile(&shoulder)?;
-    let frame = |level| RigidTransform {
-        matrix: [
-            [x[0], y[0], axis[0], axis[0].mul_add(level, origin[0])],
-            [x[1], y[1], axis[1], axis[1].mul_add(level, origin[1])],
-            [x[2], y[2], axis[2], axis[2].mul_add(level, origin[2])],
-            [0.0, 0.0, 0.0, 1.0],
-        ],
-    };
-    let tip = LoftSection {
-        profile: tip_profile,
-        transform: frame(0.0),
-    };
-    let shoulder = LoftSection {
-        profile: shoulder_profile,
-        transform: frame(depth),
-    };
-    let sections = if depth < 0.0 {
-        vec![shoulder, tip]
-    } else {
-        vec![tip, shoulder]
-    };
-    let mut model = CadModel::new();
-    let root = model.add_node(CadNode::Loft { sections });
-    model.add_root(root).ok()?;
-    model.validate().ok()?;
-    Some(RuledEndExtension {
-        fragment: CadFragment {
-            source: CadFragmentSource::RuledEndExtension {
-                solid_id: solid.solid_id(),
-                tip_face_id: cap.id,
-                wall_face_ids,
-            },
-            model,
-            root,
-        },
-        tip_face_id: cap.id,
-        axis,
-        shoulder_point_mm: shoulder_origin,
-        tip_point_mm: origin,
-    })
 }
 
 fn intersect_three_planes(
@@ -1294,3 +1015,6 @@ mod terminal_extension_tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cad-kernel-monstertruck"))]
+mod polygon_tests;
