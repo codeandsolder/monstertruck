@@ -1380,10 +1380,12 @@ checksum = "175dc66334db3b9ab9985bf8b61cfed50dc16d20964bb47f9e479adcae984a7f"
 dependencies = [
  "jiff-core",
  "jiff-static",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1801,6 +1803,7 @@ dependencies = [
  "derive_more",
  "encoding_rs",
  "image",
+ "jiff",
  "monstertruck-assembly",
  "monstertruck-core",
  "monstertruck-derive",

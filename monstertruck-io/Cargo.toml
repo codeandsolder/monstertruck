@@ -21,6 +21,7 @@ default = ["step"]
 # Reading and writing ISO 10303-21 (STEP).
 step = [
     "derive_more",
+    "dep:jiff",
     "step-p21",
     "dep:encoding_rs",
     "serde",
@@ -47,7 +48,7 @@ thiserror = { workspace = true }
 # STEP. `web_time::Instant` is `std::time::Instant` on native and falls back to
 # `performance.now()` on wasm32-unknown-unknown (where `std::time::*` panics).
 web-time = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true, optional = true }
 derive_more = { workspace = true, optional = true }
 step-p21 = { workspace = true, optional = true }
 encoding_rs = { version = "0.8.41", optional = true }
@@ -67,6 +68,7 @@ cadmpeg-codec-step = { version = "0.6", optional = true }
 cadmpeg-core = { version = "0.6", optional = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 # Use cadmpeg's independent cube fixture to validate its IR contract.
 cadmpeg-ir = { version = "0.6", features = ["examples"] }
 anyhow = { workspace = true }

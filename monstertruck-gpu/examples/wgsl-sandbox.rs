@@ -34,8 +34,8 @@
 )]
 
 use monstertruck_gpu::{
-    BufferHandler, DeviceHandler, RenderId, Rendered, SceneDescriptor, WindowScene,
-    WindowSceneDescriptor, bind_group_util, impl_render_id, wgpu,
+    BufferHandler, DeviceHandler, RenderId, Rendered, SceneDescriptor, SurfaceScene,
+    SurfaceSceneDescriptor, bind_group_util, impl_render_id, wgpu,
 };
 use std::sync::Arc;
 use wgpu::{
@@ -249,8 +249,13 @@ async fn run(
     event_loop: EventLoop<()>,
     window: winit::window::Window,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut scene =
-        WindowScene::from_window(Arc::new(window), &WindowSceneDescriptor::default()).await?;
+    let window = Arc::new(window);
+    let mut scene = SurfaceScene::from_target(
+        Arc::clone(&window),
+        window.inner_size().into(),
+        &SurfaceSceneDescriptor::default(),
+    )
+    .await?;
     let args: Vec<_> = std::env::args().collect();
     let source = if args.len() > 1 {
         match std::fs::read_to_string(&args[1]) {
@@ -278,7 +283,7 @@ async fn run(
     let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
         let control_flow = match ev {
             Event::NewEvents(StartCause::Poll) => {
-                scene.window().request_redraw();
+                window.request_redraw();
                 ControlFlow::Poll
             }
             Event::WindowEvent { event, .. } => match event {
@@ -288,7 +293,7 @@ async fn run(
                         plane.mouse[3] = -plane.mouse[3];
                         clicked = false;
                     }
-                    if let Err(error) = scene.render_frame() {
+                    if let Err(error) = scene.render_frame(window.inner_size().into()) {
                         eprintln!("render failed: {error}");
                     }
                     ControlFlow::Poll

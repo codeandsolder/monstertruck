@@ -7,8 +7,8 @@
 // https://cc0textures.com/view?id=WoodFloor024
 
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
-    WindowSceneDescriptor,
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor,
 };
 use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::{Solid, builder};
@@ -29,7 +29,7 @@ const TEXTURE_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 struct MyApp {
-    scene: WindowScene,
+    scene: SurfaceScene,
     rotate_flag: bool,
     prev_cursor: Option<Vector2>,
     light_changed: Option<std::time::Instant>,
@@ -64,7 +64,7 @@ impl MyApp {
 impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
-        let desc = WindowSceneDescriptor {
+        let desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 camera: Self::create_camera()?,
                 lights: vec![Light {
@@ -79,7 +79,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc).await?;
+        let mut scene =
+            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &desc)
+                .await?;
         let texture = image::load_from_memory(TEXTURE_BYTES)?;
         let texture = image2texture::image2texture(scene.device_handler(), &texture)?;
         let state = PolygonState {
@@ -231,8 +233,8 @@ impl App for MyApp {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) {
-        if let Err(error) = self.scene.render_frame() {
+    fn render(&mut self, size: (u32, u32)) {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }

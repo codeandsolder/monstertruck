@@ -6,7 +6,8 @@
 //! In each frame, the NURBS surface is divided into mesh.
 
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, StudioConfig, WindowScene, WindowSceneDescriptor,
+    BackendBufferConfig, Camera, Light, LightType, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor,
 };
 use monstertruck_modeling::{
     BoundedSurface, BsplineSurface, InnerSpace, KnotVector, Matrix4, Point3, Vector3, Vector4,
@@ -24,7 +25,7 @@ mod app;
 use app::{App, AppResult, ControlFlow};
 
 struct MyApp {
-    scene: WindowScene,
+    scene: SurfaceScene,
     creator: InstanceCreator,
     object: Arc<Mutex<StructuredMesh>>,
     instance: PolygonInstance,
@@ -111,7 +112,7 @@ impl MyApp {
 
 impl App for MyApp {
     async fn init(window: Arc<Window>) -> AppResult<Self> {
-        let desc = WindowSceneDescriptor {
+        let desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 camera: Self::init_camera(),
                 lights: vec![Light {
@@ -126,7 +127,9 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &desc).await?;
+        let mut scene =
+            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &desc)
+                .await?;
         let creator = scene.instance_creator();
         let surface = Self::init_surface(3, 4)?;
         let object = StructuredMesh::from_surface(&surface, surface.range_tuple(), 0.01);
@@ -153,7 +156,7 @@ impl App for MyApp {
     }
     fn app_title<'a>() -> Option<&'a str> { Some("Bspline Benchmark Animation") }
 
-    fn render(&mut self) {
+    fn render(&mut self, size: (u32, u32)) {
         if self.updated.load(Ordering::SeqCst) {
             let object = self
                 .object
@@ -172,7 +175,7 @@ impl App for MyApp {
             drop(object);
             self.updated.store(false, Ordering::SeqCst);
         }
-        if let Err(error) = self.scene.render_frame() {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }
