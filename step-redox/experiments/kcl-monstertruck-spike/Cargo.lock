@@ -2556,6 +2556,7 @@ dependencies = [
  "monstertruck-geometry",
  "monstertruck-mesh",
  "monstertruck-topology",
+ "num-traits",
  "rayon",
  "robust",
  "rustc-hash",
