@@ -167,7 +167,7 @@ pub(super) fn absolute_facet_admissible(
                 return None;
             }
             if rho > 0.0 {
-                angles.push(radial.dot(v).atan2(radial.dot(u)));
+                angles.push(radial.dot(&v).atan2(radial.dot(&u)));
             }
             above = above.max(rho - expected);
             max_expected = max_expected.max(expected);
@@ -772,7 +772,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             .evidence
             .positions
             .iter()
-            .map(|&point| (point - reference).magnitude())
+            .map(|&point| (point - reference).norm())
             .fold(0.0_f64, f64::max);
         let identity_tolerance = options.absolute_tolerance.min(crate::KERNEL_EPSILON * 0.1);
         let mut candidates = Vec::new();
@@ -781,7 +781,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             // The same circle fixes all parameters except slope. Bound
             // profile differences over the entire possible growth domain,
             // not just the seed support, before skipping another seed.
-            let axial_extent = (reference - circle.center).dot(circle.normal).abs() + extent;
+            let axial_extent = (reference - circle.center).dot(&circle.normal).abs() + extent;
             for seed in growth.seeds(circle) {
                 let Some(parameters) = growth.seed_profile(circle, seed) else {
                     continue;
