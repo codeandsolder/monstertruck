@@ -38,7 +38,7 @@ use monstertruck_mesh::Origin;
 #[cfg(feature = "analyzers")]
 use monstertruck_mesh::PolylineCurve;
 use monstertruck_mesh::{
-    AffinePoint, Faces, InnerProduct, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
+    AffinePoint, Faces, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
 };
 #[cfg(feature = "tessellation")]
 use monstertruck_mesh::{
