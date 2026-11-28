@@ -8,13 +8,13 @@ use crate::{
     PreBindGroupLayoutEntry, PresentMode, Queue, RenderId, RenderPassColorAttachment,
     RenderPassDepthStencilAttachment, RenderPassDescriptor, RenderTextureConfig, Rendered,
     RequestAdapterOptions, Scene, SceneDescriptor, SceneInfo, ShaderStages, StoreOp, StudioConfig,
-    Surface, SurfaceColorSpace, SurfaceConfiguration, TexelCopyBufferInfo, TexelCopyBufferLayout,
-    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, TextureView, TextureViewDescriptor, TimeInstant, WindowHandler,
-    WindowScene, WindowSceneDescriptor, Zeroable, bind_group_util, narrow_f64_to_f32,
+    Surface, SurfaceColorSpace, SurfaceConfiguration, SurfaceScene, SurfaceSceneDescriptor,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor, TimeInstant, Zeroable, bind_group_util, narrow_f64_to_f32,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
-use winit::window::Window;
+use wgpu::SurfaceTarget;
 
 static MAXID: AtomicUsize = AtomicUsize::new(0);
 
@@ -25,8 +25,8 @@ impl RenderId {
 }
 
 async fn init_default_device(
-    window: Option<Arc<Window>>,
-) -> Result<(DeviceHandler, Option<WindowHandler>), GpuError> {
+    target: Option<SurfaceTarget<'static>>,
+) -> Result<(DeviceHandler, Option<Surface<'static>>), GpuError> {
     #[cfg(not(feature = "webgl"))]
     let backends = Backends::PRIMARY;
     #[cfg(feature = "webgl")]
@@ -36,10 +36,9 @@ async fn init_default_device(
         ..InstanceDescriptor::new_without_display_handle()
     });
 
-    let surface = match window.as_ref() {
-        Some(window) => Some(instance.create_surface(Arc::clone(window))?),
-        None => None,
-    };
+    let surface = target
+        .map(|target| instance.create_surface(target))
+        .transpose()?;
 
     let adapter = instance
         .request_adapter(&RequestAdapterOptions {
@@ -67,15 +66,7 @@ async fn init_default_device(
         })
         .await?;
     let device_handler = DeviceHandler::new(adapter, device, queue);
-    let window_handler = match (window, surface) {
-        (Some(window), Some(surface)) => Some(WindowHandler {
-            window,
-            surface: Arc::new(surface),
-        }),
-        (None, None) => None,
-        _ => return Err(GpuError::MissingSurface),
-    };
-    Ok((device_handler, window_handler))
+    Ok((device_handler, surface))
 }
 
 impl DeviceHandler {
@@ -902,7 +893,7 @@ impl Scene {
         );
         queue.submit(Some(encoder.finish()));
         let buffer_slice = buffer.slice(..);
-        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+        let (sender, receiver) = futures_channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
             // If the receiver was dropped there is nobody left to observe the map result.
             let _ = sender.send(result);
@@ -912,8 +903,8 @@ impl Scene {
             timeout: None,
         };
         device.poll(poll_type)?;
-        match receiver.receive().await {
-            Some(Ok(())) => {
+        match receiver.await {
+            Ok(Ok(())) => {
                 let mapped = buffer_slice.get_mapped_range()?;
                 if layout.padded_bytes_per_row == layout.unpadded_bytes_per_row {
                     return Ok(mapped.iter().copied().collect());
@@ -938,33 +929,32 @@ impl Scene {
                 }
                 Ok(output)
             }
-            Some(Err(error)) => Err(error.into()),
-            None => Err(GpuError::BufferMapChannelClosed),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => Err(GpuError::BufferMapChannelClosed),
         }
     }
 }
 
-impl WindowScene {
-    /// Initialize scene compatible with `window`.
+impl SurfaceScene {
+    /// Initialize a scene compatible with an owned WGPU surface target.
+    /// The caller supplies the initial physical pixel extent and retains control
+    /// of window events. A zero initial extent uses a minimal backing buffer.
     ///
     /// # Errors
     /// Returns a [`GpuError`] if adapter/device/surface initialization fails.
-    pub async fn from_window(
-        window: Arc<Window>,
-        scene_desc: &WindowSceneDescriptor,
+    pub async fn from_target(
+        target: SurfaceTarget<'static>,
+        size: (u32, u32),
+        scene_desc: &SurfaceSceneDescriptor,
     ) -> Result<Self, GpuError> {
-        let size = window.inner_size();
-        let (device_handler, window_handler) = init_default_device(Some(window)).await?;
-        let Some(window_handler) = window_handler else {
-            return Err(GpuError::MissingSurface);
-        };
-        let (device, surface) = (&device_handler.device, &window_handler.surface);
+        let (device_handler, surface) = init_default_device(Some(target)).await?;
+        let surface = surface.ok_or(GpuError::MissingSurface)?;
         let render_texture = RenderTextureConfig {
-            canvas_size: size.into(),
+            canvas_size: (size.0.max(1), size.1.max(1)),
             format: TextureFormat::Bgra8Unorm,
         };
         let config = render_texture.compatible_surface_config();
-        surface.configure(device, &config);
+        surface.configure(device_handler.device(), &config);
 
         Ok(Self {
             scene: Scene::new(
@@ -975,35 +965,33 @@ impl WindowScene {
                     render_texture,
                 },
             ),
-            window_handler,
+            surface: Arc::new(surface),
         })
     }
-    /// Get the reference of initializing window.
-    #[inline]
-    #[must_use = "The window accessor exposes its value only through the returned reference."]
-    pub const fn window(&self) -> &Arc<Window> { &self.window_handler.window }
-    /// Get the reference of surface.
+    /// Get the reference of the presentation surface.
     #[inline]
     #[must_use = "The surface accessor exposes its value only through the returned reference."]
-    pub const fn surface(&self) -> &Arc<Surface<'_>> { &self.window_handler.surface }
-    /// Adjusts the size of the backend buffers (depth or sampling buffer) to the size of the window.
-    pub fn size_alignment(&mut self) {
-        let size = self.window().inner_size();
-        let canvas_size = self.scene.descriptor.render_texture.canvas_size;
-        if canvas_size != (size.width, size.height) {
+    pub const fn surface(&self) -> &Arc<Surface<'_>> { &self.surface }
+    /// Adjust backing buffers to a nonzero physical pixel extent.
+    fn resize(&mut self, size: (u32, u32)) {
+        if self.scene.descriptor.render_texture.canvas_size != size {
             let mut desc = self.scene.descriptor_mut();
-            desc.render_texture.canvas_size = size.into();
+            desc.render_texture.canvas_size = size;
             let config = desc.render_texture.compatible_surface_config();
             drop(desc);
             self.surface().configure(self.device(), &config);
         }
     }
-    /// Render scene to initializing window.
+    /// Render to the presentation surface at the caller's current pixel extent.
+    /// A zero-sized (e.g. minimized) surface is skipped.
     ///
     /// # Errors
     /// Returns a [`GpuError`] when rendering fails, including a singular camera transform.
-    pub fn render_frame(&mut self) -> Result<(), GpuError> {
-        self.size_alignment();
+    pub fn render_frame(&mut self, size: (u32, u32)) -> Result<(), GpuError> {
+        if size.0 == 0 || size.1 == 0 {
+            return Ok(());
+        }
+        self.resize(size);
         let surface = self.surface();
         // wgpu 29 replaced the `Result<SurfaceTexture, SurfaceError>` return of
         // `get_current_texture` with the `CurrentSurfaceTexture` enum. A
