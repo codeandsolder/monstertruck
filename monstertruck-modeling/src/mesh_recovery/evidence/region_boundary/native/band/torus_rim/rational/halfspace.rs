@@ -98,21 +98,23 @@ mod tests {
                 .collect(),
             parameter: [0.0, 1.0],
         };
+        let mut remaining = MAX_PIECES;
         assert!(span_in_halfspace(
             &make(-0.2),
             origin,
             normal,
             0.1,
             MAX_DEPTH,
-            &mut MAX_PIECES.clone()
+            &mut remaining
         ));
+        let mut remaining = MAX_PIECES;
         assert!(!span_in_halfspace(
             &make(-2.0),
             origin,
             normal,
             0.1,
             MAX_DEPTH,
-            &mut MAX_PIECES.clone()
+            &mut remaining
         ));
     }
 }
