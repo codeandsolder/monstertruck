@@ -8,7 +8,7 @@ use super::{
     CurveAnyHolder, Deserialize, GeometryTransform, Holder, Invertible, KERNEL_EPSILON, Matrix3,
     Matrix4, Name, PI, PcurveOrSurface, PlaceHolder, Point2, Point3,
     PreferredSurfaceCurveRepresentation, Processor, Result, SearchNearestParameter, Serialize,
-    SquareLinearMap, StepConvertingError, Surface, SurfaceAny, SurfaceAnyHolder, SurfaceCurve,
+    StepConvertingError, Surface, SurfaceAny, SurfaceAnyHolder, SurfaceCurve,
     SurfaceCurveEntityKind, Table, Tolerance, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola,
     UnitParabola, Vector2, Vector3, geom, step_geometry,
 };

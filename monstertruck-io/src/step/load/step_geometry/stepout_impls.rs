@@ -1,6 +1,6 @@
 use super::{
-    ConicalSurface, Curve3D, ElementarySurface, GeometryTransform, InnerProduct, Matrix4, Point3,
-    Processor, Sphere, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind,
+    ConicalSurface, Curve3D, ElementarySurface, GeometryTransform, Matrix4, Point3, Processor,
+    Sphere, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind,
     SurfaceCurveRepresentation, Transformed, Vector3, save,
 };
 use crate::step::load::{GeometricCurveSet, GeometricSetSelect};

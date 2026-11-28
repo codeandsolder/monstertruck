@@ -3,9 +3,9 @@
 
 use super::{
     BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, ExtrusionSurface,
-    IncludeCurve, InnerProduct, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3,
-    Processor, RevolutionSurface, SearchParameter, Surface, SweepSurface, ToSameGeometry,
-    TrimmedCurve, UnitCircle, Vector3,
+    IncludeCurve, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3, Processor,
+    RevolutionSurface, SearchParameter, Surface, SweepSurface, ToSameGeometry, TrimmedCurve,
+    UnitCircle, Vector3,
 };
 
 #[cfg(test)]

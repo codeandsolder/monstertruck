@@ -5,14 +5,14 @@
 use super::{
     AffinePoint, BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, Conic2D, Conic3D, Curve2D,
     Curve3D, CurveTrimRef, ElementarySurface, Ellipse, ExactParameterBoundary2D, GeometryTransform,
-    Hyperbola, InnerProduct, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4,
-    MetricSpace, NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
+    Hyperbola, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
     ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface, Plane, Point2,
     Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SphericalSurface, SquareLinearMap, StepConvertingError,
-    StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve3D, SurfaceCurveTrimRef,
-    SweepSurface, Tolerance, ToroidalSurface, TrimmedCurve, UnitCircle, UnitHyperbola,
-    UnitParabola, Vector3, Vector4, uv_clamp,
+    SearchParameterHint2D, SphericalSurface, StepConvertingError, StepParameterCurve,
+    StepRevolutionSurface, Surface, SurfaceCurve3D, SurfaceCurveTrimRef, SweepSurface, Tolerance,
+    ToroidalSurface, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4,
+    uv_clamp,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 

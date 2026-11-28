@@ -53,7 +53,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     // Three orthogonal sphere points in a compact longitude/latitude chart.
     // Rotation avoids both poles and makes this an ordinary analytic patch,
     // not a special spherical-cap chart.
-    use monstertruck_geometry::prelude::{GeometryTransform, InnerProduct, SquareLinearMap};
+    use monstertruck_geometry::prelude::GeometryTransform;
     let axis = Vector3::new(1.0, -1.0, 0.0).normalize();
     let tangent = Vector3::new(1.0, 1.0, -2.0).normalize();
     let normal = tangent.cross(&axis);
@@ -137,9 +137,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
 /// Stitching must consume the native edge chain in both resolutions.
 #[test]
 fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Result<()> {
-    use monstertruck_geometry::prelude::{
-        BsplineSurface, InnerProduct, NurbsSurface, ParametricSurface3D,
-    };
+    use monstertruck_geometry::prelude::{BsplineSurface, NurbsSurface, ParametricSurface3D};
     use monstertruck_modeling::{Face, Surface, Wire};
 
     let points = [

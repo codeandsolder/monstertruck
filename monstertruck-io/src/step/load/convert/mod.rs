@@ -17,7 +17,7 @@ use super::{
     NextAssemblyUsageOccurrenceHolder, NodeEntity, OrientedShellHolder, ParametricSurface3D,
     PlaceHolder, Point2, Point3, PolylineCurve, ProductDefinitionHolder, Result,
     SearchNearestParameter, SearchParameter, ShellAnyHolder, ShellBasedSurfaceModelHolder,
-    ShellHolder, ShellLoadReport, SquareLinearMap, StepConvertingError, Surface, SurfaceAny, Table,
+    ShellHolder, ShellLoadReport, StepConvertingError, Surface, SurfaceAny, Table,
     VertexPointHolder, step_geometry, step_p21,
 };
 use monstertruck_topology::compress::{

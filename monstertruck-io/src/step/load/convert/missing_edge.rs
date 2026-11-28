@@ -25,9 +25,9 @@
 //! used by Monstertruck's existing intersection-curve implementation.
 
 use super::{
-    AffinePoint, BoundResolution, Curve3D, EdgeCurve, FaceBoundHolder, HashMap, InnerProduct,
-    IntersectionCurve, KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2,
-    Point3, PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
+    AffinePoint, BoundResolution, Curve3D, EdgeCurve, FaceBoundHolder, HashMap, IntersectionCurve,
+    KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2, Point3,
+    PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
     step_geometry, step_p21,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;

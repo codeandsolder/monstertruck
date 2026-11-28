@@ -55,7 +55,7 @@ impl MyRender {
             matrix: mat
                 .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective((PI / 4.0)),
+            method: ProjectionMethod::perspective(PI / 4.0),
             near_clip: 0.1,
             far_clip: 40.0,
         })
@@ -73,7 +73,7 @@ impl MyRender {
         let original_mesh: PolygonInstance = scene
             .instance_creator()
             .create_instance(&mesh, &PolygonState::default())?;
-        let rad = (2.0 * PI / f64::from(NUM_OF_OBJECTS));
+        let rad = 2.0 * PI / f64::from(NUM_OF_OBJECTS);
         let mut mat = Matrix4::new_scaling(size / 2.0);
         mat = Matrix4::new_translation(&center.position_vector()) * mat;
         mat = mat
@@ -94,13 +94,12 @@ impl MyRender {
         let time = self.scene.elapsed().as_secs_f64();
         let delta_time = time - self.prev_time;
         self.prev_time = time;
-        let mat0 = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), (delta_time));
+        let mat0 = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), delta_time);
         for (idx, instance) in self.instances.iter_mut().enumerate() {
             let state = instance.instance_state_mut();
             let (matrix, material) = (&mut state.matrix, &mut state.material);
             let k = if idx % 2 == 0 { 5.0 } else { -5.0 };
-            let mat1 =
-                Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), (k * delta_time));
+            let mat1 = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), k * delta_time);
             let x = matrix[(2, 3)];
             let Some(inverse) = matrix.try_inverse() else {
                 continue;
@@ -230,12 +229,11 @@ impl App for MyRender {
                 if dir2d.so_small() {
                     return Self::default_control_flow();
                 }
-                let mut axis = dir2d[1] * camera.matrix[0];
-                axis += dir2d[0] * camera.matrix[1];
+                let mut axis = dir2d[1] * camera.matrix.fixed_view::<3, 1>(0, 0).into_owned();
+                axis += dir2d[0] * camera.matrix.fixed_view::<3, 1>(0, 1).into_owned();
                 axis /= axis.norm();
                 let angle = dir2d.norm() * 0.01;
-                let inverse_rotation =
-                    Matrix4::from_axis_angle(&Unit::new_unchecked(axis.spatial()), -angle);
+                let inverse_rotation = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), -angle);
                 camera.matrix = inverse_rotation * camera.matrix;
             }
             self.prev_cursor = Some(position);
@@ -257,7 +255,7 @@ impl App for MyRender {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 self.camera_changed = Some(std::time::Instant::now());
                 camera.method = match camera.method {
-                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective((PI / 8.0)),
+                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective(PI / 8.0),
                     ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(10.0),
                 }
             }

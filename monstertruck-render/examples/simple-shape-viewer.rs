@@ -66,7 +66,7 @@ impl MyApp {
             matrix: matrix
                 .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective((PI / 4.0)),
+            method: ProjectionMethod::perspective(PI / 4.0),
             near_clip: 0.1,
             far_clip: 40.0,
         })
@@ -303,7 +303,7 @@ impl App for MyApp {
             KeyCode::KeyP => {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 camera.method = match camera.method {
-                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective((PI / 4.0)),
+                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective(PI / 4.0),
                     ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(1.0),
                 };
             }

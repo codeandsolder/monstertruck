@@ -41,8 +41,8 @@ impl App for MyApp {
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 camera: Camera {
-                    matrix: Matrix4::new_translation(&camera_dist * Vector3::z()),
-                    method: ProjectionMethod::perspective((PI / 4.0)),
+                    matrix: Matrix4::new_translation(&(camera_dist * Vector3::z())),
+                    method: ProjectionMethod::perspective(PI / 4.0),
                     near_clip: 0.1,
                     far_clip: 100.0,
                 },
@@ -138,7 +138,7 @@ impl App for MyApp {
                 -pair_sign * Vector3::x()
             };
             shape.instance_state_mut().matrix = self.matrices[index]
-                * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), (time * PI / 2.0));
+                * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), time * PI / 2.0);
             self.scene.update_bind_group(shape);
         }
         if let Err(error) = self.scene.render_frame() {

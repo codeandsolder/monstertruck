@@ -7,7 +7,7 @@
 use super::{
     Axis2Placement, Axis2PlacementHolder, Deserialize, Holder, Matrix3, Matrix4,
     RepresentationContext, RepresentationContextHolder, RepresentationItem,
-    RepresentationItemHolder, Result, Serialize, SquareLinearMap, StepConvertingError, Table,
+    RepresentationItemHolder, Result, Serialize, StepConvertingError, Table,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]

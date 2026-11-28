@@ -127,9 +127,9 @@ fn add_smooth_normals() {
     let iter0 = naive_sphere.faces().face_iter().flatten();
     let iter1 = sphere.faces().face_iter().flatten();
     for (v0, v1) in iter0.zip(iter1) {
-        let p0 = naive_sphere.positions()[v0.pos].to_vec();
+        let p0 = naive_sphere.positions()[v0.pos].coords;
         let n0 = naive_sphere.normals()[v0.nor.unwrap()];
-        let p1 = sphere.positions()[v1.pos].to_vec();
+        let p1 = sphere.positions()[v1.pos].coords;
         let n1 = sphere.normals()[v1.nor.unwrap()];
         assert_eq!(v0.pos, v1.pos);
         assert_eq!(p0, p1);

@@ -2,13 +2,13 @@
 //! swept surfaces.
 
 use super::{
-    AffinePoint, Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder,
-    BsplineSurface, CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder,
-    Deserialize, ElementarySurface, Holder, InnerProduct, Invertible, KERNEL_EPSILON, KnotType,
-    KnotVector, Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize,
-    Sphere, StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface,
-    SweepSurface, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
-    quasi_uniform_knots, step_geometry, uniform_knots,
+    Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder, BsplineSurface,
+    CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder, Deserialize,
+    ElementarySurface, Holder, Invertible, KERNEL_EPSILON, KnotType, KnotVector, Logical, Matrix4,
+    NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize, Sphere, StepConvertingError,
+    StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface, Table, Torus, Transformed,
+    Vector, Vector3, Vector4, VectorHolder, geom, quasi_uniform_knots, step_geometry,
+    uniform_knots,
 };
 
 /// `surface`
@@ -95,7 +95,7 @@ pub struct Plane {
 impl From<&Plane> for geom::Plane {
     fn from(plane: &Plane) -> Self {
         let mat = Matrix4::from(&plane.position);
-        let o = Point3::from_homogeneous(mat.column(3).into_owned());
+        let o = Point3::from(mat.fixed_view::<3, 1>(0, 3).into_owned());
         let p = o + mat.fixed_view::<3, 1>(0, 0).into_owned();
         let q = o + mat.fixed_view::<3, 1>(0, 1).into_owned();
         Self::new(o, p, q)
@@ -139,7 +139,7 @@ impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
         let mat = Matrix4::from(&cs.position);
         let x = mat.fixed_view::<3, 1>(0, 0).into_owned();
         let z = mat.fixed_view::<3, 1>(0, 2).into_owned();
-        let center = Point3::from_homogeneous(mat.column(3).into_owned());
+        let center = Point3::from(mat.fixed_view::<3, 1>(0, 3).into_owned());
         let radius = cs.radius;
         let p = center + x * radius;
         let mut res = Self::new(RevolutionSurface::by_revolution(
