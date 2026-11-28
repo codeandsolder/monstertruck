@@ -78,7 +78,7 @@ pub fn try_attach_plane(wire: &Wire) -> Option<Face> {
     builder::try_attach_plane(&[wire.as_ref().clone()])
         .map(Into::into)
         .map_err(|error| {
-            gloo::console::error!(format!("{error}"));
+            gloo_console::error!(format!("{error}"));
         })
         .ok()
 }

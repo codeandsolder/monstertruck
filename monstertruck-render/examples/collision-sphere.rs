@@ -2,7 +2,7 @@
 // limit, and each example and test target is its own crate.
 #![recursion_limit = "256"]
 mod app;
-use app::{App, AppResult, ControlFlow, async_trait};
+use app::{App, AppResult, ControlFlow};
 use monstertruck_gpu::{
     BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
     WindowSceneDescriptor,
@@ -39,7 +39,6 @@ enum RenderMode {
     InterferenceOnly,
 }
 
-#[async_trait(?Send)]
 impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;

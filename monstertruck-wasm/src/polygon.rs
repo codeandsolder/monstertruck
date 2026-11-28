@@ -42,7 +42,7 @@ impl PolygonMesh {
     pub fn from_obj(data: &[u8]) -> Option<Self> {
         obj::read::<&[u8]>(data)
             .map_err(|e| {
-                gloo::console::error!(format!("{e}"));
+                gloo_console::error!(format!("{e}"));
             })
             .ok()
             .map(IntoWasm::into_wasm)
@@ -55,7 +55,7 @@ impl PolygonMesh {
         let stl_type = parse_stl_type(stl_type)?;
         stl::read::<&[u8]>(data, stl_type)
             .map_err(|e| {
-                gloo::console::error!(format!("{e}"));
+                gloo_console::error!(format!("{e}"));
             })
             .ok()
             .map(IntoWasm::into_wasm)
@@ -66,7 +66,7 @@ impl PolygonMesh {
         let mut res = Vec::new();
         obj::write(&self.0, &mut res)
             .map_err(|e| {
-                gloo::console::error!(format!("{e}"));
+                gloo_console::error!(format!("{e}"));
             })
             .ok()?;
         Some(res)
@@ -80,7 +80,7 @@ impl PolygonMesh {
         let mut res = Vec::new();
         stl::write(&self.0, &mut res, stl_type)
             .map_err(|e| {
-                gloo::console::error!(format!("{e}"));
+                gloo_console::error!(format!("{e}"));
             })
             .ok()?;
         Some(res)

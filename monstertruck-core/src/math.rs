@@ -257,7 +257,12 @@ mod native_contract_tests {
             transform.apply_point(point),
             nalgebra::Point2::new(3.0, -2.0)
         );
-        assert_eq!(transform.apply_vector(vector), vector);
+        assert_eq!(
+            <nalgebra::Matrix3<f32> as GeometryTransform<nalgebra::Point2<f32>>>::apply_vector(
+                &transform, vector
+            ),
+            vector
+        );
         assert_eq!(
             std::mem::size_of::<nalgebra::Vector3<f32>>(),
             3 * std::mem::size_of::<f32>()

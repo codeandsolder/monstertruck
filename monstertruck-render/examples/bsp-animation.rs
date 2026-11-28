@@ -21,7 +21,7 @@ use std::sync::{
 use std::thread::JoinHandle;
 use winit::window::Window;
 mod app;
-use app::{App, AppResult, ControlFlow, async_trait};
+use app::{App, AppResult, ControlFlow};
 
 struct MyApp {
     scene: WindowScene,
@@ -109,7 +109,6 @@ impl MyApp {
     }
 }
 
-#[async_trait(?Send)]
 impl App for MyApp {
     async fn init(window: Arc<Window>) -> AppResult<Self> {
         let desc = WindowSceneDescriptor {

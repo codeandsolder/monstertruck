@@ -21,11 +21,11 @@ members = [
     "monstertruck-topology",
     "step-redox",
     "step-redox/tools/step-viewer",
-    "step-redox/experiments/kcl-monstertruck-spike",
 ]
-# Fuzz harnesses and the external OCCT-WASM validator use independent toolchains.
+# Experimental and verification workspaces are independently resolved.
 # They share this Git repository but are not production Cargo packages.
 exclude = [
+    "step-redox/experiments/kcl-monstertruck-spike",
     "step-redox/fuzz",
     "step-redox/tools/occt-wasm-validator",
 ]
@@ -40,7 +40,6 @@ allow-test-panics-reason = "Inherited test suites may use panic-style assertions
 ahash = "0.8"
 anyhow = "1"
 array-macro = "2"
-async-trait = "0.1"
 bytemuck = { version = "1", features = ["derive"] }
 approx = "0.5"
 chrono = { version = "0.4", features = ["wasmbind"] }
@@ -52,8 +51,8 @@ derive_more = { version = "2", features = ["full"] }
 env_logger = "0.11"
 futures-intrusive = "0.5"
 getrandom = { version = "0.4", features = ["wasm_js"] }
-gloo = "0.13"
-image = "0.25"
+gloo-console = "0.4"
+image = { version = "0.25", default-features = false }
 itertools = "0.15"
 js-sys = "0.3"
 log = "0.4"
@@ -62,7 +61,6 @@ num-traits = "0.2"
 naga = { version = "30", features = ["wgsl-in"] }
 parking_lot = "0.13"
 pollster = "1.0"
-proc-macro-error = "1"
 proc-macro-crate = "3"
 proc-macro2 = "1"
 proptest = "1"

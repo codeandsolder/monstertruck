@@ -190,7 +190,7 @@ impl Shell {
     pub fn into_solid(self) -> Option<Solid> {
         monstertruck_modeling::Solid::new(vec![self.0])
             .map_err(|e| {
-                gloo::console::error!(format!("{e}"));
+                gloo_console::error!(format!("{e}"));
             })
             .ok()
             .map(IntoWasm::into_wasm)
