@@ -648,7 +648,7 @@ mod tests {
             .ok_or("sphere pole")?;
         assert_eq!(normal, Vector3::z());
         assert_eq!(residual, 0.0);
-        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
+        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, &Default::default())?;
         assert_eq!(recovered.native.regions.len(), 1);
         assert!(recovered.complete_shell().is_some());
         Ok(())

@@ -254,7 +254,7 @@ mod tests {
                 },
                 Faces::from_iter(faces),
             )?;
-            let recovered = recover_analytic_mesh(&mesh, Default::default())?;
+            let recovered = recover_analytic_mesh(&mesh, &Default::default())?;
             let evidence = &recovered.evidence;
             assert_eq!(evidence.non_manifold_edge_count, 0);
             assert_eq!(evidence.inconsistent_winding_edge_count, 0);

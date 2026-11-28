@@ -129,6 +129,7 @@ pub enum RegionBoundaryError {
 pub struct RegionBoundaryIndex<'a> {
     evidence: &'a MeshEvidence,
     incidence: EdgeIncidence,
+    source_chord_budget: Option<f64>,
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
@@ -150,6 +151,7 @@ impl<'a> RegionBoundaryIndex<'a> {
         Ok(Self {
             evidence,
             incidence: source_edge_incidence(polygons),
+            source_chord_budget: None,
         })
     }
 

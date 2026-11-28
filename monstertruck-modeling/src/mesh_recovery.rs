@@ -36,6 +36,7 @@ impl Default for PlanarRecoveryOptions {
 }
 
 mod analytic;
+mod carrier_identity;
 pub use analytic::{
     AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
     AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
