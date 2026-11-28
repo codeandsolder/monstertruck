@@ -2,7 +2,9 @@
 //! polynomial approximations of regular analytic intersection branches.
 //! No tensor-circle assumption is made for a general section spline.
 mod controls;
+mod halfspace;
 mod holes;
+pub(in crate::mesh_recovery) use halfspace::{curve_in_halfspace, point_in_halfspace};
 pub(in super::super) use holes::hole_bounds;
 mod interval;
 mod paired;

@@ -21,6 +21,7 @@ use std::f64::consts::{PI, TAU};
 mod holed;
 mod torus_rim;
 mod variable_rim;
+pub(super) use torus_rim::rational::{curve_in_halfspace, point_in_halfspace};
 
 #[derive(Clone, Copy)]
 struct Ring {

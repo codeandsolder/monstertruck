@@ -406,6 +406,7 @@ impl RegionAssemblyInput<'_> {
                         ChartTrimEvidence {
                             graph: self.graph,
                             lifted_deviations: self.lifted_deviations,
+                            native: trims,
                         },
                         self.evidence,
                         supports,
@@ -445,6 +446,7 @@ impl RegionAssemblyInput<'_> {
             chart: ChartTrimEvidence {
                 graph: self.graph,
                 lifted_deviations: self.lifted_deviations,
+                native: trims,
             },
             positions: self.positions,
             options: self.options,
@@ -470,6 +472,7 @@ impl RegionAssemblyInput<'_> {
 struct ChartTrimEvidence<'a> {
     graph: &'a SharedTrimGraph,
     lifted_deviations: &'a [Option<f64>],
+    native: &'a [Result<Vec<Edge>, NativeTrimError>],
 }
 
 struct FaceAssembly<'a> {
@@ -1221,43 +1224,23 @@ fn compact_sphere_axis(
         return None;
     }
     direction = direction.normalize();
-    let margin = options.max_vertex_displacement + options.intersection_tolerance;
-    if vertices
-        .iter()
-        .any(|&id| (points[id] - center).dot(direction) <= margin)
-    {
-        return None;
+    // A displacement allowance is not a displacement. Check both measured
+    // position tables and the actual native boundary instead of inflating
+    // the hemisphere by a worst-case budget, which may exceed the radius.
+    let margin = options.intersection_tolerance;
+    for id in vertices {
+        for point in [*evidence.positions.get(id)?, *points.get(id)?] {
+            if !band::point_in_halfspace(point, center, direction, margin) {
+                return None;
+            }
+        }
     }
-    // Every source facet lies in this convex halfspace. For a minor circle
-    // arc the distance from its projected chord is at most its sagitta.
-    // Add the original endpoint projection errors and junction movement.
     for reference in boundary.loops.iter().flatten() {
-        let trim = chart.graph.trims.get(reference.trim)?;
-        let deviation = match trim.geometry {
-            SharedTrimGeometry::Line(line) => line.max_vertex_offset,
-            SharedTrimGeometry::Circle(circle) => {
-                let sagitta = circle.radius * (1.0 - (circle.max_step_radians * 0.5).cos());
-                sagitta
-                    + circle
-                        .max_plane_residual
-                        .hypot(circle.max_vertex_radial_residual)
-            }
-            SharedTrimGeometry::Conic(_)
-            | SharedTrimGeometry::ToroidalSection(_)
-            | SharedTrimGeometry::LinearSection(_) => return None,
-            SharedTrimGeometry::Unresolved => {
-                *chart.lifted_deviations.get(reference.trim)?.as_ref()?
-            }
-        };
-        if trim
-            .source_edges
-            .iter()
-            .flat_map(|edge| edge.vertices)
-            .any(|id| {
-                points
-                    .get(id)
-                    .is_none_or(|&point| (point - center).dot(direction) <= deviation + margin)
-            })
+        let edges = chart.native.get(reference.trim)?.as_ref().ok()?;
+        if edges.is_empty()
+            || !edges
+                .iter()
+                .all(|edge| band::curve_in_halfspace(edge, center, direction, margin))
         {
             return None;
         }
@@ -2487,7 +2470,28 @@ mod tests {
             radial_center: 0.0,
             profile_radius: 1.0,
         };
-        let native = native_for_carrier(&evidence, &supports, carrier, 0.1)?;
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let proposal = index
+            .measure_surface_region(
+                &supports,
+                carrier,
+                SurfaceRegionBudget {
+                    vertex: 1.0e-8,
+                    chord: 0.1,
+                },
+            )
+            .ok_or("carrier proposal")?;
+        let partition = index.select_surface_partition(&[proposal], &evidence, 100)?;
+        let trims = index.assemble_shared_trims(&partition, &evidence.positions, trim_options())?;
+        let native = index.construct_native_trims(
+            &partition,
+            &trims,
+            &evidence.positions,
+            NativeTrimOptions {
+                max_vertex_displacement: 2.0,
+                ..native_options()
+            },
+        )?;
         assert_eq!(native.regions.len(), 4);
         assert!(
             native
