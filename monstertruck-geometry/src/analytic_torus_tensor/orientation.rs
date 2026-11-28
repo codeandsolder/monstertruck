@@ -14,7 +14,15 @@ const MAX_PATCHES: usize = 1 << 20;
 const MAX_DEPTH: usize = 24;
 type Net = Vec<Vec<IntervalControl>>;
 
-fn clamped_continuous(knots: &[f64], degree: usize) -> bool {
+// A full-multiplicity interior knot may still be continuous: concatenated
+// Bézier representations (including degree elevation) duplicate the seam
+// controls. Check the actual homogeneous boundary curves, rather than
+// excluding that representation solely from the knot multiplicity.
+fn clamped_continuous(
+    knots: &[f64],
+    degree: usize,
+    seam_equal: impl Fn(usize, usize) -> bool,
+) -> bool {
     let Some((&first, &last)) = knots.first().zip(knots.last()) else {
         return false;
     };
@@ -29,16 +37,23 @@ fn clamped_continuous(knots: &[f64], degree: usize) -> bool {
     {
         return false;
     }
-    let mut multiplicity = 1;
-    for pair in knots[degree..knots.len() - degree].windows(2) {
-        if same_algebraic_knot(pair[0], pair[1]) {
-            multiplicity += 1;
-            if multiplicity > degree {
-                return false;
-            }
-        } else {
-            multiplicity = 1;
+    let count = knots.len() - degree - 1;
+    if knots[degree + 1] <= first || knots[count - 1] >= last {
+        return false;
+    }
+    let mut start = degree + 1;
+    while start < count {
+        let mut end = start + 1;
+        while end < count && same_algebraic_knot(knots[start], knots[end]) {
+            end += 1;
         }
+        let multiplicity = end - start;
+        if multiplicity > degree + 1
+            || (multiplicity == degree + 1 && !seam_equal(start - 1, start))
+        {
+            return false;
+        }
+        start = end;
     }
     true
 }
@@ -150,9 +165,9 @@ fn oriented_normal(net: &[Vec<IntervalControl>], major: f64) -> Option<Interval>
     let normal = [x.times(radial), y.times(radial), z.times(rho)];
     let determinant = (0..3)
         .map(|i| {
-            let j = (i + 1) % 3;
-            let k = (i + 2) % 3;
-            normal[i].times(du[j].times(dv[k]).minus(du[k].times(dv[j])))
+            let next = (i + 1) % 3;
+            let other = (i + 2) % 3;
+            normal[i].times(du[next].times(dv[other]).minus(du[other].times(dv[next])))
         })
         .fold(Interval::point(0.0), Interval::plus);
     determinant.finite().then_some(determinant)
@@ -184,7 +199,19 @@ pub(super) fn certify_orientation(
 ) -> Option<()> {
     let u = net.knot_vector_u().as_ref();
     let v = net.knot_vector_v().as_ref();
-    if !clamped_continuous(u, net.udegree()) || !clamped_continuous(v, net.vdegree()) {
+    let controls = net.control_points();
+    if !clamped_continuous(u, net.udegree(), |left, right| {
+        controls
+            .get(left)
+            .zip(controls.get(right))
+            .is_some_and(|(a, b)| a == b)
+    }) || !clamped_continuous(v, net.vdegree(), |left, right| {
+        controls.iter().all(|row| {
+            row.get(left)
+                .zip(row.get(right))
+                .is_some_and(|(a, b)| a == b)
+        })
+    }) {
         return None;
     }
     let local = local_controls(net, chart)?;
