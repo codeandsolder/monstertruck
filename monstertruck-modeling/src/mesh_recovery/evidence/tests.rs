@@ -338,6 +338,92 @@ fn dense_planar_grid_preserves_linear_boundary_evidence_without_diagonals() {
 }
 
 #[test]
+fn local_refinement_keeps_large_connected_planar_remainder()
+-> Result<(), Box<dyn std::error::Error>> {
+    let n = 8;
+    let stride = n + 1;
+    let positions = (0..=n)
+        .flat_map(|y| (0..=n).map(move |x| [crate::usize_to_f64(x), crate::usize_to_f64(y), 0.0]))
+        .collect::<Vec<_>>();
+    let mut triangles = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            let a = y * stride + x;
+            triangles.extend([[a, a + 1, a + stride + 1], [a, a + stride + 1, a + stride]]);
+        }
+    }
+    let source = make_mesh(&positions, &triangles);
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default())?;
+    assert_eq!(evidence.planar_supports.len(), 1);
+    let chosen = 2 * (n * 3 + 3);
+    let refined = evidence.refine_source_facets(&[chosen])?;
+    assert_eq!(refined.planar_supports.len(), 2);
+    let selected = refined.source_planar_support[chosen];
+    assert_eq!(
+        refined.planar_supports[selected].source_face_indices,
+        [chosen]
+    );
+    let remainder = &refined.planar_supports[1 - selected];
+    assert_eq!(remainder.source_face_indices.len(), triangles.len() - 1);
+    assert_eq!(remainder.origin, evidence.planar_supports[0].origin);
+    assert_eq!(remainder.normal, evidence.planar_supports[0].normal);
+    assert_eq!(
+        refined.source_polygon_vertex_indices,
+        evidence.source_polygon_vertex_indices
+    );
+    assert_eq!(
+        refined.provenance.original_polygon_ids,
+        evidence.provenance.original_polygon_ids
+    );
+    let boundary = RegionBoundaryIndex::new(&refined)?.boundary(&[1 - selected])?;
+    assert_eq!(boundary.loops.len(), 2);
+    assert!(boundary.pinched_vertices.is_empty());
+    assert_eq!(
+        refined
+            .refine_source_facets(&[chosen])?
+            .source_planar_support,
+        refined.source_planar_support
+    );
+    Ok(())
+}
+
+#[test]
+fn local_refinement_preserves_disconnected_remainders() -> Result<(), Box<dyn std::error::Error>> {
+    let positions = (0..=5)
+        .flat_map(|x| {
+            [
+                Point3::new(crate::usize_to_f64(x), 0.0, 0.0),
+                Point3::new(crate::usize_to_f64(x), 1.0, 0.0),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let faces = (0..5).map(|i| [2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1]);
+    let mesh = PolygonMesh::new(
+        StandardAttributes {
+            positions,
+            ..Default::default()
+        },
+        Faces::from_iter(faces),
+    )?;
+    let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+    assert_eq!(evidence.planar_supports.len(), 1);
+    let refined = evidence.refine_source_facets(&[2])?;
+    assert_eq!(
+        refined
+            .planar_supports
+            .iter()
+            .map(|s| s.source_face_indices.as_slice())
+            .collect::<Vec<_>>(),
+        [&[0, 1][..], &[2], &[3, 4]]
+    );
+    let boundary = RegionBoundaryIndex::new(&refined)?;
+    for id in 0..3 {
+        assert_eq!(boundary.boundary(&[id])?.loops.len(), 1);
+    }
+    Ok(())
+}
+
+#[test]
 fn distant_world_offset_preserves_pairwise_line_relationships() {
     let mut source = unit_box_mesh();
     for point in source.positions_mut() {
@@ -501,7 +587,7 @@ fn refined_planar_support_vertex_membership_matches_every_original_polygon()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = unit_box_mesh();
     let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default())?;
-    for active in [&evidence, &evidence.refine_planar_supports(&[0, 3])?] {
+    for active in [&evidence, &evidence.refine_source_facets(&[0, 3])?] {
         for support in &active.planar_supports {
             let mut reference = Vec::new();
             for &polygon in &support.source_face_indices {

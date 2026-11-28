@@ -418,7 +418,7 @@ mod tests {
         assert!(full.station_vertices(count).is_none());
 
         assert!(fast.is_none());
-        assert!(full.mixed_support_refinements().is_empty());
+        assert!(full.mixed_support_refinement_facets().is_empty());
         assert!(full.discover_linear(&boundary).is_empty());
         assert_eq!(full.discover_circular(&boundary).seed_count, 0);
         let (count, fast) = MeridianStationGraph::for_discovery(
@@ -645,9 +645,9 @@ mod tests {
             graph_options(),
         )
         .ok_or("graph")?;
-        let split = graph.mixed_support_refinements();
+        let split = graph.mixed_support_refinement_facets();
         assert!(!split.is_empty());
-        let refined = baseline.refine_planar_supports(&split)?;
+        let refined = baseline.refine_source_facets(&split)?;
         assert_eq!(refined.positions, baseline.positions);
         assert_eq!(
             refined.source_polygon_vertex_indices,

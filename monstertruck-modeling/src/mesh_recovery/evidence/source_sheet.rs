@@ -337,7 +337,7 @@ mod tests {
             .collect::<Vec<_>>();
         canceled.sort_unstable();
         assert_eq!(canceled, [3, 4, 5, 6]);
-        let refined = result.refine_planar_supports(&[0])?;
+        let refined = result.refine_source_facets(&[0])?;
         assert_eq!(
             refined.provenance.original_polygon_ids,
             provenance.original_polygon_ids
