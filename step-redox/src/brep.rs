@@ -53,6 +53,8 @@ pub struct TorusSupport {
     pub x_direction: [f64; 3],
     pub major_radius_mm: f64,
     pub minor_radius_mm: f64,
+    /// Whether the authored surface chart has outward radial orientation.
+    pub chart_outward: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -399,6 +401,7 @@ pub fn surface_support(
                         x_direction,
                         major_radius_mm,
                         minor_radius_mm,
+                        chart_outward: true,
                     })
                 })();
                 if let Some(support) = support {
@@ -452,6 +455,14 @@ pub fn surface_support(
             normal: evidence.normal,
             max_residual_mm: evidence.max_residual_mm,
         });
+    }
+    if let Some(torus) = surface_recovery::analyze_toroidal_surface(
+        surface_id,
+        entities,
+        index,
+        DEFAULT_STEP_RECOVERY_TOLERANCES.source_feature_incidence_mm,
+    ) {
+        return SurfaceSupport::Torus(torus);
     }
     SurfaceSupport::Other {
         entity_id: surface_id,

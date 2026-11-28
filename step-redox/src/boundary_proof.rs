@@ -1554,7 +1554,7 @@ fn oriented_support_key(
                     axis,
                     major_radius_mm,
                     minor_radius_mm,
-                    radial_outward: forward,
+                    radial_outward: forward == torus.chart_outward,
                 },
             )
         }

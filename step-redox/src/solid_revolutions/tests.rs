@@ -727,7 +727,7 @@ fn recovers_split_hemispherical_end_topology() -> anyhow::Result<()> {
         entities: &entities,
         index: &index,
     };
-    let recovered = detect_hemispherical_end(99, &[1, 2, 3, 4, 5], &faces, &context)
+    let recovered = detect_mixed_curved_revolution(99, &[1, 2, 3, 4, 5], &faces, &context)
         .ok_or_else(|| anyhow::anyhow!("expected hemispherical recovery"))?;
 
     assert_eq!(recovered.profile_curves.len(), 4);
@@ -775,7 +775,7 @@ fn recovers_split_hemispherical_end_topology() -> anyhow::Result<()> {
         entities: &entities,
         index: &index,
     };
-    assert!(detect_hemispherical_end(99, &[1, 2, 3, 4, 5], &tampered, &context).is_none());
+    assert!(detect_mixed_curved_revolution(99, &[1, 2, 3, 4, 5], &tampered, &context).is_none());
     Ok(())
 }
 
@@ -1043,6 +1043,7 @@ fn split_quarter_torus_faces(
         x_direction: [1.0, 0.0, 0.0],
         major_radius_mm: torus_major_radius_mm,
         minor_radius_mm: torus_minor_radius_mm,
+        chart_outward: true,
     };
     let cylinder = brep::CylinderSupport {
         axis_origin_mm: [0.0, 0.0, 0.0],

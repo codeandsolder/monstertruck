@@ -128,43 +128,49 @@ fn closed_composite_sweep_rejects_an_open_path() -> anyhow::Result<()> {
 
 #[test]
 fn closed_composite_sweep_normalizes_final_subdivision_before_closure() -> anyhow::Result<()> {
+    use builder::CompositeSweepSegment::Rotation;
     let face = rectangular_face()?;
     let quarter = std::f64::consts::FRAC_PI_2;
-    let solid = builder::composite_closed_sweep(
-        &face,
-        [
-            builder::CompositeSweepSegment::Rotation {
-                origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
-                division: 1,
-            },
-            builder::CompositeSweepSegment::Rotation {
-                origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
-                division: 1,
-            },
-            builder::CompositeSweepSegment::Rotation {
-                origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
-                division: 1,
-            },
-            builder::CompositeSweepSegment::Rotation {
-                origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
-                division: 3,
-            },
-        ],
-    )?;
-
-    assert_eq!(
-        solid.boundaries()[0].shell_condition(),
-        shell::ShellCondition::Closed
-    );
-    assert!(solid.is_geometric_consistent());
+    let segment = Rotation {
+        origin: Point3::origin(),
+        axis: Vector3::unit_y(),
+        angle: Rad(quarter),
+        division: 1,
+    };
+    let build = |sign: f64| {
+        builder::composite_closed_sweep(
+            &face,
+            [
+                segment,
+                segment,
+                segment,
+                Rotation {
+                    origin: Point3::origin(),
+                    axis: Vector3::unit_y() * sign,
+                    angle: Rad(quarter * sign),
+                    division: 3,
+                },
+            ],
+        )
+    };
+    let solid = build(1.0)?;
+    let reversed_axis = build(-1.0)?;
+    for result in [&solid, &reversed_axis] {
+        assert_eq!(
+            result.boundaries()[0].shell_condition(),
+            shell::ShellCondition::Closed
+        );
+        assert!(result.is_geometric_consistent());
+    }
+    let positive = &solid.boundaries()[0];
+    let negative = &reversed_axis.boundaries()[0];
+    assert_eq!(positive.len(), negative.len());
+    for (a, b) in positive.iter().zip(negative.iter()) {
+        let a = a.oriented_surface();
+        let b = b.oriented_surface();
+        assert_near!(a.evaluate(0.5, 0.1), b.evaluate(0.5, 0.1));
+        assert_near!(a.normal(0.5, 0.1), b.normal(0.5, 0.1));
+    }
     Ok(())
 }
 

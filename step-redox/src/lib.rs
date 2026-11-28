@@ -14,6 +14,7 @@ mod brep;
 pub mod cad_ir;
 pub mod cad_kernel;
 pub mod cad_recovery;
+mod circular_edges;
 mod clean_pipeline;
 pub mod compatibility;
 pub mod complete_ir;

@@ -883,6 +883,7 @@ mod monstertruck_adapter {
                 x_direction: native_radial_direction(axis),
                 major_radius_mm: major_radius,
                 minor_radius_mm: minor_radius,
+                chart_outward: certificate.is_some_and(AnalyticCarrier::positive_orientation),
             }),
             None => {
                 let Some(net) = surface.try_into_homogeneous_bspline_surface() else {
@@ -890,6 +891,23 @@ mod monstertruck_adapter {
                 };
                 if let Some(plane) = native_planar_net(&net) {
                     return SurfaceSupport::Plane(plane);
+                }
+                if surface.homogeneous_net_covers_domain()
+                    && let Some(chart) =
+                        monstertruck_geometry::analytic_torus_tensor::certified_toroidal_tensor(
+                            &net,
+                            monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES
+                                .source_feature_incidence_mm,
+                        )
+                {
+                    return SurfaceSupport::Torus(TorusSupport {
+                        center_mm: [chart.center.x, chart.center.y, chart.center.z],
+                        axis: [chart.axis.x, chart.axis.y, chart.axis.z],
+                        x_direction: [chart.radial.x, chart.radial.y, chart.radial.z],
+                        major_radius_mm: chart.major_radius,
+                        minor_radius_mm: chart.minor_radius,
+                        chart_outward: chart.outward,
+                    });
                 }
                 native_spline_extrusion(&net).map_or(
                     SurfaceSupport::Other { entity_id: id },
