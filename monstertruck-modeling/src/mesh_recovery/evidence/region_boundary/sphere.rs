@@ -215,17 +215,9 @@ fn projected_polygon_distance(
     }
 }
 
-struct SupportSamples {
-    vertices: Vec<usize>,
+struct SupportSamples<'a> {
+    vertices: &'a [usize],
     circle: Option<CircleCarrierFit>,
-}
-
-fn support_vertices(evidence: &MeshEvidence, support: usize) -> Option<Vec<usize>> {
-    let mut ids = BTreeSet::new();
-    for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
-        ids.extend(evidence.source_polygon_vertices(polygon)?.iter().copied());
-    }
-    Some(ids.into_iter().collect())
 }
 
 /// Test the rank of the homogeneous quadratic sample design matrix.
@@ -240,10 +232,10 @@ pub(super) fn independently_tested(
 ) -> bool {
     let mut ids = BTreeSet::new();
     for &support in supports {
-        let Some(samples) = support_vertices(evidence, support) else {
+        let Some(samples) = evidence.planar_supports.get(support) else {
             return false;
         };
-        ids.extend(samples);
+        ids.extend(samples.source_vertices().iter().copied());
     }
     let Some(&first) = ids.first().and_then(|&id| evidence.positions.get(id)) else {
         return false;
@@ -304,7 +296,7 @@ pub(super) fn independently_tested(
 
 struct SphereDiscovery<'a> {
     evidence: &'a MeshEvidence,
-    samples: Vec<SupportSamples>,
+    samples: Vec<SupportSamples<'a>>,
     seen: Vec<Vec<usize>>,
     seeds: Vec<SphereSeed>,
     relative_tolerance: f64,
@@ -432,8 +424,8 @@ impl<'a> RegionBoundaryIndex<'a> {
     ) -> Vec<SurfaceRegionProposal<'a>> {
         let samples = (0..self.evidence.planar_supports.len())
             .map(|id| {
-                let vertices = support_vertices(self.evidence, id).unwrap_or_default();
-                let circle = fit_circle_carrier(&self.evidence.positions, &vertices).filter(|c| {
+                let vertices = self.evidence.planar_supports[id].source_vertices();
+                let circle = fit_circle_carrier(&self.evidence.positions, vertices).filter(|c| {
                     c.max_plane_residual <= absolute_tolerance
                         && c.max_radial_residual <= absolute_tolerance
                 });
@@ -701,7 +693,7 @@ mod tests {
         let index = RegionBoundaryIndex::new(&evidence)?;
         let samples = (0..evidence.planar_supports.len())
             .map(|id| SupportSamples {
-                vertices: support_vertices(&evidence, id).unwrap_or_default(),
+                vertices: evidence.planar_supports[id].source_vertices(),
                 circle: None,
             })
             .collect::<Vec<_>>();

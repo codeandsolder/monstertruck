@@ -262,11 +262,14 @@ pub(super) fn source_meridian_samples(
     // the support-contact interfaces. Dedup canonical position IDs exactly.
     let mut source_vertices = HashSet::<usize>::default();
     for &support in support_ids {
-        for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
-            for &vertex in evidence.source_polygon_vertices(polygon)? {
-                source_vertices.insert(vertex);
-            }
-        }
+        source_vertices.extend(
+            evidence
+                .planar_supports
+                .get(support)?
+                .source_vertices()
+                .iter()
+                .copied(),
+        );
     }
     if source_vertices.is_empty() {
         return None;

@@ -318,6 +318,16 @@ fn dense_planar_grid_preserves_linear_boundary_evidence_without_diagonals() {
     assert_eq!(evidence.edges.len(), 4 * n);
     assert_eq!(evidence.chains.len(), 4);
     assert_eq!(evidence.parallel_bundles.len(), 2);
+    assert_eq!(evidence.planar_supports.len(), 1);
+    assert_eq!(
+        evidence.planar_supports[0].source_vertices().len(),
+        stride * stride
+    );
+    assert_eq!(
+        evidence.planar_supports[0].source_vertices(),
+        &(0..stride * stride).collect::<Vec<_>>()
+    );
+
     assert!(
         evidence
             .chains
@@ -475,6 +485,7 @@ fn connected_planar_supports_recover_cube_planes_with_measured_area() {
     assert_eq!(evidence.planar_supports.len(), 6);
     for support in &evidence.planar_supports {
         assert_eq!(support.source_face_indices.len(), 2);
+        assert_eq!(support.source_vertices().len(), 4);
         assert!((support.area - 1.0).abs() < 1.0e-12);
         assert!(support.max_vertex_plane_residual < 1.0e-12);
         assert!(support.max_normal_angle_radians < 1.0e-12);
@@ -483,6 +494,29 @@ fn connected_planar_supports_recover_cube_planes_with_measured_area() {
         let [a, b] = evidence.edge_planar_support_pair(index).unwrap();
         assert_ne!(a, b);
     }
+}
+
+#[test]
+fn refined_planar_support_vertex_membership_matches_every_original_polygon()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = unit_box_mesh();
+    let evidence = analyze_mesh_evidence(&source, EvidenceOptions::default())?;
+    for active in [&evidence, &evidence.refine_planar_supports(&[0, 3])?] {
+        for support in &active.planar_supports {
+            let mut reference = Vec::new();
+            for &polygon in &support.source_face_indices {
+                reference.extend_from_slice(
+                    active
+                        .source_polygon_vertices(polygon)
+                        .ok_or("source polygon")?,
+                );
+            }
+            reference.sort_unstable();
+            reference.dedup();
+            assert_eq!(support.source_vertices(), reference);
+        }
+    }
+    Ok(())
 }
 
 #[test]
