@@ -168,7 +168,7 @@ fn closed_composite_sweep_normalizes_final_subdivision_before_closure() -> anyho
     for (a, b) in positive.iter().zip(negative.iter()) {
         let a = a.oriented_surface();
         let b = b.oriented_surface();
-        assert_near!(a.subs(0.5, 0.1), b.subs(0.5, 0.1));
+        assert_near!(a.evaluate(0.5, 0.1), b.evaluate(0.5, 0.1));
         assert_near!(a.normal(0.5, 0.1), b.normal(0.5, 0.1));
     }
     Ok(())
