@@ -42,6 +42,17 @@ jobs:
       command: |
         cargo build --locked --target=wasm32-unknown-unknown
         cargo build --locked --manifest-path step-redox/web/step-redox-wasm/Cargo.toml --target=wasm32-unknown-unknown
+  kcl-conformance:
+    if: github.event_name == 'workflow_dispatch'
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
+    with:
+      checkout-submodules: "true"
+      rustflags: "-D warnings"
+      timeout-minutes: 90
+      command: |
+        mkdir -p target/kcl-conformance
+        cd target/kcl-conformance
+        cargo run --locked --manifest-path ../../step-redox/experiments/kcl-monstertruck-spike/Cargo.toml --features kcl-conformance
   release-libs:
     uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
     with:

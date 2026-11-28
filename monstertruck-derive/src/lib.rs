@@ -34,7 +34,6 @@
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro_error::proc_macro_error;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 #[cfg(test)]
@@ -298,7 +297,6 @@ where I: IntoIterator<Item = &'a Variant> + 'a + Copy
 }
 
 /// Derive macro generating an impl of the trait `BoundedCurve` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(BoundedCurve)]
 pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -352,7 +350,6 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `BoundedSurface` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(BoundedSurface)]
 pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -401,7 +398,6 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `Cut` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(Cut)]
 pub fn derive_cut(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -448,7 +444,6 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `Invertible` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(Invertible)]
 pub fn derive_invertible(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -500,7 +495,6 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision1D` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParameterDivision1D)]
 pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -555,7 +549,6 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision2D` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParameterDivision2D)]
 pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -604,7 +597,6 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParametricCurve` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricCurve)]
 pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -669,7 +661,6 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricSurface)]
 pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -775,7 +766,6 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
 /// `#[surface_intrinsic_bounds(path)]` delegates intrinsic parameter-domain
 /// classification to a function of the complete wrapper. This is useful
 /// when interchange-specific semantics differ from the underlying carrier.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricSurface3D, attributes(surface_intrinsic_bounds))]
 pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1031,28 +1021,24 @@ fn derive_search(
 }
 
 /// Derives nearest-parameter search for curves.
-#[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD1)]
 pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Nearest, SearchDimension::Curve)
 }
 
 /// Derives nearest-parameter search for surfaces.
-#[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD2)]
 pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Nearest, SearchDimension::Surface)
 }
 
 /// Derives exact parameter search for curves.
-#[proc_macro_error]
 #[proc_macro_derive(SearchParameterD1)]
 pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Exact, SearchDimension::Curve)
 }
 
 /// Derives exact parameter search for surfaces.
-#[proc_macro_error]
 #[proc_macro_derive(SearchParameterD2)]
 pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Exact, SearchDimension::Surface)
@@ -1134,21 +1120,18 @@ fn derive_transform(input: TokenStream, matrix: &TokenStream2) -> TokenStream {
 }
 
 /// Derive macro generating an impl of `Transformed<Matrix3>` for enums or single-field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(TransformedM3)]
 pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
     derive_transform(input, &quote! { monstertruck_traits::__private::Matrix3 })
 }
 
 /// Derive macro generating an impl of `Transformed<Matrix4>` for enums or single-field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(TransformedM4)]
 pub fn derive_transform_m4(input: TokenStream) -> TokenStream {
     derive_transform(input, &quote! { monstertruck_traits::__private::Matrix4 })
 }
 
 /// Derive macro generating an impl of the trait `StepLength` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepLength)]
 pub fn derive_step_length(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1244,12 +1227,10 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `StepFormat` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepFormat)]
 pub fn derive_step_format(input: TokenStream) -> TokenStream { derive_step_format_impl(input) }
 
 /// Derive macro generating an impl of the trait `StepCurve` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepCurve)]
 pub fn derive_step_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1297,7 +1278,6 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `StepSurface` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepSurface)]
 pub fn derive_step_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1345,7 +1325,6 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ToSameGeometry<Self>` for structs.
-#[proc_macro_error]
 #[proc_macro_derive(SelfSameGeometry)]
 pub fn derive_self_same_geometry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

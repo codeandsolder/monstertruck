@@ -24,7 +24,7 @@ monstertruck-mesh = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
+image = { workspace = true, features = ["png"] }
 env_logger = { workspace = true }
 pollster = { workspace = true }
 rayon = { workspace = true }

@@ -7,10 +7,8 @@
     reason = "example keeps the legacy winit integration visible during API migration"
 )]
 
-pub use async_trait::async_trait;
-
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 //use std::time::Duration;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{
@@ -46,13 +44,12 @@ impl TryFrom<ControlFlow> for WControlFlow {
 
 /// The framework of applications with `winit`.
 /// The main function of this file is the smallest usecase of this trait.
-#[async_trait(?Send)]
 pub trait App: Sized + 'static {
     /// Initialize application
     /// # Arguments
     /// - handler: `DeviceHandler` provided by `wgpu`
     /// - info: information of device and backend
-    async fn init(window: Arc<Window>) -> AppResult<Self>;
+    fn init(window: Arc<Window>) -> impl Future<Output = AppResult<Self>>;
     /// By overriding this function, you can change the display of the title bar.
     /// It is not possible to change the window while it is running.
     #[must_use = "The returned title configures the window; ignoring it discards this override."]
@@ -205,7 +202,6 @@ pub trait App: Sized + 'static {
 /// Creates an empty window whose back ground is black.
 fn main() {
     struct MyApp;
-    #[async_trait(?Send)]
     impl App for MyApp {
         async fn init(_: Arc<Window>) -> AppResult<Self> { Ok(Self) }
     }
