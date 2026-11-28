@@ -23,7 +23,7 @@ mod source_collapse;
 mod source_sectors;
 mod source_sheet;
 mod source_topology;
-pub(super) use source_topology::certify_independent_source_group;
+pub(super) use source_topology::separate_closed_components;
 mod spatial;
 mod station_graph;
 mod support;
@@ -296,6 +296,21 @@ pub struct SourceProvenance {
     pub multiplicity_resolutions: Vec<SourceMultiplicityResolution>,
     /// Opt-in canceled opposite source sheets, using original polygon IDs.
     pub canceled_sheets: Vec<CanceledSourceSheet>,
+}
+
+impl SourceProvenance {
+    pub(super) fn empty(original_polygon_count: usize) -> Self {
+        Self {
+            original_polygon_count,
+            original_polygon_ids: Vec::with_capacity(original_polygon_count),
+            collapsed_facets: Vec::new(),
+            separated_vertices: Vec::new(),
+            sector_pairs: Vec::new(),
+            forced_pairs: Vec::new(),
+            multiplicity_resolutions: Vec::new(),
+            canceled_sheets: Vec::new(),
+        }
+    }
 }
 
 /// Reusable primitive-free geometric evidence for a source mesh.
@@ -1001,16 +1016,7 @@ pub fn analyze_mesh_evidence(
 ) -> Result<MeshEvidence, MeshRecoveryError> {
     validate_evidence_options(options)?;
     let (mut positions, source) = welded_source_polygons(mesh)?;
-    let mut provenance = SourceProvenance {
-        original_polygon_count: source.len(),
-        original_polygon_ids: Vec::with_capacity(source.len()),
-        collapsed_facets: Vec::new(),
-        separated_vertices: Vec::new(),
-        sector_pairs: Vec::new(),
-        forced_pairs: Vec::new(),
-        multiplicity_resolutions: Vec::new(),
-        canceled_sheets: Vec::new(),
-    };
+    let mut provenance = SourceProvenance::empty(source.len());
     let mut polygons = Vec::with_capacity(source.len());
     for (id, vertices) in source.iter().enumerate() {
         match input_polygon_from_ids(&positions, vertices.clone(), id, KERNEL_EPSILON) {

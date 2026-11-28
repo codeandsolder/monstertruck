@@ -1,10 +1,13 @@
 //! Partition recovery work only at certified independent source components.
-//! Source points and polygon cycles are preserved exactly. Components with
-//! a shared exact vertex are never separated by this optimization; all
-//! unresolved components remain together for the original topology repair.
+//! Source points and polygon cycles are preserved exactly. Use the same
+//! closed-chain and contact separation proofs as ordinary source ingestion,
+//! including coincident edges and vertices. Retain all unresolved components
+//! in a common pool for source repair.
 
 use super::{
-    MeshRecoveryError, component_groups::Groups, evidence::certify_independent_source_group,
+    MeshRecoveryError,
+    component_groups::Groups,
+    evidence::{SourceProvenance, separate_closed_components},
     input_polygon_from_ids, welded_source_polygons,
 };
 use crate::{KERNEL_EPSILON, Point3};
@@ -45,12 +48,55 @@ fn vertex_groups(vertex_count: usize, polygons: &[Vec<usize>]) -> Vec<Vec<usize>
     members.into_values().collect()
 }
 
-fn certify_group(positions: &[Point3], polygons: &[Vec<usize>], ids: &[usize]) -> bool {
-    let measured = ids
-        .iter()
-        .map(|&id| input_polygon_from_ids(positions, polygons[id].clone(), id, KERNEL_EPSILON))
-        .collect::<Result<Vec<_>, _>>();
-    measured.is_ok_and(|measured| certify_independent_source_group(positions, &measured))
+// A collapsed or otherwise invalid source facet may need the other
+// polygons at its exact-coordinate contacts to certify its repair.
+// Keep its entire raw vertex-connected group unresolved, rather than
+// dropping the facet or separating it from the evidence it needs.
+fn certified_partition(
+    positions: &mut Vec<Point3>,
+    polygons: &[Vec<usize>],
+) -> Vec<(Vec<usize>, bool)> {
+    let mut measured = Vec::new();
+    let mut provenance = SourceProvenance::empty(polygons.len());
+    let mut unresolved = Vec::new();
+    for ids in vertex_groups(positions.len(), polygons) {
+        let group = ids
+            .iter()
+            .map(|&id| input_polygon_from_ids(positions, polygons[id].clone(), id, KERNEL_EPSILON))
+            .collect::<Result<Vec<_>, _>>();
+        match group {
+            Ok(group) => {
+                measured.extend(group);
+                provenance.original_polygon_ids.extend(ids);
+            }
+            Err(_) => unresolved.extend(ids),
+        }
+    }
+    let closed = separate_closed_components(positions, &mut measured, &mut provenance);
+    let normalized = measured
+        .into_iter()
+        .map(|polygon| polygon.vertices)
+        .collect::<Vec<_>>();
+    let mut partitions = Vec::new();
+    for ids in vertex_groups(positions.len(), &normalized) {
+        let independently_closed = ids.iter().all(|&id| closed[id]);
+        let mut original = ids
+            .into_iter()
+            .map(|id| provenance.original_polygon_ids[id])
+            .collect::<Vec<_>>();
+        original.sort_unstable();
+        if independently_closed {
+            partitions.push((original, true));
+        } else {
+            unresolved.extend(original);
+        }
+    }
+    partitions.sort_unstable_by_key(|(ids, _)| ids[0]);
+    if !unresolved.is_empty() || partitions.is_empty() {
+        unresolved.sort_unstable();
+        partitions.push((unresolved, false));
+    }
+    partitions
 }
 
 fn compact_mesh(positions: &[Point3], polygons: &[Vec<usize>], ids: &[usize]) -> PolygonMesh {
@@ -87,11 +133,10 @@ fn compact_mesh(positions: &[Point3], polygons: &[Vec<usize>], ids: &[usize]) ->
 /// Separate independently closed source components before global carrier
 /// discovery.
 ///
-/// Exact-coordinate vertex incidence (including signed zero) is
-/// shared with ordinary mesh recovery. No tolerance welding or CAD labels
-/// are involved. Open, nonmanifold, degenerate and zero-volume components
-/// stay in a common unresolved pool so cross-component source repair remains
-/// possible. Disconnected native shells are not automatically material solids.
+/// Exact-coordinate incidence and closed-chain contact separation use the
+/// ordinary source normalization proof, not tolerance welding or CAD labels.
+/// Unresolved, degenerate and zero-volume source groups stay together for
+/// source repair. Disconnected native shells need not be material solids.
 ///
 /// # Errors
 /// Returns the original source-ingestion error for nonfinite coordinates or
@@ -99,20 +144,8 @@ fn compact_mesh(positions: &[Point3], polygons: &[Vec<usize>], ids: &[usize]) ->
 pub fn partition_recovery_mesh(
     mesh: &PolygonMesh,
 ) -> Result<Vec<RecoveryMeshComponent<'_>>, MeshRecoveryError> {
-    let (positions, polygons) = welded_source_polygons(mesh)?;
-    let mut partitions = Vec::new();
-    let mut unresolved = Vec::new();
-    for ids in vertex_groups(positions.len(), &polygons) {
-        if certify_group(&positions, &polygons, &ids) {
-            partitions.push((ids, true));
-        } else {
-            unresolved.extend(ids);
-        }
-    }
-    if !unresolved.is_empty() || partitions.is_empty() {
-        unresolved.sort_unstable();
-        partitions.push((unresolved, false));
-    }
+    let (mut positions, polygons) = welded_source_polygons(mesh)?;
+    let mut partitions = certified_partition(&mut positions, &polygons);
     if partitions.len() == 1 {
         let (original_polygons, independently_closed) = partitions.remove(0);
         return Ok(vec![RecoveryMeshComponent {
@@ -194,13 +227,59 @@ mod tests {
     }
 
     #[test]
-    fn touching_vertex_and_unresolved_source_groups_are_not_split()
+    fn exact_edge_contact_separates_certified_closed_chains()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut mesh = tetrahedron(0.0, false);
+        // Rotate a second tetrahedron 180 degrees about the shared x-axis.
+        // Its interior lies on the opposite side of the common edge.
+        let mut other = tetrahedron(0.0, false);
+        for p in other.positions_mut() {
+            p.y = -p.y;
+            p.z = -p.z;
+        }
+        mesh.merge(other);
+        let parts = partition_recovery_mesh(&mesh)?;
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|part| part.independently_closed));
+        assert_eq!(parts[0].original_polygons, [0, 1, 2, 3]);
+        assert_eq!(parts[1].original_polygons, [4, 5, 6, 7]);
+        Ok(())
+    }
+
+    #[test]
+    fn collapsed_contact_group_retains_original_repair_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut mesh = tetrahedron(0.0, false);
+        mesh.merge(PolygonMesh::new_unchecked(
+            StandardAttributes {
+                positions: vec![
+                    Point3::new(0., 0., 0.),
+                    Point3::new(0.5, 0., 0.),
+                    Point3::new(1., 0., 0.),
+                ],
+                ..Default::default()
+            },
+            Faces::from_iter([[0, 1, 2]]),
+        ));
+        mesh.merge(tetrahedron(3.0, false));
+        let parts = partition_recovery_mesh(&mesh)?;
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].independently_closed);
+        assert_eq!(parts[0].original_polygons, [5, 6, 7, 8]);
+        assert!(!parts[1].independently_closed);
+        assert_eq!(parts[1].original_polygons, [0, 1, 2, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn touching_closed_vertices_separate_while_unresolved_groups_stay_together()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut touching = tetrahedron(0.0, false);
         touching.merge(tetrahedron(1.0, false));
         let parts = partition_recovery_mesh(&touching)?;
-        assert_eq!(parts.len(), 1);
-        assert!(matches!(parts[0].mesh, Cow::Borrowed(_)));
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|part| part.independently_closed));
+        assert!(parts.iter().all(|part| part.original_polygons.len() == 4));
         let mut mixed = tetrahedron(0.0, false);
         let open = |x| {
             PolygonMesh::new_unchecked(
