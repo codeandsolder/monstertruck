@@ -44,7 +44,7 @@ jobs:
         cargo build --locked --manifest-path step-redox/web/step-redox-wasm/Cargo.toml --target=wasm32-unknown-unknown
   kcl-conformance:
     if: github.event_name == 'workflow_dispatch'
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@9c14ef2d72423958c56944febc620ec50f01d65a # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
     with:
       checkout-submodules: "true"
       rustflags: "-D warnings"
