@@ -27,7 +27,7 @@ default = ["analyzers", "filters", "tessellation"]
 # panics).
 web-time = { workspace = true }
 array-macro = { workspace = true }
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["deref", "deref_mut"] }
 itertools = { workspace = true }
 # Structured, digest-safe face-drop diagnostics (tessellation). `log` is a
 # zero-cost facade when no logger is installed, so it never changes output or

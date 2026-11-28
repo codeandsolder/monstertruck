@@ -1,7 +1,8 @@
 //! Recover source connectivity when global oriented incidence determines
 //! a unique partition, modulo interchangeable exact geometric fragments.
 //! Preserve all polygon multiplicity and exact coordinates. Do not select
-//! a geometrically inequivalent partition or infer duplicate complete bodies.
+//! a geometrically inequivalent partition. A uniform oriented quotient
+//! preserves repeated coverage without asserting material body identity.
 use super::{
     EdgeIncidence, InputPolygon, SourceProvenance, closed_components, connected_membership,
 };
@@ -15,6 +16,7 @@ mod peel;
 mod propagation;
 mod search;
 mod transverse;
+mod uniform;
 mod vertex_links;
 use equivalence::Profile;
 use search::Constraint;
@@ -31,6 +33,9 @@ pub struct SourceMultiplicityPair {
 /// Proof used to establish the unique geometric partition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceMultiplicityMethod {
+    /// A unique closed geometric chain repeated with uniform integer coverage.
+    /// Does not distinguish coincident bodies from duplicated source records.
+    UniformOrientedCoverage,
     /// All anchored shells were necessarily closed on exact class incidence.
     ForcedClassClosure,
     /// Global necessary joins under exact geometric incompatibility constraints.
@@ -193,7 +198,9 @@ impl<'a> ClusterInput<'a> {
         classes: &[usize],
         graph: &class_graph::ClassGraph,
     ) -> Option<(SourceMultiplicityMethod, search::Solution)> {
-        if let Some(solution) = peel::solve(graph) {
+        if let Some(solution) = uniform::solve(graph) {
+            Some((SourceMultiplicityMethod::UniformOrientedCoverage, solution))
+        } else if let Some(solution) = peel::solve(graph) {
             Some((SourceMultiplicityMethod::ForcedClassClosure, solution))
         } else {
             let joins = propagation::necessary_joins(&self.constraints, &self.edges, graph);
@@ -428,6 +435,61 @@ mod tests {
             },
             Faces::from_iter(faces),
         )?)
+    }
+
+    #[test]
+    fn repeated_complete_oriented_source_chains_preserve_every_polygon()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let positions = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+        ];
+        let single = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        for reversed in [false, true] {
+            for copies in [2, 3, 5] {
+                let mut faces = Vec::new();
+                for (i, face) in single.iter().enumerate() {
+                    for copy in 0..copies {
+                        let mut cycle = *face;
+                        cycle.rotate_left((i + copy) % 3);
+                        if reversed {
+                            cycle.reverse();
+                        }
+                        faces.push(cycle);
+                    }
+                }
+                faces.rotate_left(3);
+                let mesh = PolygonMesh::new(
+                    StandardAttributes {
+                        positions: positions.clone(),
+                        ..Default::default()
+                    },
+                    Faces::from_iter(faces),
+                )?;
+                let evidence = analyze_mesh_evidence(&mesh, Default::default())?;
+                assert_eq!(evidence.non_manifold_edge_count, 0);
+                assert_eq!(evidence.provenance.original_polygon_ids.len(), copies * 4);
+                let cert = &evidence.provenance.multiplicity_resolutions[0];
+                assert_eq!(
+                    cert.method,
+                    super::SourceMultiplicityMethod::UniformOrientedCoverage
+                );
+                assert_eq!(cert.pairs.len(), copies * 6);
+                assert!(evidence.provenance.canceled_sheets.is_empty());
+                let volume = evidence.closed_source_volume().ok_or("closed source")?;
+                let expected = f64::from(u32::try_from(copies)?) / 6.0;
+                assert!((volume - if reversed { -expected } else { expected }).abs() < 1e-12);
+                let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
+                let shell = recovered
+                    .complete_shell()
+                    .ok_or("closed repeated coverage")?;
+                assert_eq!(shell.connected_components().len(), copies);
+                assert_eq!(shell.len(), copies * 4);
+            }
+        }
+        Ok(())
     }
 
     #[test]

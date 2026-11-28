@@ -94,7 +94,7 @@ impl NativeRecoveryOptions {
 
 /// Borrowed evidence delivered before a component's discovery graph is discarded.
 ///
-/// The graph uses component-local indices; original_polygons maps to the
+/// The graph uses component-local indices; `original_polygons` maps to the
 /// original assembly input.
 pub struct NativeComponentReport<'a> {
     /// Original source polygons in the component mesh's face order.

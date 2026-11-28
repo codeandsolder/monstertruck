@@ -11,8 +11,8 @@
 //! - Enter "Space" on the keyboard to switch the rendering mode for the wireframe and surface.
 
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
-    WindowSceneDescriptor, wgpu,
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor, wgpu,
 };
 use monstertruck_meshing::prelude::*;
 use monstertruck_render::{
@@ -44,7 +44,7 @@ enum RenderMode {
 }
 
 struct MyApp {
-    scene: WindowScene,
+    scene: SurfaceScene,
     creator: InstanceCreator,
     rotate_flag: bool,
     prev_cursor: Vector2,
@@ -155,7 +155,7 @@ impl MyApp {
 impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
-        let scene_desc = WindowSceneDescriptor {
+        let scene_desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 background: Color::BLACK,
                 camera: Self::create_camera()?,
@@ -170,7 +170,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let creator = scene.instance_creator();
         let (instance, wireframe) = Self::load_obj(&creator, TEAPOT_BYTES)?;
         scene.add_object(&instance);
@@ -327,8 +332,8 @@ impl App for MyApp {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) {
-        if let Err(error) = self.scene.render_frame() {
+    fn render(&mut self, size: (u32, u32)) {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }
