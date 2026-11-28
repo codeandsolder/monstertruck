@@ -129,3 +129,8 @@ opt-level = "z"
 
 [patch.crates-io]
 quick-xml = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "vtkio-xml-security-v0.0.1" }
+# Cadmpeg core and container must share one Git family identity with the codecs.
+cadmpeg-core = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "cadmpeg-compression-v0.0.1" }
+cadmpeg-container = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "cadmpeg-compression-v0.0.1" }
+png = { git = "https://github.com/codeandsolder/cargo-patches.git", branch = "generated/ksp-image-codecs" }
+zlib-rs = { git = "https://github.com/codeandsolder/zlib-rs-fast.git", rev = "9bcb777d447db3f8ad343c61254c5f24981d5745" }
