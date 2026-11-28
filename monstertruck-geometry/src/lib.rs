@@ -134,6 +134,8 @@ pub mod analytic_plane_cone_hyperbola;
 pub mod analytic_plane_deviation;
 pub mod analytic_radial_deviation;
 mod analytic_surface;
+/// Whole-domain rational tensor certificates for toroidal carriers.
+pub mod analytic_torus_tensor;
 /// [`DeterministicContentHash`](monstertruck_core::DeterministicContentHash) impls for geometry types.
 mod content_hash_impls;
 

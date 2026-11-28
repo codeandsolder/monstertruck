@@ -1043,6 +1043,7 @@ fn split_quarter_torus_faces(
         x_direction: [1.0, 0.0, 0.0],
         major_radius_mm: torus_major_radius_mm,
         minor_radius_mm: torus_minor_radius_mm,
+        chart_outward: true,
     };
     let cylinder = brep::CylinderSupport {
         axis_origin_mm: [0.0, 0.0, 0.0],

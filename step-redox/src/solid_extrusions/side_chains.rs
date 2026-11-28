@@ -249,64 +249,24 @@ fn cylindrical_cap_edge(
     edge: &OrientedEdgeUse,
     cylinder: CylinderSupport,
 ) -> Option<OrientedEdgeUse> {
-    use monstertruck_geometry::{
-        analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage},
-        prelude::{BoundedCurve, InnerSpace, ParametricCurve, Point3, Vector3},
-    };
-    let CurveSupport::BSpline(spline) = &edge.support else {
+    if !matches!(edge.support, CurveSupport::BSpline(_)) {
         return matches!(edge.support, CurveSupport::Circle(_)).then(|| edge.clone());
-    };
-    let curve = spline.rational_curve()?;
-    let axis = normalize(cylinder.axis)?;
-    let front = curve.front();
-    let back = curve.back();
-    let point = |p: Point3| [p.x, p.y, p.z];
-    let (start, end) = if edge.parameter_forward {
-        (front, back)
-    } else {
-        (back, front)
-    };
-    if distance(point(start), edge.start_mm) > GEOM_TOL_MM
-        || distance(point(end), edge.end_mm) > GEOM_TOL_MM
-    {
-        return None;
     }
-    let height = dot(sub(point(front), cylinder.axis_origin_mm), axis);
+    let axis = normalize(cylinder.axis)?;
+    let front = if edge.parameter_forward {
+        edge.start_mm
+    } else {
+        edge.end_mm
+    };
+    let height = dot(sub(front, cylinder.axis_origin_mm), axis);
     let center = add(cylinder.axis_origin_mm, crate::math3::mul(axis, height));
-    let center_point = Point3::from(center);
-    let axis_vector = Vector3::from(axis);
-    let frame = CircularArcFrame::new(
-        center_point,
-        axis_vector,
-        cylinder.radius_mm,
-        front,
-        GEOM_TOL_MM,
-    )?;
-    // This proves both the plane and radius polynomial identities and
-    // unambiguous single angular traversal on every positive-weight span.
-    let coverage = certify_circular_arc_coverage(&curve, frame)?;
-    let (lo, hi) = curve.range_tuple();
-    let sign = [0.5, 0.25, 0.75].into_iter().find_map(|fraction| {
-        let parameter = (hi - lo).mul_add(fraction, lo);
-        let tangent = curve.derivative(parameter);
-        let radial = curve.evaluate(parameter) - center_point;
-        let angular = axis_vector.dot(radial.cross(tangent));
-        (angular.is_finite() && angular != 0.0).then_some(angular.is_sign_positive())
-    })?;
     let circle = CircleSupport {
         center_mm: center,
         normal: axis,
         radius_mm: cylinder.radius_mm,
-        x_direction: normalize(sub(point(front), center))?,
+        x_direction: normalize(sub(front, center))?,
     };
-    let mut normalized = edge.clone();
-    normalized.support = CurveSupport::Circle(circle);
-    normalized.parameter_forward = sign == edge.parameter_forward;
-    let sweep = circle_edge_sweep(&normalized, circle)?;
-    if (sweep.abs() - coverage.sweep_rad).abs() > ANGLE_TOL_RAD {
-        return None;
-    }
-    Some(normalized)
+    crate::circular_edges::normalize_circular_edge(edge, Some(circle))
 }
 
 fn cylindrical_chains(

@@ -571,6 +571,71 @@ pub fn analyze_planar_surface(
     })
 }
 
+/// Extract the authored rational tensor, without changing its surface chart.
+pub fn analyze_toroidal_surface(
+    surface_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    tolerance: f64,
+) -> Option<crate::brep::TorusSupport> {
+    use monstertruck_geometry::{analytic_torus_tensor::certified_toroidal_tensor, prelude::*};
+    let parsed = parse_surface(surface_id, entities, index)?;
+    if parsed.u_degree < 2 || parsed.v_degree < 2 {
+        return None;
+    }
+    let weights = parsed.weights?;
+    let u = normalized_expanded_knots(
+        parsed.u_degree,
+        parsed.control_points.len(),
+        &integer_parameter_list(&parsed.u_multiplicities)?,
+        &numeric_parameter_list(&parsed.u_knots)?,
+    )?;
+    let v = normalized_expanded_knots(
+        parsed.v_degree,
+        parsed.control_points.first()?.len(),
+        &integer_parameter_list(&parsed.v_multiplicities)?,
+        &numeric_parameter_list(&parsed.v_knots)?,
+    )?;
+    let scale = weights
+        .iter()
+        .flatten()
+        .map(number)
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .try_fold(0.0_f64, |max, w| {
+            (w.is_finite() && w > 0.0).then_some(max.max(w))
+        })?;
+    let controls = parsed
+        .control_points
+        .iter()
+        .zip(weights)
+        .map(|(row, weights)| {
+            row.iter()
+                .zip(weights)
+                .map(|(&id, w)| {
+                    let [x, y, z] = cartesian_point(id, entities, index)?;
+                    let w = number(&w)? / scale;
+                    (w > 0.0).then_some(Vector4::new(x * w, y * w, z * w, w))
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let net = BsplineSurface::new(
+        (KnotVector::try_from(u).ok()?, KnotVector::try_from(v).ok()?),
+        controls,
+    )
+    .ok()?;
+    let chart = certified_toroidal_tensor(&net, tolerance)?;
+    Some(crate::brep::TorusSupport {
+        center_mm: [chart.center.x, chart.center.y, chart.center.z],
+        axis: [chart.axis.x, chart.axis.y, chart.axis.z],
+        x_direction: [chart.radial.x, chart.radial.y, chart.radial.z],
+        major_radius_mm: chart.major_radius,
+        minor_radius_mm: chart.minor_radius,
+        chart_outward: chart.outward,
+    })
+}
+
 pub fn analyze_v_extrusion_surface(
     surface_id: u64,
     entities: &[EntityInstance],

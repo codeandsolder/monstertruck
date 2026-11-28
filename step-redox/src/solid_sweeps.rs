@@ -535,7 +535,17 @@ fn prove_cylinder_between_points(
                             return None;
                         }
                     }
-                    CurveSupport::BSpline(_) | CurveSupport::Other { .. } => return None,
+                    CurveSupport::BSpline(_) => {
+                        let normalized =
+                            crate::circular_edges::normalize_circular_edge(&edge, None)?;
+                        let CurveSupport::Circle(circle) = normalized.support else {
+                            return None;
+                        };
+                        if !circle_is_cylinder_section(&circle, run, profile_radius_mm) {
+                            return None;
+                        }
+                    }
+                    CurveSupport::Other { .. } => return None,
                 }
             }
         }

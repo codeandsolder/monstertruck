@@ -3,10 +3,10 @@
 use super::{
     ANALYTIC_BOUNDARY_PROOF_TOL_MM, BSplineSupport, BoundaryChainKey, CellKind, CellWitnesses,
     CircleLocusKey, CurveSupport, DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM,
-    PointKey, SupportLocusKey, brep, bspline_domain, bspline_line_support,
-    canonical_boundary_direction, circle_lies_on_support, circle_section_of_plane_and_support,
-    dequantize_scalar, dequantize_vector, evaluate_bspline, line_lies_on_support,
-    line_segment_lies_on_cone, support_locus_key, support_pair_can_intersect,
+    PointKey, SupportLocusKey, brep, bspline_line_support, canonical_boundary_direction,
+    circle_lies_on_support, circle_section_of_plane_and_support, dequantize_scalar,
+    dequantize_vector, line_lies_on_support, line_segment_lies_on_cone, support_locus_key,
+    support_pair_can_intersect,
 };
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{
@@ -218,38 +218,6 @@ fn line_incidence(
             }
             _ => line_lies_on_support(line, locus),
         })
-}
-
-fn fit_circle(spline: &BSplineSupport) -> Option<brep::CircleSupport> {
-    let (lo, hi) = bspline_domain(spline)?;
-    let first = evaluate_bspline(spline, lo)?;
-    let second = evaluate_bspline(spline, (hi - lo).mul_add(1. / 3., lo))?;
-    let third = evaluate_bspline(spline, (hi - lo).mul_add(2. / 3., lo))?;
-    let u = sub(second, first);
-    let v = sub(third, first);
-    let normal = cross(u, v);
-    let denominator = 2. * dot(normal, normal);
-    if !denominator.is_finite() || denominator <= 0. {
-        return None;
-    }
-    let displacement = mul(
-        add(
-            mul(cross(v, normal), dot(u, u)),
-            mul(cross(normal, u), dot(v, v)),
-        ),
-        1. / denominator,
-    );
-    let center = add(first, displacement);
-    let radius = norm(displacement);
-    if !radius.is_finite() || radius <= TOL {
-        return None;
-    }
-    Some(brep::CircleSupport {
-        center_mm: center,
-        radius_mm: radius,
-        normal: normalize(normal, 0.)?,
-        x_direction: normalize(sub(first, center), 0.)?,
-    })
 }
 
 fn positive_angle(start: [f64; 3], end: [f64; 3], normal: [f64; 3]) -> f64 {
@@ -548,7 +516,15 @@ pub(super) fn classify(
                 });
             proposed
                 .and_then(|circle| circle_arc(edge, circle, Some(&rational), loci, cells))
-                .or_else(|| circle_arc(edge, fit_circle(spline)?, Some(&rational), loci, cells))
+                .or_else(|| {
+                    circle_arc(
+                        edge,
+                        crate::circular_edges::propose_spline_circle(&rational, TOL)?,
+                        Some(&rational),
+                        loci,
+                        cells,
+                    )
+                })
         }
         CurveSupport::Other { .. } => None,
     }

@@ -5,8 +5,8 @@
 
 mod circular;
 pub use circular::{
-    CircularArcCoverage, CircularArcFrame, certify_circular_arc_coverage,
-    certify_cylindrical_arc_coverage,
+    CircleProposal, CircularArcCoverage, CircularArcFrame, certify_circular_arc_coverage,
+    certify_cylindrical_arc_coverage, propose_circle,
 };
 
 use crate::analytic_bezier_partition::proof_bezier_spans;

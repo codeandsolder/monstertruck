@@ -114,6 +114,24 @@ fn triangular_spine_with_independent_radii_roundtrips() -> anyhow::Result<()> {
     let rebuilt = recover_round_sweep_fragment(&recovered)?;
     let proof = SourceRecovery::new(*id, entities, &index, &kernel)
         .ok_or_else(|| anyhow::anyhow!("source certificate unavailable"))?;
+    let candidate = kernel.evaluate(&rebuilt.model, rebuilt.root)?;
+    let candidate_step = kernel.to_step(&candidate)?;
+    let parsed = ParsedStepSource::parse(candidate_step.as_bytes())?.exchange;
+    let candidate_entities = &parsed.data[0].entities;
+    let candidate_ids = crate::brep::manifold_solid_ids(candidate_entities);
+    let [candidate_id] = candidate_ids.as_slice() else {
+        anyhow::bail!("candidate must have a single solid");
+    };
+    let comparison = crate::boundary_proof::compare_analytic_boundaries(
+        *id,
+        entities,
+        *candidate_id,
+        candidate_entities,
+    );
+    assert!(
+        comparison.equivalent,
+        "{comparison:#?}\nRecovered: {recovered:#?}"
+    );
     assert!(proof.proves(&rebuilt.model, rebuilt.root, None)?);
     Ok(())
 }

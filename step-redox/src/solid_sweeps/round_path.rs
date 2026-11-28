@@ -10,6 +10,7 @@ use super::{
     same_torus, torus_major_direction,
 };
 use crate::brep::{CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
+use crate::circular_edges::normalize_circular_edge;
 use crate::math3::{cross, distance, dot, mul, norm, normalize, point_to_unit_line_distance, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::solid_extrusions::circle_edge_sweep;
@@ -154,7 +155,7 @@ impl<'a> Partition<'a> {
     }
 
     fn interfaces(&self, radius: f64) -> Option<Vec<Interface>> {
-        let mut rings = BTreeMap::<[usize; 2], Vec<CircleRing<'_>>>::new();
+        let mut rings = BTreeMap::<[usize; 2], Vec<CircleRing>>::new();
         for uses in self.edges.values() {
             let [(a, edge), (b, _)] = uses.as_slice() else {
                 return None;
@@ -164,6 +165,7 @@ impl<'a> Partition<'a> {
                 continue;
             }
             groups.sort_unstable();
+            let edge = normalize_circular_edge(edge, None)?;
             let CurveSupport::Circle(circle) = edge.support else {
                 return None;
             };
@@ -206,9 +208,9 @@ fn same_circle(a: CircleSupport, b: CircleSupport) -> bool {
         && 1.0 - dot(a.normal, b.normal).abs() <= DIR_TOL
 }
 
-struct CircleRing<'a> {
+struct CircleRing {
     circle: CircleSupport,
-    edges: Vec<&'a OrientedEdgeUse>,
+    edges: Vec<OrientedEdgeUse>,
 }
 
 fn angle_about(normal: [f64; 3], x: [f64; 3], radial: [f64; 3]) -> f64 {
@@ -222,7 +224,7 @@ fn split_interval(start: f64, length: f64) -> [(f64, f64); 2] {
     [(start, end.min(TAU)), (0.0, (end - TAU).max(0.0))]
 }
 
-impl CircleRing<'_> {
+impl CircleRing {
     fn prove_complete(&self) -> Option<()> {
         let circle = self.circle;
         let normal = normalize(circle.normal, GEOM_TOL_MM)?;
@@ -546,6 +548,7 @@ impl BendChart<'_> {
         for &face in &self.bend.face_ids {
             for loop_ in crate::brep::face_loops(face, entities, index)? {
                 for edge in loop_.edges {
+                    let edge = normalize_circular_edge(&edge, None)?;
                     let CurveSupport::Circle(circle) = edge.support else {
                         return None;
                     };

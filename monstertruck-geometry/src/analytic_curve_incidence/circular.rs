@@ -128,6 +128,8 @@ pub struct CircularArcCoverage {
     pub start_rad: f64,
     /// Positive angular length, at most one revolution.
     pub sweep_rad: f64,
+    /// Whether the authored parameter increases the frame angle.
+    pub forward: bool,
 }
 
 /// Prove every rational span lies on the supplied circle and traverses one
@@ -214,5 +216,63 @@ fn angular_coverage(
     Some(CircularArcCoverage {
         start_rad: from,
         sweep_rad: total.abs(),
+        forward: total > 0.0,
+    })
+}
+
+/// Candidate circle from well-separated points of an authored spline.
+/// This is NOT a geometric certificate. Callers must certify full-domain
+/// incidence and, when needed, angular coverage before accepting it.
+#[derive(Clone, Copy, Debug)]
+pub struct CircleProposal {
+    /// Candidate center.
+    pub center: Point3,
+    /// Candidate unit normal.
+    pub normal: Vector3,
+    /// Candidate radius.
+    pub radius: f64,
+}
+
+/// Propose a circle without assuming the endpoints are distinct or the
+/// parameterization is uniform. Every positive span supplies witnesses.
+#[must_use = "the proposal requires a subsequent full-domain certificate"]
+pub fn propose_circle(curve: &BsplineCurve<Vector4>, tolerance: f64) -> Option<CircleProposal> {
+    use crate::analytic_cylinder_intersection::project_positive_homogeneous_point as project;
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return None;
+    }
+    let spans = proof_bezier_spans(curve)?;
+    let point = |p: [f64; 4]| project(Vector4::new(p[0], p[1], p[2], p[3]));
+    let mut witnesses = Vec::new();
+    for span in spans {
+        witnesses.push(point(*span.controls.first()?)?);
+        witnesses.push(project(
+            curve.evaluate(f64::midpoint(span.start, span.end)),
+        )?);
+        witnesses.push(point(*span.controls.last()?)?);
+    }
+    let first = *witnesses.first()?;
+    let u = witnesses
+        .iter()
+        .map(|p| *p - first)
+        .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
+    let v = witnesses.iter().map(|p| *p - first).max_by(|a, b| {
+        u.cross(*a)
+            .magnitude2()
+            .total_cmp(&u.cross(*b).magnitude2())
+    })?;
+    let normal = u.cross(v);
+    let denominator = 2.0 * normal.magnitude2();
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return None;
+    }
+    let displacement =
+        (v.cross(normal) * u.magnitude2() + normal.cross(u) * v.magnitude2()) / denominator;
+    let center = first + displacement;
+    let radius = displacement.magnitude();
+    (radius.is_finite() && radius > tolerance).then_some(CircleProposal {
+        center,
+        normal: normal.normalize(),
+        radius,
     })
 }
