@@ -72,7 +72,7 @@ fn multiple_boundary(points: [Point3; 4], radius_ratios: [f64; 4]) -> Vec<Vec<Po
 
 proptest! {
     #[test]
-    fn test_circum_center(
+    fn test_circumcenter(
         p0 in array::uniform3(-10.0f64..10.0),
         p1 in array::uniform3(-10.0f64..10.0),
         p2 in array::uniform3(-10.0f64..10.0),
@@ -80,7 +80,7 @@ proptest! {
         let p0 = Point3::from(p0);
         let p1 = Point3::from(p1);
         let p2 = Point3::from(p2);
-        let c = circum_center(p0, p1, p2);
+        let c = circumcenter(p0, p1, p2);
 
         // The point `c` exists at the same distance from the three points.
         let d0 = c.distance2(p0);
@@ -157,7 +157,7 @@ proptest! {
         // lands the sample right on top of an endpoint, so `t` must never
         // feed the reconstruction basis; it only picks the point under test.
         let mid = curve.evaluate(0.5 * (t0 + t1));
-        let origin = circum_center(p0, p1, mid);
+        let origin = circumcenter(p0, p1, mid);
         let radius = origin.distance(p0);
         let p2 = curve.evaluate((1.0 - t) * t0 + t * t1);
         // `p2` lies on that circle to within a radius-relative tolerance:

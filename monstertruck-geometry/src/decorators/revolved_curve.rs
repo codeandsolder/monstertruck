@@ -93,7 +93,7 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
             0 => self.curve.evaluate(u) - self.origin(),
             _ => self.curve.derivative_n(m, u),
         };
-        let v_part = from_axis_angle_derivation(n, self.axis(), v);
+        let v_part = monstertruck_core::axis_angle_derivative(n, self.axis(), v);
         v_part * u_part + center
     }
     #[inline]
@@ -109,7 +109,7 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
-        let v_part = from_axis_angle_derivation(1, self.axis(), v);
+        let v_part = monstertruck_core::axis_angle_derivative(1, self.axis(), v);
         v_part * u_part
     }
     #[inline]
@@ -119,13 +119,13 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
-        let v_part = from_axis_angle_derivation(2, self.axis(), v);
+        let v_part = monstertruck_core::axis_angle_derivative(2, self.axis(), v);
         v_part * u_part
     }
     #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.derivative(u);
-        let v_part = from_axis_angle_derivation(1, self.axis(), v);
+        let v_part = monstertruck_core::axis_angle_derivative(1, self.axis(), v);
         v_part * u_part
     }
     #[inline]
@@ -760,24 +760,6 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
             .collect();
         (curve_division.0, circle_division)
     }
-}
-
-fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: f64) -> Matrix3 {
-    let (s, c) = f64::sin_cos(angle);
-    let (s, c) = match n % 4 {
-        0 => (s, c),
-        1 => (c, -s),
-        2 => (-s, -c),
-        _ => (-c, s),
-    };
-    let one_minus_cosine_derivative = match n {
-        0 => 1.0 - c,
-        _ => -c,
-    };
-
-    #[expect(clippy::deprecated_cfg_attr, reason = "rustfmt_skip is formatter-only and intentionally scoped through cfg_attr")]
-    #[cfg_attr(rustfmt, rustfmt_skip)]
-    Matrix3::new((one_minus_cosine_derivative * axis.x).mul_add(axis.x, c), f64::mul_add(s, -axis.z, one_minus_cosine_derivative * axis.x * axis.y), f64::mul_add(s, axis.y, one_minus_cosine_derivative * axis.x * axis.z), f64::mul_add(s, axis.z, one_minus_cosine_derivative * axis.x * axis.y), (one_minus_cosine_derivative * axis.y).mul_add(axis.y, c), f64::mul_add(s, -axis.x, one_minus_cosine_derivative * axis.y * axis.z), f64::mul_add(s, -axis.y, one_minus_cosine_derivative * axis.x * axis.z), f64::mul_add(s, axis.x, one_minus_cosine_derivative * axis.y * axis.z), (one_minus_cosine_derivative * axis.z).mul_add(axis.z, c))
 }
 
 #[cfg(test)]

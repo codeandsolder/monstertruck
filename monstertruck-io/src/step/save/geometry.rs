@@ -271,18 +271,26 @@ impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3> {
 }
 impl_const_step_length!(Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3>, 4);
 
+fn write_conic_placement_3d(transform: &Matrix4, idx: usize, f: &mut Formatter<'_>) -> Result {
+    let (location_idx, axis_idx, ref_direction_idx) = (idx + 1, idx + 2, idx + 3);
+    let location = transform.column(3).into_owned().to_point();
+    let axis = VectorAsDirection(transform.column(2).into_owned().spatial().normalize());
+    let direction =
+        VectorAsDirection(transform.column(0).into_owned().spatial() / transform.column(0).norm());
+    f.write_fmt(format_args!(
+        "#{idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n"
+    ))?;
+    StepFormat::fmt(&location, location_idx, f)?;
+    StepFormat::fmt(&axis, axis_idx, f)?;
+    StepFormat::fmt(&direction, ref_direction_idx, f)
+}
+
 impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = transform.column(3).into_owned().to_point();
-        let axis = VectorAsDirection(transform.column(2).into_owned().spatial().normalize());
         let r0 = transform.column(0).into_owned().norm();
         let r1 = transform.column(1).into_owned().norm();
-        let ref_direction = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
         if r0.near(&r1) {
             let r = FloatDisplay(r0);
             f.write_fmt(format_args!("#{idx} = CIRCLE('', #{position_idx}, {r});\n"))?;
@@ -292,12 +300,7 @@ impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
                 "#{idx} = ELLIPSE('', #{position_idx}, {r0}, {r1});\n"
             ))?;
         }
-        f.write_fmt(format_args!(
-            "#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n",
-        ))?;
-        StepFormat::fmt(&location, location_idx, f)?;
-        StepFormat::fmt(&axis, axis_idx, f)?;
-        StepFormat::fmt(&ref_direction, ref_direction_idx, f)
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
 impl_const_step_length!(Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>, 5);
@@ -327,24 +330,16 @@ impl StepFormat for Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = StepDisplay::new(transform.column(3).into_owned().to_point(), location_idx);
-        let axis_raw = VectorAsDirection(transform.column(2).into_owned().spatial().normalize());
-        let axis = StepDisplay::new(axis_raw, axis_idx);
         let r0 = transform.column(0).into_owned().norm();
         let r1 = transform.column(1).into_owned().norm();
-        let ref_direction_raw = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
-        let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
         let (r0, r1) = (FloatDisplay(r0), FloatDisplay(r1));
         f.write_fmt(format_args!(
-            "#{idx} = HYPERBOLA('', #{position_idx}, {r0}, {r1});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
-{location}{axis}{ref_direction}"
-        ))
+            "#{idx} = HYPERBOLA('', #{position_idx}, {r0}, {r1});\n"
+        ))?;
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
+
 impl_const_step_length!(Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4>, 5);
 
 impl StepFormat for Processor<TrimmedCurve<UnitParabola<Point2>>, Matrix3> {
@@ -372,24 +367,16 @@ impl StepFormat for Processor<TrimmedCurve<UnitParabola<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = StepDisplay::new(transform.column(3).into_owned().to_point(), location_idx);
-        let axis_raw = VectorAsDirection(transform.column(2).into_owned().spatial().normalize());
-        let axis = StepDisplay::new(axis_raw, axis_idx);
         let r0 = transform.column(0).into_owned().norm();
         let r1 = transform.column(1).into_owned().norm();
         let focal_dist = FloatDisplay(r1 * r1 / r0);
-        let ref_direction_raw = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
-        let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
         f.write_fmt(format_args!(
-            "#{idx} = PARABOLA('', #{position_idx}, {focal_dist});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
-{location}{axis}{ref_direction}"
-        ))
+            "#{idx} = PARABOLA('', #{position_idx}, {focal_dist});\n"
+        ))?;
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
+
 impl_const_step_length!(Processor<TrimmedCurve<UnitParabola<Point3>>, Matrix4>, 5);
 
 impl<C, M: One> StepCurve for Processor<C, M> {

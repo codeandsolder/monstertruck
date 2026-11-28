@@ -591,17 +591,7 @@ fn rot_der_n(orders: [usize; 4], axis: Vector3, angle: f64) -> Matrix3 {
         .sin_cos();
     let k = -c + if orders[3] == 0 { 1.0 } else { 0.0 };
     match orders {
-        [0, 0, 0, _] => Matrix3::new(
-            (k * axis.x).mul_add(axis.x, c),
-            f64::mul_add(s, -axis.z, k * axis.x * axis.y),
-            f64::mul_add(s, axis.y, k * axis.x * axis.z),
-            f64::mul_add(s, axis.z, k * axis.x * axis.y),
-            (k * axis.y).mul_add(axis.y, c),
-            f64::mul_add(s, -axis.x, k * axis.y * axis.z),
-            f64::mul_add(s, -axis.y, k * axis.x * axis.z),
-            f64::mul_add(s, axis.x, k * axis.y * axis.z),
-            (k * axis.z).mul_add(axis.z, c),
-        ),
+        [0, 0, 0, n] => monstertruck_core::axis_angle_derivative(n, axis, angle),
         [1, 0, 0, _] => Matrix3::new(
             2.0 * axis.x * k,
             axis.y * k,

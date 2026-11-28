@@ -493,23 +493,7 @@ fn test_t_mesh_try_add_absolute_point_invalid_insertion() {
     );
 }
 
-/// Constructs the following T-mesh, testing that navigating from the origin to a connection in the
-/// right direction functions as expected.
-///
-/// ```
-///    |      |
-///  --+------+--
-///    |      |
-///  --+      |
-///    |      |
-///  --+------+--
-///    |      |
-/// ```
-/// <+> is the duplicate point
-/// [+] is the unconnected pont
-/// {+} is the out-of-bounds point
-#[test]
-fn test_t_mesh_navigate_until_con_existing_con() {
+fn navigation_test_origin() -> (Tmesh<Point3>, Arc<RwLock<TmeshControlPoint<Point3>>>) {
     let points = [
         Point3::from([0.0, 0.0, 0.0]),
         Point3::from([1.0, 0.0, 0.0]),
@@ -528,6 +512,28 @@ fn test_t_mesh_navigate_until_con_existing_con() {
         0.5,
     ))
     .expect("Valid addition of control point.");
+
+    (mesh, origin)
+}
+
+/// Constructs the following T-mesh, testing that navigating from the origin to a connection in the
+/// right direction functions as expected.
+///
+/// ```
+///    |      |
+///  --+------+--
+///    |      |
+///  --+      |
+///    |      |
+///  --+------+--
+///    |      |
+/// ```
+/// <+> is the duplicate point
+/// [+] is the unconnected pont
+/// {+} is the out-of-bounds point
+#[test]
+fn test_t_mesh_navigate_until_con_existing_con() {
+    let (_mesh, origin) = navigation_test_origin();
 
     // Navigates to the top left point
     let navigation_result = origin
@@ -567,24 +573,7 @@ fn test_t_mesh_navigate_until_con_existing_con() {
 /// {+} is the out-of-bounds point
 #[test]
 fn test_t_mesh_navigate_until_con_no_existing_con() {
-    let points = [
-        Point3::from([0.0, 0.0, 0.0]),
-        Point3::from([1.0, 0.0, 0.0]),
-        Point3::from([1.0, 1.0, 0.0]),
-        Point3::from([0.0, 1.0, 0.0]),
-    ];
-
-    let mut mesh = Tmesh::new(points, 1.0);
-    let origin = (mesh.find(&Point3::from([0.0, 0.0, 0.0]))).expect("Point exists in T-mesh");
-
-    // Add control point for navigation
-    (mesh.add_control_point(
-        Point3::from([0.0, 0.5, 0.0]),
-        &origin,
-        TmeshDirection::Up,
-        0.5,
-    ))
-    .expect("Valid addition of control point.");
+    let (_mesh, origin) = navigation_test_origin();
 
     // Navigate until error
     let navigation_result = origin
@@ -987,40 +976,7 @@ fn points_eq(a: Point3, b: Point3) -> bool { (a.x + a.y + a.z - (b.x + b.y + b.z
 #[test]
 fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
     const N: usize = 25;
-    let points = [
-        Point3::from([0.0, 0.0, 0.0]),
-        Point3::from([1.0, 0.0, 1.0]),
-        Point3::from([1.0, 1.0, 0.0]),
-        Point3::from([0.0, 1.0, 1.0]),
-    ];
-
-    let mut mesh = Tmesh::new(points, 1.0);
-
-    // Make mesh a 5x5
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-    mesh.subdivide(average_points)
-        .expect("Mesh is not malformed.");
-
-    // Modify mesh so that the form is highly dependant on all elements of a point. Nescessary because if the control points
-    // are on a (flat) plane, then the elements which change due to LKI (x and y) can be almost anything and the limit surface
-    // will be the same. If the points are more scattered, then deviation in elements which get canceled out by the "averging"
-    // nature of the LKI algorithm will become more evident in the elements which are not "averaged out".
-    mesh.map_point(
-        &Point3::from([0.25, 0.25, 0.375]),
-        Point3::from([0.25, 0.10, 0.375]),
-    )
-    .expect("Control point is in mesh");
-    mesh.map_point(
-        &Point3::from([0.50, 0.25, 0.500]),
-        Point3::from([0.50, 0.30, 0.300]),
-    )
-    .expect("Control point is in mesh");
-    mesh.map_point(
-        &Point3::from([0.75, 0.25, 0.625]),
-        Point3::from([0.75, 0.15, 0.625]),
-    )
-    .expect("Control point is in mesh");
+    let mut mesh = make_derivative_test_mesh();
     mesh.map_point(
         &Point3::from([1.00, 0.25, 0.750]),
         Point3::from([1.00, 0.25, 0.200]),

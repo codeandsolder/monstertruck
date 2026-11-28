@@ -1,3 +1,4 @@
+use monstertruck_core::circumcenter;
 use monstertruck_geometry::prelude::*;
 use std::f64::consts::PI;
 
@@ -31,23 +32,11 @@ pub fn circle_arc_by_three_points(
     let (w0, w1) = (point0.w, point1.w);
     let point0 = (point0).to_point();
     let point1 = (point1).to_point();
-    let origin = circum_center(point0, point1, transit);
+    let origin = circumcenter(point0, point1, transit);
     let (vec0, vec1) = (point0 - transit, point1 - transit);
     let axis = vec1.cross(&vec0).normalize();
     let angle = PI - angle_between(vec0, vec1);
     circle_arc(point0, origin, axis, angle * 2.0, (w0, w1))
-}
-
-fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
-    let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
-    let (a2, ab, b2) = (vec0.dot(&vec0), vec0.dot(&vec1), vec1.dot(&vec1));
-    let det = ab.mul_add(-ab, a2 * b2);
-    // Solving the 2×2 Gram system for the circumcenter coefficients gives
-    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
-    // the symmetry explicit and avoids the easy-to-misread product grouping.
-    let u = (a2 - ab) * b2;
-    let v = (b2 - ab) * a2;
-    pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
 fn unit_circle_arc(angle: f64, w0: f64, w1: f64) -> NurbsCurve<Vector4> {
@@ -178,16 +167,7 @@ impl RelaySphere {
         // `der`, leaving the sign invariant).
         let orientation = if flip_side { -1.0 } else { 1.0 };
         let sign = f64::signum(n.dot(&der)) * orientation;
-        let mat = Matrix3::from_columns(&[n, n0, n1]).transpose();
-        let vec = Vector3::new(
-            n.dot(&p.position_vector()),
-            f64::mul_add(sign, -radius, n0.dot(&p0.position_vector())),
-            f64::mul_add(sign, -radius, n1.dot(&p1.position_vector())),
-        );
-        let center = Point3::from(mat.try_inverse()? * vec);
-        let q0 = center + sign * radius * n0;
-        let q1 = center + sign * radius * n1;
-        Some((center, q0, q1))
+        monstertruck_core::tangent_sphere_contacts((p, n), [(p0, n0), (p1, n1)], sign * radius)
     }
 
     fn next_point(

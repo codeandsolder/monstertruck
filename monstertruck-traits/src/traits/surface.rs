@@ -257,29 +257,17 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
     }
     /// Returns the derivation by `u` of the normal vector at `(u, v)`.
     fn normal_uder(&self, u: f64, v: f64) -> Vector3 {
-        let uder = self.derivative_u(u, v);
-        let vder = self.derivative_v(u, v);
-        let uuder = self.derivative_uu(u, v);
-        let uvder = self.derivative_uv(u, v);
-        let cross = uder.cross(&vder);
-        let cross_uder = uuder.cross(&vder) + uder.cross(&uvder);
-        let abs = cross.norm();
-        let abs_uder = cross.dot(&cross_uder) / abs;
-        let abs_squared = abs * abs;
-        (cross_uder * abs - cross * abs_uder) / abs_squared
+        monstertruck_core::surface_normal_derivative(
+            [self.derivative_u(u, v), self.derivative_v(u, v)],
+            [self.derivative_uu(u, v), self.derivative_uv(u, v)],
+        )
     }
     /// Returns the derivation by `u` of the normal vector at `(u, v)`.
     fn normal_vder(&self, u: f64, v: f64) -> Vector3 {
-        let uder = self.derivative_u(u, v);
-        let vder = self.derivative_v(u, v);
-        let uvder = self.derivative_uv(u, v);
-        let vvder = self.derivative_vv(u, v);
-        let cross = uder.cross(&vder);
-        let cross_vder = uvder.cross(&vder) + uder.cross(&vvder);
-        let abs = cross.norm();
-        let abs_vder = cross.dot(&cross_vder) / abs;
-        let abs_squared = abs * abs;
-        (cross_vder * abs - cross * abs_vder) / abs_squared
+        monstertruck_core::surface_normal_derivative(
+            [self.derivative_u(u, v), self.derivative_v(u, v)],
+            [self.derivative_uv(u, v), self.derivative_vv(u, v)],
+        )
     }
 }
 

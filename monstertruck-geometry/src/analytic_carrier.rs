@@ -82,26 +82,7 @@ pub fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
 #[must_use = "The optional similarity scale must be checked before accepting a transformed carrier."]
 pub fn similarity_scale(transform: Matrix4) -> Option<f64> {
     let tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
-    if ![
-        transform[(0, 0)],
-        transform[(1, 0)],
-        transform[(2, 0)],
-        transform[(3, 0)],
-        transform[(0, 1)],
-        transform[(1, 1)],
-        transform[(2, 1)],
-        transform[(3, 1)],
-        transform[(0, 2)],
-        transform[(1, 2)],
-        transform[(2, 2)],
-        transform[(3, 2)],
-        transform[(0, 3)],
-        transform[(1, 3)],
-        transform[(2, 3)],
-        transform[(3, 3)],
-    ]
-    .into_iter()
-    .all(f64::is_finite)
+    if !transform.iter().all(|coefficient| coefficient.is_finite())
         || transform[(3, 0)].abs() > tolerance
         || transform[(3, 1)].abs() > tolerance
         || transform[(3, 2)].abs() > tolerance

@@ -8,7 +8,7 @@
 )]
 
 use super::{
-    AffinePoint, BsplineCurve, ContactCircle, ContactPoint, KnotVector, Matrix2, Matrix3, Matrix4,
+    AffinePoint, BsplineCurve, ContactCircle, ContactPoint, KnotVector, Matrix2, Matrix4,
     NurbsCurve, PI, ParameterRange, ParametricSurface3D, Point2, Point3, SearchParameter,
     SurfaceParameter, ToSameGeometry, Tolerance, Vector2, Vector3, Vector4,
 };
@@ -146,16 +146,7 @@ fn contact_points(
 ) -> Option<(Point3, Point3, Point3)> {
     let ((p, der), (p0, n0), (p1, n1)) = (point_on_curve, plane0, plane1);
     let sign = f64::signum(n0.cross(&n1).dot(&der));
-    let mat = Matrix3::from_columns(&[der, n0, n1]).transpose();
-    let vec = Vector3::new(
-        der.dot(&p.position_vector()),
-        f64::mul_add(sign, -radius, n0.dot(&p0.position_vector())),
-        f64::mul_add(sign, -radius, n1.dot(&p1.position_vector())),
-    );
-    let center = Point3::from(mat.try_inverse()? * vec);
-    let q0 = center + sign * radius * n0;
-    let q1 = center + sign * radius * n1;
-    Some((center, q0, q1))
+    monstertruck_core::tangent_sphere_contacts((p, der), [(p0, n0), (p1, n1)], sign * radius)
 }
 
 fn next_point(

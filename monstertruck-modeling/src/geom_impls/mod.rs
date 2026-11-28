@@ -5,6 +5,7 @@ use crate::{
     SquareLinearMap, ToSameGeometry, Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
 };
 use itertools::Itertools;
+use monstertruck_core::circumcenter;
 use std::f64::consts::PI;
 
 pub fn circle_arc_by_three_points(
@@ -30,7 +31,7 @@ pub fn circle_arc_by_three_points(
     {
         return Err(Error::DegenerateCircularArcPoints);
     }
-    let origin = circum_center(point0, point1, transit);
+    let origin = circumcenter(point0, point1, transit);
     if !finite(origin) {
         return Err(Error::DegenerateCircularArcPoints);
     }
@@ -76,18 +77,6 @@ pub fn try_circle_arc_by_start_tangent(
         angle = 2.0f64.mul_add(PI, angle);
     }
     Ok(circle_arc(point0, origin, axis, angle))
-}
-
-fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
-    let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
-    let (a2, ab, b2) = (vec0.dot(&vec0), vec0.dot(&vec1), vec1.dot(&vec1));
-    let det = ab.mul_add(-ab, a2 * b2);
-    // Solving the 2×2 Gram system for the circumcenter coefficients gives
-    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
-    // the symmetry explicit and avoids the easy-to-misread product grouping.
-    let u = (a2 - ab) * b2;
-    let v = (b2 - ab) * a2;
-    pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
 pub fn circle_arc(

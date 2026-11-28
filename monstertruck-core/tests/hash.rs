@@ -1,4 +1,5 @@
 use monstertruck_core::hash::*;
+use monstertruck_core::{ComponentWise, KernelScalar};
 use nalgebra::*;
 
 fn scalar_from_usize<S: KernelScalar>(mut value: usize) -> S {

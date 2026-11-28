@@ -29,6 +29,80 @@ f64_type!(
 #[must_use]
 pub fn angle_between(a: Vector3, b: Vector3) -> f64 { a.cross(&b).norm().atan2(a.dot(&b)) }
 
+/// Derivative of the unit normal along a specified parameter direction.
+/// Both tangents and their directional derivatives must be expressed in the same frame.
+#[must_use]
+pub fn surface_normal_derivative([du, dv]: [Vector3; 2], [ddu, ddv]: [Vector3; 2]) -> Vector3 {
+    let cross = du.cross(&dv);
+    let derivative = ddu.cross(&dv) + du.cross(&ddv);
+    let magnitude = cross.norm();
+    let magnitude_derivative = cross.dot(&derivative) / magnitude;
+    (derivative * magnitude - cross * magnitude_derivative) / (magnitude * magnitude)
+}
+
+/// Circumcenter of three noncollinear points, obtained from their 2D Gram system.
+/// The result is undefined for a collinear or repeated triple.
+#[must_use]
+pub fn circumcenter(first: Point3, second: Point3, third: Point3) -> Point3 {
+    let (a, b) = (second - first, third - first);
+    let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
+    let determinant = ab.mul_add(-ab, aa * bb);
+    let u = (aa - ab) * bb;
+    let v = (bb - ab) * aa;
+    first + u / (2.0 * determinant) * a + v / (2.0 * determinant) * b
+}
+
+/// Tangent sphere center and contact points for two oriented planes, constrained
+/// to a third plane through `section`. Surface normals must be unit vectors.
+/// A negative signed radius selects the opposite contact side.
+#[must_use]
+pub fn tangent_sphere_contacts(
+    (point, section_normal): (Point3, Vector3),
+    [(point0, normal0), (point1, normal1)]: [(Point3, Vector3); 2],
+    signed_radius: f64,
+) -> Option<(Point3, Point3, Point3)> {
+    let matrix = Matrix3::from_columns(&[section_normal, normal0, normal1]).transpose();
+    let rhs = Vector3::new(
+        section_normal.dot(&point.coords),
+        normal0.dot(&point0.coords) - signed_radius,
+        normal1.dot(&point1.coords) - signed_radius,
+    );
+    let center = Point3::from(matrix.try_inverse()? * rhs);
+    Some((
+        center,
+        center + signed_radius * normal0,
+        center + signed_radius * normal1,
+    ))
+}
+
+/// Arbitrary angular derivative of Rodrigues' rotation matrix about a fixed unit axis.
+#[must_use]
+pub fn axis_angle_derivative(n: usize, axis: Vector3, angle: f64) -> Matrix3 {
+    let (s, c) = f64::sin_cos(angle);
+    let (s, c) = match n % 4 {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    };
+    let one_minus_cosine_derivative = match n {
+        0 => 1.0 - c,
+        _ => -c,
+    };
+
+    Matrix3::new(
+        (one_minus_cosine_derivative * axis.x).mul_add(axis.x, c),
+        f64::mul_add(s, -axis.z, one_minus_cosine_derivative * axis.x * axis.y),
+        f64::mul_add(s, axis.y, one_minus_cosine_derivative * axis.x * axis.z),
+        f64::mul_add(s, axis.z, one_minus_cosine_derivative * axis.x * axis.y),
+        (one_minus_cosine_derivative * axis.y).mul_add(axis.y, c),
+        f64::mul_add(s, -axis.x, one_minus_cosine_derivative * axis.y * axis.z),
+        f64::mul_add(s, -axis.y, one_minus_cosine_derivative * axis.x * axis.z),
+        f64::mul_add(s, axis.x, one_minus_cosine_derivative * axis.y * axis.z),
+        (one_minus_cosine_derivative * axis.z).mul_add(axis.z, c),
+    )
+}
+
 /// Real scalar supported by the fixed-size geometric kernel.
 pub trait KernelScalar: RealField + Copy {
     /// Positive infinity for an empty bounding extent.
