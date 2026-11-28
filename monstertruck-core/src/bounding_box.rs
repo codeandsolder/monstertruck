@@ -279,6 +279,25 @@ impl<V: Bounded> BoundingBox<V> {
     pub fn contains(self, pt: V) -> bool { self + Self(pt, pt) == self }
 }
 
+impl<S: KernelScalar> BoundingBox<Point3<S>> {
+    /// Corners in two counterclockwise XY rings, starting at the minimum
+    /// corner of the lower Z plane and repeating the ring at maximum Z.
+    #[must_use = "retain the ordered corners when constructing cuboid topology"]
+    pub fn corners(self) -> [Point3<S>; 8] {
+        let (p, q) = (self.min(), self.max());
+        [
+            Point3::new(p.x, p.y, p.z),
+            Point3::new(q.x, p.y, p.z),
+            Point3::new(q.x, q.y, p.z),
+            Point3::new(p.x, q.y, p.z),
+            Point3::new(p.x, p.y, q.z),
+            Point3::new(q.x, p.y, q.z),
+            Point3::new(q.x, q.y, q.z),
+            Point3::new(p.x, q.y, q.z),
+        ]
+    }
+}
+
 impl<V> BoundingBox<V> where V: Index<usize> {}
 
 impl<'a, V: Bounded> FromIterator<&'a V> for BoundingBox<V> {

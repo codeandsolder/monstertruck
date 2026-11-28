@@ -269,6 +269,25 @@ where
         .or_else(|| surface.search_nearest_parameter(point, None, 100))
 }
 
+/// Project into the native chart and normalize against its intrinsic bounds.
+fn project_trim_parameter<S>(
+    surface: &S,
+    point: Point3,
+    hint: Option<(f64, f64)>,
+) -> Option<Point2>
+where
+    S: ParametricSurface3D
+        + SearchParameter<SurfaceParameter, Point = Point3>
+        + SearchNearestParameter<SurfaceParameter, Point = Point3>,
+{
+    let (u, v) = search_surface_parameter(surface, point, hint)?;
+    normalize_surface_parameter(
+        surface,
+        Point2::new(u, v),
+        hint.map(|(u, v)| Point2::new(u, v)),
+    )
+}
+
 mod split_closed_edges;
 use split_closed_edges::{split_closed_edges, split_closed_edges_trimmed};
 
@@ -663,17 +682,6 @@ where
             + SearchParameter<SurfaceParameter, Point = Point3>
             + SearchNearestParameter<SurfaceParameter, Point = Point3>,
         T: BoundaryCurveFromSamples<S>, {
-        let project = |point: Point3, hint: Option<(f64, f64)>| {
-            surface
-                .search_parameter(point, hint, 100)
-                .or_else(|| surface.search_parameter(point, None, 100))
-                .or_else(|| surface.search_nearest_parameter(point, hint, 100))
-                .or_else(|| surface.search_nearest_parameter(point, None, 100))
-                .map(|(u, v)| Point2::new(u, v))
-                .and_then(|uv| {
-                    normalize_surface_parameter(surface, uv, hint.map(|(u, v)| Point2::new(u, v)))
-                })
-        };
         let points = edge
             .curve
             .parameter_division(edge.curve.range_tuple(), tol)
@@ -682,7 +690,7 @@ where
             .iter()
             .copied()
             .scan(None, |hint, point| {
-                let uv = project(point, *hint);
+                let uv = project_trim_parameter(surface, point, *hint);
                 *hint = uv.map(|uv| (uv.x, uv.y));
                 Some(uv)
             })
@@ -690,7 +698,7 @@ where
             .or_else(|| {
                 points
                     .into_iter()
-                    .map(|point| project(point, None))
+                    .map(|point| project_trim_parameter(surface, point, None))
                     .collect()
             })
             .and_then(|points| T::boundary_curve_from_samples(surface, points))
@@ -728,18 +736,7 @@ where
         + Clone,
     T: BoundedCurve + Cut + Clone + Invertible,
 {
-    let point_to_uv = |point, hint: Option<(f64, f64)>| {
-        surface
-            .search_parameter(point, hint, 100)
-            .or_else(|| surface.search_parameter(point, None, 100))
-            .or_else(|| surface.search_nearest_parameter(point, hint, 100))
-            .or_else(|| surface.search_nearest_parameter(point, None, 100))
-            .map(|(u, v)| Point2::new(u, v))
-            .and_then(|uv| {
-                normalize_surface_parameter(surface, uv, hint.map(|(u, v)| Point2::new(u, v)))
-            })
-    };
-    let Some(uv0) = point_to_uv(edge.curve.front(), None) else {
+    let Some(uv0) = project_trim_parameter(surface, edge.curve.front(), None) else {
         if debug_reattach {
             tracing::debug!(
                 "debug reattach linear no_uv front={:?} back={:?}",
@@ -749,7 +746,7 @@ where
         }
         return None;
     };
-    let Some(uv1) = point_to_uv(edge.curve.back(), Some((uv0.x, uv0.y))) else {
+    let Some(uv1) = project_trim_parameter(surface, edge.curve.back(), Some((uv0.x, uv0.y))) else {
         if debug_reattach {
             tracing::debug!(
                 "debug reattach linear no_uv back front={:?} back={:?} uv0={:?}",

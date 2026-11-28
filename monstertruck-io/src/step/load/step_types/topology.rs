@@ -10,7 +10,7 @@ use super::{
     PreferredSurfaceCurveRepresentation, Processor, Result, SearchNearestParameter, Serialize,
     SquareLinearMap, StepConvertingError, Surface, SurfaceAny, SurfaceAnyHolder, SurfaceCurve,
     SurfaceCurveEntityKind, Table, Tolerance, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola,
-    UnitParabola, geom, step_geometry,
+    UnitParabola, Vector2, Vector3, geom, step_geometry,
 };
 
 /// `vertex_point`

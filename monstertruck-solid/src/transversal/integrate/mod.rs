@@ -446,19 +446,7 @@ fn axis_aligned_cuboid<C, S>(bounds: BoundingBox<Point3>) -> ShapeOpsResult<Soli
 where
     Line<Point3>: ToSameGeometry<C>,
     Plane: ToSameGeometry<S>, {
-    let p = bounds.min();
-    let q = bounds.max();
-    let vertices = [
-        Point3::new(p.x, p.y, p.z),
-        Point3::new(q.x, p.y, p.z),
-        Point3::new(q.x, q.y, p.z),
-        Point3::new(p.x, q.y, p.z),
-        Point3::new(p.x, p.y, q.z),
-        Point3::new(q.x, p.y, q.z),
-        Point3::new(q.x, q.y, q.z),
-        Point3::new(p.x, q.y, q.z),
-    ]
-    .map(Vertex::new);
+    let vertices = bounds.corners().map(Vertex::new);
     let edges = [
         line_edge(&vertices[0], &vertices[1]),
         line_edge(&vertices[1], &vertices[2]),

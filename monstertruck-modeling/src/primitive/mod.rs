@@ -140,17 +140,7 @@ pub fn cuboid<C, S>(r#box: BoundingBox<Point3>) -> Solid<Point3, C, S>
 where
     Line<Point3>: ToSameGeometry<C>,
     Plane: ToSameGeometry<S>, {
-    let (p, q) = (r#box.min(), r#box.max());
-    let v = builder::vertices([
-        Point3::new(p.x, p.y, p.z),
-        Point3::new(q.x, p.y, p.z),
-        Point3::new(q.x, q.y, p.z),
-        Point3::new(p.x, q.y, p.z),
-        Point3::new(p.x, p.y, q.z),
-        Point3::new(q.x, p.y, q.z),
-        Point3::new(q.x, q.y, q.z),
-        Point3::new(p.x, q.y, q.z),
-    ]);
+    let v = builder::vertices(r#box.corners());
     let e = [
         builder::line(&v[0], &v[1]),
         builder::line(&v[1], &v[2]),

@@ -9,8 +9,8 @@ use super::{
     CartesianPointHolder, Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, Holder, Homogeneous,
     KnotVector, Logical, Matrix3, Matrix4, NurbsCurve, PI, Pcurve, PcurveHolder, Point2, Point3,
     PolylineCurve, Result, Serialize, StepConvertingError, SurfaceCurve, SurfaceCurveHolder, Table,
-    Transformed, UnitCircle, UnitHyperbola, UnitParabola, Vector, VectorHolder, geom,
-    quasi_uniform_knots, step_geometry, uniform_knots,
+    Transformed, UnitCircle, UnitHyperbola, UnitParabola, Vector, Vector2, Vector3, VectorHolder,
+    geom, quasi_uniform_knots, step_geometry, uniform_knots,
 };
 
 /// `curve`
