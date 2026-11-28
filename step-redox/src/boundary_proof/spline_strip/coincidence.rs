@@ -460,8 +460,9 @@ fn verify_source_strip_cap_rows(
 /// Read-only STEP/source-context precision audit for complete B-spline strips.
 ///
 /// Cap curves are independently bounded against the two source surface rows.
-/// An explicit requested bound uses the project physical budget, independent
-/// of author metadata. With no requested bound, audit the declared precision.
+/// An explicit requested bound is a diagnostic measurement target. With no
+/// requested bound, audit the declared precision; recovery callers provide
+/// the effective source recovery tolerance instead.
 /// This is not the strict complete-source boundary proof.
 ///
 /// # Errors
@@ -487,7 +488,7 @@ pub fn audit_source_spline_cap_precision(
     let index = build_index(entities);
     let faces = super::super::strict_closed_shell_faces(solid_id, entities, &index)
         .map_err(anyhow::Error::msg)?;
-    let declared = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+    let declared = crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         entities, &index,
     );
     let authored_uncertainty_mm = declared.get(&solid_id).copied();
@@ -495,10 +496,8 @@ pub fn audit_source_spline_cap_precision(
         .or(authored_uncertainty_mm)
         .context("missing requested or source-declared precision")?;
     ensure!(
-        target_bound_mm.is_finite()
-            && target_bound_mm > 0.0
-            && target_bound_mm <= monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
-        "requested bound must be positive and within native recovery accuracy",
+        target_bound_mm.is_finite() && target_bound_mm > 0.0,
+        "requested bound must be finite and positive",
     );
     let mm_per_unit = crate::source_edge_locus::source_solid_length_scale_mm(solid_id, entities)?;
     let coordinate_tolerance = target_bound_mm / mm_per_unit;
@@ -651,10 +650,10 @@ mod tests {
         assert!(maximum <= report.target_bound_mm);
 
         let strict =
-            audit_source_spline_cap_precision(original, 0, *solid, Some(super::super::TOL))?;
+            audit_source_spline_cap_precision(original, 0, *solid, Some(crate::boundary_proof::TEST_BOUNDARY_TOL_MM))?;
         eprintln!(
             "strict boundary quantum={} mm, certified={}/{} caps={}, worst={} mm",
-            super::super::TOL,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
             strict.fully_certified_strip_faces,
             strict.strip_faces,
             strict.cap_witnesses.len(),
@@ -670,7 +669,7 @@ mod tests {
             strict
                 .cap_witnesses
                 .iter()
-                .all(|cap| cap.bound_mm <= super::super::TOL)
+                .all(|cap| cap.bound_mm <= crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
         );
         // The bound must be meaningful, not a tolerance-independent
         // acceptance of every author-declared STEP curve mismatch.
@@ -678,15 +677,13 @@ mod tests {
         assert_eq!(sub_angstrom.strip_faces, 13);
         assert!(sub_angstrom.fully_certified_strip_faces < strict.fully_certified_strip_faces);
         assert!(audit_source_spline_cap_precision(original, 0, *solid, Some(0.0)).is_err());
-        assert!(
-            audit_source_spline_cap_precision(
-                original,
-                0,
-                *solid,
-                Some(2.0 * report.target_bound_mm)
-            )
-            .is_err()
-        );
+        let broader = audit_source_spline_cap_precision(
+            original,
+            0,
+            *solid,
+            Some(2.0 * report.target_bound_mm),
+        )?;
+        assert_eq!(broader.target_bound_mm, 2.0 * report.target_bound_mm);
 
         let original_utf8 = std::str::from_utf8(original)?;
         let micron_precision =

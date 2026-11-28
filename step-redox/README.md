@@ -119,12 +119,12 @@ checked with OpenCascade during development. The architecture spike is in
 ## Geometry tolerance policy
 
 All distances are in millimetres. Native STEP reconstruction has a single
-physical accuracy target, **0.00001 mm (10 nm)**. Source primitive recognition,
+physical accuracy target, **0.01 mm (10 µm)** by default. The effective budget is the maximum of the default and the source-declared
+length uncertainty. Source primitive recognition,
 support fitting and reconstruction residual checks use this budget, not the
-coordinate hash quantum or internal arithmetic epsilon. Mesh reconstruction
-has a separate **0.01 mm (10 µm)** accuracy target.
+coordinate hash quantum or internal arithmetic epsilon. Mesh reconstruction also defaults to **0.01 mm (10 µm)**.
 
-Imported inverse-edge-treatment proposals can still search a wider 0.01 mm
+Imported inverse-edge-treatment proposals can still search a 0.01 mm
 fit neighborhood to find the intended feature. This is a proposal budget,
 not a native reconstruction acceptance budget. Preserve unequal source
 chamfer setbacks and other actual dimensions when needed for the final fit.

@@ -13,10 +13,12 @@ const SCALAR_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_scalar_quant_
 const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
 const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
 pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+#[cfg(test)]
+const TEST_BOUNDARY_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
 mod bounded;
 mod cell_correspondence;
-use cell_correspondence::{CellKind, CellWitnesses};
+use cell_correspondence::{CellKind, BoundaryProofContext};
 mod sphere_chart;
 mod spline_strip;
 pub use sphere_chart::{
@@ -202,6 +204,8 @@ impl AnalyticBoundarySignature {
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalyticBoundaryDiagnostic {
     pub solid_id: u64,
+    /// Effective physical recovery budget of the original source body.
+    pub recovery_tolerance_mm: f64,
     pub supported: bool,
     pub reason: Option<String>,
     pub signature: Option<AnalyticBoundarySignature>,
@@ -298,10 +302,11 @@ pub fn compare_analytic_boundaries(
 ) -> AnalyticBoundaryComparison {
     let first =
         analytic_boundary_diagnostic(first_solid_id, first_entities, &build_index(first_entities));
-    let second = analytic_boundary_diagnostic(
+    let second = analytic_boundary_diagnostic_at_accuracy(
         second_solid_id,
         second_entities,
         &build_index(second_entities),
+        first.recovery_tolerance_mm,
     );
     let equivalent = compare_diagnostics(&first, first_entities, &second, second_entities);
     AnalyticBoundaryComparison {
@@ -326,7 +331,7 @@ pub(crate) fn compare_diagnostics(
         {
             let witnesses = |diagnostic: &AnalyticBoundaryDiagnostic,
                              entities: &[EntityInstance]| {
-                let mut cells = CellWitnesses::tracked();
+                let mut cells = BoundaryProofContext::tracked(diagnostic.recovery_tolerance_mm);
                 let signature = analytic_boundary_signature(
                     diagnostic.solid_id,
                     entities,
@@ -339,6 +344,7 @@ pub(crate) fn compare_diagnostics(
             cell_correspondence::compare(
                 a,
                 b,
+                first.recovery_tolerance_mm,
                 || witnesses(first, first_entities),
                 || witnesses(second, second_entities),
             )
@@ -354,15 +360,32 @@ pub(crate) fn analytic_boundary_diagnostic(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> AnalyticBoundaryDiagnostic {
-    match analytic_boundary_signature(solid_id, entities, index, &mut CellWitnesses::default()) {
+    let recovery_tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
+    analytic_boundary_diagnostic_at_accuracy(solid_id, entities, index, recovery_tolerance_mm)
+}
+
+/// Qualify a candidate using the original source's budget, not the
+/// uncertainty metadata of its newly exported STEP representation.
+pub(crate) fn analytic_boundary_diagnostic_at_accuracy(
+    solid_id: u64,
+    entities: &[EntityInstance],
+    index: &HashMap<u64, usize>,
+    recovery_tolerance_mm: f64,
+) -> AnalyticBoundaryDiagnostic {
+    match analytic_boundary_signature(
+        solid_id, entities, index, &mut BoundaryProofContext::new(recovery_tolerance_mm),
+    ) {
         Ok(signature) => AnalyticBoundaryDiagnostic {
             solid_id,
+            recovery_tolerance_mm,
             supported: true,
             reason: None,
             signature: Some(signature),
         },
         Err(reason) => AnalyticBoundaryDiagnostic {
             solid_id,
+            recovery_tolerance_mm,
             supported: false,
             reason: Some(reason),
             signature: None,
@@ -435,8 +458,9 @@ fn analytic_boundary_signature(
     solid_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Result<AnalyticBoundarySignature, String> {
+    let tolerance_mm = cells.tolerance_mm();
     let face_ids = strict_closed_shell_faces(solid_id, entities, index)?;
 
     let graph = collect_boundary_graph(&face_ids, entities, index, cells)?;
@@ -457,19 +481,19 @@ fn analytic_boundary_signature(
         chains.push(BoundaryChainKey::Spline { supports, curve });
     }
     for (supports, segments) in groups.linear {
-        chains.extend(normalize_linear_chains(&supports, &segments)?);
+        chains.extend(normalize_linear_chains(&supports, &segments, tolerance_mm)?);
     }
     for ((supports, locus), arcs) in groups.circular {
         chains.extend(
-            bounded::normalize_arcs(&supports, &locus, &arcs)
+            bounded::normalize_arcs(&supports, &locus, &arcs, tolerance_mm)
                 .map_err(|reason| format!("{reason}: {supports:?}, {locus:?}, {arcs:?}"))?,
         );
     }
     for (supports, arcs) in groups.cylinder_sections {
-        chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs)?);
+        chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs, tolerance_mm)?);
     }
     for ((supports, key), arcs) in groups.cylinder_intersections {
-        chains.extend(bounded::normalize_intersections(&supports, key, &arcs)?);
+        chains.extend(bounded::normalize_intersections(&supports, key, &arcs, tolerance_mm)?);
     }
     chains.sort();
 
@@ -516,7 +540,7 @@ fn collect_boundary_graph(
     face_ids: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Result<BoundaryGraph, String> {
     let mut faces = Vec::with_capacity(face_ids.len());
     let mut edge_uses = HashMap::<u64, Vec<CoedgeUse>>::new();
@@ -667,8 +691,9 @@ fn group_physical_boundaries(
     component_support: &HashMap<usize, OrientedSupportKey>,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Result<PhysicalBoundaryGroups, String> {
+    let tolerance_mm = cells.tolerance_mm();
     let mut rejected = Vec::new();
     let mut groups = PhysicalBoundaryGroups::default();
     let mut edge_uses = graph.edge_uses.iter().collect::<Vec<_>>();
@@ -716,7 +741,7 @@ fn group_physical_boundaries(
                 // accept such geometry through the full angular certificate.
                 let explicit =
                     brep::curve_geometry_for_incidence_proof(geometry.curve_id, entities, index);
-                bounded::certify_flagged_angular_section(geometry, &explicit, &loci)
+                bounded::certify_flagged_angular_section(geometry, &explicit, &loci, tolerance_mm)
             },
             |curve| bounded::classify(geometry, curve, &loci, cells),
         );
@@ -804,7 +829,7 @@ fn prove_all_supports_are_bounded(
 /// sequence into the same signature as a single line.
 fn normalize_linear_chains(
     supports: &[OrientedSupportKey; 2],
-    segments: &[(PointKey, PointKey)],
+    segments: &[(PointKey, PointKey)], tolerance_mm: f64,
 ) -> Result<Vec<BoundaryChainKey>, String> {
     let mut adjacency = BTreeMap::<PointKey, Vec<usize>>::new();
     for (index, &(start, end)) in segments.iter().enumerate() {
@@ -855,7 +880,7 @@ fn normalize_linear_chains(
             );
             let projection = dot(offset, direction);
             if projection <= previous
-                || norm(cross(offset, direction)) > ANALYTIC_BOUNDARY_PROOF_TOL_MM
+                || norm(cross(offset, direction)) > tolerance_mm
             {
                 return Err("linear chain bends or backtracks".into());
             }
@@ -865,8 +890,8 @@ fn normalize_linear_chains(
         for &(other_start, other_end) in &spans {
             let a = sub(other_start, from);
             let b = sub(other_end, from);
-            if norm(cross(a, direction)) <= ANALYTIC_BOUNDARY_PROOF_TOL_MM
-                && norm(cross(b, direction)) <= ANALYTIC_BOUNDARY_PROOF_TOL_MM
+            if norm(cross(a, direction)) <= POINT_Q_MM
+                && norm(cross(b, direction)) <= POINT_Q_MM
             {
                 let first = dot(a, direction);
                 let second = dot(b, direction);
@@ -957,7 +982,7 @@ fn edge_is_proven_closed_circle(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+    const LOCUS_TOLERANCE_MM: f64 = TEST_BOUNDARY_TOL_MM;
     if edge.start_vertex != edge.end_vertex {
         return false;
     }
@@ -1015,8 +1040,7 @@ fn resolve_geometric_curve_support(
     None
 }
 
-fn bspline_line_support(spline: &BSplineSupport) -> Option<brep::LineSupport> {
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+fn bspline_line_support(spline: &BSplineSupport, tolerance_mm: f64) -> Option<brep::LineSupport> {
     if spline.control_points_mm.len() < 2 {
         return None;
     }
@@ -1035,11 +1059,11 @@ fn bspline_line_support(spline: &BSplineSupport) -> Option<brep::LineSupport> {
         .iter()
         .copied()
         .max_by(|first, second| distance(origin, *first).total_cmp(&distance(origin, *second)))?;
-    let direction = normalize(sub(farthest, origin), LOCUS_TOLERANCE_MM)?;
+    let direction = normalize(sub(farthest, origin), POINT_Q_MM)?;
     if spline
         .control_points_mm
         .iter()
-        .any(|point| norm(cross(sub(*point, origin), direction)) > LOCUS_TOLERANCE_MM)
+        .any(|point| norm(cross(sub(*point, origin), direction)) > tolerance_mm)
     {
         return None;
     }
@@ -1074,7 +1098,6 @@ fn circle_section_of_plane_and_support(
     other: &SupportLocusKey,
 ) -> Option<([f64; 3], [f64; 3], f64)> {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let SupportLocusKey::Plane { normal, offset_mm } = plane else {
         return None;
     };
@@ -1119,7 +1142,7 @@ fn circle_section_of_plane_and_support(
             let axial = (offset - dot(normal, apex)) / denominator;
             let signed = if *positive_nappe { axial } else { -axial };
             let radius = axial.abs() * slope;
-            if signed <= LOCUS_TOLERANCE_MM || radius <= LOCUS_TOLERANCE_MM || !radius.is_finite() {
+            if signed <= 0.0 || radius <= POINT_Q_MM || !radius.is_finite() {
                 return None;
             }
             Some((add(apex, mul(axis, axial)), axis, radius))
@@ -1136,7 +1159,7 @@ fn bspline_is_circular_section_of_supports(
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
 ) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+    const LOCUS_TOLERANCE_MM: f64 = TEST_BOUNDARY_TOL_MM;
     let section = circle_section_of_plane_and_support(&loci[0], &loci[1])
         .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]));
     let Some((center, axis, radius)) = section else {
@@ -1147,8 +1170,7 @@ fn bspline_is_circular_section_of_supports(
 
 /// A point on the single physical cone nappe. Checking a quadratic cone
 /// equation alone would incorrectly identify both nappes as one carrier.
-fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey, tolerance_mm: f64) -> bool {
     let SupportLocusKey::Cone {
         apex_mm,
         axis,
@@ -1164,11 +1186,11 @@ fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey) -> bool {
     let delta = sub(point, apex);
     let axial = dot(delta, axis);
     let signed_axial = if *positive_nappe { axial } else { -axial };
-    if !signed_axial.is_finite() || signed_axial <= LOCUS_TOLERANCE_MM {
+    if !signed_axial.is_finite() || signed_axial <= 0.0 {
         return false;
     }
     let radial = sub(delta, mul(axis, axial));
-    signed_axial.mul_add(-slope, norm(radial)).abs() <= LOCUS_TOLERANCE_MM
+    signed_axial.mul_add(-slope, norm(radial)).abs() <= tolerance_mm
 }
 
 /// A linear STEP edge is *bounded* by its two topological vertices. For cones,
@@ -1178,10 +1200,9 @@ fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey) -> bool {
 fn line_segment_lies_on_cone(
     line: brep::LineSupport,
     endpoints_mm: [PointKey; 2],
-    locus: &SupportLocusKey,
+    locus: &SupportLocusKey, tolerance_mm: f64,
 ) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(start) = dequantize_vector(endpoints_mm[0], POINT_Q_MM) else {
         return false;
     };
@@ -1191,22 +1212,21 @@ fn line_segment_lies_on_cone(
     let Some(geometric_direction) = normalize(line.direction, 0.0) else {
         return false;
     };
-    let Some(chord_direction) = normalize(sub(end, start), LOCUS_TOLERANCE_MM) else {
+    let Some(chord_direction) = normalize(sub(end, start), POINT_Q_MM) else {
         return false;
     };
     if norm(cross(chord_direction, geometric_direction)) > ANGULAR_TOLERANCE
-        || norm(cross(sub(start, line.origin_mm), geometric_direction)) > LOCUS_TOLERANCE_MM
+        || norm(cross(sub(start, line.origin_mm), geometric_direction)) > tolerance_mm
     {
         return false;
     }
-    point_lies_on_cone_nappe(start, locus)
-        && point_lies_on_cone_nappe(end, locus)
-        && point_lies_on_cone_nappe(mul(add(start, end), 0.5), locus)
+    point_lies_on_cone_nappe(start, locus, tolerance_mm)
+        && point_lies_on_cone_nappe(end, locus, tolerance_mm)
+        && point_lies_on_cone_nappe(mul(add(start, end), 0.5), locus, tolerance_mm)
 }
 
-fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
+fn support_pair_can_intersect(loci: &[SupportLocusKey; 2], tolerance_mm: f64) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     match (&loci[0], &loci[1]) {
         (
             SupportLocusKey::Plane { normal: first, .. },
@@ -1254,7 +1274,7 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
             let Some(radius) = dequantize_scalar(*radius_mm) else {
                 return false;
             };
-            (dot(normal, closest) - offset).abs() <= radius + LOCUS_TOLERANCE_MM
+            (dot(normal, closest) - offset).abs() <= radius + tolerance_mm
         }
         (SupportLocusKey::Cone { .. }, SupportLocusKey::Plane { .. })
         | (SupportLocusKey::Plane { .. }, SupportLocusKey::Cone { .. }) => {
@@ -1281,9 +1301,8 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
     }
 }
 
-fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> bool {
+fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey, tolerance_mm: f64) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(direction) = normalize(line.direction, 0.0) else {
         return false;
     };
@@ -1295,7 +1314,7 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
             let Some(offset) = dequantize_scalar(*offset_mm) else {
                 return false;
             };
-            (dot(normal, line.origin_mm) - offset).abs() <= LOCUS_TOLERANCE_MM
+            (dot(normal, line.origin_mm) - offset).abs() <= tolerance_mm
                 && dot(normal, direction).abs() <= ANGULAR_TOLERANCE
         }
         SupportLocusKey::Cylinder {
@@ -1315,18 +1334,17 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
             let delta = sub(line.origin_mm, closest);
             let radial = sub(delta, mul(axis, dot(delta, axis)));
             norm(cross(direction, axis)) <= ANGULAR_TOLERANCE
-                && (norm(radial) - radius).abs() <= LOCUS_TOLERANCE_MM
+                && (norm(radial) - radius).abs() <= tolerance_mm
         }
-        SupportLocusKey::SplineStrip { strip } => spline_strip::line_on_strip(line, strip),
+        SupportLocusKey::SplineStrip { strip } => spline_strip::line_on_strip(line, strip, tolerance_mm),
         SupportLocusKey::Cone { .. }
         | SupportLocusKey::Sphere { .. }
         | SupportLocusKey::Torus { .. } => false,
     }
 }
 
-fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey) -> bool {
+fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey, tolerance_mm: f64) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(normal) = normalize(circle.normal, 0.0) else {
         return false;
     };
@@ -1342,7 +1360,7 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
                 return false;
             };
             norm(cross(normal, plane_normal)) <= ANGULAR_TOLERANCE
-                && (dot(plane_normal, circle.center_mm) - offset).abs() <= LOCUS_TOLERANCE_MM
+                && (dot(plane_normal, circle.center_mm) - offset).abs() <= tolerance_mm
         }
         SupportLocusKey::Cylinder {
             axis,
@@ -1361,8 +1379,8 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
             let delta = sub(circle.center_mm, closest);
             let radial_center = sub(delta, mul(axis, dot(delta, axis)));
             norm(cross(normal, axis)) <= ANGULAR_TOLERANCE
-                && norm(radial_center) <= LOCUS_TOLERANCE_MM
-                && (circle.radius_mm - radius).abs() <= LOCUS_TOLERANCE_MM
+                && norm(radial_center) <= tolerance_mm
+                && (circle.radius_mm - radius).abs() <= tolerance_mm
         }
         SupportLocusKey::Cone {
             apex_mm,
@@ -1379,11 +1397,11 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
             let radial_center = sub(delta, mul(axis, axial));
             signed_axial > 0.0
                 && norm(cross(normal, axis)) <= ANGULAR_TOLERANCE
-                && norm(radial_center) <= LOCUS_TOLERANCE_MM
-                && signed_axial.mul_add(-slope, circle.radius_mm).abs() <= LOCUS_TOLERANCE_MM
+                && norm(radial_center) <= tolerance_mm
+                && signed_axial.mul_add(-slope, circle.radius_mm).abs() <= tolerance_mm
         }
         SupportLocusKey::Sphere { .. } | SupportLocusKey::Torus { .. } => {
-            bounded::circle_on_curved_support(circle, support)
+            bounded::circle_on_curved_support(circle, support, tolerance_mm)
         }
         SupportLocusKey::SplineStrip { .. } => false,
     }
@@ -1407,7 +1425,7 @@ fn dequantize_vector(vector: [i64; 3], quantum: f64) -> Option<[f64; 3]> {
 fn boundary_surface_support(
     surface_id: u64,
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
+    index: &HashMap<u64, usize>, tolerance_mm: f64,
 ) -> SurfaceSupport {
     let constructive = brep::surface_support(surface_id, entities, index);
     if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
@@ -1415,7 +1433,7 @@ fn boundary_surface_support(
             surface_id,
             entities,
             index,
-            NATIVE_STEP_RECOVERY_MM,
+            tolerance_mm,
         )
     {
         return SurfaceSupport::Plane(brep::PlaneSupport {
@@ -1452,7 +1470,7 @@ fn canonical_boundary_direction(raw: [f64; 3]) -> Option<([f64; 3], [i64; 3])> {
 pub(crate) fn requires_nonplanar_polynomial_carrier(
     face_ids: &[u64],
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
+    index: &HashMap<u64, usize>, tolerance_mm: f64,
 ) -> bool {
     face_ids.iter().any(|&face_id| {
         let Some(surface_id) = brep::face_surface(face_id, entities, index) else {
@@ -1463,7 +1481,7 @@ pub(crate) fn requires_nonplanar_polynomial_carrier(
             Some("F") => false,
             _ => return false,
         };
-        spline_strip::has_nonplanar_polynomial_patch(face_id, surface_id, forward, entities, index)
+        spline_strip::has_nonplanar_polynomial_patch(face_id, surface_id, forward, entities, index, tolerance_mm)
     })
 }
 
@@ -1471,8 +1489,9 @@ fn oriented_support_key(
     face_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<OrientedSupportKey> {
+    let tolerance_mm = cells.tolerance_mm();
     let surface_id = brep::face_surface(face_id, entities, index)?;
     let forward = match brep::face_sense(face_id, entities, index)?.as_str() {
         "T" => true,
@@ -1480,7 +1499,7 @@ fn oriented_support_key(
         _ => return None,
     };
 
-    match boundary_surface_support(surface_id, entities, index) {
+    match boundary_surface_support(surface_id, entities, index, tolerance_mm) {
         SurfaceSupport::Plane(plane) => {
             let raw_normal = normalize(plane.normal, 0.0)?;
             let (normal, normal_key) = cells.direction(raw_normal)?;
@@ -1580,11 +1599,11 @@ fn oriented_support_key(
 fn spline_extrusion_cylinder_key(
     surface: &SplineExtrusionSupport,
     forward: bool,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<OrientedSupportKey> {
-    const FIT_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+    let tolerance_mm = cells.tolerance_mm();
 
-    if surface.max_residual_mm > FIT_TOL_MM {
+    if surface.max_residual_mm > tolerance_mm {
         return None;
     }
     let raw_axis = normalize(surface.extrusion_mm, 0.0)?;
@@ -1596,13 +1615,13 @@ fn spline_extrusion_cylinder_key(
 
     let chord = sub(p1, p0);
     let chord_in_plane = sub(chord, mul(axis, dot(chord, axis)));
-    let u = normalize(chord_in_plane, FIT_TOL_MM)?;
-    let v = normalize(cross(axis, u), FIT_TOL_MM)?;
+    let u = normalize(chord_in_plane, POINT_Q_MM)?;
+    let v = normalize(cross(axis, u), 0.0)?;
     let q1x = dot(sub(p1, p0), u);
     let q2 = sub(pm, p0);
     let q2x = dot(q2, u);
     let q2y = dot(q2, v);
-    if q1x.abs() <= FIT_TOL_MM || q2y.abs() <= FIT_TOL_MM {
+    if q1x.abs() <= POINT_Q_MM || q2y.abs() <= POINT_Q_MM {
         return None;
     }
     let center_x = q1x * 0.5;
@@ -1612,11 +1631,11 @@ fn spline_extrusion_cylinder_key(
     }
     let center = add(p0, add(mul(u, center_x), mul(v, center_y)));
     let radius = distance(center, p0);
-    if !radius.is_finite() || radius <= FIT_TOL_MM {
+    if !radius.is_finite() || radius <= POINT_Q_MM {
         return None;
     }
 
-    if !certify_rational_bspline_circle(&surface.profile, center, axis, radius, FIT_TOL_MM)? {
+    if !certify_rational_bspline_circle(&surface.profile, center, axis, radius, tolerance_mm)? {
         return None;
     }
 
@@ -1992,10 +2011,38 @@ mod tests {
             // Verify sub-budget and excessive translations of complete solids.
             assert!(compare(0.49, 0.51), "solid #{solid}");
             assert!(compare(0.51, 0.49), "solid #{solid}: symmetry");
-            assert!(compare(-40.0, 40.0), "solid #{solid}: 8 nm");
-            assert!(compare(40.0, -40.0), "solid #{solid}: 8 nm reversed");
-            assert!(!compare(-60.0, 60.0), "solid #{solid}: 12 nm");
+            let cells = NATIVE_STEP_RECOVERY_MM / POINT_Q_MM;
+            assert!(compare(-0.4 * cells, 0.4 * cells), "solid #{solid}: 8 µm");
+            assert!(
+                compare(0.4 * cells, -0.4 * cells),
+                "solid #{solid}: 8 µm reversed"
+            );
+            assert!(!compare(-0.6 * cells, 0.6 * cells), "solid #{solid}: 12 µm");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn source_uncertainty_is_a_floor_not_a_candidate_override() -> anyhow::Result<()> {
+        let bytes = include_bytes!("../validation/fixtures/native_conical_frustum.step");
+        let text = std::str::from_utf8(bytes)?;
+        let ordinary = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
+        let coarse_text = text.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-02)", 1);
+        assert_ne!(coarse_text, text);
+        let coarse =
+            monstertruck_io::step::load::ParsedStepSource::parse(coarse_text.as_bytes())?.exchange;
+        let original = &ordinary.data[0].entities;
+        let coarse_original = &coarse.data[0].entities;
+        let shifted = shifted_entities(original, 0.03);
+        let coarse_candidate = shifted_entities(coarse_original, 0.03);
+        let result = compare_analytic_boundaries(15, coarse_original, 15, &shifted);
+        assert_eq!(result.first.recovery_tolerance_mm, 0.05);
+        assert!(result.equivalent, "{result:?}");
+        let result = compare_analytic_boundaries(15, original, 15, &coarse_candidate);
+        assert_eq!(result.first.recovery_tolerance_mm, NATIVE_STEP_RECOVERY_MM);
+        assert!(!result.equivalent, "{result:?}");
+        let too_far = shifted_entities(original, 0.06);
+        assert!(!compare_analytic_boundaries(15, coarse_original, 15, &too_far).equivalent);
         Ok(())
     }
 
@@ -2031,8 +2078,8 @@ mod tests {
             origin_mm: [0.0, 0.0, 1.0e-3],
             direction: [1.0, 0.0, 0.0],
         };
-        assert!(line_lies_on_support(on_plane, &support));
-        assert!(!line_lies_on_support(off_plane, &support));
+        assert!(line_lies_on_support(on_plane, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!line_lies_on_support(off_plane, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
     }
 
     fn positive_cone() -> SupportLocusKey {
@@ -2065,20 +2112,20 @@ mod tests {
             x_direction: [1.0, 0.0, 0.0],
             radius_mm: 1.0,
         };
-        assert!(circle_lies_on_support(circle, &support));
+        assert!(circle_lies_on_support(circle, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
         assert!(!circle_lies_on_support(
             brep::CircleSupport {
                 radius_mm: 1.001,
                 ..circle
             },
-            &support
+            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         assert!(!circle_lies_on_support(
             brep::CircleSupport {
                 center_mm: [0.0, 0.0, -2.0],
                 ..circle
             },
-            &support
+            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         let negative_nappe = SupportLocusKey::Cone {
             apex_mm: [0, 0, 0],
@@ -2086,13 +2133,13 @@ mod tests {
             slope: 5_000_000_000,
             positive_nappe: false,
         };
-        assert!(!circle_lies_on_support(circle, &negative_nappe));
+        assert!(!circle_lies_on_support(circle, &negative_nappe, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
         assert!(circle_lies_on_support(
             brep::CircleSupport {
                 center_mm: [0.0, 0.0, -2.0],
                 ..circle
             },
-            &negative_nappe
+            &negative_nappe, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
     }
 
@@ -2104,18 +2151,18 @@ mod tests {
             direction: [1.0, 0.0, 2.0],
         };
         let forward = [[10_000_000, 0, 20_000_000], [20_000_000, 0, 40_000_000]];
-        assert!(line_segment_lies_on_cone(line, forward, &support));
+        assert!(line_segment_lies_on_cone(line, forward, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
         // Same quadratic cone equation but the segment crosses the singular
         // apex into the opposite nappe. It must not be accepted.
         let crossing = [[10_000_000, 0, 20_000_000], [-10_000_000, 0, -20_000_000]];
-        assert!(!line_segment_lies_on_cone(line, crossing, &support));
+        assert!(!line_segment_lies_on_cone(line, crossing, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
         assert!(!line_segment_lies_on_cone(
             line,
             [
                 [10_000_000, 0, 20_000_000],
                 [20_000_000, 10_000_000, 40_000_000]
             ],
-            &support
+            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
     }
 
@@ -2322,8 +2369,8 @@ mod tests {
             radius_mm: 2.001,
             ..exact
         };
-        assert!(circle_lies_on_support(exact, &support));
-        assert!(!circle_lies_on_support(wrong, &support));
+        assert!(circle_lies_on_support(exact, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!circle_lies_on_support(wrong, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
     }
 
     #[test]
@@ -2351,10 +2398,10 @@ mod tests {
     #[test]
     fn open_chain_normalization_ignores_degree_two_partitions() {
         let supports = [plane(0, true), plane(10_000_000, true)];
-        let one = normalize_linear_chains(&supports, &[([0, 0, 0], [20, 0, 0])]);
+        let one = normalize_linear_chains(&supports, &[([0, 0, 0], [20, 0, 0])], crate::boundary_proof::TEST_BOUNDARY_TOL_MM);
         let split = normalize_linear_chains(
             &supports,
-            &[([0, 0, 0], [7, 0, 0]), ([7, 0, 0], [20, 0, 0])],
+            &[([0, 0, 0], [7, 0, 0]), ([7, 0, 0], [20, 0, 0])], crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
         );
         assert!(one.is_ok());
         assert_eq!(one, split);
@@ -2377,7 +2424,7 @@ mod tests {
             ],
             vec![([0, 0, 0], [30, 0, 0]), ([10, 0, 0], [40, 0, 0])],
         ] {
-            assert!(normalize_linear_chains(&supports, &edges).is_err());
+            assert!(normalize_linear_chains(&supports, &edges, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_err());
         }
     }
 
@@ -2590,7 +2637,7 @@ mod tests {
                 ([0, 0, 0], [10, 0, 0]),
                 ([10, 0, 0], [20, 0, 0]),
                 ([10, 0, 0], [10, 10, 0]),
-            ],
+            ], crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
         );
         assert!(result.is_err());
     }
@@ -2607,7 +2654,7 @@ mod tests {
                 offset_mm: 10_000_000,
             },
         ];
-        assert!(!support_pair_can_intersect(&loci));
+        assert!(!support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
     }
 
     #[test]
@@ -2623,7 +2670,7 @@ mod tests {
                 radius_mm: 10_000_000,
             },
         ];
-        assert!(!support_pair_can_intersect(&loci));
+        assert!(!support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
     }
 
     #[test]
@@ -2639,7 +2686,7 @@ mod tests {
                 radius_mm: 10_000_000,
             },
         ];
-        assert!(support_pair_can_intersect(&loci));
+        assert!(support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
     }
 
     #[test]
@@ -2650,10 +2697,10 @@ mod tests {
             knots: vec![0.0, 0.0, 0.5, 1.0, 1.0],
             weights: Some(vec![1.0, 0.8, 1.0]),
         };
-        assert!(bspline_line_support(&exact).is_some());
+        assert!(bspline_line_support(&exact, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_some());
 
         let mut bent = exact;
         bent.control_points_mm[1][1] = 1.0e-3;
-        assert!(bspline_line_support(&bent).is_none());
+        assert!(bspline_line_support(&bent, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
     }
 }

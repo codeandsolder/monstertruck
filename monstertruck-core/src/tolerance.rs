@@ -354,9 +354,20 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     stl_quantization_step_factor: 0.5,
 };
 
-/// Maximum geometric deviation for native STEP reconstruction, in mm (10 nm).
-/// This is the physical recovery accuracy, not the kernel arithmetic epsilon.
-pub const NATIVE_STEP_RECOVERY_MM: f64 = 1.0e-5;
+/// Default native STEP reconstruction accuracy in mm (10 µm).
+/// Source-declared uncertainty can increase, but never decrease, this budget.
+pub const NATIVE_STEP_RECOVERY_MM: f64 = 1.0e-2;
+
+/// Effective native recovery budget. The declared uncertainty must already
+/// be converted to millimetres. Missing/invalid metadata uses the default.
+#[must_use]
+pub fn native_step_recovery_mm(source_uncertainty_mm: Option<f64>) -> f64 {
+    source_uncertainty_mm
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map_or(NATIVE_STEP_RECOVERY_MM, |value| {
+            value.max(NATIVE_STEP_RECOVERY_MM)
+        })
+}
 
 /// Default geometric deviation for reconstruction from tessellated source, in mm (10 µm).
 pub const MESH_RECOVERY_MM: f64 = 1.0e-2;
@@ -369,7 +380,8 @@ pub const MESH_RECOVERY_MM: f64 = 1.0e-2;
 /// thresholds; none grants permission to collapse unrelated topology.
 ///
 /// Numerical and representation thresholds remain distinct. All physical
-/// source fitting uses NATIVE_STEP_RECOVERY_MM; the acceptance budget is not
+/// source fitting defaults to NATIVE_STEP_RECOVERY_MM; a valid declared
+/// source uncertainty is a lower bound. The acceptance budget is not
 /// inferred from these arithmetic or indexing parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StepRecoveryTolerances {
@@ -652,7 +664,7 @@ pub struct StepRecoveryTolerances {
 pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecoveryTolerances {
     numerical_geometry_mm: 1.0e-7,
     feature_heal_mm: 0.01,
-    cad_step_export_accuracy_mm: NATIVE_STEP_RECOVERY_MM,
+    cad_step_export_accuracy_mm: 1.0e-5,
     cad_edge_selector_mm: 1.0e-7,
     cad_axis_angle_rad: 1.0e-10,
     cad_axis_locus_mm: 1.0e-9,

@@ -6,12 +6,11 @@ use crate::math3::{
 };
 use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::ReducedSolid;
-use crate::step_entities::{parameter_number, representation_items_and_context};
-use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
+use crate::step_graph::{build_index, entity_id, simple_record};
 use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use step_p21::ast::{EntityInstance, Parameter, Record};
+use step_p21::ast::EntityInstance;
 
 mod profile_graph;
 use profile_graph::{
@@ -25,9 +24,6 @@ use meridian::{MeridianArc, MeridianCurve, MeridianLine, MeridianProfile};
 const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 /// Native source fitting budget, independent of the exporter uncertainty.
 pub(crate) const REVOLUTION_SOURCE_SUPPORT_TOL_MM: f64 = GEOM_TOL_MM;
-/// Hard ceiling for source-declared length uncertainty used by revolution recovery.
-/// Author metadata may not enlarge the project recovery budget.
-pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -271,125 +267,6 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
-/// Native recovery budget for each representation with trusted uncertainty.
-/// Missing metadata uses the same budget at callers; use the literal
-/// uncertainty reader for diagnostics that report what the file declares.
-pub(crate) fn source_tolerance_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> HashMap<u64, f64> {
-    source_uncertainty_by_representation_item(entities, index, GEOM_TOL_MM)
-}
-
-/// Literal author-declared length uncertainty (including unit conversion),
-/// without any fallback to the kernel's own recovery geometry tolerance.
-pub(crate) fn declared_source_uncertainty_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> HashMap<u64, f64> {
-    source_uncertainty_by_representation_item(entities, index, 0.0)
-}
-
-fn source_uncertainty_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    floor_mm: f64,
-) -> HashMap<u64, f64> {
-    let mut context_cache = HashMap::<u64, Option<f64>>::new();
-    let mut out = HashMap::<u64, f64>::new();
-
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "ADVANCED_BREP_SHAPE_REPRESENTATION" {
-            continue;
-        }
-        let Some((items, context_id)) = representation_items_and_context(entity) else {
-            continue;
-        };
-        let tolerance = *context_cache.entry(context_id).or_insert_with(|| {
-            representation_context_length_uncertainty_mm(context_id, entities, index)
-        });
-        let Some(tolerance) = tolerance else {
-            continue;
-        };
-        let tolerance = tolerance.max(floor_mm);
-
-        for item in items {
-            out.entry(item)
-                .and_modify(|existing| *existing = existing.min(tolerance))
-                .or_insert(tolerance);
-        }
-    }
-
-    out
-}
-
-fn representation_context_length_uncertainty_mm(
-    context_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<f64> {
-    let entity = entities.get(*index.get(&context_id)?)?;
-    let record = entity_record_named(entity, "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT")?;
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let [Parameter::List(uncertainties)] = params.as_slice() else {
-        return None;
-    };
-
-    let [uncertainty] = uncertainties.as_slice() else {
-        return None;
-    };
-    let uncertainty_id = entity_ref_value(uncertainty)?;
-    let value = uncertainty_measure_mm(uncertainty_id, entities, index)?;
-    if !value.is_finite() || value <= 0.0 || value > MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM {
-        return None;
-    }
-    Some(value)
-}
-
-fn uncertainty_measure_mm(
-    uncertainty_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<f64> {
-    let entity = entities.get(*index.get(&uncertainty_id)?)?;
-    let record = entity_record_named(entity, "UNCERTAINTY_MEASURE_WITH_UNIT")?;
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let [
-        Parameter::Typed { keyword, parameter },
-        unit,
-        Parameter::String(name),
-        _,
-    ] = params.as_slice()
-    else {
-        return None;
-    };
-    if keyword.as_ref() != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
-        return None;
-    }
-    let value = parameter_number(parameter)?;
-    let unit_id = entity_ref_value(unit)?;
-    let section = crate::step_document::StepSectionView::new(entities, index);
-    let scale_mm = crate::units::length_unit_scale_mm(unit_id, &section)?;
-    let result = value * scale_mm;
-    result.is_finite().then_some(result)
-}
-
-fn entity_record_named<'a>(entity: &'a EntityInstance, name: &str) -> Option<&'a Record> {
-    match entity {
-        EntityInstance::Simple { record, .. } => (record.name == name).then_some(record),
-        EntityInstance::Complex { subsuper, .. } => {
-            subsuper.0.iter().find(|record| record.name == name)
-        }
-    }
-}
-
 #[must_use = "The computed detect solid surface signatures collection is returned and must be retained or inspected."]
 pub fn detect_solid_surface_signatures(entities: &[EntityInstance]) -> Vec<SolidSurfaceSignature> {
     let index = build_index(entities);
@@ -476,7 +353,8 @@ pub(crate) fn detect_solid_revolutions_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidRevolution> {
-    let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     detect_solid_revolutions_with_tolerances(
         entities,
         index,
@@ -519,7 +397,8 @@ pub(crate) fn detect_radial_slot_revolutions_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredRadialSlotRevolution> {
-    let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     detect_radial_slot_revolutions_with_tolerances(
         entities,
         index,
@@ -581,10 +460,11 @@ pub(crate) fn detect_solid_revolution_from_reduced(
             loops: face.loops.clone(),
         })
         .collect::<Vec<_>>();
-    let source_tolerance_mm = source_tolerance_by_representation_item(entities, index)
-        .get(&solid.solid_id())
-        .copied()
-        .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
+    let source_tolerance_mm =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index)
+            .get(&solid.solid_id())
+            .copied()
+            .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     detect_one_solid_from_faces(
         solid.solid_id(),
         face_ids,
@@ -621,16 +501,20 @@ fn detect_one_solid_from_faces(
         index,
     };
 
-    if let Some(torus) = detect_full_ring_torus(solid_id, &face_ids, faces) {
+    if let Some(mut torus) = detect_full_ring_torus(solid_id, &face_ids, faces) {
+        torus.source_tolerance_mm = source_tolerance_mm;
         return Some(torus);
     }
-    if let Some(cap) = detect_spherical_cap(solid_id, &face_ids, faces) {
+    if let Some(mut cap) = detect_spherical_cap(solid_id, &face_ids, faces) {
+        cap.source_tolerance_mm = source_tolerance_mm;
         return Some(cap);
     }
-    if let Some(end) = detect_hemispherical_end(solid_id, &face_ids, faces, &context) {
+    if let Some(mut end) = detect_hemispherical_end(solid_id, &face_ids, faces, &context) {
+        end.source_tolerance_mm = source_tolerance_mm;
         return Some(end);
     }
-    if let Some(mixed) = detect_mixed_curved_revolution(solid_id, &face_ids, faces, &context) {
+    if let Some(mut mixed) = detect_mixed_curved_revolution(solid_id, &face_ids, faces, &context) {
+        mixed.source_tolerance_mm = source_tolerance_mm;
         return Some(mixed);
     }
     if face_ids.len() < 3 {
@@ -773,10 +657,11 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
         entities,
         index,
     };
-    let source_tolerance_mm = source_tolerance_by_representation_item(entities, index)
-        .get(&solid_id)
-        .copied()
-        .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
+    let source_tolerance_mm =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index)
+            .get(&solid_id)
+            .copied()
+            .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     let mut recovered = detect_mixed_curved_revolution_with_synthetic(
         solid_id,
         selected_face_ids,
@@ -1215,7 +1100,7 @@ fn detect_full_ring_torus(
     if !first.major_radius_mm.is_finite()
         || !first.minor_radius_mm.is_finite()
         || first.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
-        || first.major_radius_mm <= first.minor_radius_mm + GEOM_TOL_MM
+        || first.major_radius_mm <= first.minor_radius_mm
     {
         return None;
     }
@@ -2404,7 +2289,8 @@ fn cylinder_profile_segment_with_angular_trims(
     } = segment_context;
     if face.loops.len() != 1
         || !parallel(cylinder.axis, axis)
-        || point_to_unit_line_distance(cylinder.axis_origin_mm, axis_origin, axis) > GEOM_TOL_MM
+        || point_to_unit_line_distance(cylinder.axis_origin_mm, axis_origin, axis)
+            > source_tolerance_mm
         || !cylinder.radius_mm.is_finite()
         || cylinder.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
@@ -2571,7 +2457,8 @@ fn cone_profile_segment_with_angular_trims_inner(
     } = segment_context;
     if face.loops.len() != 1
         || !parallel(cone.axis, axis)
-        || point_to_unit_line_distance(cone.reference_origin_mm, axis_origin, axis) > GEOM_TOL_MM
+        || point_to_unit_line_distance(cone.reference_origin_mm, axis_origin, axis)
+            > source_tolerance_mm
         || !cone.reference_radius_mm.is_finite()
         || cone.reference_radius_mm < 0.0
         || !cone.semi_angle_rad.is_finite()
@@ -2848,7 +2735,7 @@ fn cone_profile_segment_with_angular_trims_inner(
     for sample in &boundary_samples {
         profile_residual = profile_residual.max((sample[0] - radius_at(sample[1])).abs());
     }
-    if profile_residual > GEOM_TOL_MM {
+    if profile_residual > source_tolerance_mm {
         return None;
     }
 
@@ -3293,7 +3180,7 @@ fn plane_profile_segment_with_angular_trims(
         }
     }
 
-    if geometry_residual > GEOM_TOL_MM || source_support_residual > source_tolerance_mm {
+    if geometry_residual > source_tolerance_mm || source_support_residual > source_tolerance_mm {
         return None;
     }
 

@@ -725,7 +725,7 @@ pub fn recover_complete_ir_with_kernel_bytes<
         .iter()
         .zip(&indexes)
         .map(|(section, index)| {
-            crate::solid_revolutions::source_tolerance_by_representation_item(
+            crate::source_accuracy::source_tolerance_by_representation_item(
                 &section.entities,
                 index,
             )
@@ -755,6 +755,12 @@ pub fn recover_complete_ir_with_kernel_bytes<
     for source in build.recovery.source_solids.clone() {
         let entities = &exchange.data[source.data_section].entities;
         let index = &indexes[source.data_section];
+        let source_accuracy_mm = source_tolerances[source.data_section]
+            .get(&source.id)
+            .copied()
+            .unwrap_or(monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM);
+        let source_kernel = kernel.for_source_recovery(source_accuracy_mm);
+        let kernel = &source_kernel;
         let proof = if export {
             SourceRecovery::new(source.id, entities, index, kernel).or_else(|| {
                 SourceRecovery::reconcile_strip_senses(source.id, entities, index, kernel)
@@ -1971,7 +1977,7 @@ fn prepare_boundary_feature_reduction(
         .map(|tool| tool.solid_id)
         .collect::<Vec<_>>();
     let tool_index = crate::step_graph::build_index(&tool_entities);
-    let tolerances = crate::solid_revolutions::source_tolerance_by_representation_item(
+    let tolerances = crate::source_accuracy::source_tolerance_by_representation_item(
         &tool_entities,
         &tool_index,
     );
@@ -2109,7 +2115,7 @@ fn recover_constructive_fragments_from_entities_with_index(
     index: &HashMap<u64, usize>,
 ) -> Result<Vec<CadFragment>> {
     let source_tolerances =
-        crate::solid_revolutions::source_tolerance_by_representation_item(entities, index);
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     recover_constructive_fragments_with_tolerances(
         entities,
         index,
@@ -3167,7 +3173,7 @@ mod tests {
         assert!(tool_ids.iter().all(|id| !original_ids.contains(id)));
         let index = crate::step_graph::build_index(entities);
         let tolerances =
-            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+            crate::source_accuracy::source_tolerance_by_representation_item(entities, &index);
         let full = recover_constructive_fragments_with_tolerances(
             entities,
             &index,
@@ -3313,6 +3319,12 @@ mod tests {
 
     impl CadKernel for SummaryOnlyKernel {
         type Evaluated = crate::cad_kernel::KernelSummary;
+
+        fn for_source_recovery(&self, _: f64) -> Self {
+            Self {
+                summary: self.summary,
+            }
+        }
 
         fn evaluate(&self, _: &CadModel, _: NodeId) -> Result<Self::Evaluated> { Ok(self.summary) }
 
@@ -4924,6 +4936,10 @@ END-ISO-10303-21;
     impl CadKernel for NoSourceSnapshotKernel {
         type Evaluated =
             <crate::cad_kernel::monstertruck::MonstertruckKernel as CadKernel>::Evaluated;
+
+        fn for_source_recovery(&self, minimum_mm: f64) -> Self {
+            Self(self.0.for_source_recovery(minimum_mm))
+        }
 
         fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
             self.0.evaluate(model, root)

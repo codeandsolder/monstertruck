@@ -27,7 +27,7 @@ impl SectionCache {
 
     fn source_tolerances(&self, entities: &[EntityInstance]) -> &SourceTolerances {
         self.source_tolerances.get_or_init(|| {
-            solid_revolutions::source_tolerance_by_representation_item(
+            crate::source_accuracy::source_tolerance_by_representation_item(
                 entities,
                 self.index(entities),
             )
@@ -286,7 +286,7 @@ mod tests {
         assert!(!tolerances.is_empty());
         assert_eq!(
             tolerances,
-            &solid_revolutions::source_tolerance_by_representation_item(entities, index),
+            &crate::source_accuracy::source_tolerance_by_representation_item(entities, index),
             "session uncertainty evidence must match standalone source parsing"
         );
         json_equal(
@@ -672,9 +672,9 @@ mod tests {
         let start = Instant::now();
         for _ in 0..iterations {
             let index = black_box(crate::step_graph::build_index(entities));
-            black_box(solid_revolutions::source_tolerance_by_representation_item(
-                entities, &index,
-            ));
+            black_box(
+                crate::source_accuracy::source_tolerance_by_representation_item(entities, &index),
+            );
         }
         let rebuilt = start.elapsed();
         let start = Instant::now();

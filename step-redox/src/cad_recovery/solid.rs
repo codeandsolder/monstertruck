@@ -7,8 +7,7 @@ use crate::math3::{add, cross, dot, mul, norm};
 use crate::profile_curves::RecoveredProfileCurve;
 use crate::solid_extrusions::{RecoveredSolidExtrusion, RecoveredSourceCapExtrusion};
 use crate::solid_revolutions::{
-    MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM, REVOLUTION_SOURCE_SUPPORT_TOL_MM,
-    RecoveredRadialSlotRevolution, RecoveredSolidRevolution,
+    REVOLUTION_SOURCE_SUPPORT_TOL_MM, RecoveredRadialSlotRevolution, RecoveredSolidRevolution,
 };
 use crate::solid_sweeps::{
     RecoveredOpenRectangularSweep, RecoveredPlanarSweepLeg, RecoveredRevolvedRoundTail,
@@ -1250,7 +1249,6 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
 
     if !revolution.source_tolerance_mm.is_finite()
         || revolution.source_tolerance_mm < REVOLUTION_SOURCE_SUPPORT_TOL_MM
-        || revolution.source_tolerance_mm > MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM
     {
         bail!("solid revolution has invalid source tolerance");
     }
@@ -1678,9 +1676,11 @@ mod tests {
         excessive_residual.max_residual_mm = 2.0 * REVOLUTION_SOURCE_SUPPORT_TOL_MM;
         assert!(recover_solid_revolution_fragment(&excessive_residual).is_err());
 
-        let mut excessive_tolerance = revolution.clone();
-        excessive_tolerance.source_tolerance_mm = 2.0 * MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM;
-        assert!(recover_solid_revolution_fragment(&excessive_tolerance).is_err());
+        let mut source_limited = revolution.clone();
+        source_limited.source_tolerance_mm = 2.0 * REVOLUTION_SOURCE_SUPPORT_TOL_MM;
+        assert!(recover_solid_revolution_fragment(&source_limited).is_ok());
+        source_limited.source_tolerance_mm = f64::INFINITY;
+        assert!(recover_solid_revolution_fragment(&source_limited).is_err());
 
         let mut too_strict_tolerance = revolution.clone();
         too_strict_tolerance.source_tolerance_mm = 0.5 * REVOLUTION_SOURCE_SUPPORT_TOL_MM;

@@ -198,7 +198,7 @@ pub fn propose_cylinder_intersection_healing(
     let source = request.source;
     let index = build_index(source.entities);
     let scale = source_solid_length_scale_mm(request.solid_id, source.entities)?;
-    let uncertainty = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+    let uncertainty = crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         source.entities,
         &index,
     )

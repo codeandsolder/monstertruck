@@ -59,6 +59,7 @@ pub mod solid_extrusions;
 mod solid_lofts;
 pub mod solid_revolutions;
 pub mod solid_sweeps;
+mod source_accuracy;
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub mod source_edge_healing;
 pub mod source_edge_locus;

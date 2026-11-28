@@ -6,7 +6,6 @@ use super::{
     AnalyticBoundarySignature, BoundaryChainKey, DIRECTION_Q, OrientedSupportKey, POINT_Q_MM,
     PointKey, SCALAR_Q_MM, canonical_boundary_direction, point_key, quantize,
 };
-use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,9 +19,9 @@ pub(super) enum CellKind {
 }
 
 impl CellKind {
-    const fn comparison_limit(self) -> f64 {
+    const fn comparison_limit(self, tolerance_mm: f64) -> f64 {
         match self {
-            Self::Point | Self::Offset | Self::Radius => NATIVE_STEP_RECOVERY_MM,
+            Self::Point | Self::Offset | Self::Radius => tolerance_mm,
             Self::Direction | Self::Slope => DIRECTION_Q,
         }
     }
@@ -43,11 +42,11 @@ struct CellKey {
 }
 
 impl CellKey {
-    fn possibly_matches(self, other: Self) -> bool {
+    fn possibly_matches(self, other: Self, tolerance_mm: f64) -> bool {
         self.kind == other.kind
             && self.components.iter().zip(other.components).all(|(a, b)| {
                 a.abs_diff(b).to_f64().is_some_and(|delta| {
-                    delta <= self.kind.comparison_limit() / self.kind.quantum() + 1.0
+                    delta <= self.kind.comparison_limit(tolerance_mm) / self.kind.quantum() + 1.0
                 })
             })
     }
@@ -59,16 +58,26 @@ type BoundsByCell = BTreeMap<CellKey, RawBounds>;
 /// Track the actual values used to construct cells, not their decoded centres.
 /// Ordinary equal-signature proofs do not allocate this map; it is collected
 /// only when a complete geometric correspondence could be relevant.
-#[derive(Default)]
-pub(super) struct CellWitnesses(Option<BoundsByCell>);
+pub(super) struct BoundaryProofContext {
+    bounds: Option<BoundsByCell>,
+    tolerance_mm: f64,
+}
 
-impl CellWitnesses {
-    pub(super) const fn tracked() -> Self { Self(Some(BTreeMap::new())) }
+impl BoundaryProofContext {
+    pub(super) const fn new(tolerance_mm: f64) -> Self {
+        Self { bounds: None, tolerance_mm }
+    }
 
-    pub(super) const fn enabled(&self) -> bool { self.0.is_some() }
+    pub(super) const fn tracked(tolerance_mm: f64) -> Self {
+        Self { bounds: Some(BTreeMap::new()), tolerance_mm }
+    }
+
+    pub(super) const fn tolerance_mm(&self) -> f64 { self.tolerance_mm }
+
+    pub(super) const fn enabled(&self) -> bool { self.bounds.is_some() }
 
     fn record(&mut self, kind: CellKind, components: [i64; 3], raw: [f64; 3]) {
-        if let Some(bounds) = &mut self.0 {
+        if let Some(bounds) = &mut self.bounds {
             let (lo, hi) = bounds
                 .entry(CellKey { kind, components })
                 .or_insert((raw, raw));
@@ -105,18 +114,27 @@ impl CellWitnesses {
         Some(key)
     }
 
-    fn fits(&self, a: CellKey, other: &Self, b: CellKey) -> bool {
-        let Some((alo, ahi)) = self.0.as_ref().and_then(|cells| cells.get(&a)) else {
+    fn fits(&self, a: CellKey, other: &Self, b: CellKey, tolerance_mm: f64) -> bool {
+        let Some((alo, ahi)) = self.bounds.as_ref().and_then(|cells| cells.get(&a)) else {
             return false;
         };
-        let Some((blo, bhi)) = other.0.as_ref().and_then(|cells| cells.get(&b)) else {
+        let Some((blo, bhi)) = other.bounds.as_ref().and_then(|cells| cells.get(&b)) else {
             return false;
         };
         let span: [f64; 3] = std::array::from_fn(|i| ahi[i].max(bhi[i]) - alo[i].min(blo[i]));
         match a.kind {
-            CellKind::Point => crate::math3::norm(span) <= a.kind.comparison_limit(),
-            _ => span.iter().all(|&d| d <= a.kind.comparison_limit()),
+            CellKind::Point => crate::math3::norm(span) <= a.kind.comparison_limit(tolerance_mm),
+            _ => span
+                .iter()
+                .all(|&d| d <= a.kind.comparison_limit(tolerance_mm)),
         }
+    }
+}
+
+#[cfg(test)]
+impl Default for BoundaryProofContext {
+    fn default() -> Self {
+        Self::new(super::TEST_BOUNDARY_TOL_MM)
     }
 }
 
@@ -364,8 +382,9 @@ const fn point_cell(components: PointKey) -> CellKey {
 pub(super) fn compare(
     a: &AnalyticBoundarySignature,
     b: &AnalyticBoundarySignature,
-    raw_a: impl FnOnce() -> Option<CellWitnesses>,
-    raw_b: impl FnOnce() -> Option<CellWitnesses>,
+    tolerance_mm: f64,
+    raw_a: impl FnOnce() -> Option<BoundaryProofContext>,
+    raw_b: impl FnOnce() -> Option<BoundaryProofContext>,
 ) -> Option<bool> {
     if a.supports.len() != b.supports.len() || a.chains.len() != b.chains.len() {
         return Some(false);
@@ -381,7 +400,7 @@ pub(super) fn compare(
     if points_b.difference(&points_a).any(|point| {
         !missing
             .iter()
-            .any(|target| point_cell(*target).possibly_matches(point_cell(*point)))
+            .any(|target| point_cell(*target).possibly_matches(point_cell(*point), tolerance_mm))
     }) {
         return Some(false);
     }
@@ -390,7 +409,9 @@ pub(super) fn compare(
     let raw_a = raw_a()?;
     let raw_b = raw_b()?;
     let raw_fits = |target: CellKey, key: CellKey| {
-        target == key || (target.possibly_matches(key) && raw_a.fits(target, &raw_b, key))
+        target == key
+            || (target.possibly_matches(key, tolerance_mm)
+                && raw_a.fits(target, &raw_b, key, tolerance_mm))
     };
     let point_map = correspondence(&points_a, &points_b, |target, key| {
         raw_fits(point_cell(*target), point_cell(*key))
@@ -452,7 +473,7 @@ mod tests {
         let a = plane_signature([10, 1, 0], 20, [30, 0, 0]);
         let b = plane_signature([11, 1, 0], 21, [31, 0, 0]);
         let raw = |delta: f64| {
-            let mut cells = CellWitnesses::tracked();
+            let mut cells = BoundaryProofContext::tracked(POINT_Q_MM);
             cells.record(
                 CellKind::Direction,
                 [quantize((10. + delta) * DIRECTION_Q, DIRECTION_Q)?, 1, 0],
@@ -462,16 +483,28 @@ mod tests {
             cells.point([(30. + delta) * POINT_Q_MM, 0., 0.])?;
             Some(cells)
         };
-        assert_eq!(compare(&a, &b, || raw(0.49), || raw(0.51)), Some(true));
-        assert_ne!(compare(&a, &b, || raw(-0.4), || raw(1.4)), Some(true));
+        assert_eq!(
+            compare(&a, &b, POINT_Q_MM, || raw(0.49), || raw(0.51)),
+            Some(true)
+        );
+        assert_ne!(
+            compare(&a, &b, POINT_Q_MM, || raw(-0.4), || raw(1.4)),
+            Some(true)
+        );
         let mut changed = b.clone();
         changed.chains.clear();
         assert_eq!(
-            compare(&a, &changed, || raw(0.49), || raw(0.51)),
+            compare(&a, &changed, POINT_Q_MM, || raw(0.49), || raw(0.51)),
             Some(false)
         );
         assert_ne!(
-            compare(&a, &b, || Some(CellWitnesses::tracked()), || raw(0.51)),
+            compare(
+                &a,
+                &b,
+                POINT_Q_MM,
+                || Some(BoundaryProofContext::tracked(POINT_Q_MM)),
+                || raw(0.51)
+            ),
             Some(true)
         );
     }
@@ -495,7 +528,7 @@ mod tests {
             signature.chains.extend(common.chains.clone());
         }
         let raw = |key, x: f64| {
-            let mut cells = CellWitnesses::tracked();
+            let mut cells = BoundaryProofContext::tracked(POINT_Q_MM);
             cells.record(
                 CellKind::Direction,
                 [key, 1, 0],
@@ -504,7 +537,7 @@ mod tests {
             Some(cells)
         };
         assert_eq!(
-            compare(&a, &b, || raw(10, 10.49), || raw(11, 10.51)),
+            compare(&a, &b, POINT_Q_MM, || raw(10, 10.49), || raw(11, 10.51)),
             Some(true)
         );
     }

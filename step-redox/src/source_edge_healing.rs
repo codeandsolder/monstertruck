@@ -247,7 +247,7 @@ fn verified_solid_uncertainty_mm(
     {
         bail!("both incident surfaces must be faces of the given source solid");
     }
-    crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+    crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         request.source.entities,
         index,
     )

@@ -397,8 +397,9 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
     let Some((id, entities)) = evaluated_step_solid(kernel, evaluated)? else {
         return Ok(false);
     };
-    let diagnostic =
-        crate::boundary_proof::analytic_boundary_diagnostic(id, &entities, &build_index(&entities));
+    let diagnostic = crate::boundary_proof::analytic_boundary_diagnostic_at_accuracy(
+        id, &entities, &build_index(&entities), source.recovery_tolerance_mm,
+    );
     Ok(crate::boundary_proof::compare_diagnostics(
         source,
         source_entities,
@@ -586,7 +587,7 @@ impl<'a, K: CadKernel> SourceRecovery<'a, K> {
         }
         // A deliberately loose rejection margin, not an admission tolerance.
         // The exact source signature is still mandatory for every survivor.
-        let pad = crate::cad_kernel::GeometryPolicy::PROJECT_STANDARD_TOLERANCE_MM;
+        let pad = self.boundary.recovery_tolerance_mm;
         if !proposal_extent::covers_witnesses(model, root, &self.boundary_vertices, pad) {
             return Ok(false);
         }
@@ -705,7 +706,7 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
                     )
                 })
             }) && crate::boundary_proof::requires_nonplanar_polynomial_carrier(
-                &face_ids, entities, index,
+                &face_ids, entities, index, source.boundary.recovery_tolerance_mm,
             );
         Some(Self {
             source,
@@ -747,7 +748,7 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
         let solid_id = self.source.solid_id;
         let mut fragments = Vec::with_capacity(cores.len() + self.extensions.len());
         let mut axes = Vec::with_capacity(fragments.capacity());
-        let mut max_residual_mm = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
+        let mut max_residual_mm = self.source.boundary.recovery_tolerance_mm;
         for core in cores {
             max_residual_mm = max_residual_mm.max(core.max_residual_mm);
             axes.push(core.z_axis);
@@ -1392,6 +1393,7 @@ mod tests {
         struct CountingKernel(Cell<usize>);
         impl CadKernel for CountingKernel {
             type Evaluated = KernelSummary;
+            fn for_source_recovery(&self, _: f64) -> Self { Self(Cell::new(self.0.get())) }
             fn evaluate(&self, _: &CadModel, _: NodeId) -> Result<Self::Evaluated> {
                 self.0.set(self.0.get() + 1);
                 bail!("evaluation sentinel");

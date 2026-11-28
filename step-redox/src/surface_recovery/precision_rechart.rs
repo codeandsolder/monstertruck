@@ -464,15 +464,6 @@ pub fn propose_source_cap_rechart(
     data_section: usize,
     solid_id: u64,
 ) -> Result<SourceCapRechartProposal> {
-    let strict_bound = crate::boundary_proof::ANALYTIC_BOUNDARY_PROOF_TOL_MM;
-    let audit =
-        audit_source_spline_cap_precision(source_step, data_section, solid_id, Some(strict_bound))?;
-    ensure!(
-        audit.fully_certified_strip_faces == audit.strip_faces,
-        "{} / {} source strip face trims are precision-proven",
-        audit.fully_certified_strip_faces,
-        audit.strip_faces
-    );
     let mut exchange = monstertruck_io::step::load::ParsedStepSource::parse(source_step)?.exchange;
     crate::step_io::require_supported_sections(&exchange)?;
     let source = &exchange
@@ -484,6 +475,16 @@ pub fn propose_source_cap_rechart(
     ensure!(
         index.len() == source.len(),
         "source STEP has repeated entity IDs"
+    );
+    let strict_bound =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, source, &index);
+    let audit =
+        audit_source_spline_cap_precision(source_step, data_section, solid_id, Some(strict_bound))?;
+    ensure!(
+        audit.fully_certified_strip_faces == audit.strip_faces,
+        "{} / {} source strip face trims are precision-proven",
+        audit.fully_certified_strip_faces,
+        audit.strip_faces
     );
     let original_boundary = analytic_boundary_diagnostic(solid_id, source, &index);
     let scale = crate::source_edge_locus::source_solid_length_scale_mm(solid_id, source)?;
@@ -682,7 +683,7 @@ mod tests {
         };
         let mut shifted = cartesian_point(original_pole_id, entities, &index)
             .context("source pole has no Cartesian coordinates")?;
-        shifted[1] += 5.0e-4;
+        shifted[1] += 0.1;
         let mut next_id = entities.iter().map(entity_id).max().unwrap_or(0) + 1;
         let new_pole = crate::step_entities::push_point(entities, &mut next_id, shifted);
         let record = simple_record_mut(&mut entities[index[&curve_id]])

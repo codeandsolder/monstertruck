@@ -968,7 +968,7 @@ pub fn audit_source_solid_bspline_incidences(
         conical_faces: 0,
         unexamined_faces: 0,
         declared_uncertainty_mm:
-            crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+            crate::source_accuracy::declared_source_uncertainty_by_representation_item(
                 entities, &index,
             )
             .get(&solid_id)

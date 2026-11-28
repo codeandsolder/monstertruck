@@ -1,13 +1,13 @@
 //! Injectivity of a positive-weight Bernstein profile transverse to a sweep.
 //! A span lies in its complete control hull. Separation certificates are
 //! therefore whole-domain proofs, not polyline or sampled-point tests.
-use super::{SplineCurveKey, TOL, decode};
+use super::{SplineCurveKey, POINT_Q_MM, decode};
 use crate::math3::{cross, dot, mul, normalize, sub};
 
 type Point = [f64; 3];
 
 fn transverse_direction(direction: Point, axis: Point) -> Option<Point> {
-    normalize(sub(direction, mul(axis, dot(axis, direction))), TOL)
+    normalize(sub(direction, mul(axis, dot(axis, direction))), POINT_Q_MM)
 }
 
 /// Candidate separating axes from the two projected control hulls.
@@ -31,7 +31,7 @@ fn monotone_span(points: &[Point], axis: Point) -> bool {
     let chord = sub(*last, *first);
     let monotone_on = |d: Point| {
         let d = if dot(chord, d) < 0. { mul(d, -1.) } else { d };
-        dot(chord, d) > TOL
+        dot(chord, d) > POINT_Q_MM
             && points
                 .windows(2)
                 .all(|pair| dot(sub(pair[1], pair[0]), d) >= 0.)
@@ -63,10 +63,10 @@ fn separated(left: &[Point], right: &[Point], adjacent: bool, axis: Point) -> bo
             // The common endpoint is exactly on the plane. At least one
             // strictly sided control on each span guarantees every interior
             // parameter is strictly sided by positive Bernstein weights.
-            (a_hi <= 0. && b_lo >= 0. && a_lo < -TOL && b_hi > TOL)
-                || (b_hi <= 0. && a_lo >= 0. && b_lo < -TOL && a_hi > TOL)
+            (a_hi <= 0. && b_lo >= 0. && a_lo < -POINT_Q_MM && b_hi > POINT_Q_MM)
+                || (b_hi <= 0. && a_lo >= 0. && b_lo < -POINT_Q_MM && a_hi > POINT_Q_MM)
         } else {
-            a_hi + TOL < b_lo || b_hi + TOL < a_lo
+            a_hi + POINT_Q_MM < b_lo || b_hi + POINT_Q_MM < a_lo
         }
     };
     directions(left, axis)

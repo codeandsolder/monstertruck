@@ -15,6 +15,7 @@
     reason = "test assertions intentionally state emptiness expectations explicitly"
 )]
 use super::*;
+use crate::step_graph::entity_ref_value;
 
 fn test_linear_profile_segment(
     face_index: usize,
@@ -74,69 +75,6 @@ fn profile_has_arc(
             && ((distance2(start, first) <= 1.0e-12 && distance2(end, second) <= 1.0e-12)
                 || (distance2(start, second) <= 1.0e-12 && distance2(end, first) <= 1.0e-12))
     })
-}
-
-#[test]
-fn reads_representation_length_uncertainty_with_hard_cap() -> anyhow::Result<()> {
-    fn tolerance_from(text: &str) -> anyhow::Result<Option<f64>> {
-        let exchange = step_p21::parser::parse(text)?;
-        let entities = &exchange
-            .data
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("parsed exchange has no DATA section"))?
-            .entities;
-        let index = build_index(entities);
-        let solid_id = entities
-            .iter()
-            .find(|entity| {
-                simple_record(entity).is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
-            })
-            .map(entity_id)
-            .ok_or_else(|| anyhow::anyhow!("fixture has no MANIFOLD_SOLID_BREP"))?;
-        Ok(
-            declared_source_uncertainty_by_representation_item(entities, &index)
-                .get(&solid_id)
-                .copied(),
-        )
-    }
-
-    let source = std::str::from_utf8(include_bytes!(
-        "../../validation/fixtures/native_conical_frustum.step"
-    ))?;
-    assert_eq!(tolerance_from(source)?, Some(1.0e-7));
-
-    let widened = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-06)", 1);
-    assert!(
-        (tolerance_from(&widened)?
-            .ok_or_else(|| anyhow::anyhow!("widened uncertainty missing"))?
-            - 5.0e-6)
-            .abs()
-            <= 1.0e-15
-    );
-
-    let excessive = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(2.E-05)", 1);
-    assert_eq!(tolerance_from(&excessive)?, None);
-
-    let centimetres = source.replacen(
-        "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.)",
-        "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.CENTI.,.METRE.)",
-        1,
-    );
-    assert!(
-        (tolerance_from(&centimetres)?
-            .ok_or_else(|| anyhow::anyhow!("centimetre uncertainty missing"))?
-            - 1.0e-6)
-            .abs()
-            <= 1.0e-15
-    );
-
-    let ambiguous = source.replacen(
-        "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117))",
-        "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117,#117))",
-        1,
-    );
-    assert_eq!(tolerance_from(&ambiguous)?, None);
-    Ok(())
 }
 
 fn test_circle_edge(
@@ -1509,12 +1447,12 @@ fn recovers_native_conical_frustum_fixture() -> anyhow::Result<()> {
     assert_eq!(recovered_with_declared_uncertainty.len(), 1);
     assert_eq!(
         recovered_with_declared_uncertainty[0].source_tolerance_mm,
-        MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM
+        NATIVE_STEP_RECOVERY_MM
     );
 
     let oversized_uncertainty = String::from_utf8_lossy(bytes).replacen(
         "LENGTH_MEASURE(1.E-07)",
-        "LENGTH_MEASURE(1.E-04)",
+        "LENGTH_MEASURE(5.E-02)",
         1,
     );
     let recovered_with_oversized_uncertainty =
@@ -1522,7 +1460,7 @@ fn recovers_native_conical_frustum_fixture() -> anyhow::Result<()> {
     assert_eq!(recovered_with_oversized_uncertainty.len(), 1);
     assert_eq!(
         recovered_with_oversized_uncertainty[0].source_tolerance_mm,
-        REVOLUTION_SOURCE_SUPPORT_TOL_MM
+        0.05
     );
 
     let tampered = String::from_utf8_lossy(bytes).replacen(
@@ -1868,7 +1806,10 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
         .find(|entity| simple_record(entity).is_some_and(|r| r.name == "MANIFOLD_SOLID_BREP"))
         .map(entity_id)
         .ok_or_else(|| anyhow::anyhow!("missing source solid"))?;
-    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+    let source_tolerance =
+        crate::source_accuracy::declared_source_uncertainty_by_representation_item(
+            entities, &index,
+        )
         .get(&solid_id)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("missing declared source tolerance"))?;
@@ -1934,7 +1875,10 @@ fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> a
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+    let source_tolerance =
+        crate::source_accuracy::declared_source_uncertainty_by_representation_item(
+            entities, &index,
+        )
         .get(&15385)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("source representation tolerance missing"))?;

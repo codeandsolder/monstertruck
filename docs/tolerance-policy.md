@@ -149,7 +149,7 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 
 ## Physical recovery accuracy (millimetres)
 
-- Native STEP reconstruction: `NATIVE_STEP_RECOVERY_MM` = 0.00001 mm (10 nm).
+- Native STEP reconstruction: `NATIVE_STEP_RECOVERY_MM` = 0.01 mm (10 µm) default; effective budget = max(default, declared source uncertainty in mm).
 - Tessellated source reconstruction: `MESH_RECOVERY_MM` = 0.01 mm (10 µm).
 
 A fitting allowance is not a minimum feature size, a coordinate quantization
@@ -260,8 +260,8 @@ source STEP examples and geometric difference, not just face count.
 | Family / job | Candidate target | Why / required check |
 |---|---|---|
 | Structural algebraic identity (exact knot structure, homogeneous proportionality) | f64 relative error ~1e-12--1e-10, scaled by coefficient magnitude and conditioning | Reject incompatible supports without trying to 'heal' them; separate source representation quantization from geometric equivalence |
-| STEP source fitting / recognition of intended features | 10 nm native project accuracy; broader proposal searches do not change output accuracy | Evaluate geometric residuals in original model coordinates, not arbitrary numerical quanta |
-| CAD reconstruction max geometry deviation | 10 nm native / 10 µm mesh; explicit CAD modeling policies are separate | Compare the rebuilt shape with the source, preserving meaningful topology and material orientation |
+| STEP source fitting / recognition of intended features | 10 µm default native project accuracy, raised to declared source uncertainty when larger; broader proposal searches do not change output accuracy | Evaluate geometric residuals in original model coordinates, not arbitrary numerical quanta |
+| CAD reconstruction max geometry deviation | 10 µm default for native and mesh, never below known source uncertainty; explicit CAD modeling policies are separate | Compare the rebuilt shape with the source, preserving meaningful topology and material orientation |
 | Surface/curve sampling for *seeding* intersections | Curvature/feature-dependent chord deviation ~0.005--0.05 mm, with a minimum-feature guard; subdivide adaptively | Tolerance-only benchmark reached a plateau at 0.01 mm sampling; coarse samples must never be used alone to prove incidence |
 | Exact surface-intersection residual | Conditioned spatial residual, typically aim 1e-7--1e-5 mm on mm-normalized source; escalate precision only where required | Need local Jacobian, floating-point scale, tangent near-singular handling; strict 4e-6 mm global cutoff is not a proof of branch identity |
 | Newton parameter convergence | No single meaningful universal value. Stop based on spatial residual + scaled parameter update, e.g. normalized relative 1e-8--1e-6 and conditioning-aware acceptance | Current 1e-6 is in *parameter coordinates*, can mean vastly different mm on different surfaces; log residual and step separately |
