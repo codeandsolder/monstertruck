@@ -81,7 +81,7 @@ fn sampled_cylindrical_stl_roundtrips_as_analytic_step_cylinders() {
     use monstertruck_modeling::mesh_recovery::{
         CylinderRecoveryOptions, recover_cylindrical_solid,
     };
-    use monstertruck_modeling::{InnerProduct, ParametricSurface, Vector3};
+    use monstertruck_modeling::{ParametricSurface, Vector3};
     let sides = 32;
     let rings = (0..2)
         .flat_map(|level| {

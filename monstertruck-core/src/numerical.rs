@@ -99,6 +99,15 @@ mod tests {
     }
 
     #[test]
+    fn qr_rejects_nonfinite_and_rank_deficient_maps() {
+        let mut singular = Matrix3::identity();
+        singular.set_column(1, &nalgebra::Vector3::zeros());
+        assert!(affine_qr(singular).is_none());
+        singular[(0, 0)] = f64::NAN;
+        assert!(affine_qr(singular).is_none());
+    }
+
+    #[test]
     fn companion_roots_scale_across_magnitudes() {
         for scale in [1e-9_f64, 1.0, 1e9] {
             let Some(mut roots) =

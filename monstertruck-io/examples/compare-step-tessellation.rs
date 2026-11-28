@@ -6,7 +6,7 @@
 use anyhow::Result;
 use clap::Parser;
 use monstertruck_io::step::load::Table;
-use monstertruck_mesh::{InnerProduct, Point3, PolygonMesh};
+use monstertruck_mesh::{Point3, PolygonMesh};
 use monstertruck_meshing::{analyzers::CalcVolume, tessellation::MeshableShape};
 use monstertruck_modeling::{Curve, Surface};
 use monstertruck_topology::compress::CompressedShell;

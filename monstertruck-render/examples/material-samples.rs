@@ -46,28 +46,16 @@ impl App for MyApp {
                     near_clip: 0.1,
                     far_clip: 100.0,
                 },
-                lights: vec![
-                    Light {
-                        position: Point3::new(-half_side, -half_side, half_camera_dist),
-                        color: Vector3::new(0.5, 0.5, 0.5),
-                        kind: LightType::Point,
-                    },
-                    Light {
-                        position: Point3::new(-half_side, half_side, half_camera_dist),
-                        color: Vector3::new(0.5, 0.5, 0.5),
-                        kind: LightType::Point,
-                    },
-                    Light {
-                        position: Point3::new(half_side, -half_side, half_camera_dist),
-                        color: Vector3::new(0.5, 0.5, 0.5),
-                        kind: LightType::Point,
-                    },
-                    Light {
-                        position: Point3::new(half_side, half_side, half_camera_dist),
-                        color: Vector3::new(0.5, 0.5, 0.5),
-                        kind: LightType::Point,
-                    },
-                ],
+                lights: [-half_side, half_side]
+                    .into_iter()
+                    .flat_map(|x| {
+                        [-half_side, half_side].map(|y| Light {
+                            position: Point3::new(x, y, half_camera_dist),
+                            color: Vector3::new(0.5, 0.5, 0.5),
+                            kind: LightType::Point,
+                        })
+                    })
+                    .collect(),
                 background: wgpu::Color {
                     r: BACKGROUND[0],
                     g: BACKGROUND[1],

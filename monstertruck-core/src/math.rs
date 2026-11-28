@@ -297,6 +297,51 @@ mod native_contract_tests {
     use super::*;
 
     #[test]
+    fn rotation_derivatives_follow_the_cross_product_generator() {
+        let axis = Unit::new_normalize(Vector3::new(1.0, -2.0, 3.0));
+        let (x, y, z) = (axis.x, axis.y, axis.z);
+        let generator = Matrix3::new(0.0, -z, y, z, 0.0, -x, -y, x, 0.0);
+        for angle in [-2.0, 0.0, 0.37, 2.8] {
+            let mut expected = Rotation3::from_axis_angle(&axis, angle).into_inner();
+            for order in 0..=8 {
+                let actual = axis_angle_derivative(order, *axis, angle);
+                assert!((actual - expected).norm() < 1e-12);
+                expected = generator * expected;
+            }
+        }
+    }
+
+    #[test]
+    fn normal_derivative_matches_curved_surface() {
+        // S(u,v) = (u, v, u²/2), evaluated at u=0.
+        let actual = surface_normal_derivative(
+            [Vector3::x(), Vector3::y()],
+            [Vector3::z(), Vector3::zeros()],
+        );
+        assert_eq!(actual, -Vector3::x());
+    }
+
+    #[test]
+    fn tangent_sphere_contact_solves_both_signed_sides() {
+        let section = (Point3::new(0.0, 0.0, 1.0), Vector3::z());
+        let planes = [
+            (Point3::origin(), Vector3::x()),
+            (Point3::origin(), Vector3::y()),
+        ];
+        for radius in [-2.0, 2.0] {
+            assert_eq!(
+                tangent_sphere_contacts(section, planes, radius),
+                Some((
+                    Point3::new(-radius, -radius, 1.0),
+                    Point3::new(0.0, -radius, 1.0),
+                    Point3::new(-radius, 0.0, 1.0)
+                ))
+            );
+        }
+        assert!(tangent_sphere_contacts(section, [planes[0]; 2], 1.0).is_none());
+    }
+
+    #[test]
     fn translation_affects_points_but_not_derivatives() {
         let transform = Matrix4::new_translation(&Vector3::new(1.0, -2.0, 3.0));
         let point = Point3::new(3.0, 4.0, 5.0);

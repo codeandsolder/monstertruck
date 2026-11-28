@@ -6,9 +6,9 @@ use image::{Rgb, RgbImage};
 use monstertruck_io::step::load::{
     Table,
     step_geometry::{
-        AffinePoint, Attributes, BoundedCurve, BoundingBox, Curve3D, InnerProduct, Invertible,
-        KERNEL_EPSILON, Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
-        PolygonMesh, PolylineCurve, StepParameterCurve, Surface, Vector2, Vector3, Zero,
+        AffinePoint, Attributes, BoundedCurve, BoundingBox, Curve3D, Invertible, KERNEL_EPSILON,
+        Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3, PolygonMesh, PolylineCurve,
+        StepParameterCurve, Surface, Vector2, Vector3, Zero,
     },
 };
 use monstertruck_meshing::prelude::*;
