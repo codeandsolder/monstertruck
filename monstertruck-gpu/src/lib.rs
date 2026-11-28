@@ -41,10 +41,7 @@ use bytemuck::{Pod, Zeroable};
 use derive_more::{Deref, DerefMut};
 use monstertruck_core::{
     bounding_box::BoundingBox,
-    math::{
-        AffinePoint, GeometryTransform, Homogeneous, InnerProduct, Matrix3, Matrix4, Point2,
-        Point3, SquareLinearMap, Vector3,
-    },
+    math::{GeometryTransform, Homogeneous, Matrix3, Matrix4, Point2, Point3, Vector3},
 };
 use std::sync::Arc;
 pub use wgpu;

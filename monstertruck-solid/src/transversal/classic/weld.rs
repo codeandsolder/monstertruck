@@ -599,7 +599,7 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 #[cfg(test)]
 mod weld_tests {
     use super::*;
-    use monstertruck_core::math::AffinePoint;
+
     use monstertruck_core::tolerance::{KERNEL_EPSILON, Tolerance};
     use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
     use monstertruck_modeling::{Curve, Surface};

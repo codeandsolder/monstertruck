@@ -11,7 +11,7 @@ mod tests;
 
 use super::{BandContext, Ring, signed_delta};
 use crate::mesh_recovery::SurfaceCarrier;
-use crate::{Edge, InnerProduct, ParametricCurve, Point3, Vector3};
+use crate::{Edge, ParametricCurve, Point3, Vector3};
 use controls::{Control, Controls};
 use interval::{Interval, angle};
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;

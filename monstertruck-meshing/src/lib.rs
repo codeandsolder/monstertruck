@@ -47,7 +47,7 @@ use monstertruck_mesh::{
     ParametricSurface3D, Point2, SearchNearestParameter, SearchParameter, SurfaceParameter, algo,
 };
 #[cfg(any(feature = "analyzers", feature = "filters"))]
-use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace, SquareLinearMap};
+use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace};
 #[cfg(feature = "filters")]
 use monstertruck_mesh::{ComponentWise, Tolerance, Vector2, polygon_mesh};
 #[cfg(feature = "analyzers")]

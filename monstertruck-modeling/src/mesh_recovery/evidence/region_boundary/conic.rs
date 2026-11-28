@@ -3,7 +3,7 @@
 //! parametrization of ellipse, parabola and hyperbola branches alike.
 
 use super::SurfaceCarrier;
-use crate::{BsplineCurve, Curve, InnerProduct, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
+use crate::{BsplineCurve, Curve, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// Independently constrained noncircular conic on a linear surface of

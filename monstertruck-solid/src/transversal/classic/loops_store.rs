@@ -26,7 +26,7 @@ pub(super) use ruled::{
 };
 
 use monstertruck_core::{
-    math::{AffinePoint, InnerProduct, MetricSpace, Point2, Point3, Vector2, Vector3},
+    math::{AffinePoint, MetricSpace, Point2, Point3, Vector2, Vector3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;

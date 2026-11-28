@@ -10,8 +10,8 @@ mod replay;
 pub use replay::BoundaryFacetInput;
 
 use crate::{
-    AffinePoint, BsplineCurve, BsplineSurface, Edge, Face, InnerProduct, KnotVector, NurbsSurface,
-    Point3, Surface, Vector3, Vector4, Wire, builder,
+    AffinePoint, BsplineCurve, BsplineSurface, Edge, Face, KnotVector, NurbsSurface, Point3,
+    Surface, Vector3, Vector4, Wire, builder,
 };
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,

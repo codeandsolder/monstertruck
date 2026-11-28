@@ -1,12 +1,11 @@
 use super::{
     AffinePoint, BoundaryCurveFromSamples, BoundedCurve, BoundedSurface, BoundingBox, Cut,
-    ExactParameterBoundary2D, GeometryTransform, Homogeneous, IncludeCurve, InnerProduct,
-    Invertible, KERNEL_EPSILON, Matrix3, Matrix4, MetricSpace, ParameterBoundary2D,
-    ParameterDivision1D, ParameterDivision2D, ParametricCurve, ParametricCurve3D,
-    ParametricSurface, ParametricSurface3D, Point2, Point3, SearchNearestParameter,
-    SearchNearestParameterD1, SearchParameter, SearchParameterD1, SearchParameterD2,
-    SearchParameterHint2D, Shell, Solid, SurfaceParameter, ToSameGeometry, Tolerance, Transformed,
-    Vector3, Vector4, bounding,
+    ExactParameterBoundary2D, GeometryTransform, Homogeneous, IncludeCurve, Invertible,
+    KERNEL_EPSILON, Matrix3, Matrix4, MetricSpace, ParameterBoundary2D, ParameterDivision1D,
+    ParameterDivision2D, ParametricCurve, ParametricCurve3D, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, SearchNearestParameter, SearchNearestParameterD1,
+    SearchParameter, SearchParameterD1, SearchParameterD2, SearchParameterHint2D, Shell, Solid,
+    SurfaceParameter, ToSameGeometry, Tolerance, Transformed, Vector3, Vector4, bounding,
 };
 use derive_more::From;
 use monstertruck_core::{ContentHasher, DeterministicContentHash};

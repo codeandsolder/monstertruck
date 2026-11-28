@@ -83,8 +83,8 @@
 //!   anything else refuses.
 
 use crate::{
-    AffinePoint, BoundingBox, Conic2D, Curve, Curve2D, Face, InnerProduct, Line, Matrix4,
-    ParameterCurve, Point2, Point3, Solid, Surface, Vector3, Vector4,
+    AffinePoint, BoundingBox, Conic2D, Curve, Curve2D, Face, Line, Matrix4, ParameterCurve, Point2,
+    Point3, Solid, Surface, Vector3, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
