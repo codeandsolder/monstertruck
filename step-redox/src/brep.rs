@@ -1233,12 +1233,14 @@ END-ISO-10303-21;
 
     #[test]
     fn planar_non_extrusion_bspline_falls_back_to_plane() -> anyhow::Result<()> {
+        // A degree-two row with a displaced middle pole is not an affine
+        // sweep; unequal row offsets also rule out a swapped-axis extrusion.
         let text = wrapped(
             "#1=CARTESIAN_POINT('',(0.,0.,3.));
-             #2=CARTESIAN_POINT('',(0.,1.,3.));
+             #2=CARTESIAN_POINT('',(0.,0.8,3.));
              #3=CARTESIAN_POINT('',(0.,2.,3.));
              #4=CARTESIAN_POINT('',(2.,0.,3.));
-             #5=CARTESIAN_POINT('',(2.,1.,3.));
+             #5=CARTESIAN_POINT('',(2.,1.3,3.));
              #6=CARTESIAN_POINT('',(2.,2.,3.));
              #10=B_SPLINE_SURFACE_WITH_KNOTS('',1,2,((#1,#2,#3),(#4,#5,#6)),.UNSPECIFIED.,.F.,.F.,.F.,(2,2),(3,3),(0.,1.),(0.,1.),.UNSPECIFIED.);",
         );
