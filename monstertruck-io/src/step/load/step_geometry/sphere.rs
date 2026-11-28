@@ -3,7 +3,6 @@ use super::{
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
     Vector3,
 };
-#[cfg(test)]
 use std::f64::consts::PI;
 use std::ops::Bound;
 impl ParametricSurface for Sphere {
