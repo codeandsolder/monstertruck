@@ -67,7 +67,7 @@ pub trait App: Sized + 'static {
         ControlFlow::Poll
     }
     /// By overriding this function, one can set the rendering process for each frame.
-    fn render(&mut self) {}
+    fn render(&mut self, _size: (u32, u32)) {}
     /// By overriding this function, one can change the behavior when the window is resized.
     fn resized(&mut self, _size: PhysicalSize<u32>) -> ControlFlow { Self::default_control_flow() }
     /// By overriding this function, one can change the behavior when the window is moved.
@@ -177,7 +177,7 @@ fn run_app<A: App>(event_loop: EventLoop<()>, window: Arc<Window>, mut app: A) -
                     A::default_control_flow()
                 }
                 WindowEvent::RedrawRequested => {
-                    app.render();
+                    app.render(window.inner_size().into());
                     A::default_control_flow()
                 }
                 WindowEvent::Moved(position) => app.moved(position),
