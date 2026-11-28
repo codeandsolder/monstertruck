@@ -1019,7 +1019,15 @@ fn native_edge(
         .and_then(Option::as_ref)
         .ok_or(NativeTrimError::UnresolvedVertex(b))?;
     let edge = match trim.geometry {
-        SharedTrimGeometry::Line(_) => builder::line(front, back),
+        SharedTrimGeometry::Line(_) => {
+            // Topological identity is not a geometric length proof. A
+            // collapsed line has no STEP direction and is not a valid trim.
+            let length = (back.point() - front.point()).norm();
+            if !length.is_finite() || length <= 0.0 {
+                return Err(NativeTrimError::EdgeGeometry);
+            }
+            builder::line(front, back)
+        }
         SharedTrimGeometry::Circle(circle) => native_circle_edge(
             front,
             back,
@@ -1678,6 +1686,83 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tilted_planes_bound_a_closed_linear_revolution_band()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for slope in [0.0_f64, 0.1] {
+            let ring = 24_usize;
+            let mut positions = Vec::new();
+            // Two parallel oblique planes, z = offset + 0.8*x, cut the
+            // revolution into disjoint non-isoparametric rims whose axial
+            // ranges overlap substantially. Neither boundary is a ring.
+            for offset in [-0.4, 0.4] {
+                for i in 0..ring {
+                    let angle = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(ring);
+                    let (sin, cos) = angle.sin_cos();
+                    let tilt = 0.8 * cos;
+                    let z = tilt.mul_add(2.0, offset) / (-slope).mul_add(tilt, 1.0);
+                    let r = slope.mul_add(z, 2.0);
+                    positions.push(Point3::new(r * cos, r * sin, z));
+                }
+            }
+            let mut faces = Vec::new();
+            for i in 0..ring {
+                let next = (i + 1) % ring;
+                faces.push(vec![i, next, next + ring, i + ring]);
+            }
+            faces.push((0..ring).rev().collect());
+            faces.push((ring..2 * ring).collect());
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions,
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let mut supports = evidence.source_planar_support[..ring].to_vec();
+            supports.sort_unstable();
+            supports.dedup();
+            let native = native_for_carrier(
+                &evidence,
+                &supports,
+                SurfaceCarrier::LinearRevolution {
+                    origin: Point3::new(0.0, 0.0, 0.0),
+                    axis: Vector3::z(),
+                    radius_at_origin: 2.0,
+                    slope,
+                },
+                0.2,
+            )?;
+            assert!(native.trims.iter().all(Result::is_ok));
+            assert!(
+                native
+                    .regions
+                    .iter()
+                    .all(|r| r.faces.is_ok() && !r.requires_chart_cut)
+            );
+            assert_eq!(
+                native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+                2
+            );
+            let shell = native
+                .regions
+                .into_iter()
+                .map(|r| r.faces)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), 4);
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.is_geometric_consistent());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn toroidal_band_splits_the_periodic_meridian_into_shared_chart_seams()
     -> Result<(), Box<dyn std::error::Error>> {
         let ring = 8_usize;
@@ -2047,6 +2132,37 @@ mod tests {
     }
 
     #[test]
+    fn distinct_vertex_identities_do_not_certify_collapsed_line() {
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let trim = SharedAnalyticTrim {
+            contact_path: 0,
+            regions: (0, Some(1)),
+            source_edges: Vec::new(),
+            geometry: SharedTrimGeometry::Line(super::super::ContactLineEvidence {
+                endpoints: [a, b],
+                direction: Vector3::x(),
+                chord_length: 1.0,
+                max_vertex_offset: 0.0,
+                max_reverse_step: 0.0,
+                exactly_collinear: true,
+            }),
+        };
+        let interval = TrimInterval {
+            endpoints: [0, 1],
+            sweep: 0.0,
+        };
+        let vertices = [Some(builder::vertex(a)), Some(builder::vertex(a))];
+        assert_ne!(vertices[0], vertices[1]);
+        assert!(matches!(
+            native_edge(&trim, interval, &vertices, native_options()),
+            Err(NativeTrimError::EdgeGeometry)
+        ));
+        let vertices = [Some(builder::vertex(a)), Some(builder::vertex(b))];
+        assert!(native_edge(&trim, interval, &vertices, native_options()).is_ok());
+    }
+
+    #[test]
     fn junction_refinement_preserves_existing_native_trim() -> Result<(), Box<dyn std::error::Error>>
     {
         let points = [Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
@@ -2160,76 +2276,89 @@ mod tests {
     #[test]
     fn tilted_planar_section_bounds_a_closed_toroidal_band()
     -> Result<(), Box<dyn std::error::Error>> {
-        let n = 24_usize;
-        let stations = 4_usize;
-        let mut positions = Vec::new();
-        // z = 0.1*x + 0.45 gives a regular noncircular upper rim.
-        for row in 0..stations {
-            for i in 0..n {
-                let azimuth = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
-                let (sine, cosine) = azimuth.sin_cos();
-                let slope = 0.1 * cosine;
-                let end = slope.atan() + ((0.45 + 3.0 * slope) / 1.0_f64.hypot(slope)).asin();
-                let meridian = end * crate::usize_to_f64(row) / crate::usize_to_f64(stations - 1);
-                let radius = 3.0 + meridian.cos();
-                positions.push(Point3::new(radius * cosine, radius * sine, meridian.sin()));
+        for both_variable in [false, true] {
+            let n = 24_usize;
+            let stations = 4_usize;
+            let mut positions = Vec::new();
+            // Both parallel tilted planes have globally overlapping meridian ranges,
+            // yet they are disjoint at every azimuth. Also retain the original
+            // exact lower-ring case.
+            for row in 0..stations {
+                for i in 0..n {
+                    let azimuth = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                    let (sine, cosine) = azimuth.sin_cos();
+                    let slope = 0.1 * cosine;
+                    let meridian_at = |height: f64| {
+                        slope.atan() + ((height + 3.0 * slope) / 1.0_f64.hypot(slope)).asin()
+                    };
+                    let start = if both_variable {
+                        meridian_at(-0.2)
+                    } else {
+                        0.0
+                    };
+                    let end = meridian_at(if both_variable { 0.2 } else { 0.45 });
+                    let fraction = crate::usize_to_f64(row) / crate::usize_to_f64(stations - 1);
+                    let meridian = (end - start).mul_add(fraction, start);
+                    let radius = 3.0 + meridian.cos();
+                    positions.push(Point3::new(radius * cosine, radius * sine, meridian.sin()));
+                }
             }
-        }
-        let mut faces = Vec::new();
-        for row in 0..stations - 1 {
-            for i in 0..n {
-                let a = row * n + i;
-                let b = row * n + (i + 1) % n;
-                let c = b + n;
-                let d = a + n;
-                faces.extend([vec![a, b, c], vec![a, c, d]]);
+            let mut faces = Vec::new();
+            for row in 0..stations - 1 {
+                for i in 0..n {
+                    let a = row * n + i;
+                    let b = row * n + (i + 1) % n;
+                    let c = b + n;
+                    let d = a + n;
+                    faces.extend([vec![a, b, c], vec![a, c, d]]);
+                }
             }
+            let patch_faces = faces.len();
+            faces.push((0..n).rev().collect());
+            faces.push(((stations - 1) * n..stations * n).collect());
+            let (native, trims) =
+                torus_section_fixture(positions, faces, patch_faces, [3.0, 1.0], 0.2)?;
+            assert!(
+                trims
+                    .trims
+                    .iter()
+                    .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
+            );
+            assert!(
+                native
+                    .regions
+                    .iter()
+                    .all(|r| r.faces.is_ok() && !r.requires_chart_cut),
+                "{:?}",
+                native
+                    .regions
+                    .iter()
+                    .map(|r| (
+                        r.region,
+                        r.faces.as_ref().map(Vec::len),
+                        r.requires_chart_cut
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+                2
+            );
+            let shell = native
+                .regions
+                .into_iter()
+                .map(|r| r.faces)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), 4);
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.is_geometric_consistent());
         }
-        let patch_faces = faces.len();
-        faces.push((0..n).rev().collect());
-        faces.push(((stations - 1) * n..stations * n).collect());
-        let (native, trims) =
-            torus_section_fixture(positions, faces, patch_faces, [3.0, 1.0], 0.2)?;
-        assert!(
-            trims
-                .trims
-                .iter()
-                .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
-        );
-        assert!(
-            native
-                .regions
-                .iter()
-                .all(|r| r.faces.is_ok() && !r.requires_chart_cut),
-            "{:?}",
-            native
-                .regions
-                .iter()
-                .map(|r| (
-                    r.region,
-                    r.faces.as_ref().map(Vec::len),
-                    r.requires_chart_cut
-                ))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
-            2
-        );
-        let shell = native
-            .regions
-            .into_iter()
-            .map(|r| r.faces)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<crate::Shell>();
-        assert_eq!(shell.len(), 4);
-        assert_eq!(
-            shell.shell_condition(),
-            monstertruck_topology::shell::ShellCondition::Closed
-        );
-        assert!(shell.is_geometric_consistent());
         Ok(())
     }
 

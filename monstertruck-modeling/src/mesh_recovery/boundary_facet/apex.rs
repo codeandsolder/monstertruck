@@ -2,10 +2,10 @@
 //!
 //! The continuous rational-curve certificate remains authoritative.
 
+use super::tangent::visit_span_tangents;
 use super::{
-    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, Point3, Vector3, Vector4, centroid,
-    cross, directed_pairs, finite, proof_bezier_spans, rational_point,
-    subdivide_homogeneous_bezier,
+    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, Point3, Vector3, centroid, cross,
+    directed_pairs, finite, proof_bezier_spans,
 };
 
 // Clip an apex proposal polygon to the left of a directed projected line.
@@ -25,38 +25,6 @@ fn clip_apex_polygon(points: &mut Vec<Point3>, normal: Vector3, origin: Point3, 
             points.push(a + (b - a) * (da / (da - db)));
         }
     }
-}
-
-// Endpoint control-polygon directions are the true rational tangent
-// directions for positive weights. Subdivision gives additional samples
-// without relying on the curve's parameter speed.
-fn clip_span_tangents(
-    points: &mut Vec<Point3>,
-    normal: Vector3,
-    controls: &[[f64; 4]],
-    depth: usize,
-    remaining: &mut usize,
-) -> Option<()> {
-    *remaining = remaining.checked_sub(1)?;
-    if points.is_empty() {
-        return Some(());
-    }
-    if depth > 0 {
-        let (left, right) = subdivide_homogeneous_bezier(controls)?;
-        clip_span_tangents(points, normal, &left, depth - 1, remaining)?;
-        return clip_span_tangents(points, normal, &right, depth - 1, remaining);
-    }
-    let point = |[x, y, z, w]: [f64; 4]| rational_point(Vector4::new(x, y, z, w));
-    let [a, b, ..] = controls else {
-        return None;
-    };
-    let [.., c, d] = controls else {
-        return None;
-    };
-    let (a, b, c, d) = (point(*a), point(*b), point(*c), point(*d));
-    clip_apex_polygon(points, normal, a, b - a);
-    clip_apex_polygon(points, normal, d, d - c);
-    Some(())
 }
 
 impl FacetFan<'_> {
@@ -81,15 +49,17 @@ impl FacetFan<'_> {
         let mut remaining = 32768;
         for depth in [0, 2, 4, 6] {
             for span in spans.iter().flatten() {
-                clip_span_tangents(
-                    &mut polygon,
-                    self.normal,
+                let viable = visit_span_tangents(
                     &span.controls,
                     depth,
                     &mut remaining,
+                    &mut |p, tangent| {
+                        clip_apex_polygon(&mut polygon, self.normal, p, tangent);
+                        polygon.len() >= 3
+                    },
                 )
                 .ok_or(original_error)?;
-                if polygon.len() < 3 {
+                if !viable {
                     return Err(original_error);
                 }
             }

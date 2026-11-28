@@ -113,22 +113,12 @@ impl BandContext<'_> {
             if i == *first || i == *second {
                 continue;
             }
-            let mut rim = Vec::new();
-            let mut sources = Vec::new();
-            for reference in cycle {
-                let edges = trims.get(reference.trim)?.as_ref().ok()?;
-                if reference.reversed {
-                    sources.extend(
-                        (0..edges.len())
-                            .rev()
-                            .map(|ordinal| (reference.trim, ordinal)),
-                    );
-                    rim.extend(edges.iter().rev().map(Edge::inverse));
-                } else {
-                    sources.extend((0..edges.len()).map(|ordinal| (reference.trim, ordinal)));
-                    rim.extend(edges.iter().cloned());
-                }
-            }
+            let torus_rim::OrientedRim {
+                edges: rim,
+                sources,
+            } = torus_rim::OrientedRim::collect(cycle, |id| {
+                trims.get(id)?.as_ref().ok().map(Vec::as_slice)
+            })?;
             let bounds = match torus_rim::rational::hole_bounds(self, &rim, axis, lower, span) {
                 Ok(bounds) => bounds,
                 Err(error) => {

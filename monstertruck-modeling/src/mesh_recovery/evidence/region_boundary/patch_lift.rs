@@ -339,6 +339,10 @@ pub(super) fn lift_native_source_edge(
             lifted.chord_deviation_upper_bound,
         )
     } else {
+        let length = (back.point() - front.point()).norm();
+        if !length.is_finite() || length <= 0.0 {
+            return None;
+        }
         (builder::line(front, back), movement)
     };
     (bound <= options.budget.chord && edge.is_geometric_consistent()).then_some((edge, bound))
