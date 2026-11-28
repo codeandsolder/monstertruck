@@ -20,7 +20,7 @@ let scene = Scene::new(handler, &SceneDescriptor {
                 &Point3::origin(),
                 &Vector3::y(),
             ).try_inverse().unwrap(),
-            method: ProjectionMethod::perspective((TAU / 8.0)),
+            method: ProjectionMethod::perspective(TAU / 8.0),
             near_clip: 0.1,
             far_clip: 100.0,
         },

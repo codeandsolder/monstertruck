@@ -1000,7 +1000,7 @@ pub mod monstertruck {
         let sweep = if closed {
             builder::SweepAngle::Closed
         } else {
-            builder::SweepAngle::Partial((angle_rad))
+            builder::SweepAngle::Partial(angle_rad)
         };
 
         let touches_axis = wires.iter().any(|wire| {

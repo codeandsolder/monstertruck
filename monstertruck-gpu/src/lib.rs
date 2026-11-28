@@ -16,7 +16,7 @@
 //!                 &Point3::origin(),
 //!                 &Vector3::y(),
 //!             ).try_inverse().unwrap(),
-//!             method: ProjectionMethod::perspective((TAU / 8.0)),
+//!             method: ProjectionMethod::perspective(TAU / 8.0),
 //!             near_clip: 0.1,
 //!             far_clip: 100.0,
 //!         },
@@ -273,7 +273,7 @@ pub enum ProjectionMethod {
 ///     // depends on the camera-to-world convention of this API,
 ///     // the matrix must be inverted
 ///     matrix: matrix.try_inverse().unwrap(),
-///     method: ProjectionMethod::perspective((PI / 4.0)),
+///     method: ProjectionMethod::perspective(PI / 4.0),
 ///     near_clip: 0.1,
 ///     far_clip: 1.0,
 /// };

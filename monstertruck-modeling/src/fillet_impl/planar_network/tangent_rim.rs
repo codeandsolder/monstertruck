@@ -44,7 +44,7 @@ impl Side {
                 sense,
             } => {
                 Matrix4::new_translation(&center.position_vector())
-                    * Matrix4::new_scaling((sense.mul_add(-radius, original)) / original)
+                    * Matrix4::new_scaling(sense.mul_add(-radius, original) / original)
                     * Matrix4::new_translation(&-center.position_vector())
             }
         };

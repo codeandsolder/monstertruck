@@ -219,7 +219,7 @@ impl ProjectedBounds {
         };
         for p in points {
             for (i, axis) in axes.iter().enumerate() {
-                let x = (*p - separation.origin).dot(&*axis);
+                let x = (*p - separation.origin).dot(axis);
                 bounds.low[i] = bounds.low[i].min(x);
                 bounds.high[i] = bounds.high[i].max(x);
             }

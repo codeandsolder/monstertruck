@@ -231,7 +231,7 @@ impl Camera {
     ///     // depends on the camera-to-world convention of this API,
     ///     // the matrix must be inverted
     ///     matrix: matrix.try_inverse().unwrap(),
-    ///     method: ProjectionMethod::perspective((PI / 4.0)),
+    ///     method: ProjectionMethod::perspective(PI / 4.0),
     ///     near_clip: 0.1,
     ///     far_clip: 1.0,
     /// };
