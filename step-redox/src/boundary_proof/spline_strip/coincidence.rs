@@ -649,8 +649,12 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
         assert!(maximum <= report.target_bound_mm);
 
-        let strict =
-            audit_source_spline_cap_precision(original, 0, *solid, Some(crate::boundary_proof::TEST_BOUNDARY_TOL_MM))?;
+        let strict = audit_source_spline_cap_precision(
+            original,
+            0,
+            *solid,
+            Some(crate::boundary_proof::TEST_BOUNDARY_TOL_MM),
+        )?;
         eprintln!(
             "strict boundary quantum={} mm, certified={}/{} caps={}, worst={} mm",
             crate::boundary_proof::TEST_BOUNDARY_TOL_MM,

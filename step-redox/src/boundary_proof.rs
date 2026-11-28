@@ -18,7 +18,7 @@ const TEST_BOUNDARY_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
 mod bounded;
 mod cell_correspondence;
-use cell_correspondence::{CellKind, BoundaryProofContext};
+use cell_correspondence::{BoundaryProofContext, CellKind};
 mod sphere_chart;
 mod spline_strip;
 pub use sphere_chart::{
@@ -374,7 +374,10 @@ pub(crate) fn analytic_boundary_diagnostic_at_accuracy(
     recovery_tolerance_mm: f64,
 ) -> AnalyticBoundaryDiagnostic {
     match analytic_boundary_signature(
-        solid_id, entities, index, &mut BoundaryProofContext::new(recovery_tolerance_mm),
+        solid_id,
+        entities,
+        index,
+        &mut BoundaryProofContext::new(recovery_tolerance_mm),
     ) {
         Ok(signature) => AnalyticBoundaryDiagnostic {
             solid_id,
@@ -490,10 +493,19 @@ fn analytic_boundary_signature(
         );
     }
     for (supports, arcs) in groups.cylinder_sections {
-        chains.extend(bounded::normalize_cylinder_sections(&supports, &arcs, tolerance_mm)?);
+        chains.extend(bounded::normalize_cylinder_sections(
+            &supports,
+            &arcs,
+            tolerance_mm,
+        )?);
     }
     for ((supports, key), arcs) in groups.cylinder_intersections {
-        chains.extend(bounded::normalize_intersections(&supports, key, &arcs, tolerance_mm)?);
+        chains.extend(bounded::normalize_intersections(
+            &supports,
+            key,
+            &arcs,
+            tolerance_mm,
+        )?);
     }
     chains.sort();
 
@@ -829,7 +841,8 @@ fn prove_all_supports_are_bounded(
 /// sequence into the same signature as a single line.
 fn normalize_linear_chains(
     supports: &[OrientedSupportKey; 2],
-    segments: &[(PointKey, PointKey)], tolerance_mm: f64,
+    segments: &[(PointKey, PointKey)],
+    tolerance_mm: f64,
 ) -> Result<Vec<BoundaryChainKey>, String> {
     let mut adjacency = BTreeMap::<PointKey, Vec<usize>>::new();
     for (index, &(start, end)) in segments.iter().enumerate() {
@@ -879,9 +892,7 @@ fn normalize_linear_chains(
                 from,
             );
             let projection = dot(offset, direction);
-            if projection <= previous
-                || norm(cross(offset, direction)) > tolerance_mm
-            {
+            if projection <= previous || norm(cross(offset, direction)) > tolerance_mm {
                 return Err("linear chain bends or backtracks".into());
             }
             previous = projection;
@@ -890,9 +901,7 @@ fn normalize_linear_chains(
         for &(other_start, other_end) in &spans {
             let a = sub(other_start, from);
             let b = sub(other_end, from);
-            if norm(cross(a, direction)) <= POINT_Q_MM
-                && norm(cross(b, direction)) <= POINT_Q_MM
-            {
+            if norm(cross(a, direction)) <= POINT_Q_MM && norm(cross(b, direction)) <= POINT_Q_MM {
                 let first = dot(a, direction);
                 let second = dot(b, direction);
                 let overlap = first.max(second).min(length) - first.min(second).max(0.);
@@ -1200,7 +1209,8 @@ fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey, tolerance_
 fn line_segment_lies_on_cone(
     line: brep::LineSupport,
     endpoints_mm: [PointKey; 2],
-    locus: &SupportLocusKey, tolerance_mm: f64,
+    locus: &SupportLocusKey,
+    tolerance_mm: f64,
 ) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
     let Some(start) = dequantize_vector(endpoints_mm[0], POINT_Q_MM) else {
@@ -1301,7 +1311,11 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2], tolerance_mm: f64) ->
     }
 }
 
-fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey, tolerance_mm: f64) -> bool {
+fn line_lies_on_support(
+    line: brep::LineSupport,
+    support: &SupportLocusKey,
+    tolerance_mm: f64,
+) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
     let Some(direction) = normalize(line.direction, 0.0) else {
         return false;
@@ -1336,14 +1350,20 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey, tole
             norm(cross(direction, axis)) <= ANGULAR_TOLERANCE
                 && (norm(radial) - radius).abs() <= tolerance_mm
         }
-        SupportLocusKey::SplineStrip { strip } => spline_strip::line_on_strip(line, strip, tolerance_mm),
+        SupportLocusKey::SplineStrip { strip } => {
+            spline_strip::line_on_strip(line, strip, tolerance_mm)
+        }
         SupportLocusKey::Cone { .. }
         | SupportLocusKey::Sphere { .. }
         | SupportLocusKey::Torus { .. } => false,
     }
 }
 
-fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey, tolerance_mm: f64) -> bool {
+fn circle_lies_on_support(
+    circle: brep::CircleSupport,
+    support: &SupportLocusKey,
+    tolerance_mm: f64,
+) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
     let Some(normal) = normalize(circle.normal, 0.0) else {
         return false;
@@ -1425,7 +1445,8 @@ fn dequantize_vector(vector: [i64; 3], quantum: f64) -> Option<[f64; 3]> {
 fn boundary_surface_support(
     surface_id: u64,
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>, tolerance_mm: f64,
+    index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> SurfaceSupport {
     let constructive = brep::surface_support(surface_id, entities, index);
     if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
@@ -1470,7 +1491,8 @@ fn canonical_boundary_direction(raw: [f64; 3]) -> Option<([f64; 3], [i64; 3])> {
 pub(crate) fn requires_nonplanar_polynomial_carrier(
     face_ids: &[u64],
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>, tolerance_mm: f64,
+    index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> bool {
     face_ids.iter().any(|&face_id| {
         let Some(surface_id) = brep::face_surface(face_id, entities, index) else {
@@ -1481,7 +1503,14 @@ pub(crate) fn requires_nonplanar_polynomial_carrier(
             Some("F") => false,
             _ => return false,
         };
-        spline_strip::has_nonplanar_polynomial_patch(face_id, surface_id, forward, entities, index, tolerance_mm)
+        spline_strip::has_nonplanar_polynomial_patch(
+            face_id,
+            surface_id,
+            forward,
+            entities,
+            index,
+            tolerance_mm,
+        )
     })
 }
 
@@ -2078,8 +2107,16 @@ mod tests {
             origin_mm: [0.0, 0.0, 1.0e-3],
             direction: [1.0, 0.0, 0.0],
         };
-        assert!(line_lies_on_support(on_plane, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
-        assert!(!line_lies_on_support(off_plane, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(line_lies_on_support(
+            on_plane,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
+        assert!(!line_lies_on_support(
+            off_plane,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     fn positive_cone() -> SupportLocusKey {
@@ -2112,20 +2149,26 @@ mod tests {
             x_direction: [1.0, 0.0, 0.0],
             radius_mm: 1.0,
         };
-        assert!(circle_lies_on_support(circle, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(circle_lies_on_support(
+            circle,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         assert!(!circle_lies_on_support(
             brep::CircleSupport {
                 radius_mm: 1.001,
                 ..circle
             },
-            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         assert!(!circle_lies_on_support(
             brep::CircleSupport {
                 center_mm: [0.0, 0.0, -2.0],
                 ..circle
             },
-            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         let negative_nappe = SupportLocusKey::Cone {
             apex_mm: [0, 0, 0],
@@ -2133,13 +2176,18 @@ mod tests {
             slope: 5_000_000_000,
             positive_nappe: false,
         };
-        assert!(!circle_lies_on_support(circle, &negative_nappe, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!circle_lies_on_support(
+            circle,
+            &negative_nappe,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         assert!(circle_lies_on_support(
             brep::CircleSupport {
                 center_mm: [0.0, 0.0, -2.0],
                 ..circle
             },
-            &negative_nappe, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &negative_nappe,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
     }
 
@@ -2151,18 +2199,29 @@ mod tests {
             direction: [1.0, 0.0, 2.0],
         };
         let forward = [[10_000_000, 0, 20_000_000], [20_000_000, 0, 40_000_000]];
-        assert!(line_segment_lies_on_cone(line, forward, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(line_segment_lies_on_cone(
+            line,
+            forward,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         // Same quadratic cone equation but the segment crosses the singular
         // apex into the opposite nappe. It must not be accepted.
         let crossing = [[10_000_000, 0, 20_000_000], [-10_000_000, 0, -20_000_000]];
-        assert!(!line_segment_lies_on_cone(line, crossing, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!line_segment_lies_on_cone(
+            line,
+            crossing,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         assert!(!line_segment_lies_on_cone(
             line,
             [
                 [10_000_000, 0, 20_000_000],
                 [20_000_000, 10_000_000, 40_000_000]
             ],
-            &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
     }
 
@@ -2369,8 +2428,16 @@ mod tests {
             radius_mm: 2.001,
             ..exact
         };
-        assert!(circle_lies_on_support(exact, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
-        assert!(!circle_lies_on_support(wrong, &support, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(circle_lies_on_support(
+            exact,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
+        assert!(!circle_lies_on_support(
+            wrong,
+            &support,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -2398,10 +2465,15 @@ mod tests {
     #[test]
     fn open_chain_normalization_ignores_degree_two_partitions() {
         let supports = [plane(0, true), plane(10_000_000, true)];
-        let one = normalize_linear_chains(&supports, &[([0, 0, 0], [20, 0, 0])], crate::boundary_proof::TEST_BOUNDARY_TOL_MM);
+        let one = normalize_linear_chains(
+            &supports,
+            &[([0, 0, 0], [20, 0, 0])],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+        );
         let split = normalize_linear_chains(
             &supports,
-            &[([0, 0, 0], [7, 0, 0]), ([7, 0, 0], [20, 0, 0])], crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+            &[([0, 0, 0], [7, 0, 0]), ([7, 0, 0], [20, 0, 0])],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
         );
         assert!(one.is_ok());
         assert_eq!(one, split);
@@ -2424,7 +2496,14 @@ mod tests {
             ],
             vec![([0, 0, 0], [30, 0, 0]), ([10, 0, 0], [40, 0, 0])],
         ] {
-            assert!(normalize_linear_chains(&supports, &edges, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_err());
+            assert!(
+                normalize_linear_chains(
+                    &supports,
+                    &edges,
+                    crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+                )
+                .is_err()
+            );
         }
     }
 
@@ -2637,7 +2716,8 @@ mod tests {
                 ([0, 0, 0], [10, 0, 0]),
                 ([10, 0, 0], [20, 0, 0]),
                 ([10, 0, 0], [10, 10, 0]),
-            ], crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+            ],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
         );
         assert!(result.is_err());
     }
@@ -2654,7 +2734,10 @@ mod tests {
                 offset_mm: 10_000_000,
             },
         ];
-        assert!(!support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!support_pair_can_intersect(
+            &loci,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -2670,7 +2753,10 @@ mod tests {
                 radius_mm: 10_000_000,
             },
         ];
-        assert!(!support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!support_pair_can_intersect(
+            &loci,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -2686,7 +2772,10 @@ mod tests {
                 radius_mm: 10_000_000,
             },
         ];
-        assert!(support_pair_can_intersect(&loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(support_pair_can_intersect(
+            &loci,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -2697,7 +2786,9 @@ mod tests {
             knots: vec![0.0, 0.0, 0.5, 1.0, 1.0],
             weights: Some(vec![1.0, 0.8, 1.0]),
         };
-        assert!(bspline_line_support(&exact, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_some());
+        assert!(
+            bspline_line_support(&exact, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_some()
+        );
 
         let mut bent = exact;
         bent.control_points_mm[1][1] = 1.0e-3;

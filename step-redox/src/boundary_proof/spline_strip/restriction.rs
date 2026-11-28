@@ -74,7 +74,12 @@ fn projected(p: Vector4) -> [f64; 3] { [p.x / p.w, p.y / p.w, p.z / p.w] }
 /// Locate endpoints on a monotone Bernstein span. The coordinate is only a
 /// parameter proposal; full restricted coefficient equality below is the
 /// certificate. Identical endpoint keys always obtain the same parameter.
-fn span_parameter(controls: &[Vector4], direction: [f64; 3], target: PointKey, tolerance_mm: f64) -> Option<f64> {
+fn span_parameter(
+    controls: &[Vector4],
+    direction: [f64; 3],
+    target: PointKey,
+    tolerance_mm: f64,
+) -> Option<f64> {
     let start = dot(projected(*controls.first()?), direction);
     let end = dot(projected(*controls.last()?), direction);
     let value = dot(decode(target)?, direction);
@@ -170,7 +175,8 @@ fn span_direction(controls: &[Vector4]) -> Option<[f64; 3]> {
 fn restricted_span(
     parent: &BernsteinSpanKey,
     piece: &BernsteinSpanKey,
-    actual: &[Vector4], tolerance_mm: f64,
+    actual: &[Vector4],
+    tolerance_mm: f64,
 ) -> Option<[f64; 2]> {
     if parent == piece {
         return Some([0., 1.]);
@@ -198,9 +204,15 @@ fn restricted_span(
         return None;
     }
     let direction = span_direction(&controls)?;
-    let lo = span_parameter(&controls, direction, *piece.points_mm.first()?, tolerance_mm)?;
+    let lo = span_parameter(
+        &controls,
+        direction,
+        *piece.points_mm.first()?,
+        tolerance_mm,
+    )?;
     let hi = span_parameter(&controls, direction, *piece.points_mm.last()?, tolerance_mm)?;
-    (lo < hi && same_restricted_span(&restrict_span(&controls, lo, hi), actual, tolerance_mm)).then_some([lo, hi])
+    (lo < hi && same_restricted_span(&restrict_span(&controls, lo, hi), actual, tolerance_mm))
+        .then_some([lo, hi])
 }
 
 /// A restriction may subdivide any individual original knot span. Its
@@ -209,7 +221,8 @@ fn restricted_span(
 fn restriction_in_order(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
-    ends: [PointKey; 2], tolerance_mm: f64,
+    ends: [PointKey; 2],
+    tolerance_mm: f64,
 ) -> Option<[ProfilePosition; 2]> {
     let mut interval: Option<[ProfilePosition; 2]> = None;
     for (j, (span, actual)) in piece.key.spans.iter().zip(&piece.controls).enumerate() {
@@ -280,7 +293,8 @@ fn full_profile_interval(parent: &SplineCurveKey) -> Option<[ProfilePosition; 2]
 pub(super) fn profile_piece(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
-    mut ends: [PointKey; 2], tolerance_mm: f64,
+    mut ends: [PointKey; 2],
+    tolerance_mm: f64,
 ) -> Option<[ProfilePosition; 2]> {
     if *parent == piece.key && parent.ends()? == ends {
         return full_profile_interval(parent);
@@ -371,7 +385,12 @@ mod tests {
             .collect::<Vec<_>>();
         let interval = |curve: &BSplineSupport| {
             let piece = curve_evidence(curve)?;
-            profile_piece(&parent.key, &piece, piece.key.ends()?, crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
+            profile_piece(
+                &parent.key,
+                &piece,
+                piece.key.ends()?,
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+            )
         };
         let pieces = children
             .iter()

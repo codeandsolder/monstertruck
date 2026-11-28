@@ -2,9 +2,9 @@
 //! matching endpoint pairs establishes a curved edge. Retain complete positive-
 //! weight rational Bernstein control nets, ordered spans, and actual trims.
 use super::{
-    BSplineSupport, BoundaryProofContext, CurveSupport,
-    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded,
-    dequantize_scalar, dequantize_vector, point_key,
+    BSplineSupport, BoundaryProofContext, CurveSupport, DIRECTION_Q, EdgeGeometry,
+    OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded, dequantize_scalar,
+    dequantize_vector, point_key,
 };
 use crate::{
     brep,
@@ -219,7 +219,8 @@ pub(super) fn has_nonplanar_polynomial_patch(
     surface_id: u64,
     forward: bool,
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>, tolerance_mm: f64,
+    index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> bool {
     crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index).is_some_and(
         |(profiles, _)| {
@@ -425,7 +426,8 @@ fn embedded_translated_profiles(
 /// coordinate-key cell boundary despite being within the proof budget.
 fn curve_matches_edge(
     spline: &BSplineSupport,
-    edge: &EdgeGeometry, tolerance_mm: f64,
+    edge: &EdgeGeometry,
+    tolerance_mm: f64,
 ) -> Option<(CurveEvidence, [PointKey; 2])> {
     let evidence = curve_evidence(spline)?;
     let actual = if edge.parameter_forward == evidence.forward {
@@ -442,8 +444,9 @@ fn curve_matches_edge(
     }
     let expected_keys = evidence.key.ends()?;
     let bound = |point: PointKey, end: [f64; 3]| {
-        decode(point)
-            .is_some_and(|point| distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= tolerance_mm)
+        decode(point).is_some_and(|point| {
+            distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= tolerance_mm
+        })
     };
     if actual[0] == actual[1] || !bound(actual[0], expected[0]) || !bound(actual[1], expected[1]) {
         return None;
@@ -519,7 +522,8 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry, tolerance_mm: f64
 fn full_trim(
     profiles: &[SplineCurveKey; 2],
     forward: bool,
-    loops: &[brep::FaceLoop], tolerance_mm: f64,
+    loops: &[brep::FaceLoop],
+    tolerance_mm: f64,
 ) -> Option<()> {
     let [boundary] = loops else {
         return None;
@@ -552,7 +556,9 @@ fn full_trim(
         let matching_generators = generators
             .iter()
             .enumerate()
-            .filter_map(|(i, &generator)| generator_piece(generator, &geometry, tolerance_mm).map(|()| i))
+            .filter_map(|(i, &generator)| {
+                generator_piece(generator, &geometry, tolerance_mm).map(|()| i)
+            })
             .collect::<Vec<_>>();
         match matching_generators.as_slice() {
             [i] => {
@@ -627,7 +633,8 @@ pub(super) fn oriented_key(
     full_trim(
         &profiles,
         outward_positive,
-        &brep::face_loops(face_id, entities, index)?, tolerance_mm,
+        &brep::face_loops(face_id, entities, index)?,
+        tolerance_mm,
     )?;
     Some(OrientedSupportKey::SplineStrip {
         strip: Box::new(SplineStripKey { profiles }),
@@ -644,7 +651,8 @@ pub(super) fn reversed_face_sense_is_proven(
     surface_id: u64,
     forward: bool,
     entities: &[EntityInstance],
-    index: &HashMap<u64, usize>, tolerance_mm: f64,
+    index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> bool {
     let Some((profiles, outward_positive)) = canonical_strip(
         surface_id,
@@ -662,7 +670,11 @@ pub(super) fn reversed_face_sense_is_proven(
         && full_trim(&profiles, !outward_positive, &loops, tolerance_mm).is_some()
 }
 
-pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey, tolerance_mm: f64) -> bool {
+pub(super) fn line_on_strip(
+    line: brep::LineSupport,
+    strip: &SplineStripKey,
+    tolerance_mm: f64,
+) -> bool {
     let Some([a, b]) = strip.profiles[0].ends() else {
         return false;
     };
@@ -678,7 +690,8 @@ pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey, tol
 pub(super) fn certified_edge(
     edge: &EdgeGeometry,
     spline: &BSplineSupport,
-    loci: &[SupportLocusKey; 2], tolerance_mm: f64,
+    loci: &[SupportLocusKey; 2],
+    tolerance_mm: f64,
 ) -> Option<ProfilePiece> {
     if !loci
         .iter()
@@ -776,15 +789,24 @@ mod tests {
     #[test]
     fn polynomial_exclusion_requires_a_single_nonplanar_full_span() {
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(nonplanar_polynomial_profiles(&profiles, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         // Different common weights in the two sweep rows only rechart v.
         profiles[0].weights = Some(vec![1.; 4]);
         profiles[1].weights = Some(vec![2.; 4]);
-        assert!(nonplanar_polynomial_profiles(&profiles, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         // A rational arc is not ruled out by polynomial algebra.
         profiles[0].weights = Some(vec![1., 0.8, 0.8, 1.]);
         profiles[1].weights = Some(vec![2., 1.6, 1.6, 2.]);
-        assert!(!nonplanar_polynomial_profiles(&profiles, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
 
         // A bent piecewise-linear profile has a nonplanar complete
         // control net but each individual swept span is a plane.
@@ -794,7 +816,10 @@ mod tests {
             knots: vec![0., 0., 0.5, 1., 1.],
             weights: None,
         };
-        assert!(!nonplanar_polynomial_profiles(&[bent(0.), bent(1.)], crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!nonplanar_polynomial_profiles(
+            &[bent(0.), bent(1.)],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
 
         // A degree-elevated line remains planar.
         let mut profiles = [profile(0.), profile(0.01)];
@@ -803,7 +828,10 @@ mod tests {
                 point[1] = 0.;
             }
         }
-        assert!(!nonplanar_polynomial_profiles(&profiles, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(!nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -928,7 +956,15 @@ mod tests {
                 edge(c, a, line(a), false, 4),
             ],
         };
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_some());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_some()
+        );
         let unpartitioned = boundary.clone();
         let midpoint = [b[0], b[1], f64::midpoint(b[2], d[2])];
         boundary.edges.splice(
@@ -938,19 +974,67 @@ mod tests {
                 edge(midpoint, d, line(b), true, 5),
             ],
         );
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_some());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_some()
+        );
         boundary.edges[2].start_mm = b;
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary = unpartitioned;
-        assert!(full_trim(&keys, false, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
-        assert!(full_trim(&keys, true, &[boundary.clone(), boundary.clone()], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                false,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                &[boundary.clone(), boundary.clone()],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary.edges[0].parameter_forward = false;
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary.edges[0].parameter_forward = true;
         let mut changed = low;
         changed.control_points_mm[1][1] += 0.01;
         boundary.edges[0].support = CurveSupport::BSpline(changed);
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary), crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         Ok(())
     }
 }

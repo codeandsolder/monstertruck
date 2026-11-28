@@ -38,7 +38,8 @@ pub fn reconcile_strip_face_senses(
 ) -> Option<ReconciledStripBoundary> {
     let faces = strict_closed_shell_faces(solid_id, entities, index).ok()?;
     let mut repairs = Vec::new();
-    let tolerance_mm = crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let mut cells = BoundaryProofContext::new(tolerance_mm);
     for face_id in faces {
         if oriented_support_key(face_id, entities, index, &mut cells).is_some() {
@@ -51,7 +52,12 @@ pub fn reconcile_strip_face_senses(
             _ => return None,
         };
         if !spline_strip::reversed_face_sense_is_proven(
-            face_id, surface_id, forward, entities, index, tolerance_mm,
+            face_id,
+            surface_id,
+            forward,
+            entities,
+            index,
+            tolerance_mm,
         ) {
             return None;
         }
@@ -180,7 +186,12 @@ mod tests {
             .into_iter()
             .find(|&face| {
                 matches!(
-                    oriented_support_key(face, entities, &index, &mut BoundaryProofContext::default()),
+                    oriented_support_key(
+                        face,
+                        entities,
+                        &index,
+                        &mut BoundaryProofContext::default()
+                    ),
                     Some(super::super::OrientedSupportKey::Plane { .. })
                 )
             })

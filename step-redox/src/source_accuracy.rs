@@ -149,10 +149,35 @@ mod tests {
                 .map(entity_id)
                 .ok_or_else(|| anyhow::anyhow!("fixture has no MANIFOLD_SOLID_BREP"))?;
             Ok((
-            declared_source_uncertainty_by_representation_item(entities, &index)
-                .get(&solid_id)
-                .copied(),
-            source_recovery_tolerance_mm(solid_id, entities, &index),
-        ))
+                declared_source_uncertainty_by_representation_item(entities, &index)
+                    .get(&solid_id)
+                    .copied(),
+                source_recovery_tolerance_mm(solid_id, entities, &index),
+            ))
+        }
+        let source = std::str::from_utf8(include_bytes!(
+            "../validation/fixtures/native_conical_frustum.step"
+        ))?;
+        assert_eq!(tolerance_from(source)?, (Some(1.0e-7), 0.01));
+        let widened = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-02)", 1);
+        assert_eq!(tolerance_from(&widened)?, (Some(0.05), 0.05));
+        let centimetres = widened.replacen(
+            "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.)",
+            "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.CENTI.,.METRE.)",
+            1,
+        );
+        assert_eq!(tolerance_from(&centimetres)?, (Some(0.5), 0.5));
+        let duplicate = widened.replacen(
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117))",
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117,#117))",
+            1,
+        );
+        assert_eq!(tolerance_from(&duplicate)?, (Some(0.05), 0.05));
+        let absent = source.replace(
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117))",
+            "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT(())",
+        );
+        assert_eq!(tolerance_from(&absent)?, (None, 0.01));
+        Ok(())
     }
 }

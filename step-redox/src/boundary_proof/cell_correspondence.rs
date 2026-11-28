@@ -65,11 +65,17 @@ pub(super) struct BoundaryProofContext {
 
 impl BoundaryProofContext {
     pub(super) const fn new(tolerance_mm: f64) -> Self {
-        Self { bounds: None, tolerance_mm }
+        Self {
+            bounds: None,
+            tolerance_mm,
+        }
     }
 
     pub(super) const fn tracked(tolerance_mm: f64) -> Self {
-        Self { bounds: Some(BTreeMap::new()), tolerance_mm }
+        Self {
+            bounds: Some(BTreeMap::new()),
+            tolerance_mm,
+        }
     }
 
     pub(super) const fn tolerance_mm(&self) -> f64 { self.tolerance_mm }
@@ -133,9 +139,7 @@ impl BoundaryProofContext {
 
 #[cfg(test)]
 impl Default for BoundaryProofContext {
-    fn default() -> Self {
-        Self::new(super::TEST_BOUNDARY_TOL_MM)
-    }
+    fn default() -> Self { Self::new(super::TEST_BOUNDARY_TOL_MM) }
 }
 
 fn map_vector(key: &mut [i64; 3], kind: CellKind, map: &mut dyn FnMut(CellKey) -> CellKey) {

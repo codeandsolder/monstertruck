@@ -1,7 +1,7 @@
 //! Injectivity of a positive-weight Bernstein profile transverse to a sweep.
 //! A span lies in its complete control hull. Separation certificates are
 //! therefore whole-domain proofs, not polyline or sampled-point tests.
-use super::{SplineCurveKey, POINT_Q_MM, decode};
+use super::{POINT_Q_MM, SplineCurveKey, decode};
 use crate::math3::{cross, dot, mul, normalize, sub};
 
 type Point = [f64; 3];

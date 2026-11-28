@@ -398,7 +398,10 @@ fn rebuilt_kernel_boundary_matches_diagnostic<K: CadKernel>(
         return Ok(false);
     };
     let diagnostic = crate::boundary_proof::analytic_boundary_diagnostic_at_accuracy(
-        id, &entities, &build_index(&entities), source.recovery_tolerance_mm,
+        id,
+        &entities,
+        &build_index(&entities),
+        source.recovery_tolerance_mm,
     );
     Ok(crate::boundary_proof::compare_diagnostics(
         source,
@@ -706,7 +709,10 @@ impl<'a, 's, K: CadKernel> CoreUnionEvidence<'a, 's, K> {
                     )
                 })
             }) && crate::boundary_proof::requires_nonplanar_polynomial_carrier(
-                &face_ids, entities, index, source.boundary.recovery_tolerance_mm,
+                &face_ids,
+                entities,
+                index,
+                source.boundary.recovery_tolerance_mm,
             );
         Some(Self {
             source,

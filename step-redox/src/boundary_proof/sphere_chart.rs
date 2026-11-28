@@ -101,7 +101,12 @@ fn aligned_chart(
     let mut parallels = Vec::new();
     let mut meridians = Vec::new();
     for (&edge, &circle) in circles {
-        if !super::bounded::circle_on_sphere(circle, sphere.center_mm, sphere.radius_mm, super::ANALYTIC_BOUNDARY_PROOF_TOL_MM) {
+        if !super::bounded::circle_on_sphere(
+            circle,
+            sphere.center_mm,
+            sphere.radius_mm,
+            super::ANALYTIC_BOUNDARY_PROOF_TOL_MM,
+        ) {
             return None;
         }
         let offset = norm(sub(circle.center_mm, sphere.center_mm));

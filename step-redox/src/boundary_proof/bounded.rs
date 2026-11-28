@@ -1,12 +1,11 @@
 //! Physical line and circular-arc coverage, independent of edge subdivision.
 //! Samples propose a circle; whole-domain rational certificates prove it.
 use super::{
- BSplineSupport, BoundaryChainKey, CellKind, BoundaryProofContext,
-    CircleLocusKey, CurveSupport, DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM,
-    PointKey, SupportLocusKey, brep, bspline_domain, bspline_line_support,
-    canonical_boundary_direction, circle_lies_on_support, circle_section_of_plane_and_support,
-    dequantize_scalar, dequantize_vector, evaluate_bspline, line_lies_on_support,
-    line_segment_lies_on_cone, support_locus_key, support_pair_can_intersect,
+    BSplineSupport, BoundaryChainKey, BoundaryProofContext, CellKind, CircleLocusKey, CurveSupport,
+    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, brep,
+    bspline_domain, bspline_line_support, canonical_boundary_direction, circle_lies_on_support,
+    circle_section_of_plane_and_support, dequantize_scalar, dequantize_vector, evaluate_bspline,
+    line_lies_on_support, line_segment_lies_on_cone, support_locus_key, support_pair_can_intersect,
 };
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use monstertruck_geometry::{
@@ -99,7 +98,12 @@ fn full_circle(circle: brep::CircleSupport) -> Option<NurbsCurve<Vector4>> {
 /// Exact range of distance from every point of a circle to a sphere center.
 /// A nonconcentric circular section is allowed; endpoint samples alone
 /// cannot determine the radial extremum.
-pub(super) fn circle_on_sphere(circle: brep::CircleSupport, center: [f64; 3], radius: f64, tolerance_mm: f64) -> bool {
+pub(super) fn circle_on_sphere(
+    circle: brep::CircleSupport,
+    center: [f64; 3],
+    radius: f64,
+    tolerance_mm: f64,
+) -> bool {
     let delta = sub(circle.center_mm, center);
     let height = dot(delta, circle.normal);
     let radial = norm(sub(delta, mul(circle.normal, height)));
@@ -125,7 +129,8 @@ fn circle_on_torus(
     center: [f64; 3],
     axis: [f64; 3],
     major: f64,
-    minor: f64, tolerance_mm: f64,
+    minor: f64,
+    tolerance_mm: f64,
 ) -> bool {
     if !(major > minor && minor > POINT_Q_MM) {
         return false;
@@ -151,7 +156,8 @@ fn circle_on_torus(
 
 pub(super) fn circle_on_curved_support(
     circle: brep::CircleSupport,
-    support: &SupportLocusKey, tolerance_mm: f64,
+    support: &SupportLocusKey,
+    tolerance_mm: f64,
 ) -> bool {
     let Some(normal) = normalize(circle.normal, 0.) else {
         return false;
@@ -189,7 +195,8 @@ pub(super) fn circle_on_curved_support(
             sphere_or_torus(support)
                 .zip(full_circle(circle))
                 .is_some_and(|(support, curve)| {
-                    certify_nurbs_curve_on_support(&curve, support, tolerance_mm) == CurveIncidence::Proven
+                    certify_nurbs_curve_on_support(&curve, support, tolerance_mm)
+                        == CurveIncidence::Proven
                 })
         }
         _ => false,
@@ -198,7 +205,8 @@ pub(super) fn circle_on_curved_support(
 
 fn on_circle(p: [f64; 3], circle: brep::CircleSupport, tolerance_mm: f64) -> bool {
     let delta = sub(p, circle.center_mm);
-    dot(delta, circle.normal).abs() <= tolerance_mm && (norm(delta) - circle.radius_mm).abs() <= tolerance_mm
+    dot(delta, circle.normal).abs() <= tolerance_mm
+        && (norm(delta) - circle.radius_mm).abs() <= tolerance_mm
 }
 pub(super) fn on_line(p: [f64; 3], line: brep::LineSupport, tolerance_mm: f64) -> bool {
     normalize(line.direction, 0.)
@@ -207,7 +215,8 @@ pub(super) fn on_line(p: [f64; 3], line: brep::LineSupport, tolerance_mm: f64) -
 fn line_incidence(
     edge: &EdgeGeometry,
     line: brep::LineSupport,
-    loci: &[SupportLocusKey; 2], tolerance_mm: f64,
+    loci: &[SupportLocusKey; 2],
+    tolerance_mm: f64,
 ) -> bool {
     edge.start != edge.end
         && [edge.start, edge.end]
@@ -429,7 +438,12 @@ impl CylinderSectionChart {
             && (norm(self.project(p)) - self.radius).abs() <= tolerance_mm
     }
 
-    fn certify(&self, edge: &EdgeGeometry, curve: &NurbsCurve<Vector4>, tolerance_mm: f64) -> Option<Arc> {
+    fn certify(
+        &self,
+        edge: &EdgeGeometry,
+        curve: &NurbsCurve<Vector4>,
+        tolerance_mm: f64,
+    ) -> Option<Arc> {
         let plane = AnalyticSupport::Plane {
             origin: point(self.plane_origin),
             normal: vector(self.plane_normal),
@@ -492,7 +506,8 @@ impl CylinderSectionChart {
 pub(super) fn certify_flagged_angular_section(
     edge: &EdgeGeometry,
     curve: &CurveSupport,
-    loci: &[SupportLocusKey; 2], tolerance_mm: f64,
+    loci: &[SupportLocusKey; 2],
+    tolerance_mm: f64,
 ) -> Option<BoundedEdge> {
     let CurveSupport::BSpline(spline) = curve else {
         return None;
@@ -515,7 +530,9 @@ pub(super) fn classify(
         return None;
     }
     match curve {
-        CurveSupport::Line(line) => line_incidence(edge, *line, loci, tolerance_mm).then_some(BoundedEdge::Line),
+        CurveSupport::Line(line) => {
+            line_incidence(edge, *line, loci, tolerance_mm).then_some(BoundedEdge::Line)
+        }
         CurveSupport::Circle(circle) => circle_arc(edge, *circle, None, loci, cells),
         CurveSupport::BSpline(spline) => {
             let rational = spline.rational_curve()?;
@@ -530,15 +547,18 @@ pub(super) fn classify(
             {
                 return Some(BoundedEdge::Line);
             }
-            if let Some(arc) =
-                CylinderSectionChart::new(loci).and_then(|chart| chart.certify(edge, &rational, tolerance_mm))
+            if let Some(arc) = CylinderSectionChart::new(loci)
+                .and_then(|chart| chart.certify(edge, &rational, tolerance_mm))
             {
                 return Some(BoundedEdge::CylinderSection(arc));
             }
-            if let Some(intersection) = certify_crossing_cylinders(edge, &rational, loci, tolerance_mm) {
+            if let Some(intersection) =
+                certify_crossing_cylinders(edge, &rational, loci, tolerance_mm)
+            {
                 return Some(intersection);
             }
-            if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci, tolerance_mm) {
+            if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci, tolerance_mm)
+            {
                 return Some(BoundedEdge::Spline(key));
             }
             let proposed = circle_section_of_plane_and_support(&loci[0], &loci[1])
@@ -564,7 +584,8 @@ pub(super) fn classify(
 pub(super) fn normalize_arcs(
     supports: &[OrientedSupportKey; 2],
     locus: &CircleLocusKey,
-    arcs: &[Arc], tolerance_mm: f64,
+    arcs: &[Arc],
+    tolerance_mm: f64,
 ) -> Result<Vec<BoundaryChainKey>, String> {
     let radius = dequantize_scalar(locus.radius_mm).ok_or("invalid circle radius")?;
     let tol = tolerance_mm / radius;
@@ -588,21 +609,23 @@ pub(super) fn normalize_arcs(
 
 pub(super) fn normalize_cylinder_sections(
     supports: &[OrientedSupportKey; 2],
-    arcs: &[Arc], tolerance_mm: f64,
+    arcs: &[Arc],
+    tolerance_mm: f64,
 ) -> Result<Vec<BoundaryChainKey>, String> {
     let chart = CylinderSectionChart::new(&supports.each_ref().map(support_locus_key))
         .ok_or("invalid oblique cylinder section")?;
-    normalize_angular_chains(arcs, tolerance_mm / chart.radius, chart.axis, |p| chart.project(p)).map(
-        |chains| {
-            chains
-                .into_iter()
-                .map(|endpoints_mm| BoundaryChainKey::CylinderSection {
-                    supports: supports.clone(),
-                    endpoints_mm,
-                })
-                .collect()
-        },
-    )
+    normalize_angular_chains(arcs, tolerance_mm / chart.radius, chart.axis, |p| {
+        chart.project(p)
+    })
+    .map(|chains| {
+        chains
+            .into_iter()
+            .map(|endpoints_mm| BoundaryChainKey::CylinderSection {
+                supports: supports.clone(),
+                endpoints_mm,
+            })
+            .collect()
+    })
 }
 
 /// Chain topology stays in physical 3-D coordinates; only angular coverage
@@ -765,7 +788,14 @@ mod tests {
         let (locus, short) = arc(start, end, true)?;
         let (_, long) = arc(start, end, false)?;
         let (_, reversed) = arc(end, start, false)?;
-        let signature = |arc| normalize_arcs(&supports, &locus, &[arc], crate::boundary_proof::TEST_BOUNDARY_TOL_MM);
+        let signature = |arc| {
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[arc],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+            )
+        };
         assert_eq!(signature(short), signature(reversed));
         assert_ne!(signature(short), signature(long));
         assert!((short.sweep - FRAC_PI_2).abs() < TOL);
@@ -784,17 +814,38 @@ mod tests {
         let (_, second) = arc(middle, end, true)?;
         let (_, other_half) = arc(end, start, true)?;
         assert_eq!(
-            normalize_arcs(&supports, &locus, &[half], crate::boundary_proof::TEST_BOUNDARY_TOL_MM),
-            normalize_arcs(&supports, &locus, &[second, first], crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[half],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            ),
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[second, first],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
         );
-        let cycle =
-            normalize_arcs(&supports, &locus, &[half, other_half], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).map_err(anyhow::Error::msg)?;
+        let cycle = normalize_arcs(
+            &supports,
+            &locus,
+            &[half, other_half],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+        )
+        .map_err(anyhow::Error::msg)?;
         let rounded = Arc {
             sweep: 4.0_f64.mul_add(f64::EPSILON, other_half.sweep),
             ..other_half
         };
         assert_eq!(
-            normalize_arcs(&supports, &locus, &[half, rounded], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).map_err(anyhow::Error::msg)?,
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[half, rounded],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?,
             cycle
         );
 
@@ -805,22 +856,43 @@ mod tests {
                 ..
             }]
         ));
-        assert!(normalize_arcs(&supports, &locus, &[half, first, second], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_err());
+        assert!(
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[half, first, second],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_err()
+        );
         let (_, complement) = arc(middle, start, true)?;
-        assert!(normalize_arcs(&supports, &locus, &[half, complement], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_err());
+        assert!(
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[half, complement],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_err()
+        );
         Ok(())
     }
 
     #[test]
     fn sphere_and_torus_circle_incidence_requires_whole_carrier() {
         let sphere = support_locus_key(&sphere());
-        assert!(circle_on_curved_support(unit_circle(), &sphere, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(circle_on_curved_support(
+            unit_circle(),
+            &sphere,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         assert!(!circle_on_curved_support(
             brep::CircleSupport {
                 center_mm: [0., 0., 0.01],
                 ..unit_circle()
             },
-            &sphere, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &sphere,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         let torus = SupportLocusKey::Torus {
             center_mm: [0; 3],
@@ -838,14 +910,23 @@ mod tests {
             normal: [0., 1., 0.],
             ..unit_circle()
         };
-        assert!(circle_on_curved_support(parallel, &torus, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
-        assert!(circle_on_curved_support(meridian, &torus, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(circle_on_curved_support(
+            parallel,
+            &torus,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
+        assert!(circle_on_curved_support(
+            meridian,
+            &torus,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         assert!(!circle_on_curved_support(
             brep::CircleSupport {
                 radius_mm: 0.99,
                 ..meridian
             },
-            &torus, crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            &torus,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
         ));
         // Two distinct circular components of a torus-plane intersection:
         // identical oriented carrier pair cannot identify their loci.
@@ -857,8 +938,16 @@ mod tests {
             radius_mm: 4.,
             ..unit_circle()
         };
-        assert!(circle_on_curved_support(inner, &torus, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
-        assert!(circle_on_curved_support(outer, &torus, crate::boundary_proof::TEST_BOUNDARY_TOL_MM));
+        assert!(circle_on_curved_support(
+            inner,
+            &torus,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
+        assert!(circle_on_curved_support(
+            outer,
+            &torus,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         let loci = [support_locus_key(&plane()), torus];
         let classify_circle = |c: brep::CircleSupport| {
             let curve = CurveSupport::Circle(c);
@@ -950,17 +1039,36 @@ mod tests {
         let first = oblique_arc(0., FRAC_PI_2 * 0.5)?;
         let second = oblique_arc(FRAC_PI_2 * 0.5, FRAC_PI_2)?;
         let reversed = oblique_arc(FRAC_PI_2, 0.)?;
-        let signature = normalize_cylinder_sections(&supports, &[whole], crate::boundary_proof::TEST_BOUNDARY_TOL_MM);
-        assert_eq!(
-            signature,
-            normalize_cylinder_sections(&supports, &[second, first], crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
+        let signature = normalize_cylinder_sections(
+            &supports,
+            &[whole],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
         );
         assert_eq!(
             signature,
-            normalize_cylinder_sections(&supports, &[reversed], crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
+            normalize_cylinder_sections(
+                &supports,
+                &[second, first],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+        );
+        assert_eq!(
+            signature,
+            normalize_cylinder_sections(
+                &supports,
+                &[reversed],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
         );
         assert!(signature.is_ok());
-        assert!(normalize_cylinder_sections(&supports, &[whole, first, second], crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_err());
+        assert!(
+            normalize_cylinder_sections(
+                &supports,
+                &[whole, first, second],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_err()
+        );
         assert!(matches!(
             signature.map_err(anyhow::Error::msg)?.as_slice(),
             [BoundaryChainKey::CylinderSection {
@@ -974,9 +1082,13 @@ mod tests {
             oblique_arc(PI + FRAC_PI_2, TAU)?,
         ];
         assert!(matches!(
-            normalize_cylinder_sections(&supports, &[whole, rest[0], rest[1], rest[2]], crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
-                .map_err(anyhow::Error::msg)?
-                .as_slice(),
+            normalize_cylinder_sections(
+                &supports,
+                &[whole, rest[0], rest[1], rest[2]],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?
+            .as_slice(),
             [BoundaryChainKey::CylinderSection {
                 endpoints_mm: None,
                 ..
@@ -1003,7 +1115,12 @@ mod tests {
         let e = edge([R, 0, R], [0, R, 0], true, ordinary);
         let loci = oblique_supports().each_ref().map(support_locus_key);
         assert!(matches!(
-            certify_flagged_angular_section(&e, &explicit, &loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM),
+            certify_flagged_angular_section(
+                &e,
+                &explicit,
+                &loci,
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            ),
             Some(BoundedEdge::CylinderSection(_))
         ));
         let CurveSupport::BSpline(mut wrong) = explicit else {
@@ -1011,7 +1128,13 @@ mod tests {
         };
         wrong.control_points_mm[1][2] += 0.01;
         assert!(
-            certify_flagged_angular_section(&e, &CurveSupport::BSpline(wrong), &loci, crate::boundary_proof::TEST_BOUNDARY_TOL_MM).is_none()
+            certify_flagged_angular_section(
+                &e,
+                &CurveSupport::BSpline(wrong),
+                &loci,
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
         );
         Ok(())
     }
@@ -1083,8 +1206,18 @@ mod tests {
         let (reference_locus, reference) = arc([R, 0, 0], [0, R, 0], true)?;
         assert_eq!(locus, reference_locus);
         assert_eq!(
-            normalize_arcs(&supports, &locus, &[certified], crate::boundary_proof::TEST_BOUNDARY_TOL_MM),
-            normalize_arcs(&supports, &locus, &[reference], crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[certified],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            ),
+            normalize_arcs(
+                &supports,
+                &locus,
+                &[reference],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
         );
         let mut bumped = curve;
         bumped.control_points_mm[1][0] += 0.001;
