@@ -6,7 +6,7 @@
 //! the signed coverage, including multiplicity, agrees independent of its
 //! triangulation. The original source polygons are never altered.
 use super::super::super::super::{InputPolygon, seams};
-use crate::Point3;
+use crate::{Point3, mesh_recovery::planar_predicates};
 use robust::{Coord, Coord3D, orient2d, orient3d};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,73 +47,6 @@ const fn project(p: Point3, axis: usize) -> Coord<f64> {
         1 => Coord { x: p.z, y: p.x },
         _ => Coord { x: p.x, y: p.y },
     }
-}
-
-fn in_bounds(a: Coord<f64>, b: Coord<f64>, p: Coord<f64>) -> bool {
-    p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
-}
-
-fn intersects(a: Coord<f64>, b: Coord<f64>, c: Coord<f64>, d: Coord<f64>) -> bool {
-    let turns = [
-        orient2d(a, b, c),
-        orient2d(a, b, d),
-        orient2d(c, d, a),
-        orient2d(c, d, b),
-    ];
-    if turns.iter().any(|t| !t.is_finite()) {
-        return true;
-    }
-    let opposite = |x: f64, y: f64| (x > 0.0 && y < 0.0) || (x < 0.0 && y > 0.0);
-    (opposite(turns[0], turns[1]) && opposite(turns[2], turns[3]))
-        || (turns[0] == 0.0 && in_bounds(a, b, c))
-        || (turns[1] == 0.0 && in_bounds(a, b, d))
-        || (turns[2] == 0.0 && in_bounds(c, d, a))
-        || (turns[3] == 0.0 && in_bounds(c, d, b))
-}
-
-// Exact signed orientation at the lexicographically extreme vertex of a
-// simple polygon; adjacent straight-through edges are allowed, retracing
-// and all nonadjacent intersections are not.
-fn polygon_sign(points: &[Coord<f64>]) -> Option<bool> {
-    if points.len() < 3 {
-        return None;
-    }
-    let count = points.len();
-    let same = |a: Coord<f64>, b: Coord<f64>| (a.x - b.x).abs() == 0.0 && (a.y - b.y).abs() == 0.0;
-    for (i, &a) in points.iter().enumerate() {
-        let b = points[(i + 1) % count];
-        let c = points[(i + 2) % count];
-        let turn = orient2d(a, b, c);
-        if !turn.is_finite()
-            || same(a, b)
-            || (turn == 0.0 && (in_bounds(a, b, c) || in_bounds(b, c, a)))
-        {
-            return None;
-        }
-        for (j, &other) in points.iter().enumerate().skip(i + 2) {
-            if i == 0 && j + 1 == count {
-                continue;
-            }
-            if intersects(a, b, other, points[(j + 1) % count]) {
-                return None;
-            }
-        }
-    }
-    let extreme = points
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            a.x.partial_cmp(&b.x)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
-        })?
-        .0;
-    let turn = orient2d(
-        points[(extreme + count - 1) % count],
-        points[extreme],
-        points[(extreme + 1) % count],
-    );
-    (turn.is_finite() && turn != 0.0).then_some(turn > 0.0)
 }
 
 struct Plane {
@@ -168,7 +101,7 @@ impl Plane {
             .iter()
             .map(|&id| project(positions[id], self.axis))
             .collect::<Vec<_>>();
-        polygon_sign(&points)
+        planar_predicates::polygon_sign(&points, std::convert::identity)
     }
 
     fn contains_fragment(

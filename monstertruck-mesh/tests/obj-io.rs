@@ -345,3 +345,56 @@ fn malformed_nonempty_face_index_is_rejected() {
     let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 nope 3\n";
     assert!(obj::read(obj.as_slice()).is_err());
 }
+
+#[test]
+fn obj_preserves_full_f64_coordinates_and_attributes() -> Result<(), Box<dyn std::error::Error>> {
+    // Nearby exact source positions must not collapse on serialization.
+    // Include extreme finite magnitudes and subnormals as well as ordinary
+    // coordinates whose meaningful bits exceed eleven decimal digits.
+    let values = [
+        1.0_f64,
+        1.0_f64.next_up(),
+        -28.009999999999998,
+        f64::MIN_POSITIVE,
+        f64::from_bits(1),
+        f64::MAX,
+        -0.0,
+        std::f64::consts::PI,
+        1.0e-200,
+    ];
+    let mesh = PolygonMesh::new(
+        StandardAttributes {
+            positions: values
+                .chunks_exact(3)
+                .map(|p| Point3::new(p[0], p[1], p[2]))
+                .collect(),
+            uv_coords: vec![Vector2::new(values[1], values[4])],
+            normals: vec![Vector3::new(values[7], values[2], values[8])],
+        },
+        Faces::from_iter([[
+            (0, Some(0), Some(0)),
+            (1, Some(0), Some(0)),
+            (2, Some(0), Some(0)),
+        ]]),
+    )?;
+    let mut bytes = Vec::new();
+    obj::write(&mesh, &mut bytes)?;
+    let result = obj::read(bytes.as_slice())?;
+    for (a, b) in mesh.positions().iter().zip(result.positions()) {
+        for i in 0..3 {
+            assert_eq!(a[i].to_bits(), b[i].to_bits());
+        }
+    }
+    for (a, b) in mesh.uv_coords().iter().zip(result.uv_coords()) {
+        for i in 0..2 {
+            assert_eq!(a[i].to_bits(), b[i].to_bits());
+        }
+    }
+    for (a, b) in mesh.normals().iter().zip(result.normals()) {
+        for i in 0..3 {
+            assert_eq!(a[i].to_bits(), b[i].to_bits());
+        }
+    }
+    assert_eq!(mesh.faces(), result.faces());
+    Ok(())
+}

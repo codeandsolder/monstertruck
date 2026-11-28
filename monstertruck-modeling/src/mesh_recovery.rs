@@ -38,6 +38,11 @@ impl Default for PlanarRecoveryOptions {
 
 mod analytic;
 mod carrier_identity;
+mod collapsed_aperture;
+pub use collapsed_aperture::{
+    AperturePolygonOrigin, CollapsedApertureCandidate, CollapsedApertureEvidence,
+    collapsed_aperture_candidates,
+};
 mod component_groups;
 mod component_partition;
 mod native_recovery;
@@ -68,6 +73,7 @@ pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindric
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod evidence;
 mod planar_domain;
+mod planar_predicates;
 pub use planar_domain::{PlanarDomainCertificate, certify_projected_planar_domain};
 mod planar_fans;
 pub use planar_fans::{PlanarFanOptions, PlanarFanSimplification, simplify_planar_fan_shell};
