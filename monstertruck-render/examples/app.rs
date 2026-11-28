@@ -8,13 +8,16 @@
 )]
 
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
-use std::{future::Future, sync::Arc};
+use std::{
+    future::{Future, ready},
+    sync::Arc,
+};
 //use std::time::Duration;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{
     ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow as WControlFlow};
+use winit::event_loop::{ActiveEventLoop, ControlFlow as WControlFlow, EventLoop};
 use winit::window::Window;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -103,22 +106,28 @@ pub trait App: Sized + 'static {
     #[inline]
     fn run() {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Err(error) = pollster::block_on(run_app::<Self>()) {
+        if let Err(error) = run_native::<Self>() {
             eprintln!("application failed: {error}");
             std::process::exit(1);
         }
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async {
-            if let Err(error) = run_app::<Self>().await {
+            let result: AppResult<()> = async {
+                let (event_loop, window) = create_window::<Self>()?;
+                let app = Self::init(Arc::clone(&window)).await?;
+                run_app(event_loop, window, app)
+            }
+            .await;
+            if let Err(error) = result {
                 log::error!("application failed: {error}");
             }
         });
     }
 }
 
-/// Run the application in the future.
-async fn run_app<A: App>() -> AppResult<()> {
-    let event_loop = winit::event_loop::EventLoop::new()?;
+/// Initialize the window on the event-loop thread.
+fn create_window<A: App>() -> AppResult<(EventLoop<()>, Arc<Window>)> {
+    let event_loop = EventLoop::new()?;
     let mut wa = winit::window::Window::default_attributes();
     if let Some(title) = A::app_title() {
         title.clone_into(&mut wa.title);
@@ -145,9 +154,17 @@ async fn run_app<A: App>() -> AppResult<()> {
             .map_err(|_| std::io::Error::other("could not append canvas to document body"))?;
     }
 
-    let window = Arc::new(window);
-    let mut app = A::init(Arc::clone(&window)).await?;
+    Ok((event_loop, Arc::new(window)))
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+fn run_native<A: App>() -> AppResult<()> {
+    let (event_loop, window) = create_window::<A>()?;
+    let app = pollster::block_on(A::init(Arc::clone(&window)))?;
+    run_app(event_loop, window, app)
+}
+
+fn run_app<A: App>(event_loop: EventLoop<()>, window: Arc<Window>, mut app: A) -> AppResult<()> {
     let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
         let control_flow = match ev {
             Event::NewEvents(_) => {
@@ -204,7 +221,7 @@ async fn run_app<A: App>() -> AppResult<()> {
 fn main() {
     struct MyApp;
     impl App for MyApp {
-        async fn init(_: Arc<Window>) -> AppResult<Self> { Ok(Self) }
+        fn init(_: Arc<Window>) -> impl Future<Output = AppResult<Self>> { ready(Ok(Self)) }
     }
     MyApp::run();
 }
