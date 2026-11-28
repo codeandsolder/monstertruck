@@ -210,6 +210,9 @@ pub enum HybridRecoveryError {
         queued_states: usize,
         /// Number of attempted full native transactions.
         trials: usize,
+        /// Original support seeds of the last attempted transaction.
+        /// Empty when no geometric transaction was reached.
+        seed_supports: Box<[usize]>,
         /// Most recent geometric rejection or missing admissible cover.
         last: Box<Self>,
     },
@@ -695,6 +698,19 @@ impl HybridInput<'_> {
         let mut unresolved = Vec::new();
         for (id, JunctionConstraints { carriers, sections }) in constraints {
             let source = self.evidence.positions[id];
+            // Once all incident analytic constraints have been released,
+            // an earlier projection is no longer evidence for a new
+            // junction. Restore the original position, including short
+            // source edges that would otherwise stay collapsed.
+            if carriers.is_empty() && sections.is_empty() {
+                if vertices[id]
+                    .as_ref()
+                    .is_none_or(|old| old.point() != source)
+                {
+                    vertices[id] = Some(builder::vertex(source));
+                }
+                continue;
+            }
             let branch = sections.as_slice();
             let valid = |p: Point3, tolerance: f64| {
                 (p - source).magnitude() <= options.max_vertex_displacement
