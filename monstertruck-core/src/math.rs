@@ -2,7 +2,7 @@
 
 pub use crate::derivatives::*;
 pub use crate::differential::*;
-pub use crate::numerical::{affine_qr3, affine_qr4, monic_cubic_roots, monic_quartic_roots};
+pub use crate::numerical::{affine_qr, monic_cubic_roots, monic_quartic_roots};
 pub use approx::{AbsDiffEq, RelativeEq, UlpsEq};
 pub use nalgebra;
 use nalgebra::{ComplexField, Point, RealField, SMatrix, SVector};
