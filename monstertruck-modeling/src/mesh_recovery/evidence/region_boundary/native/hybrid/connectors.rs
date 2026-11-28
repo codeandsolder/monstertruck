@@ -169,9 +169,18 @@ impl<'a> ConnectorSearch<'a> {
                     });
                 }
                 Err(error) => {
-                    if let HybridRecoveryError::RetainedTrim {
+                    if let HybridRecoveryError::RevolutionCrossings(witnesses) = &error {
+                        let trims = witnesses
+                            .iter()
+                            .flat_map(|witness| witness.trims)
+                            .collect::<BTreeSet<_>>();
+                        for trim in trims {
+                            self.successors(&selected_regions, &releases, trim)?;
+                        }
+                    } else if let HybridRecoveryError::RetainedTrim {
                         trim,
                         error: NativeTrimError::RevolutionTrimCrossing,
+                        ..
                     } = error
                     {
                         self.successors(&selected_regions, &releases, trim)?;

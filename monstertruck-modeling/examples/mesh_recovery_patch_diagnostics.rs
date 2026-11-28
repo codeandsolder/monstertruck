@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use monstertruck_mesh::obj;
+use monstertruck_modeling::Shell;
 use monstertruck_modeling::mesh_recovery::{
     AnalyticRecoveryOptions, BoundaryFacetInput, BoundaryPatchError, HybridConnectorOptions,
     HybridRecovery, HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed,
@@ -11,6 +12,7 @@ use monstertruck_modeling::mesh_recovery::{
     RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
     SurfaceRegionPartition, recover_analytic_mesh,
 };
+use monstertruck_topology::shell::ShellCondition;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -143,9 +145,25 @@ fn failed_facet(error: &BoundaryPatchError) -> Value {
 
 fn hybrid_failed_facet(error: &HybridRecoveryError) -> Value {
     match error {
-        HybridRecoveryError::Patch { error, .. } => failed_facet(error),
+        HybridRecoveryError::Patch {
+            source_polygon,
+            error,
+            ..
+        } => {
+            let mut report = failed_facet(error);
+            if let Some(fields) = report.as_object_mut() {
+                fields.insert("source_polygon".into(), json!(source_polygon));
+            }
+            report
+        }
         HybridRecoveryError::ConnectorSearch { last, .. }
         | HybridRecoveryError::SupportSearch { last, .. } => hybrid_failed_facet(last),
+        HybridRecoveryError::OwnershipAlternatives {
+            alternative,
+            primary,
+        } => json!({
+            "alternative":hybrid_failed_facet(alternative),"primary":hybrid_failed_facet(primary)
+        }),
         _ => Value::Null,
     }
 }
@@ -228,22 +246,37 @@ fn retained_trim_diagnostic(
     {
         return retained_trim_diagnostic(recovery, last);
     }
-    let HybridRecoveryError::RetainedTrim { trim: id, .. } = error else {
+    if let HybridRecoveryError::OwnershipAlternatives {
+        alternative,
+        primary,
+    } = error
+    {
+        return json!({"alternative":retained_trim_diagnostic(recovery, alternative),"primary":retained_trim_diagnostic(recovery, primary)});
+    }
+    if let HybridRecoveryError::RevolutionCrossings(witnesses) = error {
+        return json!({"crossings": witnesses.iter().map(|witness| json!({"trims":witness.trims,"source_edges":witness.source_edges.iter().map(|edges| edges.iter().map(|edge|json!({"vertices":edge.vertices,"polygons":[Some(edge.interior_polygon),edge.exterior_polygon]})).collect::<Vec<_>>()).collect::<Vec<_>>() })).collect::<Vec<_>>()});
+    }
+    let HybridRecoveryError::RetainedTrim {
+        trim: id,
+        source_edges,
+        ..
+    } = error
+    else {
         return Value::Null;
     };
-    let Some(trim) = recovery.trims.trims.get(*id) else {
-        return Value::Null;
-    };
-    let endpoints = trim
-        .source_edges
+    let endpoints = source_edges
         .iter()
         .flat_map(|edge| edge.vertices)
         .collect::<BTreeSet<_>>();
     let partition = &recovery.reconciled.partition;
-    json!({"id":id,"regions":[Some(trim.regions.0),trim.regions.1],
-      "geometry":format!("{:?}",trim.geometry),
-      "carriers":std::iter::once(trim.regions.0).chain(trim.regions.1).map(|r|format!("{:?}",partition.carriers[r])).collect::<Vec<_>>(),
-      "edges":trim.source_edges.iter().map(|e|json!({"vertices":e.vertices,"polygons":[Some(e.interior_polygon),e.exterior_polygon]})).collect::<Vec<_>>(),
+    let parents = source_edges
+        .iter()
+        .flat_map(|edge| std::iter::once(edge.interior_polygon).chain(edge.exterior_polygon))
+        .map(|polygon| partition.region_by_polygon[polygon])
+        .collect::<BTreeSet<_>>();
+    json!({"id":id,"original_parent_regions":parents,
+      "carriers":parents.iter().map(|&r|format!("{:?}",partition.carriers[r])).collect::<Vec<_>>(),
+      "edges":source_edges.iter().map(|e|json!({"vertices":e.vertices,"polygons":[Some(e.interior_polygon),e.exterior_polygon]})).collect::<Vec<_>>(),
       "vertices":endpoints.into_iter().map(|id|json!({"id":id,"source":recovery.evidence.positions[id],"reconciled":recovery.reconciled.positions[id],"native":recovery.native.vertices[id].as_ref().map(monstertruck_modeling::Vertex::point)})).collect::<Vec<_>>()})
 }
 
@@ -489,6 +522,16 @@ fn pending_chart_diagnostics(
     }).collect()
 }
 
+fn export_shell(shell: Option<&Shell>, output: Option<&Path>) -> Result<bool> {
+    let (Some(shell), Some(path)) = (shell, output) else {
+        return Ok(false);
+    };
+    let mut writer = BufWriter::new(File::create_new(path)?);
+    serde_json::to_writer(&mut writer, &shell.compress())?;
+    writer.flush()?;
+    Ok(true)
+}
+
 fn refined_result_report(
     refined: monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
     shell_output: Option<&Path>,
@@ -498,16 +541,9 @@ fn refined_result_report(
     let mut result = refined.recovery;
     let planar_simplification = simplify_report(&mut result, simplify);
     let shell = result.complete_shell();
-    let exported = if let (Some(path), Some(shell)) = (shell_output, &shell) {
-        let mut writer = BufWriter::new(File::create_new(path)?);
-        serde_json::to_writer(&mut writer, &shell.compress())?;
-        writer.flush()?;
-        true
-    } else {
-        false
-    };
+    let exported = export_shell(shell.as_ref(), shell_output)?;
     Ok(
-        json!({"status":"ok","selected_regions":refined.selected_regions,
+        json!({"status":"ok","recovery_kind":"hybrid","max_native_vertex_displacement":result.native.max_vertex_displacement,"selected_regions":refined.selected_regions,
         "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
             "support":c.support,"parent_region":c.parent_region,"locus":match c.locus { monstertruck_modeling::mesh_recovery::PatchSupportLocus::Chord(edge)=>json!({"edge":edge}),monstertruck_modeling::mesh_recovery::PatchSupportLocus::Vertex(vertex)=>json!({"vertex":vertex}) },"distance_lower_witness":c.distance_lower_witness
         })).collect::<Vec<_>>(),
@@ -580,6 +616,18 @@ fn unresolved_contact_trial(
     shell_output: Option<&Path>,
     simplify: bool,
 ) -> Result<Value> {
+    // An already complete analytic shell is the preferred zero-release
+    // result. A search with no failed contacts is not a recovery failure.
+    if let Some(shell) = recovery.complete_shell()
+        && shell.shell_condition() == ShellCondition::Closed
+    {
+        let exported = export_shell(Some(&shell), shell_output)?;
+        return Ok(json!({"status":"ok","recovery_kind":"analytic",
+            "native_faces":shell.len(),"shell_condition":"Closed","shell_exported":exported,
+            "failed_regions":[],"failed_trims":0,"chart_cuts":0,"released_polygons":0,
+            "max_native_vertex_displacement":recovery.native.max_vertex_displacement,
+            "max_deviation":null,"max_seam_deviation":null,"states":0,"trials":0,"seconds":0.0}));
+    }
     // This explicit mode authorizes only a bounded number of original
     // source polygons, regardless of whether their fitted parent is a
     // plane or a revolution. Search seeds come from failed contacts and certified crossing domains.
@@ -601,7 +649,7 @@ fn unresolved_contact_trial(
             report
         }
         Err(error) => {
-            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error)})
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error)})
         }
     };
     report["seconds"] = json!(start.elapsed().as_secs_f64());
@@ -652,7 +700,7 @@ fn replay_support_trial(
             report
         }
         Err(error) => {
-            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error)})
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error)})
         }
     };
     report["seed_supports"] = json!(seeds);
@@ -784,7 +832,7 @@ fn main() -> Result<()> {
     };
     println!(
         "{}",
-        json!({"source":path,"recovery_seconds":recovery_seconds,"hybrid":report})
+        json!({"source":path,"recovery_seconds":recovery_seconds,"vertex_budget":budget.vertex,"chord_budget":budget.chord,"hybrid":report})
     );
     Ok(())
 }

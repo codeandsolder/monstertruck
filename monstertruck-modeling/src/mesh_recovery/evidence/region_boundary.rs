@@ -42,9 +42,9 @@ pub use contacts::{RegionContactGraph, RegionContactPath};
 pub use containment::{CarrierResidual, SurfaceCarrier, SurfaceCurveAgreement};
 pub use curve_evidence::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
 pub use native::{
-    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
-    HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
+    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridCrossingWitness,
+    HybridPatchEvidence, HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery,
+    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
     HybridSupportSearchRecovery, NativeChartObstacle, NativeRegionFace, NativeTrimError,
     NativeTrimGraph, NativeTrimOptions, PatchSupportConflict, PatchSupportLocus,
     PlanarTrimCrossing, RefinedHybridRecovery,

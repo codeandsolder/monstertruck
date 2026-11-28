@@ -72,7 +72,7 @@ pub use evidence::{
     ContactLinearSectionEvidence, ContactToroidalSectionEvidence, CurvatureGrowthHypothesis,
     CurvatureGrowthIndex, CurvatureGrowthOptions, CurvatureGrowthStep, CurvatureTrack,
     CurvatureTrackOptions, EvidenceOptions, FeatureEdge, FeatureEdgeKind, HybridConnectorOptions,
-    HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
+    HybridConnectorRecovery, HybridConnectorRelease, HybridCrossingWitness, HybridPatchEvidence,
     HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
     HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
     HybridSupportSearchRecovery, LiftedRegionPatch, LiftedSourceChord, MeridianGraphOptions,

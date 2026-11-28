@@ -16,6 +16,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+mod greedy;
+
 /// Search limits for local releases around failed source contacts.
 #[derive(Clone, Copy, Debug)]
 pub struct HybridSupportSearchOptions {
@@ -91,6 +93,9 @@ struct CoverSearch {
     crossing_searches: Vec<CrossingSearch>,
     visited: BTreeSet<Vec<usize>>,
     states: usize,
+    // Reserve one state for a deterministic feasible cover if exact
+    // enumeration is too wide to produce a first native transaction.
+    greedy_root: Option<CoverCandidate>,
 }
 
 impl CoverSearch {
@@ -139,6 +144,7 @@ impl CoverSearch {
             crossing_searches: Vec::new(),
             visited: BTreeSet::new(),
             states: 0,
+            greedy_root: None,
         };
         // Every single-choice contact is mandatory. Apply these before
         // branching, avoiding exponential state growth from forced pairs.
@@ -161,11 +167,19 @@ impl CoverSearch {
             .try_fold(0_usize, |total, &id| total.checked_add(search.sizes[id]))
             .ok_or(HybridRecoveryError::InvalidInput)?;
         if !search.choices.is_empty() {
-            search.enqueue(CoverCandidate {
+            let root = CoverCandidate {
                 cost,
                 selected,
                 seeds: mandatory,
-            });
+            };
+            if search.choices.iter().any(|choice| {
+                choice
+                    .iter()
+                    .all(|id| root.selected.binary_search(id).is_err())
+            }) {
+                search.greedy_root = Some(root.clone());
+            }
+            search.enqueue(root);
         }
         Ok(search)
     }
@@ -226,8 +240,10 @@ impl CoverSearch {
         common.checked_add(charge)
     }
 
+    fn state_limit(&self) -> usize { self.max_states - usize::from(self.greedy_root.is_some()) }
+
     fn enqueue(&mut self, candidate: CoverCandidate) {
-        if self.visited.len() >= self.max_states || self.visited.contains(&candidate.selected) {
+        if self.visited.len() >= self.state_limit() || self.visited.contains(&candidate.selected) {
             return;
         }
         if let Some(bound) = self.lower_bound(candidate.cost, &candidate.selected)
@@ -262,7 +278,7 @@ impl CoverSearch {
     }
 
     fn extend(&mut self, candidate: &CoverCandidate, support: usize) {
-        if self.visited.len() < self.max_states
+        if self.visited.len() < self.state_limit()
             && let Some(next) = self.expanded(candidate, &[support])
         {
             self.enqueue(next);
@@ -330,7 +346,7 @@ impl CoverSearch {
             .filter_map(|alternative| self.expanded(state, &alternative.seeds))
             .collect::<Vec<_>>();
         for candidate in next {
-            if self.visited.len() >= self.max_states {
+            if self.visited.len() >= self.state_limit() {
                 break;
             }
             if self.visited.contains(&candidate.selected) {
@@ -421,10 +437,20 @@ impl CoverSearch {
                     self.extend(&candidate, support);
                 }
             } else {
+                self.greedy_root = None;
+                return Some(candidate);
+            }
+            // A single complete cover needs at most one new seed per
+            // constraint. After that much exact search without a cover,
+            // interleave one greedy transaction before consuming the
+            // remaining frontier and all its repair capacity.
+            if self.states >= self.choices.len().saturating_add(1).min(self.state_limit())
+                && let Some(candidate) = self.take_greedy_cover()
+            {
                 return Some(candidate);
             }
         }
-        None
+        self.take_greedy_cover()
     }
 
     // A failed geometric transaction can require both sides of a contact
@@ -809,19 +835,14 @@ impl HybridSource<'_> {
         search.witnessed_cover(candidate, choices)
     }
 
-    fn search_contacts(
+    fn initial_cover_search(
         &self,
         permitted_supports: &[usize],
+        context: &ReleaseContext<'_>,
         options: HybridSupportSearchOptions,
-    ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
-        let context = ReleaseContext::new(
-            self.evidence,
-            &self.reconciled.partition,
-            permitted_supports,
-            options.refinement,
-        )?;
+    ) -> Result<(CoverSearch, Option<CoverCandidate>), HybridRecoveryError> {
         let contacts = self.failed_support_contacts()?;
-        let closures = self.contact_support_closures(&contacts, permitted_supports, &context)?;
+        let closures = self.contact_support_closures(&contacts, permitted_supports, context)?;
         let sizes = self
             .evidence
             .planar_supports
@@ -829,9 +850,7 @@ impl HybridSource<'_> {
             .map(|s| s.source_face_indices.len())
             .collect();
         let mut search = CoverSearch::new(contacts, closures, sizes, options)?;
-        let mut last = HybridRecoveryError::NoSupportCandidate;
-        let mut trials = 0;
-        let mut followup = if search.choices.is_empty() {
+        let followup = if search.choices.is_empty() {
             Self::crossing_followup(
                 &mut search,
                 &CoverCandidate {
@@ -845,11 +864,29 @@ impl HybridSource<'_> {
                     self.native,
                     options.refinement.strict.intersection_tolerance,
                 )?,
-                &context,
+                context,
             )
         } else {
             None
         };
+        Ok((search, followup))
+    }
+
+    fn search_contacts(
+        &self,
+        permitted_supports: &[usize],
+        options: HybridSupportSearchOptions,
+    ) -> Result<HybridSupportSearchRecovery, HybridRecoveryError> {
+        let context = ReleaseContext::new(
+            self.evidence,
+            &self.reconciled.partition,
+            permitted_supports,
+            options.refinement,
+        )?;
+        let (mut search, mut followup) =
+            self.initial_cover_search(permitted_supports, &context, options)?;
+        let mut last = HybridRecoveryError::NoSupportCandidate;
+        let mut trials = 0;
         while trials < options.max_trials {
             let Some(candidate) = followup.take().or_else(|| search.next_cover()) else {
                 break;
@@ -900,7 +937,20 @@ impl HybridSource<'_> {
                     }
                     last = incomplete_recovery_error(&candidate.seeds, &refined);
                 }
-                Err(error) => last = error,
+                Err(error) => {
+                    if trials < options.max_trials {
+                        let mut choices = context.repair_choices(&error, &candidate.selected);
+                        if !choices.is_empty() {
+                            followup = Self::crossing_followup(
+                                &mut search,
+                                &candidate,
+                                &mut choices,
+                                &context,
+                            );
+                        }
+                    }
+                    last = error;
+                }
             }
             search.extend_rejected(&candidate);
         }
@@ -1157,6 +1207,43 @@ mod tests {
         assert_eq!(next_pair(&mut search), Some((4, vec![0, 2])));
         assert_eq!(next_pair(&mut search), Some((5, vec![0, 1])));
         assert_eq!(next_pair(&mut search), Some((5, vec![1, 2])));
+        Ok(())
+    }
+
+    #[test]
+    fn greedy_fallback_finds_a_complete_cover_with_one_state() -> Result<(), HybridRecoveryError> {
+        let contacts = (0..24).map(|id| [2 * id, 2 * id + 1]).collect();
+        let sizes = (0..48).map(|id| 1 + id % 2).collect::<Vec<_>>();
+        let mut search =
+            CoverSearch::new(contacts, identity_closures(0..48), sizes, options(24, 1))?;
+        let candidate = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!(candidate.cost, 24);
+        assert_eq!(candidate.selected, (0..48).step_by(2).collect::<Vec<_>>());
+        assert_eq!(search.states, 1);
+        assert_eq!(search.visited.len(), 1);
+        assert!(search.next_cover().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn greedy_fallback_charges_shared_closure_members_and_respects_budget()
+    -> Result<(), HybridRecoveryError> {
+        let contacts = BTreeSet::from([[0, 1], [2, 3], [4, 5]]);
+        let mut closures = identity_closures(0..6);
+        closures.insert(0, BTreeSet::from([0, 2, 4]));
+        let sizes = vec![1, 2, 1, 2, 1, 2];
+        for (limit, expected) in [(3, Some((3, vec![0, 2, 4]))), (2, None)] {
+            let mut search = CoverSearch::new(
+                contacts.clone(),
+                closures.clone(),
+                sizes.clone(),
+                options(limit, 1),
+            )?;
+            assert_eq!(next_pair(&mut search), expected);
+            assert!(search.visited.len() <= 1);
+        }
         Ok(())
     }
 
