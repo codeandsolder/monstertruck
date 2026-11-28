@@ -302,12 +302,12 @@ pub(super) fn planar_crossing_pairs(
 // Orthogonal projection onto axial/tangential coordinates is injective on
 // a positive-radius linear revolution restricted to one open radial halfspace.
 // The entire rational control hull must lie in that halfspace.
-pub(super) fn revolution_crossings(
+pub(super) fn revolution_crossing_pairs(
     edges: &[(usize, &Edge)],
     origin: Point3,
     axis: Vector3,
     tolerance: f64,
-) -> Vec<usize> {
+) -> Vec<[usize; 2]> {
     let radial = edges
         .iter()
         .fold(Vector3::new(0.0, 0.0, 0.0), |sum, (_, edge)| {
@@ -331,11 +331,6 @@ pub(super) fn revolution_crossings(
         return Vec::new();
     };
     crossing_pairs(spans, false)
-        .into_iter()
-        .flatten()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 fn crossing_pairs(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<[usize; 2]> {
@@ -406,8 +401,8 @@ mod tests {
         let opposite = arc(1.0, 1.0, -1.0)?;
         let origin = Point3::new(0.0, 0.0, 0.0);
         let axis = Vector3::unit_z();
-        let check = |a, b| revolution_crossings(&[(3, a), (7, b)], origin, axis, 1e-8);
-        assert_eq!(check(&bow, &level), vec![3, 7]);
+        let check = |a, b| revolution_crossing_pairs(&[(3, a), (7, b)], origin, axis, 1e-8);
+        assert_eq!(check(&bow, &level), vec![[3, 7]]);
         assert!(check(&clear, &level).is_empty());
         assert!(check(&bow, &opposite).is_empty());
         Ok(())

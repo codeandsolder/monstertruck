@@ -16,7 +16,7 @@ use crate::{
     ToSameGeometry, Torus, TrimmedCurve, UnitCircle, Vector3, Vertex, Wire, builder,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     f64::consts::{PI, TAU},
 };
 
@@ -24,9 +24,9 @@ mod band;
 mod hybrid;
 mod planar_repair;
 pub use hybrid::{
-    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridPatchEvidence,
-    HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery, HybridRecoveryError,
-    HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
+    HybridConnectorOptions, HybridConnectorRecovery, HybridConnectorRelease, HybridCrossingWitness,
+    HybridPatchEvidence, HybridPlanarSimplification, HybridPolygonFaces, HybridRecovery,
+    HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed, HybridSupportSearchOptions,
     HybridSupportSearchRecovery, PatchSupportConflict, PatchSupportLocus, RefinedHybridRecovery,
 };
 
@@ -273,7 +273,7 @@ impl RegionBoundaryIndex<'_> {
                 vertex.as_ref().map(|v| (v.point() - source).magnitude())
             })
             .fold(0.0_f64, f64::max);
-        let regions = RegionAssemblyInput {
+        let RegionAssembly { regions, .. } = RegionAssemblyInput {
             evidence: self.evidence,
             partition,
             graph,
@@ -302,9 +302,21 @@ struct RegionAssemblyInput<'a> {
     lifted_deviations: &'a [Option<f64>],
 }
 
+// Source trim ID and native interval ordinal, before any chart subdivision.
+type RevolutionCrossing = [(usize, usize); 2];
+
+struct RegionAssembly {
+    regions: Vec<NativeRegionFace>,
+    revolution_crossings: Vec<RevolutionCrossing>,
+}
+
 impl RegionAssemblyInput<'_> {
-    fn reject_revolution_crossings(&self, trims: &mut [Result<Vec<Edge>, NativeTrimError>]) {
-        let mut rejected = std::collections::BTreeSet::new();
+    fn reject_revolution_crossings(
+        &self,
+        trims: &mut [Result<Vec<Edge>, NativeTrimError>],
+    ) -> Vec<RevolutionCrossing> {
+        let mut rejected = BTreeSet::new();
+        let mut crossings = BTreeSet::new();
         for region in &self.graph.regions {
             if self.approximated.contains(&region.region) {
                 continue;
@@ -331,25 +343,37 @@ impl RegionAssemblyInput<'_> {
                         .and_then(|t| t.as_ref().ok())
                         .into_iter()
                         .flatten()
-                        .map(move |edge| (reference.trim, edge))
+                        .enumerate()
+                        .map(move |(ordinal, edge)| ((reference.trim, ordinal), edge))
                 })
                 .collect::<Vec<_>>();
-            rejected.extend(planar_domain::revolution_crossings(
-                &edges,
+            let indexed = edges
+                .iter()
+                .enumerate()
+                .map(|(index, (_, edge))| (index, *edge))
+                .collect::<Vec<_>>();
+            for pair in planar_domain::revolution_crossing_pairs(
+                &indexed,
                 origin,
                 axis,
                 self.options.intersection_tolerance,
-            ));
+            ) {
+                let mut witness = pair.map(|index| edges[index].0);
+                witness.sort_unstable();
+                rejected.extend(witness.map(|(trim, _)| trim));
+                crossings.insert(witness);
+            }
         }
         for id in rejected {
             trims[id] = Err(NativeTrimError::RevolutionTrimCrossing);
         }
+        crossings.into_iter().collect()
     }
 
     fn assemble(
         &self,
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
-    ) -> Result<Vec<NativeRegionFace>, NativeTrimError> {
+    ) -> Result<RegionAssembly, NativeTrimError> {
         let mut groups = vec![Vec::new(); self.partition.carriers.len()];
         for (id, &region) in self.partition.region_by_support.iter().enumerate() {
             groups
@@ -357,7 +381,7 @@ impl RegionAssemblyInput<'_> {
                 .ok_or(NativeTrimError::InvalidSource)?
                 .push(id);
         }
-        self.reject_revolution_crossings(trims);
+        let revolution_crossings = self.reject_revolution_crossings(trims);
         let plans = self
             .graph
             .regions
@@ -435,7 +459,10 @@ impl RegionAssemblyInput<'_> {
             .filter(|(region, _)| !self.approximated.contains(&region.region))
             .map(|(region, (plan, obstacles))| assembly.region(region, plan.as_ref(), obstacles))
             .collect();
-        Ok(regions)
+        Ok(RegionAssembly {
+            regions,
+            revolution_crossings,
+        })
     }
 }
 

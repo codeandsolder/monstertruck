@@ -7,9 +7,9 @@
 
 use super::{HybridInput, HybridRecovery, HybridRecoveryError, HybridSource};
 use crate::mesh_recovery::{
-    MeshEvidence, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryError,
-    RegionBoundaryIndex, RegionPatchOptions, SharedTrimGraph, SharedTrimOptions, SurfaceCarrier,
-    SurfaceRegionPartition,
+    MeshEvidence, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryEdge,
+    RegionBoundaryError, RegionBoundaryIndex, RegionPatchOptions, SharedTrimGraph,
+    SharedTrimOptions, SurfaceCarrier, SurfaceRegionPartition,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -115,6 +115,7 @@ pub(super) struct ReleaseContext<'a> {
     permitted: BTreeSet<usize>,
     options: HybridRefinementOptions,
     support_vertices: Vec<Vec<usize>>,
+    vertex_supports: Vec<Vec<usize>>,
     vertex_conflicts: Vec<Vec<PatchSupportConflict>>,
 }
 
@@ -138,6 +139,7 @@ impl<'a> ReleaseContext<'a> {
             return Err(HybridRecoveryError::InvalidInput);
         }
         let mut support_vertices = Vec::with_capacity(count);
+        let mut vertex_supports = vec![Vec::new(); evidence.positions.len()];
         let mut vertex_conflicts = vec![Vec::new(); evidence.positions.len()];
         for (support, plane) in evidence.planar_supports.iter().enumerate() {
             let parent_region = partition.region_by_support[support];
@@ -162,6 +164,7 @@ impl<'a> ReleaseContext<'a> {
                     .positions
                     .get(vertex)
                     .ok_or(HybridRecoveryError::InvalidInput)?;
+                vertex_supports[vertex].push(support);
                 if let Some(distance_lower_witness) = vertex_distance_witness(carrier, point)
                     && distance_lower_witness
                         > options.patch.budget.vertex + options.patch.intersection_tolerance
@@ -182,8 +185,148 @@ impl<'a> ReleaseContext<'a> {
             permitted: permitted.iter().copied().collect(),
             options,
             support_vertices,
+            vertex_supports,
             vertex_conflicts,
         })
+    }
+
+    // A failed junction is not proof that any particular carrier must be
+    // released. Offer the complete incident support set for each retained
+    // parent carrier, and a local all-carrier fallback. Releasing just one
+    // of several supports of the same parent does not remove its constraint.
+    pub(super) fn junction_choices(&self, vertex: usize, selected: &[usize]) -> Vec<Vec<usize>> {
+        let Some(incident) = self.vertex_supports.get(vertex) else {
+            return Vec::new();
+        };
+        let mut by_parent = BTreeMap::<usize, Vec<usize>>::new();
+        for &support in incident {
+            if selected.binary_search(&support).is_err() {
+                by_parent
+                    .entry(self.partition.region_by_support[support])
+                    .or_default()
+                    .push(support);
+            }
+        }
+        let mut choices = by_parent.into_values().collect::<Vec<_>>();
+        if choices.len() > 1 {
+            let mut all = choices.iter().flatten().copied().collect::<Vec<_>>();
+            all.sort_unstable();
+            choices.push(all);
+        }
+        choices.retain(|group| group.iter().all(|id| self.permitted.contains(id)));
+        choices.sort_unstable();
+        choices.dedup();
+        choices
+    }
+
+    // A native interval can cover several original source chords. Releasing
+    // its complete support set on either side is a candidate, not an
+    // assumption that the continuous certificate will then succeed.
+    fn contact_choices(&self, edges: &[RegionBoundaryEdge], selected: &[usize]) -> Vec<Vec<usize>> {
+        let mut sides = [BTreeSet::new(), BTreeSet::new()];
+        for edge in edges {
+            for (side, polygon) in [Some(edge.interior_polygon), edge.exterior_polygon]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(support) = polygon
+                    .and_then(|id| self.evidence.source_planar_support.get(id))
+                    .copied()
+                    && selected.binary_search(&support).is_err()
+                {
+                    sides[side].insert(support);
+                }
+            }
+        }
+        sides
+            .into_iter()
+            .filter(|side| !side.is_empty())
+            .map(|side| side.into_iter().collect())
+            .collect()
+    }
+
+    // A facet's original polygon is retained even after a connected patch
+    // coalesces its internal triangulation. Only its actual edge neighbors
+    // and incident junction constraints are relevant local repairs.
+    fn facet_choices(&self, polygon: usize, selected: &[usize]) -> Vec<Vec<usize>> {
+        let Some(&support) = self.evidence.source_planar_support.get(polygon) else {
+            return Vec::new();
+        };
+        let mut neighbors = BTreeSet::new();
+        for &id in &self.evidence.support_interface_indices[support] {
+            let interface = &self.evidence.support_interfaces[id];
+            let side = usize::from(interface.supports[0] != support);
+            let other = interface.supports[1 - side];
+            if selected.binary_search(&other).is_err()
+                && interface
+                    .source_polygon_pairs
+                    .iter()
+                    .any(|pair| pair[side] == polygon)
+            {
+                neighbors.insert(other);
+            }
+        }
+        let mut choices = neighbors.iter().map(|&id| vec![id]).collect::<Vec<_>>();
+        if neighbors.len() > 1 {
+            choices.push(neighbors.into_iter().collect());
+        }
+        if let Some(vertices) = self.evidence.source_polygon_vertices(polygon) {
+            for &vertex in vertices {
+                choices.extend(self.junction_choices(vertex, selected));
+            }
+        }
+        choices
+    }
+
+    pub(super) fn repair_choices(
+        &self,
+        error: &HybridRecoveryError,
+        selected: &[usize],
+    ) -> Vec<Vec<Vec<usize>>> {
+        let mut choices = match error {
+            HybridRecoveryError::UnresolvedJunctions(vertices) => vertices
+                .iter()
+                .map(|&id| self.junction_choices(id, selected))
+                .collect(),
+            HybridRecoveryError::RevolutionCrossings(crossings) => crossings
+                .iter()
+                .map(|crossing| {
+                    crossing
+                        .source_edges
+                        .iter()
+                        .flat_map(|edges| self.contact_choices(edges, selected))
+                        .collect()
+                })
+                .collect(),
+            HybridRecoveryError::RetainedTrim { source_edges, .. } => {
+                vec![self.contact_choices(source_edges, selected)]
+            }
+            HybridRecoveryError::LiftedEdge { edge, .. } => {
+                let mut alternatives = self.contact_choices(std::slice::from_ref(edge), selected);
+                alternatives.extend(
+                    edge.vertices
+                        .iter()
+                        .flat_map(|&id| self.junction_choices(id, selected)),
+                );
+                vec![alternatives]
+            }
+            HybridRecoveryError::Patch {
+                source_polygon: Some(polygon),
+                ..
+            } => vec![self.facet_choices(*polygon, selected)],
+            HybridRecoveryError::RetainedRegion { supports, .. } => vec![vec![supports.to_vec()]],
+            _ => Vec::new(),
+        };
+        for alternatives in &mut choices {
+            alternatives.retain(|group| {
+                !group.is_empty() && group.iter().all(|id| self.permitted.contains(id))
+            });
+            alternatives.sort_unstable();
+            alternatives.dedup();
+        }
+        choices.sort_unstable();
+        choices.dedup();
+        choices
     }
 
     fn initial(
@@ -424,7 +567,16 @@ fn check_original_retention(
         if before.faces.is_ok()
             && (region.faces.is_err() || (!before.requires_chart_cut && region.requires_chart_cut))
         {
-            return Err(HybridRecoveryError::RetainedRegion(region.region));
+            return Err(HybridRecoveryError::RetainedRegion {
+                region: region.region,
+                supports: refined
+                    .partition
+                    .region_by_support
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, &owner)| (owner == region.region).then_some(id))
+                    .collect(),
+            });
         }
     }
     // Original valid retained-retained contacts cannot disappear or become
@@ -457,6 +609,7 @@ fn check_original_retention(
             if !valid.contains(&key(edge.vertices)) {
                 return Err(HybridRecoveryError::RetainedTrim {
                     trim: id,
+                    source_edges: Box::new([*edge]),
                     error: crate::mesh_recovery::NativeTrimError::InvalidSource,
                 });
             }
@@ -759,6 +912,133 @@ mod tests {
             context.closure(unauthorized),
             Err(HybridRecoveryError::NoSupportCandidate)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn junction_release_alternatives_remove_complete_incident_carrier_groups()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, partition, _, sphere) = spherical_fixture()?;
+        let selected = vec![evidence.source_planar_support[4]];
+        let permitted = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        let policy = options(0.25, 10);
+        let context = ReleaseContext::new(&evidence, &partition, &permitted, policy)?;
+        let (vertex, sphere_supports) = context.support_vertices[selected[0]]
+            .iter()
+            .find_map(|&vertex| {
+                let supports = context.vertex_supports[vertex]
+                    .iter()
+                    .copied()
+                    .filter(|&support| partition.region_by_support[support] == sphere)
+                    .collect::<Vec<_>>();
+                (supports.len() > 1).then_some((vertex, supports))
+            })
+            .ok_or("multiple spherical supports at an exposed junction")?;
+        let choices = context.junction_choices(vertex, &selected);
+        assert!(choices.contains(&sphere_supports));
+        assert!(choices.iter().all(|choice| {
+            !choice.contains(&selected[0])
+                && choice
+                    .iter()
+                    .all(|id| context.vertex_supports[vertex].contains(id))
+        }));
+        assert!(choices.iter().all(|choice| {
+            let count = sphere_supports
+                .iter()
+                .filter(|id| choice.contains(id))
+                .count();
+            count == 0 || count == sphere_supports.len()
+        }));
+        let restricted = permitted
+            .into_iter()
+            .filter(|id| *id != sphere_supports[0])
+            .collect::<Vec<_>>();
+        let context = ReleaseContext::new(&evidence, &partition, &restricted, policy)?;
+        assert!(
+            context
+                .junction_choices(vertex, &selected)
+                .iter()
+                .all(|choice| { sphere_supports.iter().all(|id| !choice.contains(id)) })
+        );
+        assert!(
+            context
+                .junction_choices(evidence.positions.len(), &selected)
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn crossing_repair_uses_original_incidence_not_transaction_trim_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::mesh_recovery::{HybridCrossingWitness, NativeTrimError};
+        let (evidence, partition, _, _) = spherical_fixture()?;
+        let interface = evidence
+            .support_interfaces
+            .first()
+            .ok_or("source interface")?;
+        let [left, right] = interface.supports;
+        let [a, b] = interface.source_polygon_pairs[0];
+        let edge = RegionBoundaryEdge {
+            vertices: interface.source_edges[0],
+            interior_polygon: a,
+            exterior_polygon: Some(b),
+        };
+        let permitted = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        let context = ReleaseContext::new(&evidence, &partition, &permitted, options(0.25, 10))?;
+        let crossing =
+            HybridRecoveryError::RevolutionCrossings(Box::new([HybridCrossingWitness {
+                trims: [usize::MAX, usize::MAX - 1],
+                source_edges: [Box::new([edge]), Box::new([edge])],
+            }]));
+        assert_eq!(
+            context.repair_choices(&crossing, &[]),
+            vec![vec![vec![left], vec![right]]]
+        );
+        assert_eq!(
+            context.repair_choices(&crossing, &[left]),
+            vec![vec![vec![right]]]
+        );
+        let trim = HybridRecoveryError::RetainedTrim {
+            trim: usize::MAX,
+            source_edges: Box::new([edge]),
+            error: NativeTrimError::EdgeGeometry,
+        };
+        assert_eq!(
+            context.repair_choices(&trim, &[left]),
+            vec![vec![vec![right]]]
+        );
+        let limited = ReleaseContext::new(&evidence, &partition, &[left], options(0.25, 10))?;
+        assert_eq!(
+            limited.repair_choices(&crossing, &[left]),
+            vec![Vec::<Vec<usize>>::new()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_facet_repair_considers_the_actual_adjacent_supports()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, partition, _, _) = spherical_fixture()?;
+        let interface = evidence
+            .support_interfaces
+            .first()
+            .ok_or("source interface")?;
+        let [left, right] = interface.supports;
+        let polygon = interface.source_polygon_pairs[0][0];
+        let allowed = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
+        let context = ReleaseContext::new(&evidence, &partition, &allowed, options(0.25, 10))?;
+        let choices = context.facet_choices(polygon, &[left]);
+        assert!(choices.contains(&vec![right]));
+        let source = evidence
+            .source_polygon_vertices(polygon)
+            .ok_or("source polygon")?;
+        assert!(choices.iter().flatten().all(|&support| {
+            support != left
+                && context.support_vertices[support]
+                    .iter()
+                    .any(|id| source.contains(id))
+        }));
         Ok(())
     }
 

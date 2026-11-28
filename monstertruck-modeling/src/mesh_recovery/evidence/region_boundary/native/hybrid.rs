@@ -8,16 +8,16 @@
 use super::super::patch_lift::{junction_roundoff, lift_native_source_edge};
 use super::{
     NativeChartObstacle, NativeRegionFace, NativeTrimError, NativeTrimGraph, NativeTrimOptions,
-    RegionAssemblyInput, SectionBranch, SharedTrimGeometry, SharedTrimGraph, SurfaceCarrier,
-    SurfaceRegionPartition, TrimInterval, build_trim, geometry_constraints, junction_candidates,
-    trim_intervals,
+    RegionAssembly, RegionAssemblyInput, RevolutionCrossing, SectionBranch, SharedTrimGeometry,
+    SharedTrimGraph, SurfaceCarrier, SurfaceRegionPartition, TrimInterval, build_trim,
+    geometry_constraints, junction_candidates, trim_intervals,
 };
 use crate::{
     Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchError, BoundaryPatchOptions, MeshEvidence, PrescribedSourceEdge,
-        ReconciledPartition, RecoveredAnalyticMesh, RegionBoundaryError, RegionPatchOptions,
-        approximate_boundary_patch,
+        ReconciledPartition, RecoveredAnalyticMesh, RegionBoundaryEdge, RegionBoundaryError,
+        RegionPatchOptions, approximate_boundary_patch,
     },
 };
 use monstertruck_topology::shell::ShellCondition;
@@ -116,6 +116,15 @@ impl HybridRecovery {
     }
 }
 
+/// A positive native crossing witness with original source interval provenance.
+#[derive(Debug)]
+pub struct HybridCrossingWitness {
+    /// Both trim IDs in the transaction's current partition.
+    pub trims: [usize; 2],
+    /// Source segments covered by each of the two crossing native intervals.
+    pub source_edges: [Box<[RegionBoundaryEdge]>; 2],
+}
+
 /// Failure of an explicit global hybrid transaction.
 #[derive(Debug, thiserror::Error)]
 pub enum HybridRecoveryError {
@@ -133,17 +142,25 @@ pub enum HybridRecoveryError {
     Patch {
         /// First original region ID of the connected selected union.
         region: usize,
+        /// Original source polygon for a localized facet failure, if known.
+        source_polygon: Option<usize>,
         /// Failed approximation certificate.
         error: BoundaryPatchError,
     },
+    /// Newly exposed shared junctions whose retained constraints could not be reconciled.
+    #[error("unresolved hybrid source junctions {0:?}")]
+    UnresolvedJunctions(Box<[usize]>),
     /// A source segment could not be lifted within the selected budgets.
-    #[error("hybrid trim {trim} source edge {vertices:?} could not be lifted")]
+    #[error("hybrid trim {trim} source edge {edge:?} could not be lifted")]
     LiftedEdge {
-        /// Original shared trim ID.
+        /// Shared trim ID in the transaction's current partition.
         trim: usize,
-        /// Original source endpoint IDs.
-        vertices: [usize; 2],
+        /// Original source incidence, independent of partition or trim renumbering.
+        edge: RegionBoundaryEdge,
     },
+    /// A new transverse crossing invalidates native geometry in the transaction.
+    #[error("hybrid revolution trim crossings {0:?}")]
+    RevolutionCrossings(Box<[HybridCrossingWitness]>),
     /// An unavoidable seam conflict would require an unauthorized support release.
     #[error("hybrid support release is not permitted: {0:?}")]
     ForbiddenSupport(PatchSupportConflict),
@@ -207,15 +224,22 @@ pub enum HybridRecoveryError {
     /// A previously valid retained analytic trim would fail.
     #[error("hybrid recovery would invalidate retained trim {trim}: {error}")]
     RetainedTrim {
-        /// Source graph trim ID.
+        /// Shared trim ID in the graph where the failure occurred.
         trim: usize,
+        /// Original source segments, stable across repartitioning.
+        source_edges: Box<[RegionBoundaryEdge]>,
         /// Construction or continuous-domain rejection.
         error: NativeTrimError,
     },
     /// A previously valid retained analytic region would fail or require
     /// a previously unnecessary chart decomposition.
-    #[error("hybrid recovery would invalidate retained region {0}")]
-    RetainedRegion(usize),
+    #[error("hybrid recovery would invalidate retained region {region}")]
+    RetainedRegion {
+        /// Region in the current partition.
+        region: usize,
+        /// Original supports of this retained fragment.
+        supports: Box<[usize]>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -229,6 +253,39 @@ struct HybridPlan {
     policy: Vec<TrimPolicy>,
     intervals: Vec<Result<Vec<TrimInterval>, NativeTrimError>>,
     touched: BTreeSet<usize>,
+}
+
+impl HybridPlan {
+    // Native intervals are built in source order. Map their endpoint IDs
+    // back to the exact contiguous source path, including multi-segment
+    // circle or line intervals. Never guess from a refined trim ID.
+    fn source_interval(&self, (trim, ordinal): (usize, usize)) -> &[RegionBoundaryEdge] {
+        let source = &self.graph.trims[trim].source_edges;
+        let Ok(intervals) = &self.intervals[trim] else {
+            return source;
+        };
+        let mut start = 0;
+        for (index, interval) in intervals.iter().enumerate() {
+            if source
+                .get(start)
+                .is_none_or(|edge| edge.vertices[0] != interval.endpoints[0])
+            {
+                return source;
+            }
+            let Some(length) = source[start..]
+                .iter()
+                .position(|edge| edge.vertices[1] == interval.endpoints[1])
+            else {
+                return source;
+            };
+            let end = start + length + 1;
+            if index == ordinal {
+                return &source[start..end];
+            }
+            start = end;
+        }
+        source
+    }
 }
 
 struct HybridEdges {
@@ -458,7 +515,10 @@ impl HybridInput<'_> {
                     .map(|bound| bound + self.patch.budget.vertex)
             })
             .collect::<Vec<_>>();
-        let mut regions = RegionAssemblyInput {
+        let RegionAssembly {
+            mut regions,
+            revolution_crossings,
+        } = RegionAssemblyInput {
             evidence: self.evidence,
             partition: self.partition,
             graph: &plan.graph,
@@ -468,7 +528,7 @@ impl HybridInput<'_> {
             lifted_deviations: &deviations,
         }
         .assemble(&mut trims)?;
-        self.check_retained(&plan, &trims, &regions)?;
+        self.check_retained(&plan, &trims, &regions, &revolution_crossings)?;
         let mut patch_regions = Vec::new();
         let patches = self.assemble_patches(&plan, &lifted_originals, &mut patch_regions)?;
         subdivisions::propagate(&mut patch_regions, &lifted_originals, &trims)?;
@@ -497,7 +557,26 @@ impl HybridInput<'_> {
         plan: &HybridPlan,
         trims: &[Result<Vec<Edge>, NativeTrimError>],
         regions: &[NativeRegionFace],
+        crossings: &[RevolutionCrossing],
     ) -> Result<(), HybridRecoveryError> {
+        let new_crossings = crossings
+            .iter()
+            .filter(|pair| {
+                pair.iter().any(|&(id, _)| {
+                    matches!(plan.policy[id], TrimPolicy::Lifted(_))
+                        || self.baseline.trims[id].is_ok()
+                })
+            })
+            .map(|&pair| HybridCrossingWitness {
+                trims: pair.map(|(id, _)| id),
+                source_edges: pair.map(|reference| plan.source_interval(reference).into()),
+            })
+            .collect::<Vec<_>>();
+        if !new_crossings.is_empty() {
+            return Err(HybridRecoveryError::RevolutionCrossings(
+                new_crossings.into_boxed_slice(),
+            ));
+        }
         for (id, (old, new)) in self.baseline.trims.iter().zip(trims).enumerate() {
             if matches!(plan.policy[id], TrimPolicy::Retained)
                 && old.is_ok()
@@ -505,6 +584,7 @@ impl HybridInput<'_> {
             {
                 return Err(HybridRecoveryError::RetainedTrim {
                     trim: id,
+                    source_edges: plan.graph.trims[id].source_edges.clone().into_boxed_slice(),
                     error: *error,
                 });
             }
@@ -523,7 +603,16 @@ impl HybridInput<'_> {
                 && (region.faces.is_err()
                     || (!before.requires_chart_cut && region.requires_chart_cut))
             {
-                return Err(HybridRecoveryError::RetainedRegion(region.region));
+                return Err(HybridRecoveryError::RetainedRegion {
+                    region: region.region,
+                    supports: self
+                        .partition
+                        .region_by_support
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(id, &owner)| (owner == region.region).then_some(id))
+                        .collect(),
+                });
             }
         }
         Ok(())
@@ -603,6 +692,7 @@ impl HybridInput<'_> {
             angular_resolution: self.patch.angular_resolution,
         };
         let mut vertices = self.baseline.vertices.clone();
+        let mut unresolved = Vec::new();
         for (id, JunctionConstraints { carriers, sections }) in constraints {
             let source = self.evidence.positions[id];
             let branch = sections.as_slice();
@@ -643,10 +733,19 @@ impl HybridInput<'_> {
                     break;
                 }
             }
-            let point = point.ok_or(NativeTrimError::UnresolvedVertex(id))?;
-            vertices[id] = Some(point);
+            if let Some(point) = point {
+                vertices[id] = Some(point);
+            } else {
+                unresolved.push(id);
+            }
         }
-        Ok(vertices)
+        if unresolved.is_empty() {
+            Ok(vertices)
+        } else {
+            Err(HybridRecoveryError::UnresolvedJunctions(
+                unresolved.into_boxed_slice(),
+            ))
+        }
     }
 
     fn edges(
@@ -687,7 +786,7 @@ impl HybridInput<'_> {
                         )
                         .ok_or(HybridRecoveryError::LiftedEdge {
                             trim: id,
-                            vertices: edge.vertices,
+                            edge: *edge,
                         })?;
                         deviation = deviation.max(bound);
                         edges.push(native);
@@ -843,9 +942,16 @@ impl HybridInput<'_> {
                 ..BoundaryPatchOptions::new(self.patch.budget)
             },
         )
-        .map_err(|error| HybridRecoveryError::Patch {
-            region: ids[0],
-            error,
+        .map_err(|error| {
+            let source_polygon = match &error {
+                BoundaryPatchError::Facet { polygon, .. } => polygons.get(*polygon).copied(),
+                _ => None,
+            };
+            HybridRecoveryError::Patch {
+                region: ids[0],
+                source_polygon,
+                error,
+            }
         })?;
         let mut faces = BTreeMap::<usize, Vec<Face>>::new();
         let mut ranges = BTreeMap::<(usize, usize, usize), Range<usize>>::new();
@@ -1070,6 +1176,120 @@ mod tests {
                     assert_eq!(shell.edge_iter().filter(|e| e.id() == edge.id()).count(), 2);
                 }
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_interval_provenance_preserves_all_original_chords() {
+        let source_edges = (0..5)
+            .map(|id| RegionBoundaryEdge {
+                vertices: [id, (id + 1) % 5],
+                interior_polygon: id,
+                exterior_polygon: Some(id + 5),
+            })
+            .collect::<Vec<_>>();
+        let plan = HybridPlan {
+            graph: SharedTrimGraph {
+                trims: vec![crate::mesh_recovery::SharedAnalyticTrim {
+                    contact_path: 0,
+                    regions: (0, Some(1)),
+                    source_edges: source_edges.clone(),
+                    geometry: SharedTrimGeometry::Unresolved,
+                }],
+                regions: Vec::new(),
+                ambiguous_edges: Vec::new(),
+                limited_paths: 0,
+            },
+            policy: vec![TrimPolicy::Retained],
+            intervals: vec![Ok(vec![
+                TrimInterval {
+                    endpoints: [0, 3],
+                    sweep: 2.0,
+                },
+                TrimInterval {
+                    endpoints: [3, 0],
+                    sweep: 2.0,
+                },
+            ])],
+            touched: BTreeSet::new(),
+        };
+        assert_eq!(plan.source_interval((0, 0)), &source_edges[..3]);
+        assert_eq!(plan.source_interval((0, 1)), &source_edges[3..]);
+        assert_eq!(plan.source_interval((0, 2)), &source_edges);
+    }
+
+    #[test]
+    fn hybrid_transaction_reports_all_unresolved_exposed_junctions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (evidence, mut partition, fallback, sphere) = spherical_fixture()?;
+        let Some(SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius,
+        }) = partition.carriers[sphere]
+        else {
+            return Err("expected sphere".into());
+        };
+        partition.carriers[sphere] = Some(SurfaceCarrier::CircularRevolution {
+            axial_center,
+            axis,
+            radial_center,
+            profile_radius: profile_radius + 0.1,
+        });
+        let strict = NativeTrimOptions {
+            max_vertex_displacement: 0.01,
+            intersection_tolerance: 1.0e-8,
+            angular_resolution: 1.0e-8,
+        };
+        let index = RegionBoundaryIndex::new(&evidence)?;
+        let graph = index.assemble_shared_trims(
+            &partition,
+            &evidence.positions,
+            SharedTrimOptions {
+                absolute_tolerance: 0.01,
+                relative_tolerance: 1.0e-4,
+                max_interval_edges: 128,
+            },
+        )?;
+        let baseline =
+            index.construct_native_trims(&partition, &graph, &evidence.positions, strict)?;
+        let input = HybridInput {
+            evidence: &evidence,
+            partition: &partition,
+            graph: &graph,
+            baseline: &baseline,
+            positions: &evidence.positions,
+            selected: fallback.into_iter().collect(),
+            patch: RegionPatchOptions {
+                budget: SurfaceRegionBudget {
+                    vertex: 0.01,
+                    chord: 0.25,
+                },
+                intersection_tolerance: strict.intersection_tolerance,
+                angular_resolution: strict.angular_resolution,
+            },
+            strict,
+        };
+        let plan = input.plan()?;
+        let expected = input
+            .constraints(&plan)?
+            .into_iter()
+            .filter_map(|(id, constraints)| {
+                constraints
+                    .carriers
+                    .iter()
+                    .any(|c| matches!(c, SurfaceCarrier::CircularRevolution { .. }))
+                    .then_some(id)
+            })
+            .collect::<Vec<_>>();
+        assert!(expected.len() > 1);
+        match input.vertices(&plan) {
+            Err(HybridRecoveryError::UnresolvedJunctions(vertices)) => {
+                assert_eq!(&*vertices, expected.as_slice())
+            }
+            _ => return Err("expected all failed exposed junctions".into()),
         }
         Ok(())
     }
