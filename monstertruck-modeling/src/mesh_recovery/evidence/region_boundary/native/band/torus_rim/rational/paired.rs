@@ -37,9 +37,7 @@ impl LiftedRim {
         .ok_or(Rejection::Invalid)?;
         let start = [uv[frame.varying], uv[1 - frame.varying]].map(Interval::point);
         let (pieces, end) = lift_cycle(frame, &rim.edges, start)?;
-        if end[0].sub(start[0]).sub(Interval::point(TAU)).magnitude() > frame.resolution
-            || end[1].sub(start[1]).magnitude() > frame.height_resolution
-        {
+        if !frame.junction(end, start, TAU) {
             return Err(Rejection::Winding);
         }
         let height = pieces
@@ -201,12 +199,19 @@ fn prove_pair(
     // upper meridian side; positive meridional winding has material on
     // its lower azimuth side. Reverse the negative cycle for the proof.
     let lower_positive = context.outward == (axis == 0);
-    let (Ok(a), Ok(mut b)) = (
-        LiftedRim::new(context, frame, rims[lower].reversed(!lower_positive)),
-        LiftedRim::new(context, frame, rims[1 - lower].reversed(lower_positive)),
-    ) else {
-        return None;
+    let mut lift = |rim: OrientedRim| {
+        // Keep the source mapping even when constructing the lift fails.
+        let sources = rim.sources.clone();
+        match LiftedRim::new(context, frame, rim) {
+            Ok(lifted) => Some(lifted),
+            Err(error) => {
+                obstacles.extend(chart_obstacles(error, &sources));
+                None
+            }
+        }
     };
+    let a = lift(rims[lower].reversed(!lower_positive))?;
+    let mut b = lift(rims[1 - lower].reversed(lower_positive))?;
     for rim in [&a, &b] {
         if let Err(pairs) = simplicity::cycle(frame, &rim.pieces, true) {
             obstacles.extend(chart_obstacles(Rejection::Pair(pairs), &rim.rim.sources));

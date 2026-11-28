@@ -1,5 +1,8 @@
 //! Continuous certificate for the actual rational native rim, including
 //! polynomial approximations of regular analytic intersection branches.
+//! At shared native vertices, enclose both the original rational curve and
+//! its endpoint-aligned reference within the existing physical kernel
+//! incidence allowance. No actual edge geometry or source budget changes.
 //! No tensor-circle assumption is made for a general section spline.
 mod controls;
 mod holes;
@@ -72,6 +75,26 @@ impl Frame {
             self.height_resolution
         }
     }
+    // The aligned reference curves share an exact topological vertex.
+    // The actual curves are enclosed by the same intervals. A chart
+    // resolution limits numerical branch selection, not the physical
+    // endpoint discrepancy (which was checked in world coordinates).
+    fn junction(self, a: [Interval; 2], b: [Interval; 2], shift: f64) -> bool {
+        (0..2).all(|i| {
+            let other = if i == 0 {
+                b[i].add(Interval::point(shift))
+            } else {
+                b[i]
+            };
+            let gap = a[i].sub(other);
+            let resolution = self.tolerance(i);
+            gap.finite()
+                && gap.lo <= resolution
+                && gap.hi >= -resolution
+                && (!(i == 0 || self.periodic_height()) || gap.width() < PI * 0.5)
+        })
+    }
+
     fn unwrap(self, axis: usize, value: Interval, reference: f64) -> Interval {
         if axis == 0 || self.periodic_height() {
             near(value, reference)
@@ -186,7 +209,7 @@ impl Piece {
         }
         let raw_start = frame.endpoint(*controls.values.first()?)?;
         let start = std::array::from_fn(|i| frame.unwrap(i, raw_start[i], reference[i].mid()));
-        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.tolerance(i)) {
+        if !frame.junction(start, reference, 0.0) {
             return None;
         }
         let raw_end = frame.endpoint(*controls.values.last()?)?;
@@ -270,11 +293,44 @@ pub(in super::super) enum Rejection {
     Invalid,
 }
 
+// Keep the original rational Bernstein endpoint AND its topological
+// counterpart inside one interval. With positive weights, replacing the
+// endpoint numerator by vertex * weight is a continuous local reference
+// correction bounded by the endpoint's world-space displacement. The
+// derivatives and all chart boxes below enclose both curves and their
+// control-point homotopy, including the complete interior of each span.
+fn enclose_endpoint(control: &mut Control, vertex: Point3) -> Option<()> {
+    let weight = control[3];
+    if !weight.finite() || weight.lo <= 0.0 {
+        return None;
+    }
+    let mut distance = Interval::point(0.0);
+    for i in 0..3 {
+        let residual = control[i].div(weight)?.sub(Interval::point(vertex[i]));
+        distance = distance.add(residual.square());
+    }
+    if distance.sqrt()?.hi > crate::KERNEL_EPSILON {
+        return None;
+    }
+    for i in 0..3 {
+        control[i] = control[i].union(weight.scale(vertex[i]));
+    }
+    Some(())
+}
+
 fn lift_cycle(
     frame: Frame,
     rim: &[Edge],
     first: [Interval; 2],
 ) -> Result<(Vec<Piece>, [Interval; 2]), Rejection> {
+    if rim.is_empty()
+        || rim
+            .iter()
+            .zip(rim.iter().cycle().skip(1))
+            .any(|(a, b)| a.back() != b.front())
+    {
+        return Err(Rejection::Invalid);
+    }
     let mut reference = first;
     let mut pieces = Vec::new();
     for (edge_id, edge) in rim.iter().enumerate() {
@@ -282,7 +338,18 @@ fn lift_cycle(
             .oriented_curve()
             .try_into_homogeneous_bspline_curve()
             .ok_or(Rejection::Span(edge_id))?;
-        for mut span in controls::spans(&curve).ok_or(Rejection::Span(edge_id))? {
+        let mut spans = controls::spans(&curve).ok_or(Rejection::Span(edge_id))?;
+        let first = spans
+            .first_mut()
+            .and_then(|span| span.values.first_mut())
+            .ok_or(Rejection::Span(edge_id))?;
+        enclose_endpoint(first, edge.front().point()).ok_or(Rejection::Span(edge_id))?;
+        let last = spans
+            .last_mut()
+            .and_then(|span| span.values.last_mut())
+            .ok_or(Rejection::Span(edge_id))?;
+        enclose_endpoint(last, edge.back().point()).ok_or(Rejection::Span(edge_id))?;
+        for mut span in spans {
             for control in &mut span.values {
                 *control = frame.local(*control);
             }
@@ -310,13 +377,7 @@ pub(super) fn prove(
     ];
     let (pieces, reference) = lift_cycle(frame, rim, first)?;
     let resolution = frame.resolution;
-    if reference[0]
-        .sub(first[0])
-        .sub(Interval::point(TAU))
-        .magnitude()
-        > resolution
-        || reference[1].sub(first[1]).magnitude() > resolution
-    {
+    if !frame.junction(reference, first, TAU) {
         return Err(Rejection::Winding);
     }
     let height_origin = side * ring.fixed;
