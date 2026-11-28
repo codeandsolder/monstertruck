@@ -1288,8 +1288,13 @@ fn shared_source_face_loader_matches_surface_signature_census() -> anyhow::Resul
         .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no solid"))?;
     let face_ids = brep::solid_face_ids(solid_id, entities, &index)
         .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no faces"))?;
-    let faces = source_face_infos(&face_ids, entities, &index)
-        .ok_or_else(|| anyhow::anyhow!("source face loading failed"))?;
+    let faces = source_face_infos(
+        &face_ids,
+        entities,
+        &index,
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, &index),
+    )
+    .ok_or_else(|| anyhow::anyhow!("source face loading failed"))?;
     let incidence = closed_shell_edge_uses(&faces)
         .ok_or_else(|| anyhow::anyhow!("closed shell incidence failed"))?;
     let census = detect_solid_surface_signatures_with_index(entities, &index);

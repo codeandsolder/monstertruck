@@ -536,6 +536,13 @@ pub(super) fn classify(
         CurveSupport::Circle(circle) => circle_arc(edge, *circle, None, loci, cells),
         CurveSupport::BSpline(spline) => {
             let rational = spline.rational_curve()?;
+            // The authored strip provides a bounded curve association. Do
+            // not erase it merely because a different curve family also fits
+            // inside the physical error budget.
+            if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci, tolerance_mm)
+            {
+                return Some(BoundedEdge::Spline(key));
+            }
             if let Some(line) = bspline_line_support(spline, tolerance_mm)
                 && line_incidence(edge, line, loci, tolerance_mm)
                 && certify_nurbs_segment_locus(
@@ -556,10 +563,6 @@ pub(super) fn classify(
                 certify_crossing_cylinders(edge, &rational, loci, tolerance_mm)
             {
                 return Some(intersection);
-            }
-            if let Some(key) = super::spline_strip::certified_edge(edge, spline, loci, tolerance_mm)
-            {
-                return Some(BoundedEdge::Spline(key));
             }
             let proposed = circle_section_of_plane_and_support(&loci[0], &loci[1])
                 .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]))

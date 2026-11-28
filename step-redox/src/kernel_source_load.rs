@@ -891,10 +891,15 @@ mod monstertruck_adapter {
                 let Some(net) = surface.try_into_homogeneous_bspline_surface() else {
                     return SurfaceSupport::Other { entity_id: id };
                 };
-                if let Some(plane) = native_planar_net(&net, tolerance_mm) {
+                let extrusion = native_spline_extrusion(&net, tolerance_mm);
+                if let Some(plane) = native_planar_net(&net, tolerance_mm)
+                    && extrusion.as_ref().is_none_or(|strip| {
+                        plane.max_residual_mm <= strip.max_residual_mm + KERNEL_EPSILON
+                    })
+                {
                     return SurfaceSupport::Plane(plane);
                 }
-                native_spline_extrusion(&net, tolerance_mm).map_or(
+                extrusion.map_or(
                     SurfaceSupport::Other { entity_id: id },
                     SurfaceSupport::SplineExtrusion,
                 )

@@ -1441,7 +1441,9 @@ fn dequantize_vector(vector: [i64; 3], quantum: f64) -> Option<[f64; 3]> {
 /// parameters, including when the spline's profile is a straight line.
 /// A source-boundary certificate, instead, needs the *geometric locus*.
 /// Prefer an independently certified plane for those doubly representable
-/// surfaces; retain the spline extrusion for genuinely curved profiles.
+/// surfaces only when the planar model explains the control net at least
+/// as well as the extrusion, up to numerical noise. The physical recovery
+/// allowance is not permission to discard a better-supported curved carrier.
 fn boundary_surface_support(
     surface_id: u64,
     entities: &[EntityInstance],
@@ -1449,13 +1451,15 @@ fn boundary_surface_support(
     tolerance_mm: f64,
 ) -> SurfaceSupport {
     let constructive = brep::surface_support(surface_id, entities, index, tolerance_mm);
-    if matches!(constructive, SurfaceSupport::SplineExtrusion(_))
+    if let SurfaceSupport::SplineExtrusion(ref strip) = constructive
         && let Some(plane) = crate::surface_recovery::analyze_planar_surface(
             surface_id,
             entities,
             index,
             tolerance_mm,
         )
+        && plane.max_residual_mm
+            <= strip.max_residual_mm + DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return SurfaceSupport::Plane(brep::PlaneSupport {
             origin_mm: plane.origin_mm,
@@ -1607,9 +1611,22 @@ fn oriented_support_key(
             )
         }
         SurfaceSupport::SplineExtrusion(surface) => {
-            spline_extrusion_cylinder_key(&surface, forward, cells).or_else(|| {
+            // A nonconstant polynomial cannot parameterize a circular arc.
+            // Preserve its authored strip when it explains the complete trim;
+            // only then consider a bounded analytic approximation.
+            let polynomial = surface.profile.weights.as_ref().is_none_or(|weights| {
+                weights
+                    .windows(2)
+                    .all(|pair| pair[0].to_bits() == pair[1].to_bits())
+            });
+            let strip = |cells: &mut BoundaryProofContext| {
                 spline_strip::oriented_key(face_id, surface_id, forward, entities, index, cells)
-            })
+            };
+            if polynomial {
+                strip(cells).or_else(|| spline_extrusion_cylinder_key(&surface, forward, cells))
+            } else {
+                spline_extrusion_cylinder_key(&surface, forward, cells).or_else(|| strip(cells))
+            }
         }
         SurfaceSupport::Other { .. } => {
             spline_strip::oriented_key(face_id, surface_id, forward, entities, index, cells)
