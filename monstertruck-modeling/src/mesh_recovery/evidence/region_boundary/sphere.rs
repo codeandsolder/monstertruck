@@ -313,41 +313,107 @@ impl SphereDiscovery<'_> {
         self.relative_tolerance * sphere.radius
     }
 
-    fn accepts(&self, support: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> bool {
-        let sample = &self.samples[support];
-        // A support need not itself be cyclic (e.g. a tessellated seam
-        // with extra coplanar samples). Test its actual source vertices.
-        let plane = &self.evidence.planar_supports[support];
-        let offset = (plane.origin - sphere.center).dot(plane.normal);
-        if offset.abs() <= tolerance || (offset > 0.0) != outward {
-            return false;
-        }
-        sample.vertices.iter().all(|&id| {
+    fn fits(&self, support: usize, sphere: SphereSeed, tolerance: f64) -> bool {
+        self.samples[support].vertices.iter().all(|&id| {
             ((self.evidence.positions[id] - sphere.center).magnitude() - sphere.radius).abs()
                 <= tolerance
         }) && facet_residual_bound(self.evidence, support, sphere.center, sphere.radius)
             .is_some_and(|error| error <= self.chord_fraction * sphere.radius)
     }
 
-    fn grow(&self, seed: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> Vec<usize> {
+    fn accepts(&self, support: usize, sphere: SphereSeed, outward: bool, tolerance: f64) -> bool {
+        // A radial plane through the center has no reliable radial
+        // orientation. It must not seed or bridge ordinary sphere growth.
+        let plane = &self.evidence.planar_supports[support];
+        let offset = (plane.origin - sphere.center).dot(plane.normal);
+        offset.abs() > tolerance
+            && (offset > 0.0) == outward
+            && self.fits(support, sphere, tolerance)
+    }
+
+    fn neighbors(&self, id: usize) -> impl Iterator<Item = usize> + '_ {
+        self.evidence.support_interface_indices[id]
+            .iter()
+            .map(move |&interface| {
+                let [a, b] = self.evidence.support_interfaces[interface].supports;
+                if a == id { b } else { a }
+            })
+    }
+
+    // Some tessellators fill a difference in sampling of a shared great
+    // circle with a thin chordal strip. Every vertex lies on the sphere,
+    // but its planar normal has no radial sign. Include such a component
+    // only when its entire boundary is already surrounded by the *same*
+    // independently grown spherical region. Never bridge distinct regions
+    // or absorb open radial closures. The filled-facet bound still applies.
+    fn enclose_radial_supports(
+        &self,
+        index: &RegionBoundaryIndex<'_>,
+        sphere: SphereSeed,
+        frontier: &BTreeSet<usize>,
+        accepted: &mut BTreeSet<usize>,
+    ) {
+        let tolerance = self.strict_tolerance(sphere);
+        let radial = |id: usize| {
+            let plane = &self.evidence.planar_supports[id];
+            (plane.origin - sphere.center).dot(plane.normal).abs() <= tolerance
+                && self.fits(id, sphere, tolerance)
+        };
+        let mut tested = BTreeSet::new();
+        for &seed in frontier {
+            if accepted.contains(&seed) || !tested.insert(seed) || !radial(seed) {
+                continue;
+            }
+            let mut group = vec![seed];
+            let mut cursor = 0;
+            while let Some(&id) = group.get(cursor) {
+                for other in self.neighbors(id) {
+                    if !accepted.contains(&other) && tested.insert(other) && radial(other) {
+                        group.push(other);
+                    }
+                }
+                cursor += 1;
+            }
+            group.sort_unstable();
+            let Ok(boundary) = index.boundary(&group) else {
+                continue;
+            };
+            if !boundary.loops.is_empty()
+                && boundary.pinched_vertices.is_empty()
+                && boundary.loops.iter().flatten().all(|edge| {
+                    edge.exterior_polygon
+                        .is_some_and(|p| accepted.contains(&self.evidence.source_planar_support[p]))
+                })
+            {
+                accepted.extend(group);
+            }
+        }
+    }
+
+    fn grow(
+        &self,
+        index: &RegionBoundaryIndex<'_>,
+        seed: usize,
+        sphere: SphereSeed,
+        outward: bool,
+        tolerance: f64,
+    ) -> Vec<usize> {
         let mut tested = BTreeSet::from([seed]);
-        let mut accepted = Vec::new();
+        let mut accepted = BTreeSet::new();
         let mut queue = VecDeque::from([seed]);
         while let Some(id) = queue.pop_front() {
             if !self.accepts(id, sphere, outward, tolerance) {
                 continue;
             }
-            accepted.push(id);
-            for &interface in &self.evidence.support_interface_indices[id] {
-                let [a, b] = self.evidence.support_interfaces[interface].supports;
-                let other = if a == id { b } else { a };
+            accepted.insert(id);
+            for other in self.neighbors(id) {
                 if tested.insert(other) {
                     queue.push_back(other);
                 }
             }
         }
-        accepted.sort_unstable();
-        accepted
+        self.enclose_radial_supports(index, sphere, &tested, &mut accepted);
+        accepted.into_iter().collect()
     }
     // An initial local fit may have used perturbed trim samples.
     // The expanded candidate supplies interior vertices independently
@@ -396,7 +462,7 @@ impl SphereDiscovery<'_> {
             if checked.contains(&id) {
                 continue;
             }
-            let core = self.grow(id, fitted, outward, tolerance);
+            let core = self.grow(index, id, fitted, outward, tolerance);
             checked.insert(id);
             checked.extend(core.iter().copied());
             if core.len() > best.len() && independently_tested(self.evidence, &core, tolerance) {
@@ -404,7 +470,13 @@ impl SphereDiscovery<'_> {
             }
         }
         let &start = best.first()?;
-        let grown = self.grow(start, fitted, outward, self.surface_tolerance(fitted));
+        let grown = self.grow(
+            index,
+            start,
+            fitted,
+            outward,
+            self.surface_tolerance(fitted),
+        );
         if !expanded.iter().all(|id| grown.binary_search(id).is_ok()) {
             return None;
         }
@@ -465,7 +537,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             {
                 continue;
             }
-            let supports = discovery.grow(a, sphere, outward, tolerance);
+            let supports = discovery.grow(self, a, sphere, outward, tolerance);
             if supports.binary_search(&b).is_err() {
                 continue;
             }
@@ -474,7 +546,13 @@ impl<'a> RegionBoundaryIndex<'a> {
             for &support in &supports {
                 discovery.seen[support].push(id);
             }
-            let expanded = discovery.grow(a, sphere, outward, discovery.surface_tolerance(sphere));
+            let expanded = discovery.grow(
+                self,
+                a,
+                sphere,
+                outward,
+                discovery.surface_tolerance(sphere),
+            );
             let (sphere, supports, expanded) = discovery
                 .refit_interior(self, &expanded, sphere, outward)
                 .unwrap_or((sphere, supports, expanded));
@@ -876,6 +954,89 @@ mod tests {
                 .discover_spherical_regions(1.0e-4, 1.0e-8, 0.3)
                 .is_empty()
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod collapsed_support_tests {
+    use super::*;
+    use crate::mesh_recovery::{EvidenceOptions, analyze_mesh_evidence};
+    use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+
+    #[test]
+    fn enclosed_great_circle_strip_is_absorbed_but_open_strip_is_not()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Two regular spherical rows with one side of their common edge
+        // sampled more densely. A chordal triangle closes the polygonal
+        // seam but has no area after projection to the sphere.
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let unit = |x, y, z| center + Vector3::new(x, y, z).normalize();
+        let positions = vec![
+            unit(1., -0.2, 0.),
+            unit(1., 0.2, 0.),
+            unit(1., 0., 0.),
+            unit(1., 0., 0.3),
+            unit(1., 0., -0.3),
+            unit(1., -0.4, 0.),
+            unit(1., 0.4, 0.),
+        ];
+        // Shared directed edges are opposite. The left/right fans
+        // connect the regular triangles around the radial strip.
+        let regular = [
+            [0, 1, 3],
+            [1, 2, 4],
+            [2, 0, 4],
+            [0, 3, 5],
+            [0, 5, 4],
+            [1, 6, 3],
+            [1, 4, 6],
+        ];
+        for open in [false, true] {
+            let mut faces = regular.to_vec();
+            if open {
+                faces.remove(0);
+            }
+            let sliver = faces.len();
+            faces.push([0, 2, 1]);
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions: positions.clone(),
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let index = RegionBoundaryIndex::new(&evidence)?;
+            let id = evidence.source_planar_support[sliver];
+            let samples = (0..evidence.planar_supports.len())
+                .map(|i| SupportSamples {
+                    vertices: support_vertices(&evidence, i).unwrap_or_default(),
+                    circle: None,
+                })
+                .collect::<Vec<_>>();
+            let discovery = SphereDiscovery {
+                evidence: &evidence,
+                seen: vec![Vec::new(); samples.len()],
+                samples,
+                seeds: Vec::new(),
+                relative_tolerance: 1e-4,
+                absolute_tolerance: 1e-8,
+                chord_fraction: 0.3,
+            };
+            let sphere = SphereSeed {
+                center,
+                radius: 1.0,
+            };
+            let seed = (0..evidence.planar_supports.len())
+                .find(|&i| i != id)
+                .ok_or("regular support")?;
+            let plane = &evidence.planar_supports[seed];
+            let outward = (plane.origin - center).dot(plane.normal) > 0.0;
+            assert!(!discovery.accepts(id, sphere, outward, 1e-8));
+            let grown = discovery.grow(&index, seed, sphere, outward, 1e-8);
+            assert_eq!(grown.contains(&id), !open);
+        }
         Ok(())
     }
 }
