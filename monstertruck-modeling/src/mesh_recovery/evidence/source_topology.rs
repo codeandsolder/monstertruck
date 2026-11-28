@@ -498,7 +498,7 @@ mod tests {
                     .all(|p| p[1] - p[0] == 3)
             );
             assert!(evidence.closed_source_volume().is_some());
-            let recovered = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+            let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
             let shell = recovered
                 .complete_shell()
                 .ok_or("two separate closed shells")?;

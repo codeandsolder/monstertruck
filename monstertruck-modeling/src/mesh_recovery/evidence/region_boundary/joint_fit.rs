@@ -54,6 +54,9 @@ pub enum JointFitRejection {
     /// Affected trim preflight did not predict an improvement.
     #[error("trim preflight")]
     TrimPreflight,
+    /// A refit or ownership change exceeds the declared filled-facet allowance.
+    #[error("source support {0} exceeds its declared chord budget")]
+    SourceChordBudget(usize),
     /// Native assembly moved a vertex beyond its source budget.
     #[error("native vertex {vertex} exceeds its allowance {allowance:e}")]
     NativeDisplacement {

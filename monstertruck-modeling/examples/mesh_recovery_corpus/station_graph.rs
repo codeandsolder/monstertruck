@@ -101,9 +101,9 @@ pub fn summarize(
     local_tracks: &[CurvatureTrack],
 ) -> Result<Value, String> {
     let options = recovery_options();
-    let discovered = discover_analytic_regions(evidence, spatial, grown, local_tracks, options)
+    let discovered = discover_analytic_regions(evidence, spatial, grown, local_tracks, &options)
         .map_err(|e| e.to_string())?;
-    let recovery = construct_analytic_recovery(discovered, options).map_err(|e| e.to_string())?;
+    let recovery = construct_analytic_recovery(discovered, &options).map_err(|e| e.to_string())?;
     let active = &recovery.evidence;
     let stats = &recovery.discovery;
     let boundary = RegionBoundaryIndex::new(active).map_err(|e| e.to_string())?;
@@ -141,7 +141,7 @@ pub fn summarize(
     if evidence.non_manifold_edge_count > 0 {
         let normalized = recover_analytic_evidence(
             evidence,
-            AnalyticRecoveryOptions {
+            &AnalyticRecoveryOptions {
                 normalize_coincident_sheets: true,
                 ..options
             },
