@@ -30,9 +30,9 @@ jobs:
         cargo check --locked -p monstertruck-meshing --no-default-features --features filters
         cargo check --locked -p monstertruck-meshing --no-default-features --features tessellation
       strict-suites: |
-        [{"name":"native","cargo":["--locked","--workspace","--all-targets"],"allow-test-panics":true}]
+        [{"name":"native","cargo":["--locked","--workspace","--all-targets","--features","monstertruck-modeling/font"],"allow-test-panics":true}]
       test-suites: |
-        [{"name":"cpu","cargo":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"],"doctests":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"]}]
+        [{"name":"cpu","cargo":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial","--features","monstertruck-modeling/font"],"doctests":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial","--features","monstertruck-modeling/font"]}]
   wasm:
     uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
@@ -40,7 +40,7 @@ jobs:
       rust-targets: wasm32-unknown-unknown
       rustflags: '--cfg=web_sys_unstable_apis --cfg=getrandom_backend="wasm_js" -D warnings'
       command: |
-        cargo build --locked --target=wasm32-unknown-unknown
+        cargo build --locked --target=wasm32-unknown-unknown --features monstertruck-modeling/font
         cargo build --locked --manifest-path step-redox/web/step-redox-wasm/Cargo.toml --target=wasm32-unknown-unknown
   kcl-conformance:
     if: github.event_name == 'workflow_dispatch'

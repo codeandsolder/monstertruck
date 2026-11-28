@@ -3,6 +3,12 @@ use thiserror::Error;
 /// Modeling errors.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum Error {
+    /// Text placement contains an invalid scale, offset, plane, or closure tolerance.
+    #[error("invalid font profile placement")]
+    InvalidTextOptions,
+    /// The font contains an outline that cannot be decoded.
+    #[error("cannot decode font glyph {0}")]
+    InvalidGlyphOutline(u32),
     /// Wrapper of topological error.
     #[error(transparent)]
     FromTopology(#[from] monstertruck_topology::errors::Error),

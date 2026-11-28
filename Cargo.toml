@@ -82,7 +82,7 @@ spade = "2"
 robust = "1.2"
 syn = { version = "3", features = ["derive", "printing"] }
 thiserror = { version = "2", default-features = false }
-ttf-parser = "0.25"
+skrifa = { version = "0.49", default-features = false, features = ["std"] }
 # `default-features = false` drops vtkio's compression feature, which is the
 # only thing pulling `lz4_flex` (RUSTSEC-2026-0041). Ported from upstream truck
 # d6625230. Gating `vtk` off by default hid the advisory from the default
