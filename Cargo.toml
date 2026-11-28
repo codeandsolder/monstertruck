@@ -129,3 +129,9 @@ opt-level = "z"
 
 [patch.crates-io]
 quick-xml = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "vtkio-xml-security-v0.0.1" }
+# Published family: spade and gpu-allocator use the same Hashbrown as wgpu.
+spade = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "hashbrown-017-v0.0.1" }
+gpu-allocator = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "hashbrown-017-v0.0.1" }
+# Keep Wayland support and window decorations while aligning native dependencies.
+winit = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "wayland-modernization-v0.0.2" }
+wayland-backend = { git = "https://github.com/codeandsolder/cargo-patches.git", tag = "wayland-modernization-v0.0.2" }
