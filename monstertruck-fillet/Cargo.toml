@@ -12,7 +12,7 @@ default = []
 
 [dependencies]
 ahash = { workspace = true }
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["from"] }
 itertools = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
