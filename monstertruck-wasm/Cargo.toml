@@ -14,7 +14,7 @@ categories = ["graphics"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["as_ref", "deref", "deref_mut", "from", "into"] }
 gloo-console = { workspace = true }
 js-sys = { workspace = true }
 serde_json = { workspace = true }

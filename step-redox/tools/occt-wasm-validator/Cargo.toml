@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-flate2 = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 num-traits = "0.2"
@@ -24,3 +24,7 @@ zip = { version = "9", default-features = false, features = ["deflate-flate2-zli
 
 # Dedicated nightly / external-OCCT toolchain outside production workspace.
 [workspace]
+
+[patch.crates-io]
+png = { git = "https://github.com/codeandsolder/cargo-patches.git", branch = "generated/ksp-image-codecs" }
+zlib-rs = { git = "https://github.com/codeandsolder/zlib-rs-fast.git", rev = "9bcb777d447db3f8ad343c61254c5f24981d5745" }
