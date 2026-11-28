@@ -38,12 +38,20 @@ impl Default for PlanarRecoveryOptions {
 
 mod analytic;
 mod carrier_identity;
+mod component_groups;
+mod component_partition;
+mod native_recovery;
 pub use analytic::{
     AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
     AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
     JointFitAttempt, JointFitMethod, JointFitRejection, JointFitReport, RecoveredAnalyticMesh,
     SelectedSurfaceProposal, SupportRefinementPass, construct_analytic_recovery,
     discover_analytic_regions, recover_analytic_evidence, recover_analytic_mesh,
+};
+pub use component_partition::{RecoveryMeshComponent, partition_recovery_mesh};
+pub use native_recovery::{
+    NativeComponentReport, NativeHybridOptions, NativeMeshRecovery, NativeRecoveryOptions,
+    recover_native_mesh,
 };
 mod boundary_facet;
 pub use boundary_facet::{

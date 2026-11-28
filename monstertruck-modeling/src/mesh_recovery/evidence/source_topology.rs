@@ -231,7 +231,7 @@ fn closed_components(
 /// closed components. Keep all unresolved/open polygons in one common pool,
 /// and leave their incidence untouched. The result flags the closed polygons
 /// that must not be subjected to geometric T-junction search against that pool.
-pub(super) fn separate_closed_components(
+pub(in crate::mesh_recovery) fn separate_closed_components(
     positions: &mut Vec<Point3>,
     polygons: &mut [InputPolygon],
     provenance: &mut SourceProvenance,

@@ -9,6 +9,7 @@ use super::{
     RegionBoundaryIndex, SelectedSurfaceProposal, SurfaceCarrier, SurfaceRegionPartition,
     assemble_native,
 };
+use crate::mesh_recovery::component_groups::Groups;
 use std::collections::BTreeSet;
 mod feedback;
 mod ownership;
@@ -18,32 +19,6 @@ use ownership::OwnershipTrial;
 pub(super) struct PartitionAlternative {
     pub partition: SurfaceRegionPartition,
     pub selected: Vec<SelectedSurfaceProposal>,
-}
-
-struct Groups {
-    parents: Vec<usize>,
-}
-
-impl Groups {
-    fn new(count: usize) -> Self {
-        Self {
-            parents: (0..count).collect(),
-        }
-    }
-
-    fn root(&mut self, mut id: usize) -> usize {
-        while self.parents[id] != id {
-            self.parents[id] = self.parents[self.parents[id]];
-            id = self.parents[id];
-        }
-        id
-    }
-
-    fn join(&mut self, a: usize, b: usize) {
-        let a = self.root(a);
-        let b = self.root(b);
-        self.parents[a.max(b)] = a.min(b);
-    }
 }
 
 // First close each group under both region partitions. Then include every

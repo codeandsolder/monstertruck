@@ -18,7 +18,10 @@ use monstertruck_meshing::{
 use monstertruck_modeling::{
     Curve, EuclideanSpace, KERNEL_EPSILON, Point3, Shell, Solid, Surface,
     ToCompressedTrimmedParameterCurves,
-    mesh_recovery::{AnalyticRecoveryOptions, recover_analytic_mesh},
+    mesh_recovery::{
+        AnalyticRecoveryOptions, NativeComponentReport, NativeHybridOptions, NativeRecoveryOptions,
+        SurfaceRegionBudget, recover_native_mesh,
+    },
 };
 use monstertruck_topology::{
     compress::CompressedShell, shell::ShellCondition, trimmed::TrimmedShell,
@@ -61,6 +64,18 @@ struct Args {
     /// Known source tessellation deflection in model units (not kernel tolerance).
     #[arg(long)]
     source_chord_budget: Option<f64>,
+    /// Authorize at most this many source polygons for certified hybrid patches.
+    #[arg(long, requires = "source_chord_budget")]
+    max_released_polygons: Option<usize>,
+    /// Independent hybrid vertex allowance; defaults to the explicit chord budget.
+    #[arg(long, requires = "max_released_polygons")]
+    hybrid_vertex_budget: Option<f64>,
+    /// Maximum candidate states per independent component.
+    #[arg(long, default_value_t = 4096)]
+    max_search_states: usize,
+    /// Maximum complete hybrid transactions per independent component.
+    #[arg(long, default_value_t = 4)]
+    max_search_trials: usize,
     /// Explicitly permit cancellation of proven reverse coincident sheets.
     #[arg(long)]
     normalize_coincident_sheets: bool,
@@ -210,11 +225,95 @@ fn inspect_step(
     )
 }
 
-fn verify(path: &Path, args: &Args) -> Result<Value> {
-    let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
-    let result = recover_analytic_mesh(
-        &mesh,
-        &AnalyticRecoveryOptions {
+struct RecoveryStats {
+    source_volume: Option<f64>,
+    active_polygons: usize,
+    canceled_sheets: usize,
+    regions: usize,
+    failed_regions: usize,
+    pending_chart_cuts: usize,
+    ambiguous_source_edges: usize,
+    components: Vec<Value>,
+}
+
+impl RecoveryStats {
+    const fn new() -> Self {
+        Self {
+            source_volume: Some(0.0),
+            active_polygons: 0,
+            canceled_sheets: 0,
+            regions: 0,
+            failed_regions: 0,
+            pending_chart_cuts: 0,
+            ambiguous_source_edges: 0,
+            components: Vec::new(),
+        }
+    }
+
+    fn observe(&mut self, part: NativeComponentReport<'_>) {
+        let Ok(recovery) = part.analytic else {
+            self.source_volume = None;
+            self.components
+                .push(json!({"source_polygons":part.original_polygons.len(),
+                "error":part.analytic.err().map(ToString::to_string)}));
+            return;
+        };
+        self.active_polygons += recovery.evidence.provenance.original_polygon_ids.len();
+        self.canceled_sheets += recovery.evidence.provenance.canceled_sheets.len();
+        self.source_volume = self
+            .source_volume
+            .zip(recovery.evidence.closed_source_volume())
+            .map(|(a, b)| a + b);
+        let (native, trims, released) = match part.hybrid {
+            Some(Ok(search)) => (
+                &search.refined.recovery.native,
+                &search.refined.trims,
+                search.released_polygons,
+            ),
+            _ => (&recovery.native, &recovery.trims, 0),
+        };
+        let failed = native.regions.iter().filter(|r| r.faces.is_err()).count();
+        let pending = native
+            .regions
+            .iter()
+            .filter(|r| r.requires_chart_cut)
+            .count();
+        self.regions += native.regions.len();
+        self.failed_regions += failed;
+        self.pending_chart_cuts += pending;
+        self.ambiguous_source_edges += trims.ambiguous_edges.len();
+        self.components
+            .push(json!({"source_polygons":part.original_polygons.len(),
+            "independently_closed_source":part.independently_closed_source,
+            "native_faces":part.shell.map(|s|s.len()),"released_polygons":released,
+            "failed_regions":failed,"pending_chart_cuts":pending,
+            "analytic_seconds":part.analytic_duration.as_secs_f64(),
+            "hybrid_seconds":part.hybrid_duration.as_secs_f64(),
+            "hybrid_error":part.hybrid.and_then(Result::err).map(ToString::to_string)}));
+    }
+}
+
+fn recovery_options(args: &Args) -> Result<NativeRecoveryOptions> {
+    let hybrid = args
+        .max_released_polygons
+        .map(|limit| -> Result<_> {
+            let chord = args
+                .source_chord_budget
+                .context("hybrid recovery requires a source chord budget")?;
+            Ok(NativeHybridOptions {
+                budget: SurfaceRegionBudget {
+                    vertex: args.hybrid_vertex_budget.unwrap_or(chord),
+                    chord,
+                },
+                max_released_polygons: limit,
+                max_states_per_component: args.max_search_states,
+                max_trials_per_component: args.max_search_trials,
+                simplify_planar_fans: true,
+            })
+        })
+        .transpose()?;
+    Ok(NativeRecoveryOptions {
+        analytic: AnalyticRecoveryOptions {
             max_planar_displacement: args.max_planar_displacement,
             max_reconstruction_adjustment: args.max_reconstruction_adjustment,
             source_position_uncertainty: args.source_position_uncertainty,
@@ -222,15 +321,21 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
             normalize_coincident_sheets: args.normalize_coincident_sheets,
             ..Default::default()
         },
-    )?;
+        hybrid,
+    })
+}
+
+fn verify(path: &Path, args: &Args) -> Result<Value> {
+    let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
+    let mut stats = RecoveryStats::new();
+    let result = recover_native_mesh(&mesh, &recovery_options(args)?, |part| stats.observe(part))?;
     let mut summary = json!({"source":path,"source_polygons":mesh.face_iter().count(),
-        "active_polygons":result.evidence.provenance.original_polygon_ids.len(),"canceled_sheets":result.evidence.provenance.canceled_sheets.len(),
-        "source_signed_volume":result.evidence.closed_source_volume(),
-        "regions":result.native.regions.len(),
-        "failed_regions":result.native.regions.iter().filter(|r|r.faces.is_err()).count(),
-        "pending_chart_cuts":result.native.regions.iter().filter(|r|r.requires_chart_cut).count(),
-        "ambiguous_source_edges":result.trims.ambiguous_edges.len()});
-    if let Some(shell) = result.complete_shell() {
+        "active_polygons":stats.active_polygons,"canceled_sheets":stats.canceled_sheets,
+        "source_signed_volume":stats.source_volume,"regions":stats.regions,
+        "failed_regions":stats.failed_regions,"pending_chart_cuts":stats.pending_chart_cuts,
+        "ambiguous_source_edges":stats.ambiguous_source_edges,"component_count":result.component_count,
+        "released_polygons":result.released_polygons,"component_reports":stats.components});
+    if let Some(shell) = result.shell {
         let condition = shell.shell_condition();
         summary["native_faces"] = json!(shell.len());
         summary["shell_condition"] = json!(format!("{condition:?}"));
@@ -244,7 +349,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
                 .and_then(|(a, b)| (a.abs() > 0.0).then(|| (a - b).abs() / a.abs()));
             let relative_source_difference = fine["closed_signed_volume"]
                 .as_f64()
-                .zip(result.evidence.closed_source_volume())
+                .zip(stats.source_volume)
                 .and_then(|(a, b)| (b.abs() > 0.0).then(|| (a - b).abs() / b.abs()));
             summary["volume"] = json!({"coarse":coarse,"fine":fine,
                 "relative_resolution_difference":converged,"relative_source_difference":relative_source_difference});
@@ -254,10 +359,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
         let solid_eligible = args.verification == VerificationMode::Full
             && condition == ShellCondition::Closed
             && shell.is_connected()
-            && result
-                .evidence
-                .closed_source_volume()
-                .is_some_and(|v| v > 0.0)
+            && stats.source_volume.is_some_and(|v| v > 0.0)
             && summary["volume"]["fine"]["closed_signed_volume"]
                 .as_f64()
                 .is_some_and(|v| v > 0.0);

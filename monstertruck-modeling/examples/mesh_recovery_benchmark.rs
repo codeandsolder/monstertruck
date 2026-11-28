@@ -6,7 +6,7 @@ use monstertruck_mesh::obj;
 use monstertruck_modeling::mesh_recovery::{
     AnalyticRecoveryOptions, FeatureEdgeKind, MeshEvidence, RecoveredAnalyticMesh,
     SharedAnalyticTrim, SharedTrimGeometry, SurfaceCarrier, analyze_mesh_evidence,
-    recover_analytic_evidence,
+    partition_recovery_mesh, recover_analytic_evidence,
 };
 use serde_json::{Value, json};
 use std::{
@@ -408,22 +408,42 @@ fn benchmark(
     Ok(result)
 }
 
+fn partition_summary(path: &Path) -> Result<Value> {
+    let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
+    let start = Instant::now();
+    let parts = partition_recovery_mesh(&mesh)?;
+    Ok(json!({
+        "status": "ok",
+        "source": path,
+        "partition_seconds": start.elapsed().as_secs_f64(),
+        "source_polygons": mesh.face_iter().count(),
+        "components": parts.iter().map(|part| json!({
+            "source_polygons": part.original_polygons.len(),
+            "independently_closed": part.independently_closed,
+            "original_polygon_ids": part.original_polygons,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let first = args.next().context("expected one OBJ path")?;
+    let partition_only = first == "--partition-only";
     let evidence_only = first == "--evidence-only";
     let normalize = first == "--normalize-coincident-sheets";
     let joint_fit = first != "--no-joint-fit";
-    let path = PathBuf::from(if evidence_only || normalize || !joint_fit {
-        args.next().context("expected OBJ path after option")?
-    } else {
-        first
-    });
+    let path = PathBuf::from(
+        if partition_only || evidence_only || normalize || !joint_fit {
+            args.next().context("expected OBJ path after option")?
+        } else {
+            first
+        },
+    );
     let shell_output = args
         .next()
         .map(|flag| -> Result<PathBuf> {
             anyhow::ensure!(
-                flag == "--shell-output" && !evidence_only,
+                flag == "--shell-output" && !evidence_only && !partition_only,
                 "expected --shell-output after OBJ"
             );
             Ok(PathBuf::from(
@@ -433,8 +453,12 @@ fn main() -> Result<()> {
         .transpose()?;
     anyhow::ensure!(
         args.next().is_none(),
-        "expected [--evidence-only | --normalize-coincident-sheets | --no-joint-fit] OBJ [--shell-output JSON]"
+        "expected [--partition-only | --evidence-only | --normalize-coincident-sheets | --no-joint-fit] OBJ [--shell-output JSON]"
     );
+    if partition_only {
+        println!("{}", partition_summary(&path)?);
+        return Ok(());
+    }
     let result = benchmark(
         &path,
         evidence_only,

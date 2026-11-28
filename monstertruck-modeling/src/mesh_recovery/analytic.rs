@@ -108,7 +108,7 @@ impl Default for AnalyticRecoveryOptions {
 }
 
 impl AnalyticRecoveryOptions {
-    fn validate(&self) -> Result<(), AnalyticRecoveryError> {
+    pub(super) fn validate(&self) -> Result<(), AnalyticRecoveryError> {
         let positive = [
             self.relative_surface_tolerance,
             self.axis_relative_resolution,
