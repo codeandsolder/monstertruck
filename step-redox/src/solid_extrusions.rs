@@ -2873,6 +2873,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declared_source_accuracy_survives_reduced_extrusion_and_lowering() -> anyhow::Result<()> {
+        let source = include_str!("../validation/fixtures/native_body_corpus_box.step");
+        let source = source.replace("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-02)");
+        let exchange = step_p21::parser::parse(&source)?;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let solid = ReducedSolid::from_step(15, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("source box"))?;
+        assert_eq!(solid.recovery_tolerance_mm(), 0.05);
+        assert_eq!(solid.clone().recovery_tolerance_mm(), 0.05);
+        let extrusions = detect_solid_extrusions(entities);
+        let extrusion = extrusions
+            .iter()
+            .find(|candidate| candidate.solid_id == 15)
+            .ok_or_else(|| anyhow::anyhow!("source box extrusion"))?;
+        assert_eq!(extrusion.source_tolerance_mm, 0.05);
+        crate::cad_recovery::recover_solid_extrusion_fragment(extrusion)?;
+        Ok(())
+    }
+
+    #[test]
     fn real_hooked_tube_proposes_top_cap_with_attached_partial_bottom() -> anyhow::Result<()> {
         let bytes = include_bytes!("../validation/fixtures/native_open_cap_hook_union.step");
         let exchange = monstertruck_io::step::load::ParsedStepSource::parse(bytes)?.exchange;
