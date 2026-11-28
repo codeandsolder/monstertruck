@@ -609,10 +609,48 @@ fn refined_trial(
     Ok(result)
 }
 
+#[derive(Clone, Copy)]
+struct SearchBudget {
+    states: usize,
+    trials: usize,
+}
+
+impl Default for SearchBudget {
+    fn default() -> Self {
+        Self {
+            states: 4096,
+            trials: 4,
+        }
+    }
+}
+
+fn search_failure_report(error: &HybridRecoveryError) -> Value {
+    match error {
+        HybridRecoveryError::SupportSearch {
+            states,
+            queued_states,
+            trials,
+            seed_supports,
+            last,
+        } => json!({
+            "states":states,"queued_states":queued_states,"trials":trials,
+            "seed_supports":seed_supports,"last_error":last.to_string(),
+        }),
+        HybridRecoveryError::OwnershipAlternatives {
+            alternative,
+            primary,
+        } => json!({
+            "alternative":search_failure_report(alternative),"primary":search_failure_report(primary),
+        }),
+        _ => Value::Null,
+    }
+}
+
 fn unresolved_contact_trial(
     recovery: &RecoveredAnalyticMesh,
     budget: SurfaceRegionBudget,
     limit: usize,
+    search_budget: SearchBudget,
     shell_output: Option<&Path>,
     simplify: bool,
 ) -> Result<Value> {
@@ -634,8 +672,8 @@ fn unresolved_contact_trial(
     let permitted = (0..recovery.evidence.planar_supports.len()).collect::<Vec<_>>();
     let options = HybridSupportSearchOptions {
         refinement: refinement_options(recovery, budget, limit),
-        max_states: 4096,
-        max_trials: 4,
+        max_states: search_budget.states,
+        max_trials: search_budget.trials,
     };
     let start = Instant::now();
     let mut report = match recovery.construct_unresolved_contact_hybrid(&permitted, options) {
@@ -649,7 +687,7 @@ fn unresolved_contact_trial(
             report
         }
         Err(error) => {
-            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error)})
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error),"search_failure":search_failure_report(&error)})
         }
     };
     report["seconds"] = json!(start.elapsed().as_secs_f64());
@@ -772,6 +810,26 @@ fn main() -> Result<()> {
     let simplify = arguments.iter().any(|arg| arg == "--simplify-planar-fans");
     let carrier_trials = !arguments.iter().any(|arg| arg == "--no-carrier-trials");
     arguments.retain(|arg| arg != "--simplify-planar-fans" && arg != "--no-carrier-trials");
+    let mut search_budget = SearchBudget::default();
+    if let Some(position) = arguments.iter().position(|arg| arg == "--search-budget") {
+        let raw = arguments
+            .get(position + 1)
+            .context("expected STATES,TRIALS")?;
+        let (states, trials) = raw
+            .to_str()
+            .context("non-UTF8 search budget")?
+            .split_once(',')
+            .context("expected STATES,TRIALS")?;
+        search_budget = SearchBudget {
+            states: states.parse()?,
+            trials: trials.parse()?,
+        };
+        anyhow::ensure!(
+            search_budget.states > 0 && search_budget.trials > 0,
+            "search work budgets must be positive"
+        );
+        arguments.drain(position..=position + 1);
+    }
     let mut args = arguments.into_iter();
     let read_budget = |arg: Option<std::ffi::OsString>| -> Result<f64> {
         arg.context("expected explicit approximation budget")?
@@ -800,7 +858,7 @@ fn main() -> Result<()> {
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans] [--no-carrier-trials]; replay: --replay-supports MAX_POLYGONS ID,ID,..."
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans] [--no-carrier-trials] [--search-budget STATES,TRIALS]; replay: --replay-supports MAX_POLYGONS ID,ID,..."
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
@@ -818,9 +876,14 @@ fn main() -> Result<()> {
         Some((flag, limit, _)) if flag == "--release-conflicts" => {
             refined_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
         }
-        Some((flag, limit, _)) if flag == "--release-unresolved" => {
-            unresolved_contact_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
-        }
+        Some((flag, limit, _)) if flag == "--release-unresolved" => unresolved_contact_trial(
+            &recovery,
+            budget,
+            limit,
+            search_budget,
+            shell_output.as_deref(),
+            simplify,
+        )?,
         Some((flag, limit, seeds)) if flag == "--replay-supports" => replay_support_trial(
             &recovery,
             budget,
@@ -840,7 +903,7 @@ fn main() -> Result<()> {
     };
     println!(
         "{}",
-        json!({"source":path,"recovery_seconds":recovery_seconds,"carrier_alternative_trials":recovery.discovery.carrier_alternative_trials,"carrier_alternative_acceptances":recovery.discovery.carrier_alternative_acceptances,"vertex_budget":budget.vertex,"chord_budget":budget.chord,"hybrid":report})
+        json!({"source":path,"recovery_seconds":recovery_seconds,"carrier_alternative_trials":recovery.discovery.carrier_alternative_trials,"carrier_alternative_acceptances":recovery.discovery.carrier_alternative_acceptances,"vertex_budget":budget.vertex,"chord_budget":budget.chord,"search_budget":{"states":search_budget.states,"trials":search_budget.trials},"hybrid":report})
     );
     Ok(())
 }

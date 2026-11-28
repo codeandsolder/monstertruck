@@ -377,6 +377,11 @@ impl CoverSearch {
             .map(|alternatives| {
                 alternatives
                     .iter()
+                    .filter(|seeds| {
+                        seeds
+                            .iter()
+                            .any(|id| candidate.selected.binary_search(id).is_err())
+                    })
                     .map(|seeds| {
                         let mut closure = BTreeSet::new();
                         for id in seeds {
@@ -676,14 +681,15 @@ impl HybridSource<'_> {
         let Some(trim) = graph.trims.get(id) else {
             return [Vec::new(), Vec::new()];
         };
-        // Angular sections use one native edge per original source segment.
-        // If another chart already subdivided the trim, fall back to its
-        // complete original interval instead of guessing the ordinal.
+        // Angular sections and single-carrier lifts use one native edge
+        // per original source segment. If a chart already subdivided the
+        // trim, fall back to the complete interval rather than guessing.
         let one_to_one = matches!(
             trim.geometry,
             SharedTrimGeometry::ToroidalSection(_)
                 | SharedTrimGeometry::LinearSection(_)
                 | SharedTrimGeometry::Conic(_)
+                | SharedTrimGeometry::Unresolved
         ) && native
             .trims
             .get(id)
@@ -692,7 +698,7 @@ impl HybridSource<'_> {
         let source_edges = if one_to_one {
             trim.source_edges
                 .get(ordinal)
-                .map_or(&[][..], std::slice::from_ref)
+                .map_or(trim.source_edges.as_slice(), std::slice::from_ref)
         } else {
             trim.source_edges.as_slice()
         };
@@ -713,61 +719,74 @@ impl HybridSource<'_> {
         graph: &SharedTrimGraph,
         native: &NativeTrimGraph,
     ) -> CrossingChoices {
-        use crate::mesh_recovery::SurfaceCarrier;
         let mut choices = BTreeSet::new();
         for region in native.regions.iter().filter(|r| r.requires_chart_cut) {
-            if !matches!(partition.carriers[region.region],Some(SurfaceCarrier::CircularRevolution{radial_center,..}) if radial_center>crate::KERNEL_EPSILON)
-            {
-                continue;
-            }
-            let Some(boundary) = graph
-                .regions
-                .iter()
-                .find(|r| r.region == region.region)
-                .and_then(|r| r.boundary.as_ref().ok())
-            else {
-                continue;
-            };
-            if boundary.loops.len() < 2 {
-                continue;
-            }
             let whole = partition
                 .region_by_support
                 .iter()
                 .enumerate()
                 .filter_map(|(id, &r)| (r == region.region).then_some(id))
                 .collect::<Vec<_>>();
-            let mut adjacent = BTreeSet::new();
-            for reference in boundary.loops.iter().flatten() {
-                let trim = &graph.trims[reference.trim];
-                if !matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)) {
-                    continue;
+            if whole.is_empty() {
+                continue;
+            }
+            // Every unresolved chart has a whole-source-region fallback.
+            // Prefer a small boundary-side change when the failure exposes
+            // a localized span or an affected cycle. These are hypotheses,
+            // not assertions that a chart proof failed for geometric reasons.
+            let mut fallback = vec![whole];
+            if let Some(boundary) = graph
+                .regions
+                .iter()
+                .find(|r| r.region == region.region)
+                .and_then(|r| r.boundary.as_ref().ok())
+            {
+                for cycle in &boundary.loops {
+                    let mut adjacent = BTreeSet::new();
+                    for reference in cycle {
+                        let trim = &graph.trims[reference.trim];
+                        // Release the other side of a complete variable-rim
+                        // path, independent of the analytic carrier family.
+                        if matches!(
+                            trim.geometry,
+                            SharedTrimGeometry::Line(_) | SharedTrimGeometry::Circle(_)
+                        ) {
+                            continue;
+                        }
+                        for ordinal in 0..trim.source_edges.len() {
+                            let [_, opposite] = self.chart_edge_supports(
+                                partition,
+                                graph,
+                                native,
+                                region.region,
+                                (reference.trim, ordinal),
+                            );
+                            adjacent.extend(opposite);
+                        }
+                    }
+                    if !adjacent.is_empty() {
+                        fallback.push(adjacent.into_iter().collect());
+                    }
                 }
-                for (ordinal, _) in trim.source_edges.iter().enumerate() {
-                    let [_, opposite] = self.chart_edge_supports(
-                        partition,
-                        graph,
-                        native,
-                        region.region,
-                        (reference.trim, ordinal),
-                    );
-                    adjacent.extend(opposite);
+                if fallback.len() > 2 {
+                    let combined = fallback[1..]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                    fallback.push(combined);
                 }
             }
-            let adjacent = adjacent.into_iter().collect::<Vec<_>>();
-            let fallback = || {
-                let mut result = vec![whole.clone()];
-                if !adjacent.is_empty() {
-                    result.push(adjacent.clone());
-                }
-                result
-            };
+            fallback.sort_unstable();
+            fallback.dedup();
             let mut localized = false;
             for obstacle in &region.chart_obstacles {
                 let Some(edges) = obstacle.edges() else {
                     continue;
                 };
-                let mut alternatives = fallback();
+                let mut alternatives = fallback.clone();
                 for edge in edges {
                     alternatives.extend(
                         self.chart_edge_supports(partition, graph, native, region.region, edge)
@@ -780,8 +799,8 @@ impl HybridSource<'_> {
                 localized = true;
                 choices.insert(alternatives);
             }
-            if !localized && !adjacent.is_empty() {
-                choices.insert(fallback());
+            if !localized {
+                choices.insert(fallback);
             }
         }
         choices.into_iter().collect()
@@ -827,7 +846,11 @@ impl HybridSource<'_> {
         context: &ReleaseContext<'_>,
     ) -> Option<CoverCandidate> {
         for alternatives in choices.iter_mut() {
-            alternatives.retain(|set| Self::ensure_crossing_closures(search, set, context));
+            alternatives.retain(|set| {
+                set.iter()
+                    .any(|id| candidate.selected.binary_search(id).is_err())
+                    && Self::ensure_crossing_closures(search, set, context)
+            });
         }
         if choices.iter().any(Vec::is_empty) {
             return None;
@@ -887,11 +910,13 @@ impl HybridSource<'_> {
             self.initial_cover_search(permitted_supports, &context, options)?;
         let mut last = HybridRecoveryError::NoSupportCandidate;
         let mut trials = 0;
+        let mut last_seeds = Vec::new();
         while trials < options.max_trials {
             let Some(candidate) = followup.take().or_else(|| search.next_cover()) else {
                 break;
             };
             trials += 1;
+            last_seeds.clone_from(&candidate.seeds);
             let seed_cost: usize = candidate.seeds.iter().map(|&id| search.sizes[id]).sum();
             let limit = options.refinement.max_added_polygons - seed_cost;
             match self.construct_refined_with_context(
@@ -958,6 +983,7 @@ impl HybridSource<'_> {
             states: search.states,
             queued_states: search.visited.len(),
             trials,
+            seed_supports: last_seeds.into_boxed_slice(),
             last: Box::new(last),
         })
     }
@@ -1126,6 +1152,26 @@ mod tests {
                 .is_none()
         );
         assert!(crossing_only.next_cover().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn new_obstacle_cannot_be_satisfied_by_a_previous_release() -> Result<(), HybridRecoveryError> {
+        let mut search = CoverSearch::new(
+            BTreeSet::from([[0, 1]]),
+            identity_closures(0..4),
+            vec![1, 2, 1, 1],
+            options(3, 32),
+        )?;
+        let first = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!(first.selected, vec![0]);
+        let repair = search
+            .witnessed_cover(&first, &[vec![vec![0], vec![2, 3]]])
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!(repair.selected, vec![0, 2, 3]);
+        assert!(search.witnessed_cover(&first, &[vec![vec![0]]]).is_none());
         Ok(())
     }
 
