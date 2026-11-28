@@ -3,9 +3,9 @@
 use super::tolerance::BooleanTolerance;
 use super::{
     AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
-    InnerProduct, IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve,
-    ParameterCurve, ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve,
-    ShapeOpsSurface, Shell, SurfaceCurve, Vector4,
+    IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
+    ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve, ShapeOpsSurface,
+    Shell, SurfaceCurve, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;

@@ -13,7 +13,7 @@ use super::{
     geometry_constraints, junction_candidates, trim_intervals,
 };
 use crate::{
-    Edge, Face, InnerProduct, Point3, Shell, Vertex, builder,
+    Edge, Face, Point3, Shell, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchError, BoundaryPatchOptions, MeshEvidence, PrescribedSourceEdge,
         ReconciledPartition, RecoveredAnalyticMesh, RegionBoundaryEdge, RegionBoundaryError,

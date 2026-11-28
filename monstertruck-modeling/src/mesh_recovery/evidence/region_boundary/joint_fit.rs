@@ -5,7 +5,7 @@ use super::{
     MeshEvidence, ReconciliationOptions, SurfaceCarrier, SurfaceRegionPartition,
     reconcile::{preserves_polygon_orientation, reconcile_point},
 };
-use crate::{InnerProduct, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
 mod fillet;
 mod ownership;

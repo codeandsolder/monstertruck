@@ -6,7 +6,7 @@ use super::super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier, norm
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Clone, Copy)]

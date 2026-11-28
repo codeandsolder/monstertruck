@@ -3,7 +3,7 @@
 //! in both independently recovered incident surfaces.
 
 use super::{ContactCircleEvidence, SurfaceCarrier, curve_evidence::measure_placed_circle};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 #[derive(Clone, Copy)]
 struct PlacedCircle {

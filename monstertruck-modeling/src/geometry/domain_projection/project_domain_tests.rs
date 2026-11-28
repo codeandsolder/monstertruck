@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    AffinePoint, BsplineSurface, Invertible, KnotVector, Line, MetricSpace, NurbsSurface, Plane,
-    Processor, RevolutionSurface, Vector3, Vector4,
+    BsplineSurface, Invertible, KnotVector, Line, MetricSpace, NurbsSurface, Plane, Processor,
+    RevolutionSurface, Vector3, Vector4,
 };
 use std::f64::consts::TAU;
 

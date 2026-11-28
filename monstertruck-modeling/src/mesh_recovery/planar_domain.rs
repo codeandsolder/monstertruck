@@ -13,7 +13,7 @@
 //! certified by this test.
 
 use super::sample_fit::normal_basis;
-use crate::{Edge, InnerProduct, Point3, Vector2, Vector3, Wire};
+use crate::{Edge, Point3, Vector2, Vector3, Wire};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };

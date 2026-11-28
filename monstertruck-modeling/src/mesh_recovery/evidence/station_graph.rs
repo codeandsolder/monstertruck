@@ -8,7 +8,7 @@ use super::{
     CarrierResidual, CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, SurfaceCarrier,
     measure_circular_meridian,
 };
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Projected sample and fitting budgets, in original mesh units.

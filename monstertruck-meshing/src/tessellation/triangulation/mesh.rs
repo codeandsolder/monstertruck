@@ -7,9 +7,9 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::iter;
 
 use super::{
-    AffinePoint, Cdt, CdtEdge, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, InnerProduct,
-    Instant, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2,
-    Point3, PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
+    AffinePoint, Cdt, CdtEdge, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, Instant,
+    KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2, Point3,
+    PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
     StructuringFilter, TessellationPrimitiveMode, TessellationPrimitiveOptions, Triangulation,
     Vector2, Vector3, VertexIterator, array, boundary, log_mesh_trace,
 };

@@ -1,8 +1,8 @@
 use crate::errors::Error;
 use crate::{
     AffinePoint, BoundingBox, Connector, ExtrusionSurface, GeometricMapping, GeometryTransform,
-    InnerProduct, Line, Matrix3, Matrix4, Origin, Plane, Point3, Processor, RevolutionSurface,
-    SquareLinearMap, ToSameGeometry, Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
+    Line, Matrix3, Matrix4, Origin, Plane, Point3, Processor, RevolutionSurface, ToSameGeometry,
+    Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
 };
 use itertools::Itertools;
 use monstertruck_core::circumcenter;
@@ -136,7 +136,7 @@ pub fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
         normal.normalize()
     };
     let a = take_one_axis_by_normal(n);
-    let mat: Matrix4 = Matrix3::from_columns(&[a, n.cross(&a), n]).into();
+    let mat: Matrix4 = Matrix3::from_columns(&[a, n.cross(&a), n]).to_homogeneous();
     let inverse = mat.try_inverse()?;
     pts.iter_mut()
         .flatten()

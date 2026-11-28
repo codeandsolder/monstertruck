@@ -2,7 +2,7 @@
 //! contact. The carrier is fixed and its endpoint errors do not establish
 //! the uncertainty of the input.
 use super::{MeshEvidence, Point3, SurfaceCarrier, chord_uncertainty};
-use crate::{InnerProduct, KERNEL_EPSILON};
+use crate::KERNEL_EPSILON;
 
 #[derive(Clone, Copy)]
 pub(in crate::mesh_recovery) struct OwnershipGrowthOptions {

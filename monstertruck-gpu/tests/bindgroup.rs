@@ -3,7 +3,7 @@
 #![recursion_limit = "256"]
 mod common;
 use common::Plane;
-use monstertruck_core::math::{Matrix4, Point3, Vector3, Vector4};
+use monstertruck_core::math::{Matrix4, Point3, Vector3};
 use monstertruck_gpu::{
     Camera, Light, LightType, ProjectionMethod, RenderTextureConfig, Scene, SceneDescriptor,
     StudioConfig,
@@ -13,13 +13,10 @@ use wgpu::{Backends, Color, TextureFormat};
 const PICTURE_WIDTH: u32 = 256;
 const PICTURE_HEIGHT: u32 = 256;
 
-const CAMERA_MATRIX: Matrix4 = Matrix4::from_columns(&[
-    Vector4::new(1.0, 2.1, 3.2, 4.3),
-    Vector4::new(5.4, 6.5, 7.6, 8.7),
-    Vector4::new(9.8, 10.9, 11.0, 12.0),
-    Vector4::new(13.0, 14.0, 15.0, 16.23),
-]);
-const CAMERA_FOV: f64 = (std::f64::consts::PI / 4.0);
+const CAMERA_MATRIX: Matrix4 = Matrix4::new(
+    1.0, 5.4, 9.8, 13.0, 2.1, 6.5, 10.9, 14.0, 3.2, 7.6, 11.0, 15.0, 4.3, 8.7, 12.0, 16.23,
+);
+const CAMERA_FOV: f64 = std::f64::consts::PI / 4.0;
 const CAMERA_NEARCLIP: f64 = 0.1;
 const CAMERA_FARCLIP: f64 = 10.0;
 

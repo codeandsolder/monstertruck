@@ -465,12 +465,12 @@ fn rotation_between(from: Vector3, to: Vector3) -> Matrix3 {
             Vector3::y()
         };
         let axis = f.cross(&perp).normalize();
-        return Rotation3::from_axis_angle(&Unit::new_unchecked(axis), (std::f64::consts::PI))
+        return Rotation3::from_axis_angle(&Unit::new_unchecked(axis), std::f64::consts::PI)
             .into_inner();
     }
 
     let axis = f.cross(&t).normalize();
-    let angle = (dot.acos());
+    let angle = dot.acos();
     Rotation3::from_axis_angle(&Unit::new_unchecked(axis), angle).into_inner()
 }
 

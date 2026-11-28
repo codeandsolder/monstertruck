@@ -8,7 +8,7 @@ use super::{
     super::{EdgeIncidence, InputPolygon},
     canonical_unit,
 };
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::VecDeque;
 

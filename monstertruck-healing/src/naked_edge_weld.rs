@@ -11,8 +11,8 @@
 
 use super::{
     AffinePoint, BsplineCurve, CompressedEdge, CompressedEdgeIndex, CompressedShell,
-    DEFAULT_NUMERICAL_TOLERANCES, HashMap, InnerProduct, MetricSpace, NurbsCurve, ParametricCurve,
-    Point3, SnapCurveEndpoints, TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
+    DEFAULT_NUMERICAL_TOLERANCES, HashMap, MetricSpace, NurbsCurve, ParametricCurve, Point3,
+    SnapCurveEndpoints, TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
 };
 use monstertruck_topology::StableId;
 use std::{collections::BTreeMap, fmt};

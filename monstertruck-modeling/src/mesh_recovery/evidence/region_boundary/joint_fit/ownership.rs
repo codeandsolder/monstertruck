@@ -7,7 +7,7 @@ use super::{
     Neighborhood, Point3, SurfaceCarrier, SurfaceRegionPartition, fixed_sample_position,
     plane_from_junctions, preserves_polygon_orientation, satisfies,
 };
-use crate::{InnerProduct, KERNEL_EPSILON};
+use crate::KERNEL_EPSILON;
 use std::collections::BTreeSet;
 mod growth;
 pub(in crate::mesh_recovery) use growth::{OwnershipGrowthOptions, support_claim};

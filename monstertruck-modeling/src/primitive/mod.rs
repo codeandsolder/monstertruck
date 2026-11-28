@@ -142,14 +142,14 @@ where
     Plane: ToSameGeometry<S>, {
     let (p, q) = (r#box.min(), r#box.max());
     let v = builder::vertices([
-        (p.x, p.y, p.z),
-        (q.x, p.y, p.z),
-        (q.x, q.y, p.z),
-        (p.x, q.y, p.z),
-        (p.x, p.y, q.z),
-        (q.x, p.y, q.z),
-        (q.x, q.y, q.z),
-        (p.x, q.y, q.z),
+        Point3::new(p.x, p.y, p.z),
+        Point3::new(q.x, p.y, p.z),
+        Point3::new(q.x, q.y, p.z),
+        Point3::new(p.x, q.y, p.z),
+        Point3::new(p.x, p.y, q.z),
+        Point3::new(q.x, p.y, q.z),
+        Point3::new(q.x, q.y, q.z),
+        Point3::new(p.x, q.y, q.z),
     ]);
     let e = [
         builder::line(&v[0], &v[1]),

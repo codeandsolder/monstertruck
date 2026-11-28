@@ -12,8 +12,8 @@ use super::{
     sample_fit::normal_basis,
 };
 use crate::{
-    Curve, Edge, EdgeId, Face, InnerProduct, KERNEL_EPSILON, NurbsSurface, Plane, Point3, Shell,
-    Surface, Vector3, Vector4, VertexId, Wire,
+    Curve, Edge, EdgeId, Face, KERNEL_EPSILON, NurbsSurface, Plane, Point3, Shell, Surface,
+    Vector3, Vector4, VertexId, Wire,
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
 use monstertruck_topology::shell::ShellCondition;

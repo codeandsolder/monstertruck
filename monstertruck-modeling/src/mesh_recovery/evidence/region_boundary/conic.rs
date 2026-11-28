@@ -245,17 +245,21 @@ impl ContactConicEvidence {
         else {
             return self.secondary.is_none();
         };
-        let origin = origin.to_homogeneous().spatial();
+        let origin = origin.coords;
         let mut local_scale = 0.0_f64;
         let mut coordinate_scale = 0.0_f64;
         let mut min_weight = f64::INFINITY;
         let mut min_radius = f64::INFINITY;
         let data = controls.map(|p| {
-            let delta = p.spatial() - origin * p.w;
+            let delta = p.fixed_rows::<3>(0).into_owned() - origin * p.w;
             let axial = delta.dot(&axis);
             let radial = delta - axis * axial;
             let radius = slope.mul_add(axial, radius_at_origin * p.w);
-            coordinate_scale = coordinate_scale.max(origin.norm().mul_add(p.w, p.spatial().norm()));
+            coordinate_scale = coordinate_scale.max(
+                origin
+                    .norm()
+                    .mul_add(p.w, p.fixed_rows::<3>(0).into_owned().norm()),
+            );
             local_scale = local_scale.max(delta.norm() + radius.abs());
             min_weight = min_weight.min(p.w);
             min_radius = min_radius.min(radius / p.w);

@@ -5,7 +5,7 @@
 use super::{
     BoundaryFacetError, BoundaryFacetInput, SurfaceRegionBudget, edge_key, source_edge_incidence,
 };
-use crate::{Edge, InnerProduct, Point3, Shell, Vertex, builder};
+use crate::{Edge, Point3, Shell, Vertex, builder};
 mod coalesce;
 
 use std::{

@@ -1,7 +1,7 @@
 use crate::{
-    AffinePoint, BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device,
-    GeometryTransform, Homogeneous, InnerProduct, Matrix3, Matrix4, Point2, Point3,
-    ProjectionMethod, Ray, SquareLinearMap, Vector3, matrix4_to_raw_f32,
+    BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device, GeometryTransform,
+    Homogeneous, Matrix3, Matrix4, Point2, Point3, ProjectionMethod, Ray, Vector3,
+    matrix4_to_raw_f32,
 };
 
 // Since the projection uses the OpenGL normalized view volume,
@@ -474,7 +474,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             matrix: Matrix4::identity(),
-            method: ProjectionMethod::perspective((std::f64::consts::PI / 4.0)),
+            method: ProjectionMethod::perspective(std::f64::consts::PI / 4.0),
             near_clip: 0.1,
             far_clip: 10.0,
         }

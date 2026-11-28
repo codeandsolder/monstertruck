@@ -21,7 +21,7 @@ fn arc_length<C: ParametricCurve<Point = Point3> + BoundedCurve>(
         .map(|i| {
             let a = curve.evaluate(t0 + dt * i as f64);
             let b = curve.evaluate(t0 + dt * (i + 1) as f64);
-            (b - a).magnitude()
+            (b - a).norm()
         })
         .sum()
 }

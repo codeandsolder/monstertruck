@@ -5,13 +5,13 @@
 
 use super::{
     AffinePoint, BoundedCurve, BoundedSurface, BsplineCurve, CurveDerivatives, CurveParameter,
-    Debug, HashGen, InnerProduct, KERNEL_EPSILON, KnotVector, MAX_DER_ORDER, Matrix2, Matrix3,
-    Matrix4, MetricSpace, Mul, NurbsCurve, ParameterDivision1D, ParameterDivision2D,
-    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
-    Point1, Point2, Point3, RollingBallFilletContactCurve, RollingBallFilletSurface,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
-    SurfaceDerivatives, SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance,
-    Vector2, Vector3, Vector4, Zero, nonpositive_tolerance,
+    Debug, HashGen, KERNEL_EPSILON, KnotVector, MAX_DER_ORDER, Matrix2, Matrix3, Matrix4,
+    MetricSpace, Mul, NurbsCurve, ParameterDivision1D, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point1, Point2,
+    Point3, RollingBallFilletContactCurve, RollingBallFilletSurface, SearchNearestParameter,
+    SearchParameter, SearchParameterHint1D, SearchParameterHint2D, SurfaceDerivatives,
+    SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance, Vector2, Vector3, Vector4,
+    Zero, nonpositive_tolerance,
 };
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;

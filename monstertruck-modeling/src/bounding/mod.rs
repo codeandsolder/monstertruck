@@ -621,11 +621,8 @@ fn similarity_scale(matrix: &Matrix4) -> Option<f64> {
     {
         return None;
     }
-    let columns = [
-        matrix.column(0).into_owned().spatial(),
-        matrix.column(1).into_owned().spatial(),
-        matrix.column(2).into_owned().spatial(),
-    ];
+    let columns =
+        std::array::from_fn::<_, 3, _>(|column| matrix.fixed_view::<3, 1>(0, column).into_owned());
     let scale = columns[0].norm();
     if !scale.is_finite() || scale <= 0.0 {
         return None;
@@ -653,7 +650,9 @@ fn transform_point(matrix: &Matrix4, point: Point3) -> Point3 {
 
 /// `matrix` applied to a direction, renormalised, or [`None`] when it collapses.
 fn transform_direction(matrix: &Matrix4, direction: Vector3) -> Option<Vector3> {
-    let mapped = (matrix * direction.push(0.0)).spatial();
+    let mapped = (matrix * direction.push(0.0))
+        .fixed_rows::<3>(0)
+        .into_owned();
     let length = mapped.norm();
     (length.is_finite() && length > 0.0).then(|| mapped / length)
 }

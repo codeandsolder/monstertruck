@@ -3,7 +3,7 @@
 use super::super::super::{sample_fit::fit_circle_carrier, seams::on_line};
 use super::super::MeshEvidence;
 use super::RegionContactPath;
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 /// Straight-line hypothesis through both original contact path endpoints.
 #[derive(Clone, Copy, Debug)]

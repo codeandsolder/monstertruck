@@ -5,9 +5,7 @@
 use crate::{Result, errors::Error};
 use itertools::Itertools;
 use monstertruck_core::hash::HashGen;
-use monstertruck_core::math::{
-    AffinePoint, InnerProduct, Matrix4, Point2, Point3, Vector2, Vector3, Zero,
-};
+use monstertruck_core::math::{AffinePoint, Matrix4, Point2, Point3, Vector2, Vector3, Zero};
 use monstertruck_geometry::prelude::*;
 
 type Wire<C> = monstertruck_topology::Wire<Point3, C>;

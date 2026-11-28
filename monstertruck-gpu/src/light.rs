@@ -1,5 +1,5 @@
 use crate::{
-    AffinePoint, BufferHandler, BufferUsages, Device, Light, LightInfo, LightType, Point3, Vector3,
+    BufferHandler, BufferUsages, Device, Light, LightInfo, LightType, Point3, Vector3,
     narrow_f64_to_f32,
 };
 

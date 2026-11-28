@@ -6,7 +6,7 @@ use super::{
     reconcile::{ReconciliationOptions, reconcile_point},
 };
 use crate::{
-    Curve, Edge, InnerProduct, Vertex, builder,
+    Curve, Edge, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge,
         approximate_boundary_patch,

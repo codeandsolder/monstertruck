@@ -8,7 +8,7 @@
 use super::analytic_curve_incidence::certify_analytic_curve_on_surface;
 use super::analytic_line_segment::certify_native_curve_segment_locus;
 use super::surface::analytic_carrier;
-use super::{BoundedCurve, Curve, InnerProduct, MetricSpace, Point3, Solid, Surface};
+use super::{BoundedCurve, Curve, MetricSpace, Point3, Solid, Surface};
 use crate::Wire;
 use monstertruck_geometry::analytic_carrier::{
     AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,

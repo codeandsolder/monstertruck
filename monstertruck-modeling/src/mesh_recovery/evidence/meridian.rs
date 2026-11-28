@@ -4,7 +4,7 @@
 
 use super::super::sample_fit::fit_circle_2d;
 use super::{MeshEvidence, spatial::source_meridian_samples};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::ops::Range;
 
 /// Independent measured circular meridian of a rotational carrier.

@@ -389,9 +389,8 @@ impl VderInfo {
         let cp0 = cc_ders.contact0[0] - cc_ders.center[0];
         let dp0 = cc_ders.contact0[1];
         let dc = cc_ders.center[1];
-        let rot =
-            Rotation3::from_axis_angle(&Unit::new_unchecked(axis_ders[0]), (angle_ders[0] * u))
-                .into_inner();
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(axis_ders[0]), angle_ders[0] * u)
+            .into_inner();
         let dm = std::array::from_fn::<_, 4, _>(|index| {
             let mut orders = [0; 4];
             orders[index] = 1;

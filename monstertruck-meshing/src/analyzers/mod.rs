@@ -1,8 +1,7 @@
 use crate::{
     Adjacency, AffinePoint, BoundingBox, FaceNormal, Faces, InnerProduct, KERNEL_EPSILON,
     KERNEL_EPSILON_SQUARED, Matrix3, MetricSpace, Origin, Point3, PolygonMesh, PolylineCurve,
-    SquareLinearMap, StandardAttributes, StandardVertex, Vector3, Vector4, Vertex, hash,
-    nonpositive_tolerance,
+    StandardAttributes, StandardVertex, Vector3, Vector4, Vertex, hash, nonpositive_tolerance,
 };
 use std::cmp::Ordering;
 

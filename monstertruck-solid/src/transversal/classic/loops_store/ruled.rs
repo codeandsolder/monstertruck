@@ -6,7 +6,7 @@
 //! the same infinite ruled carrier under an affine sweep-coordinate change.
 //! A positive common sweep interval is independently required below.
 
-use monstertruck_core::{math::InnerProduct, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 pub(in crate::transversal::classic) use monstertruck_geometry::analytic_cylinder_intersection::certified_circular_cylinder;
 use monstertruck_geometry::{
     analytic_cylinder_intersection::project_positive_homogeneous_point as project,

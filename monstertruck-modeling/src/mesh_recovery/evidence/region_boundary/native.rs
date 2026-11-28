@@ -11,9 +11,9 @@ use super::{
     trim::SectionBranch,
 };
 use crate::{
-    Curve, Edge, Face, InnerProduct, Invertible, Line, Matrix4, ParametricSurface,
-    ParametricSurface3D, Plane, Point3, Processor, RevolutionSurface, Sphere, Surface,
-    ToSameGeometry, Torus, TrimmedCurve, UnitCircle, Vector3, Vertex, Wire, builder,
+    Curve, Edge, Face, Invertible, Line, Matrix4, ParametricSurface, ParametricSurface3D, Plane,
+    Point3, Processor, RevolutionSurface, Sphere, Surface, ToSameGeometry, Torus, TrimmedCurve,
+    UnitCircle, Vector3, Vertex, Wire, builder,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -8,7 +8,7 @@ use crate::{
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::wire;
-const PI: f64 = (std::f64::consts::PI);
+const PI: f64 = std::f64::consts::PI;
 
 /// Sweep angle for revolve operations.
 #[derive(Debug, Clone, Copy)]
@@ -53,7 +53,7 @@ type Shell<C, S> = monstertruck_topology::Shell<Point3, C, S>;
 /// use monstertruck_modeling::*;
 ///
 /// // put a vertex
-/// let vertex = builder::vertex((1.0, 2.0, 3.0));
+/// let vertex = builder::vertex(Point3::new(1.0, 2.0, 3.0));
 /// # assert_eq!(vertex.point(), Point3::new(1.0, 2.0, 3.0));
 /// ```
 #[inline]
@@ -66,14 +66,14 @@ pub fn vertex<P: Into<Point3>>(p: P) -> Vertex { Vertex::new(p.into()) }
 ///
 /// // put vertices of a unit cube
 /// let vertices = builder::vertices([
-///     (0.0, 0.0, 0.0),
-///     (1.0, 0.0, 0.0),
-///     (0.0, 1.0, 0.0),
-///     (0.0, 0.0, 1.0),
-///     (0.0, 1.0, 1.0),
-///     (1.0, 0.0, 1.0),
-///     (1.0, 1.0, 0.0),
-///     (1.0, 1.0, 1.0),
+///     Point3::new(0.0, 0.0, 0.0),
+///     Point3::new(1.0, 0.0, 0.0),
+///     Point3::new(0.0, 1.0, 0.0),
+///     Point3::new(0.0, 0.0, 1.0),
+///     Point3::new(0.0, 1.0, 1.0),
+///     Point3::new(1.0, 0.0, 1.0),
+///     Point3::new(1.0, 1.0, 0.0),
+///     Point3::new(1.0, 1.0, 1.0),
 /// ]);
 /// # assert_eq!(vertices[3].point(), Point3::new(0.0, 0.0, 1.0));
 /// ```

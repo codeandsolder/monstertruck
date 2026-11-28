@@ -2,7 +2,7 @@
 //! Compare carriers in a source-local domain, not at arbitrary world origins.
 
 use super::SurfaceCarrier;
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 /// Difference between two same-family carrier residual functions over a
 /// source-local ball.

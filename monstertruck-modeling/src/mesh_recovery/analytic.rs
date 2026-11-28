@@ -14,7 +14,7 @@ use super::{
     SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence,
     discover_circle_axes, measure_curvature_spatial, trace_curvature_tracks,
 };
-use crate::{InnerProduct, KERNEL_EPSILON, Point3, Shell, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{BTreeMap, BTreeSet};

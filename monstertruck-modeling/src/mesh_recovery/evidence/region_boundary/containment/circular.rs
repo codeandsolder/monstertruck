@@ -4,7 +4,7 @@
 //! checked separately; a small quartic residual alone is insufficient.
 
 use super::{CarrierResidual, residual, unit};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::f64::consts::{PI, TAU};
 
 #[derive(Clone, Copy)]

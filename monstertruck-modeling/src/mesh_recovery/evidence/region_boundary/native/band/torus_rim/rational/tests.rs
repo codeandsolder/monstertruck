@@ -112,7 +112,9 @@ fn interval_extraction_covers_nonclamped_knots_and_tiny_active_spans()
     for (bounds, approximate) in certified.iter().zip(ordinary) {
         for (enclosure, coefficient) in bounds.values.iter().zip(approximate.controls) {
             for (bound, value) in enclosure.iter().zip(coefficient) {
-                assert!(bound.contains(value) || bound.sub(Interval::point(value)).norm() < 1e-12);
+                assert!(
+                    bound.contains(value) || bound.sub(Interval::point(value)).magnitude() < 1e-12
+                );
             }
         }
     }

@@ -1,10 +1,10 @@
 //! Geometric inside/outside and coincident-face classification.
 
 use super::{
-    AffinePoint, AltRegion, BooleanTolerance, Face, InnerProduct, Invertible, MeshableShape,
-    MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolylineableCurve,
-    SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SignedRayIndex,
-    SurfaceParameter, Vector3, divide_face, hash, loops_store,
+    AffinePoint, AltRegion, BooleanTolerance, Face, Invertible, MeshableShape, MeshableSurface,
+    MetricSpace, ParametricSurface3D, Point3, PolyShell, PolylineableCurve, SearchNearestParameter,
+    SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SignedRayIndex, SurfaceParameter,
+    Vector3, divide_face, hash, loops_store,
 };
 
 /// Snapshot the tessellated operand once for every repeated ray query.

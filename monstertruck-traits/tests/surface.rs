@@ -13,9 +13,7 @@
 #![cfg(feature = "polynomial")]
 
 use monstertruck_core::assert_near2;
-use monstertruck_core::math::{
-    AffinePoint, InnerProduct, MetricSpace, Point2, Point3, Vector2, Vector3,
-};
+use monstertruck_core::math::{AffinePoint, MetricSpace, Point2, Point3, Vector2, Vector3};
 use monstertruck_core::tolerance::{Origin, Tolerance};
 use monstertruck_traits::algo::surface;
 use monstertruck_traits::polynomial::{PolynomialCurve, PolynomialSurface};

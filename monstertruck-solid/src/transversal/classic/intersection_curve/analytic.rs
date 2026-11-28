@@ -5,7 +5,7 @@
 //! their intersection. Curved boundaries remain tessellated seeds; no mesh
 //! sample is promoted to a proof of curved-edge incidence.
 use monstertruck_core::{
-    math::{AffinePoint, InnerProduct, Point3, Vector3},
+    math::{AffinePoint, Point3, Vector3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::{

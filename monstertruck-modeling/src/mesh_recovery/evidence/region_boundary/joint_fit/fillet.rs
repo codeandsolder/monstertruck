@@ -6,7 +6,7 @@ use super::{
     JointFitCandidate, JointFitRejection, Neighborhood, SurfaceCarrier, SurfaceRegionPartition,
     satisfies,
 };
-use crate::{InnerProduct, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 
 #[derive(Clone, Copy)]
 struct Torus {

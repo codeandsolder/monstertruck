@@ -976,7 +976,7 @@ fn points_eq(a: Point3, b: Point3) -> bool { (a.x + a.y + a.z - (b.x + b.y + b.z
 #[test]
 fn test_t_mesh_local_knot_insertion_no_edge_conditions() -> Result<()> {
     const N: usize = 25;
-    let mut mesh = make_derivative_test_mesh();
+    let mesh = make_derivative_test_mesh();
     mesh.map_point(
         &Point3::from([1.00, 0.25, 0.750]),
         Point3::from([1.00, 0.25, 0.200]),

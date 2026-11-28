@@ -4,13 +4,13 @@ use super::parameter_curves::{same_surface_parameterization, sampled_curve_lies_
 use super::{
     AnalyticSurfaceKind, BoundedSurface, BsplineCurve, BsplineSurface, Curve, Deserialize,
     ExtrusionSurface, From, GeometryTransform, Homogeneous, HomogeneousSurfaceConversion,
-    HomotopySurface, IncludeCurve, InnerProduct, Invertible, Matrix3, Matrix4, MetricSpace,
-    NurbsCurve, NurbsSurface, ParameterDivision2D, ParametricCurve, ParametricSurface,
-    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface,
-    SearchNearestParameter, SearchParameter, SearchParameterD2, SearchParameterHint2D, Serialize,
-    Sphere, SupportsExactPatchDomains, SurfaceParameter, SurfaceParameterRectangle, Tmesh,
-    ToSameGeometry, Tolerance, Torus, Transformed, TryIntoAnalyticSurfaceKind,
-    TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
+    HomotopySurface, IncludeCurve, Invertible, Matrix3, Matrix4, MetricSpace, NurbsCurve,
+    NurbsSurface, ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D,
+    Plane, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
+    SearchParameterD2, SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains,
+    SurfaceParameter, SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus,
+    Transformed, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
+    TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
 };
 use monstertruck_core::math::{Rotation3, Unit};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -695,7 +695,7 @@ impl ToSameGeometry<Surface> for ExtrusionSurface<Curve, Vector3> {
 #[cfg(test)]
 mod revolution_presearch_tests {
     use super::*;
-    use crate::{AffinePoint, Line};
+    use crate::Line;
 
     #[test]
     fn separable_presearch_uses_exact_generic_grid_nodes() {

@@ -4,10 +4,10 @@ use crate::{
     DepthStencilState, DeviceHandler, FragmentState, Instance, InstanceCreator, Matrix4,
     MultisampleState, PipelineCompilationOptions, PipelineLayout, Point3, PreBindGroupLayoutEntry,
     PrimitiveState, PrimitiveTopology, RenderError, RenderId, RenderPipeline,
-    RenderPipelineDescriptor, Rendered, SceneDescriptor, ShaderStages, SquareLinearMap,
-    StencilState, TextureFormat, ToInstance, Vector4, VertexAttribute, VertexBufferLayout,
-    VertexFormat, VertexState, VertexStepMode, WireFrameInstance, WireFrameState, WireShaders,
-    bind_group_util, gpu_index, impl_render_id, matrix4_to_raw_f32, narrow_f64_to_f32,
+    RenderPipelineDescriptor, Rendered, SceneDescriptor, ShaderStages, StencilState, TextureFormat,
+    ToInstance, Vector4, VertexAttribute, VertexBufferLayout, VertexFormat, VertexState,
+    VertexStepMode, WireFrameInstance, WireFrameState, WireShaders, bind_group_util, gpu_index,
+    impl_render_id, matrix4_to_raw_f32, narrow_f64_to_f32,
 };
 
 impl Default for WireFrameState {

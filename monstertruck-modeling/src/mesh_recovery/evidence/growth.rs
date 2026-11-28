@@ -6,7 +6,7 @@ use super::super::MeshRecoveryError;
 use super::join::line_distance;
 use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
-use crate::{InnerProduct, Vector3};
+use crate::Vector3;
 use rustc_hash::FxHashSet as HashSet;
 
 /// Hypothesis budgets, never implicit original CAD primitive classifications.

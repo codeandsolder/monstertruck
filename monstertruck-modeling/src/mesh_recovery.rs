@@ -6,8 +6,7 @@
 //! subsequent recovery stages can share and certify seams with curved patches.
 
 use crate::{
-    Curve, Face, InnerProduct, KERNEL_EPSILON, Plane, Point3, Shell, Surface, Vector3, Vertex,
-    Wire, builder,
+    Curve, Face, KERNEL_EPSILON, Plane, Point3, Shell, Surface, Vector3, Vertex, Wire, builder,
 };
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::{Edge, errors::Error as TopologyError};

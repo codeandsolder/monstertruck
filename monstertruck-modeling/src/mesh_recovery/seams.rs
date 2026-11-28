@@ -6,7 +6,7 @@
 //! adjacent patches; this guarantees both sides of a seam receive the same cut.
 
 use super::{EdgeIncidence, EdgeKey, InputPolygon, MeshRecoveryError, PlanarPatch, edge_key};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 

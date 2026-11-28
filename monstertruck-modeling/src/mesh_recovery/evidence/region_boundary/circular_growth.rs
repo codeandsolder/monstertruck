@@ -5,7 +5,7 @@
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
-use crate::{InnerProduct, Vector3};
+use crate::Vector3;
 use std::collections::{BTreeSet, VecDeque};
 
 fn orientation(

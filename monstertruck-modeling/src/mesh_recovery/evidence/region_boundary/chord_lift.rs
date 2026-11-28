@@ -5,7 +5,7 @@
 //! adjoining unresolved facet may use a separately bounded approximation.
 
 use super::{SurfaceCarrier, SurfaceRegionBudget};
-use crate::{BsplineCurve, InnerProduct, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
+use crate::{BsplineCurve, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
 use monstertruck_geometry::analytic_line_segment::bound_nurbs_segment_locus;
 
 /// A source segment lifted to an independently fitted analytic carrier.

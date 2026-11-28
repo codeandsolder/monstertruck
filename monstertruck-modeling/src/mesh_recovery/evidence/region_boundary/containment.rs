@@ -5,7 +5,7 @@ use super::super::super::sample_fit::normal_basis;
 use super::super::{CircularMeridianEvidence, MeshEvidence, PlanarSupport, SpatialTrackEvidence};
 mod circular;
 use super::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use circular::CircularProfile;
 
 /// Infinite surface carrier hypothesis, independently fitted to source faces.

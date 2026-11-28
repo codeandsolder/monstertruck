@@ -8,7 +8,7 @@ use super::{
     EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, input_polygon_from_ids,
     seams, segment_patches, signed_plane_distance, source_edge_incidence, welded_source_polygons,
 };
-use crate::{InnerProduct, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 

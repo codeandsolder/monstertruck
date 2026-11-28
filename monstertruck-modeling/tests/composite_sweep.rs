@@ -2,10 +2,10 @@ use monstertruck_modeling::*;
 
 fn rectangular_face() -> anyhow::Result<Face> {
     let vertices = builder::vertices([
-        (1.75, -0.25, 4.0),
-        (2.25, -0.25, 4.0),
-        (2.25, 0.25, 4.0),
-        (1.75, 0.25, 4.0),
+        Point3::new(1.75, -0.25, 4.0),
+        Point3::new(2.25, -0.25, 4.0),
+        Point3::new(2.25, 0.25, 4.0),
+        Point3::new(1.75, 0.25, 4.0),
     ]);
     let wire: Wire = vec![
         builder::line(&vertices[0], &vertices[1]),

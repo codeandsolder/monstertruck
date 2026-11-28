@@ -5,7 +5,7 @@
 
 use super::super::super::sample_fit::normal_basis;
 use super::SurfaceCarrier;
-use crate::{BsplineCurve, Curve, InnerProduct, KnotVector, Point3, Vector3};
+use crate::{BsplineCurve, Curve, KnotVector, Point3, Vector3};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
     analytic_curve_incidence::{CurveIncidence, certify_bspline_curve_on_support},

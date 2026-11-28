@@ -7,7 +7,7 @@
 
 use super::super::sample_fit::normal_basis;
 use super::{CurvatureTrack, MeshEvidence};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
 
 /// Approximate cross-sectional source vertex cluster at one axial station.

@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::{
-    AffinePoint, BoundedCurve, BsplineSurface, KnotVector, NurbsSurface, Processor,
-    RevolutionSurface, Sphere, SurfaceCurve, ToSameGeometry, Torus, TrimmedCurve, UnitCircle,
+    BoundedCurve, BsplineSurface, KnotVector, NurbsSurface, Processor, RevolutionSurface, Sphere,
+    SurfaceCurve, ToSameGeometry, Torus, TrimmedCurve, UnitCircle,
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineSurface;
 

@@ -8,7 +8,7 @@ use super::{
     InputPolygon, MeshRecoveryError, PlanarPatch, PlanarRecoveryOptions, positions_and_polygons,
     positive_source_volume, recover_planar_mesh,
 };
-use crate::{Face, InnerProduct, Point3, Shell, Solid, Vector3, builder};
+use crate::{Face, Point3, Shell, Solid, Vector3, builder};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::HashSet;

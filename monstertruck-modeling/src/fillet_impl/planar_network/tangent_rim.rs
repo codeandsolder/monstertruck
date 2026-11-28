@@ -37,7 +37,7 @@ impl Side {
 
     fn cap_curve(self, edge: &Edge, radius: f64) -> Curve {
         let transform = match self {
-            Self::Planar { outward } => Matrix4::new_translation(&-outward * radius),
+            Self::Planar { outward } => Matrix4::new_translation(&(-outward * radius)),
             Self::Circular {
                 center,
                 radius: original,
@@ -288,7 +288,7 @@ impl Patch {
             &end.side,
             rim.edge
                 .oriented_curve()
-                .transformed(Matrix4::new_translation(&-normal * radius)),
+                .transformed(Matrix4::new_translation(&(-normal * radius))),
         )
         .ok()?;
         let surface = rim.side.surface(&cap, normal, radius)?;

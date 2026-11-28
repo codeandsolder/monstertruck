@@ -6,7 +6,7 @@
 
 use super::super::MeshRecoveryError;
 use super::{MeshEvidence, canonical_unit};
-use crate::{InnerProduct, Vector3};
+use crate::Vector3;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Numerical hypothesis bounds. All original supports and interfaces remain

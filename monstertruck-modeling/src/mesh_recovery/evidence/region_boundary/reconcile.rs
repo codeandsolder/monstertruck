@@ -7,7 +7,7 @@ use super::{
     RegionBoundaryError, RegionBoundaryIndex, SharedTrimGeometry, SharedTrimOptions,
     SurfaceCarrier, SurfaceRegionPartition, trim_intersections::supplied_circles,
 };
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Explicit policy for changing the source geometry. Independent trim-fit

@@ -8,7 +8,7 @@ use super::super::{
     source_edge_incidence,
 };
 use super::{EvidenceOptions, MeshEvidence, analyze_welded_evidence, validate_evidence_options};
-use crate::{InnerProduct, KERNEL_EPSILON};
+use crate::KERNEL_EPSILON;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// An oppositely oriented pair of source planar sheets with the same

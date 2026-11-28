@@ -920,27 +920,23 @@ mod tests {
         let front = Point3::new(angle.cos(), -angle.sin(), 0.0);
         let back = Point3::new(angle.cos(), angle.sin(), 0.0);
 
-        let c0 = Point2::from(
-            cylinder
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on cylinder"),
-        );
-        let c1_raw = Point2::from(
-            cylinder
-                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
-                .expect("back on cylinder"),
-        );
+        let (u, v) = cylinder
+            .search_parameter(front, None, PROJECTION_TRIALS)
+            .expect("front on cylinder");
+        let c0 = Point2::new(u, v);
+        let (u, v) = cylinder
+            .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
+            .expect("back on cylinder");
+        let c1_raw = Point2::new(u, v);
         let c1 = unwrap_uv_near(&cylinder, c1_raw, c0);
-        let p0 = Point2::from(
-            plane
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on plane"),
-        );
-        let p1 = Point2::from(
-            plane
-                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
-                .expect("back on plane"),
-        );
+        let (u, v) = plane
+            .search_parameter(front, None, PROJECTION_TRIALS)
+            .expect("front on plane");
+        let p0 = Point2::new(u, v);
+        let (u, v) = plane
+            .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
+            .expect("back on plane");
+        let p1 = Point2::new(u, v);
 
         let cylinder_hint = SurfaceArcHint {
             surface: cylinder.clone(),
@@ -977,26 +973,22 @@ mod tests {
         let plane = xy_plane();
         let front = Point3::new(1.0, 0.0, 0.0);
         let back = Point3::new(0.0, 1.0, 0.0);
-        let c0 = Point2::from(
-            cylinder
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on cylinder"),
-        );
-        let c1 = Point2::from(
-            cylinder
-                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
-                .expect("back on cylinder"),
-        );
-        let p0 = Point2::from(
-            plane
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on plane"),
-        );
-        let p1 = Point2::from(
-            plane
-                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
-                .expect("back on plane"),
-        );
+        let (u, v) = cylinder
+            .search_parameter(front, None, PROJECTION_TRIALS)
+            .expect("front on cylinder");
+        let c0 = Point2::new(u, v);
+        let (u, v) = cylinder
+            .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
+            .expect("back on cylinder");
+        let c1 = Point2::new(u, v);
+        let (u, v) = plane
+            .search_parameter(front, None, PROJECTION_TRIALS)
+            .expect("front on plane");
+        let p0 = Point2::new(u, v);
+        let (u, v) = plane
+            .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
+            .expect("back on plane");
+        let p1 = Point2::new(u, v);
         let reversed_path = SurfaceArcHint {
             surface: cylinder.clone(),
             evidence: SurfaceHintEvidence::ComplementPath,

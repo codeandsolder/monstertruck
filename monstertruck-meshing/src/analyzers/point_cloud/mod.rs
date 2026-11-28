@@ -2,8 +2,8 @@ use crate::common::point_segment_distance2;
 use array_macro::array;
 
 use super::{
-    AffinePoint, BoundingBox, InnerProduct, KERNEL_EPSILON, MetricSpace, Origin, Point3,
-    PolygonMesh, Vector3, hash, nonpositive_tolerance,
+    AffinePoint, BoundingBox, KERNEL_EPSILON, MetricSpace, Origin, Point3, PolygonMesh, Vector3,
+    hash, nonpositive_tolerance,
 };
 mod hashed_point_cloud;
 use hashed_point_cloud::HashedPointCloud;

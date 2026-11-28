@@ -4,10 +4,10 @@ use monstertruck_meshing::analyzers::ProjectionNeighborhood;
 use std::sync::OnceLock;
 
 use super::{
-    AffinePoint, BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, HashMap, InnerProduct,
-    Invertible, LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2,
-    Point3, PolygonMesh, SearchNearestParameter, SearchParameter, ShapesOpStatus, StandardVertex,
-    Vector2, Vector3,
+    AffinePoint, BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, HashMap, Invertible,
+    LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2, Point3,
+    PolygonMesh, SearchNearestParameter, SearchParameter, ShapesOpStatus, StandardVertex, Vector2,
+    Vector3,
 };
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {

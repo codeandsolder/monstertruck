@@ -1,6 +1,6 @@
 #[cfg(any(feature = "analyzers", feature = "tessellation"))]
 use crate::MetricSpace;
-use crate::{AffinePoint, Faces, InnerProduct, Point3, Vector3, Vertex, Zero};
+use crate::{Faces, Point3, Vector3, Vertex, Zero};
 
 // The closest point on a zero-length segment is its sole endpoint. Dividing
 // by the squared length would otherwise produce NaN for collapsed mesh edges.

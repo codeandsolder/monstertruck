@@ -1,7 +1,7 @@
 //! Geometric sample fitting shared across mesh-recovery hypothesis generators.
 
 use super::evidence::canonical_unit;
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 /// Least-squares circle in a known plane. The relative frame avoids
 /// cancellation for large world offsets.

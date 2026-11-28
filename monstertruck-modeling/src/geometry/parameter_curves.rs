@@ -5,11 +5,11 @@
 use super::content_hash::content_hash64;
 use super::{
     BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
-    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerProduct, KERNEL_EPSILON, KnotVector,
-    Line, Matrix4, MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D,
-    ParametricCurve, ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell,
-    RevolutionSurface, SearchNearestParameter, SearchParameter, Shell, Solid, Surface, Tolerance,
-    TrimmedShell, TrimmedSolid, Vector3, Vector4, iter,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, KERNEL_EPSILON, KnotVector, Line, Matrix4,
+    MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D, ParametricCurve,
+    ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell, RevolutionSurface,
+    SearchNearestParameter, SearchParameter, Shell, Solid, Surface, Tolerance, TrimmedShell,
+    TrimmedSolid, Vector3, Vector4, iter,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator, TrimmedFace};

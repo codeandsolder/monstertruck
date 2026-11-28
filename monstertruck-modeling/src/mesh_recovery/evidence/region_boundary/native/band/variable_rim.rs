@@ -7,7 +7,7 @@ use super::{
     world_point,
 };
 use crate::mesh_recovery::{OrientedTrim, SurfaceCarrier};
-use crate::{BoundedCurve, Curve, Edge, InnerProduct, ParametricCurve, Point3, Vector3, Vertex};
+use crate::{BoundedCurve, Curve, Edge, ParametricCurve, Point3, Vector3, Vertex};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };

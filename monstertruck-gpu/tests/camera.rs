@@ -20,7 +20,7 @@ proptest! {
         let z = rot_axis.0;
         let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
-        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), (rot_angle)).into_inner();
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), rot_angle).into_inner();
         let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {
@@ -59,7 +59,7 @@ proptest! {
         let z = rot_axis.0;
         let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
-        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), (rot_angle)).into_inner();
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), rot_angle).into_inner();
         let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {

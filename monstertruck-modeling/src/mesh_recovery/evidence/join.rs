@@ -5,7 +5,7 @@
 
 use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
 
 /// Evidence for whether two genuinely source-connected curvature hypotheses

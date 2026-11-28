@@ -1,8 +1,8 @@
 use super::{
     AffinePoint, BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, Face, HashMap, HashSet,
-    InnerProduct, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
-    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface3D,
-    Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell, Tolerance, Wire,
+    Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
+    PolylineCurve, SP, SearchNearestParameter, Shell, Tolerance, Wire,
     append_unassigned_stable_ids,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;

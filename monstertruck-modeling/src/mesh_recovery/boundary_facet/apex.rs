@@ -3,8 +3,8 @@
 //! The continuous rational-curve certificate remains authoritative.
 
 use super::{
-    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, InnerProduct, Point3, Vector3,
-    Vector4, centroid, cross, directed_pairs, finite, proof_bezier_spans, rational_point,
+    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, Point3, Vector3, Vector4, centroid,
+    cross, directed_pairs, finite, proof_bezier_spans, rational_point,
     subdivide_homogeneous_bezier,
 };
 

@@ -150,14 +150,16 @@ impl Piece {
         edge: usize,
     ) -> Option<Self> {
         let rates = frame.rates(&controls.values)?;
-        if rates.iter().any(|r| !r.finite() || r.norm() >= PI * 0.5)
+        if rates
+            .iter()
+            .any(|r| !r.finite() || r.magnitude() >= PI * 0.5)
             || !rates.iter().any(|r| r.directed())
         {
             return None;
         }
         let raw_start = frame.endpoint(*controls.values.first()?)?;
         let start = std::array::from_fn(|i| near(raw_start[i], reference[i].mid()));
-        if (0..2).any(|i| start[i].sub(reference[i]).norm() > frame.resolution) {
+        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.resolution) {
             return None;
         }
         let raw_end = frame.endpoint(*controls.values.last()?)?;
@@ -281,8 +283,12 @@ pub(super) fn prove(
     ];
     let (pieces, reference) = lift_cycle(frame, rim, first)?;
     let resolution = frame.resolution;
-    if reference[0].sub(first[0]).sub(Interval::point(TAU)).norm() > resolution
-        || reference[1].sub(first[1]).norm() > resolution
+    if reference[0]
+        .sub(first[0])
+        .sub(Interval::point(TAU))
+        .magnitude()
+        > resolution
+        || reference[1].sub(first[1]).magnitude() > resolution
     {
         return Err(Rejection::Winding);
     }

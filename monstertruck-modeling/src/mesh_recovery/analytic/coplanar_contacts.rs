@@ -5,7 +5,7 @@
 
 use super::{AnalyticRecoveryError, AnalyticRecoveryOptions, NativeAssembly};
 use crate::{
-    InnerProduct, KERNEL_EPSILON,
+    KERNEL_EPSILON,
     mesh_recovery::{MeshEvidence, NativeTrimOptions, RegionBoundaryIndex, SurfaceCarrier},
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

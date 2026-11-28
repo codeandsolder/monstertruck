@@ -8,7 +8,7 @@
 //! release that shipped a self-contained boolean backend).
 
 use monstertruck_core::{
-    math::{AffinePoint, InnerProduct, MetricSpace, Point3},
+    math::{AffinePoint, MetricSpace, Point3},
     tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_meshing::prelude::PolylineCurve;

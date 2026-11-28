@@ -6,7 +6,7 @@
 //! volume are independently certified.
 
 use super::super::{EdgeKey, EdgeUse, InputPolygon, seams};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use robust::{Coord3D, orient3d};
 use std::cmp::Ordering;
 

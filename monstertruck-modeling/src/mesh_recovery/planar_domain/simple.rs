@@ -6,7 +6,7 @@
 //! bound is permitted; no native geometry is mutated.
 
 use super::{Span, normal_basis, point, projected_spans};
-use crate::{Edge, InnerProduct, Point3, Vector2, Vector3, Wire};
+use crate::{Edge, Point3, Vector2, Vector3, Wire};
 use robust::{Coord, orient2d};
 
 const MAX_DEPTH: usize = 6;

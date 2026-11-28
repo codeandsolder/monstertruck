@@ -16,11 +16,11 @@ let scene = Scene::new(handler, &SceneDescriptor {
     studio: StudioConfig {
         camera: Camera {
             matrix: Matrix4::look_at_rh(
-                Point3::new(1.0, 1.0, 1.0),
-                Point3::origin(),
-                Vector3::unit_y(),
-            ).invert().unwrap(),
-            method: ProjectionMethod::perspective(Rad(TAU / 8.0)),
+                &Point3::new(1.0, 1.0, 1.0),
+                &Point3::origin(),
+                &Vector3::y(),
+            ).try_inverse().unwrap(),
+            method: ProjectionMethod::perspective((TAU / 8.0)),
             near_clip: 0.1,
             far_clip: 100.0,
         },

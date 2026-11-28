@@ -5,7 +5,7 @@
 
 use super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier};
 use super::{MeshEvidence, source_edge_incidence};
-use crate::{InnerProduct, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 

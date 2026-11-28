@@ -12,9 +12,7 @@ use super::{
     NativeChartObstacle, NativeTrimError, NativeTrimOptions, chart_point, native_circle_edge,
     periodic_coordinate,
 };
-use crate::{
-    Edge, Face, IncludeCurve, InnerProduct, Point3, Surface, Vector3, Vertex, Wire, builder,
-};
+use crate::{Edge, Face, IncludeCurve, Point3, Surface, Vector3, Vertex, Wire, builder};
 use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 

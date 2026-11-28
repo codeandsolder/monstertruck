@@ -14,7 +14,7 @@ pub(in crate::transversal::classic) use analytic::{
 use super::tolerance::BooleanTolerance;
 
 use monstertruck_core::{
-    math::{AffinePoint, InnerProduct, MetricSpace, Point3},
+    math::{AffinePoint, MetricSpace, Point3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;

@@ -201,7 +201,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     monstertruck_topology::prelude!(Point3, Curve3D, Surface);
 
     // cube
-    let v = builder::vertices([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+    let v = builder::vertices([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
     let e = builder::line(&v[0], &v[1]);
     let f = builder::extrude(&e, Vector3::y());
     let cube: Solid = builder::extrude(&f, Vector3::z());
@@ -210,7 +210,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
 
     // cylinder
-    let v = builder::vertices([(1.0, 0.0, 1.0), (1.0, 0.0, 0.0)]);
+    let v = builder::vertices([Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 0.0)]);
     let e = builder::line(&v[0], &v[1]);
     let mut shell = builder::revolve(
         &e,
@@ -229,7 +229,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
 
     // torus
-    let v = builder::vertex((1.5, 0.0, 0.0));
+    let v = builder::vertex(Point3::new(1.5, 0.0, 0.0));
     let w = builder::revolve(
         &v,
         Point3::new(1.0, 0.0, 0.0),
@@ -250,14 +250,14 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
 
     // cylinder hole
-    let v = builder::vertex((-1.0, -1.0, -1.0));
+    let v = builder::vertex(Point3::new(-1.0, -1.0, -1.0));
     let e = builder::extrude(&v, 2.0 * Vector3::x());
     let f = builder::extrude(&e, 2.0 * Vector3::y());
     let s: Solid = builder::extrude(&f, 2.0 * Vector3::z());
     let mut shell = s.into_boundaries().pop().unwrap();
     let line = builder::line(
-        &builder::vertex((0.5, 0.0, 1.0)),
-        &builder::vertex((0.5, 0.0, -1.0)),
+        &builder::vertex(Point3::new(0.5, 0.0, 1.0)),
+        &builder::vertex(Point3::new(0.5, 0.0, -1.0)),
     );
     let hole = builder::revolve(
         &line,

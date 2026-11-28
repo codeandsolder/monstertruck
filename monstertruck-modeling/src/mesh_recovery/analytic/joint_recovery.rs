@@ -6,7 +6,7 @@ use super::{
     coplanar_contacts::{failed_edges, valid_regions},
 };
 use crate::{
-    InnerProduct, KERNEL_EPSILON,
+    KERNEL_EPSILON,
     mesh_recovery::{
         MeshEvidence,
         evidence::{

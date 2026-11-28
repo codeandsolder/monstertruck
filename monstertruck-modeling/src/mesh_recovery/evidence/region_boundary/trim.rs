@@ -6,7 +6,7 @@ use super::{
     ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence, ContactLinearSectionEvidence,
     ContactToroidalSectionEvidence, RegionContactPath, SurfaceCarrier,
 };
-use crate::{InnerProduct, Point3};
+use crate::Point3;
 use std::f64::consts::TAU;
 
 /// Local fit budget and bounded search configuration.

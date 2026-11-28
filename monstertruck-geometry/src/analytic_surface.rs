@@ -505,7 +505,7 @@ mod tests {
     fn spherical_rechart_certifies_meridian_and_orientation() -> anyhow::Result<()> {
         let meridian = Processor::with_transform(
             TrimmedCurve::new(UnitCircle::<Point3>::new(), (-0.8, 1.2)),
-            Matrix4::from_axis_angle(&Vector3::x_axis(), (std::f64::consts::FRAC_PI_2)),
+            Matrix4::from_axis_angle(&Vector3::x_axis(), std::f64::consts::FRAC_PI_2),
         );
         let revolution = RevolutionSurface::by_revolution(meridian, Point3::origin(), Vector3::z());
         for reflected in [false, true] {
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn spherical_rechart_refuses_folded_or_nonspherical_profiles() {
-        let rotation = Matrix4::from_axis_angle(&Vector3::x_axis(), (std::f64::consts::FRAC_PI_2));
+        let rotation = Matrix4::from_axis_angle(&Vector3::x_axis(), std::f64::consts::FRAC_PI_2);
         for (range, matrix) in [
             ((-0.5, 2.2), rotation),
             (

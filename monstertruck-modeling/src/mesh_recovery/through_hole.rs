@@ -12,7 +12,7 @@ use super::{
     HashMap, InputPolygon, MeshRecoveryError, PlanarPatch, RecoveredPlanarMesh, edge_incidence,
     edge_key, positions_and_polygons, positive_source_volume, recover_planar_mesh, seams,
 };
-use crate::{Face, InnerProduct, KERNEL_EPSILON, Point3, Shell, Solid, Vector3, Wire};
+use crate::{Face, KERNEL_EPSILON, Point3, Shell, Solid, Vector3, Wire};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{HashSet, VecDeque};

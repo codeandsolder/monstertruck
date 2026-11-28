@@ -6,7 +6,7 @@
 
 use super::{BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions};
 use crate::{
-    Edge, InnerProduct, Point3, Shell, Vector3,
+    Edge, Point3, Shell, Vector3,
     mesh_recovery::{
         BoundaryFacetApproximation, BoundaryFacetError, BoundaryFacetInput, EdgeIncidence,
         approximate_boundary_facet, edge_key, source_edge_incidence,
