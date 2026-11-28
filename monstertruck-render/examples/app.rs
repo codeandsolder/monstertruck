@@ -99,103 +99,104 @@ pub trait App: Sized + 'static {
     fn cursor_moved(&mut self, _position: PhysicalPosition<f64>) -> ControlFlow {
         Self::default_control_flow()
     }
-    /// Run the application in the future.
-    async fn async_run() -> AppResult<()> {
-        let event_loop = winit::event_loop::EventLoop::new()?;
-        let mut wa = winit::window::Window::default_attributes();
-        if let Some(title) = Self::app_title() {
-            title.clone_into(&mut wa.title);
-        }
-        let window = event_loop.create_window(wa)?;
-        #[cfg(target_arch = "wasm32")]
-        {
-            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-            console_log::init().map_err(|error| {
-                std::io::Error::other(format!("could not initialize logger: {error}"))
-            })?;
-            use winit::platform::web::WindowExtWebSys;
-            // On wasm, append the canvas to the document body
-            let body = web_sys::window()
-                .and_then(|win| win.document())
-                .and_then(|doc| doc.body())
-                .ok_or_else(|| std::io::Error::other("could not find document body"))?;
-            let canvas = window
-                .canvas()
-                .ok_or_else(|| std::io::Error::other("window has no canvas"))?;
-            canvas.set_width(500);
-            canvas.set_height(500);
-            body.append_child(&web_sys::Element::from(canvas))
-                .map_err(|_| std::io::Error::other("could not append canvas to document body"))?;
-        }
-
-        let window = Arc::new(window);
-        let mut app = Self::init(Arc::clone(&window)).await?;
-
-        let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
-            let control_flow = match ev {
-                Event::NewEvents(_) => {
-                    window.request_redraw();
-                    Self::default_control_flow()
-                }
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::Resized(size) => {
-                        app.resized(size);
-                        Self::default_control_flow()
-                    }
-                    WindowEvent::RedrawRequested => {
-                        app.render();
-                        Self::default_control_flow()
-                    }
-                    WindowEvent::Moved(position) => app.moved(position),
-                    WindowEvent::CloseRequested => app.closed_requested(),
-                    WindowEvent::Destroyed => app.destroyed(),
-                    WindowEvent::DroppedFile(path) => app.dropped_file(path),
-                    WindowEvent::HoveredFile(path) => app.hovered_file(path),
-                    WindowEvent::KeyboardInput {
-                        event,
-                        is_synthetic,
-                        ..
-                    } => app.keyboard_input(event, is_synthetic),
-                    WindowEvent::MouseInput { state, button, .. } => app.mouse_input(state, button),
-                    WindowEvent::MouseWheel { delta, phase, .. } => app.mouse_wheel(delta, phase),
-                    WindowEvent::CursorMoved { position, .. } => app.cursor_moved(position),
-                    _ => Self::default_control_flow(),
-                },
-                _ => Self::default_control_flow(),
-            };
-            match control_flow {
-                ControlFlow::Exit => target.exit(),
-                _ => {
-                    if let Ok(control_flow) = control_flow.try_into() {
-                        target.set_control_flow(control_flow);
-                    }
-                }
-            }
-        };
-        #[cfg(not(target_arch = "wasm32"))]
-        event_loop.run(routine)?;
-        #[cfg(target_arch = "wasm32")]
-        {
-            use winit::platform::web::EventLoopExtWebSys;
-            event_loop.spawn(routine);
-        }
-        Ok(())
-    }
     /// Run the application.
     #[inline]
     fn run() {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Err(error) = pollster::block_on(Self::async_run()) {
+        if let Err(error) = pollster::block_on(run_app::<Self>()) {
             eprintln!("application failed: {error}");
             std::process::exit(1);
         }
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async {
-            if let Err(error) = Self::async_run().await {
+            if let Err(error) = run_app::<Self>().await {
                 log::error!("application failed: {error}");
             }
         });
     }
+}
+
+/// Run the application in the future.
+async fn run_app<A: App>() -> AppResult<()> {
+    let event_loop = winit::event_loop::EventLoop::new()?;
+    let mut wa = winit::window::Window::default_attributes();
+    if let Some(title) = A::app_title() {
+        title.clone_into(&mut wa.title);
+    }
+    let window = event_loop.create_window(wa)?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+        console_log::init().map_err(|error| {
+            std::io::Error::other(format!("could not initialize logger: {error}"))
+        })?;
+        use winit::platform::web::WindowExtWebSys;
+        // On wasm, append the canvas to the document body
+        let body = web_sys::window()
+            .and_then(|win| win.document())
+            .and_then(|doc| doc.body())
+            .ok_or_else(|| std::io::Error::other("could not find document body"))?;
+        let canvas = window
+            .canvas()
+            .ok_or_else(|| std::io::Error::other("window has no canvas"))?;
+        canvas.set_width(500);
+        canvas.set_height(500);
+        body.append_child(&web_sys::Element::from(canvas))
+            .map_err(|_| std::io::Error::other("could not append canvas to document body"))?;
+    }
+
+    let window = Arc::new(window);
+    let mut app = A::init(Arc::clone(&window)).await?;
+
+    let routine = move |ev: Event<()>, target: &ActiveEventLoop| {
+        let control_flow = match ev {
+            Event::NewEvents(_) => {
+                window.request_redraw();
+                A::default_control_flow()
+            }
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::Resized(size) => {
+                    app.resized(size);
+                    A::default_control_flow()
+                }
+                WindowEvent::RedrawRequested => {
+                    app.render();
+                    A::default_control_flow()
+                }
+                WindowEvent::Moved(position) => app.moved(position),
+                WindowEvent::CloseRequested => app.closed_requested(),
+                WindowEvent::Destroyed => app.destroyed(),
+                WindowEvent::DroppedFile(path) => app.dropped_file(path),
+                WindowEvent::HoveredFile(path) => app.hovered_file(path),
+                WindowEvent::KeyboardInput {
+                    event,
+                    is_synthetic,
+                    ..
+                } => app.keyboard_input(event, is_synthetic),
+                WindowEvent::MouseInput { state, button, .. } => app.mouse_input(state, button),
+                WindowEvent::MouseWheel { delta, phase, .. } => app.mouse_wheel(delta, phase),
+                WindowEvent::CursorMoved { position, .. } => app.cursor_moved(position),
+                _ => A::default_control_flow(),
+            },
+            _ => A::default_control_flow(),
+        };
+        match control_flow {
+            ControlFlow::Exit => target.exit(),
+            _ => {
+                if let Ok(control_flow) = control_flow.try_into() {
+                    target.set_control_flow(control_flow);
+                }
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    event_loop.run(routine)?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn(routine);
+    }
+    Ok(())
 }
 
 /// The smallest example of the trait `App`.
