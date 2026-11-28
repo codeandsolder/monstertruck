@@ -227,6 +227,21 @@ fn closed_components(
         .collect()
 }
 
+// Use the very same oriented incidence and interval-volume certificate
+// as source normalization before factoring an independent recovery job.
+pub(in crate::mesh_recovery) fn certify_independent_source_group(
+    positions: &[Point3],
+    polygons: &[InputPolygon],
+) -> bool {
+    if polygons.is_empty() {
+        return false;
+    }
+    let incidence = source_edge_incidence(polygons.iter().map(|p| p.vertices.as_slice()));
+    closed_components(positions, polygons, &incidence, [], None)
+        .iter()
+        .all(Option::is_some)
+}
+
 /// Separate exactly coincident vertex IDs belonging to distinct independently
 /// closed components. Keep all unresolved/open polygons in one common pool,
 /// and leave their incidence untouched. The result flags the closed polygons

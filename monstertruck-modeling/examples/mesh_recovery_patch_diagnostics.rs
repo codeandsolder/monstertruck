@@ -10,7 +10,7 @@ use monstertruck_modeling::mesh_recovery::{
     HybridRecovery, HybridRecoveryError, HybridRefinementOptions, HybridRefinementSeed,
     HybridSupportSearchOptions, NativeTrimOptions, RecoveredAnalyticMesh, RegionBoundaryIndex,
     RegionPatchError, RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget,
-    SurfaceRegionPartition, recover_analytic_mesh,
+    SurfaceRegionPartition, partition_recovery_mesh, recover_analytic_mesh,
 };
 use monstertruck_topology::shell::ShellCondition;
 use serde_json::{Value, json};
@@ -532,17 +532,15 @@ fn export_shell(shell: Option<&Shell>, output: Option<&Path>) -> Result<bool> {
     Ok(true)
 }
 
-fn refined_result_report(
+fn refined_result(
     refined: monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
-    shell_output: Option<&Path>,
     simplify: bool,
-) -> Result<Value> {
+) -> (Value, Option<Shell>) {
     let pending_charts = pending_chart_diagnostics(&refined);
     let mut result = refined.recovery;
     let planar_simplification = simplify_report(&mut result, simplify);
     let shell = result.complete_shell();
-    let exported = export_shell(shell.as_ref(), shell_output)?;
-    Ok(
+    (
         json!({"status":"ok","recovery_kind":"hybrid","max_native_vertex_displacement":result.native.max_vertex_displacement,"selected_regions":refined.selected_regions,
         "added_polygons":refined.added_polygons,"conflicts":refined.conflicts.iter().map(|c|json!({
             "support":c.support,"parent_region":c.parent_region,"locus":match c.locus { monstertruck_modeling::mesh_recovery::PatchSupportLocus::Chord(edge)=>json!({"edge":edge}),monstertruck_modeling::mesh_recovery::PatchSupportLocus::Vertex(vertex)=>json!({"vertex":vertex}) },"distance_lower_witness":c.distance_lower_witness
@@ -555,8 +553,19 @@ fn refined_result_report(
         "max_deviation":result.patches.iter().map(|p|p.deviation_upper_bound).fold(0.0_f64,f64::max),
         "max_seam_deviation":result.patches.iter().map(|p|p.seam_deviation_upper_bound).fold(0.0_f64,f64::max),
         "shell_condition":shell.as_ref().map(|s|format!("{:?}",s.shell_condition())),
-        "native_faces":shell.as_ref().map(|s|s.len()),"shell_exported":exported}),
+        "native_faces":shell.as_ref().map(|s|s.len()),"shell_exported":false}),
+        shell,
     )
+}
+
+fn refined_result_report(
+    refined: monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
+    shell_output: Option<&Path>,
+    simplify: bool,
+) -> Result<Value> {
+    let (mut report, shell) = refined_result(refined, simplify);
+    report["shell_exported"] = json!(export_shell(shell.as_ref(), shell_output)?);
+    Ok(report)
 }
 
 fn refined_trial(
@@ -646,25 +655,33 @@ fn search_failure_report(error: &HybridRecoveryError) -> Value {
     }
 }
 
-fn unresolved_contact_trial(
+struct ContactResult {
+    report: Value,
+    shell: Option<Shell>,
+    released_polygons: usize,
+}
+
+fn unresolved_contact_result(
     recovery: &RecoveredAnalyticMesh,
     budget: SurfaceRegionBudget,
     limit: usize,
     search_budget: SearchBudget,
-    shell_output: Option<&Path>,
     simplify: bool,
-) -> Result<Value> {
+) -> ContactResult {
     // An already complete analytic shell is the preferred zero-release
     // result. A search with no failed contacts is not a recovery failure.
     if let Some(shell) = recovery.complete_shell()
         && shell.shell_condition() == ShellCondition::Closed
     {
-        let exported = export_shell(Some(&shell), shell_output)?;
-        return Ok(json!({"status":"ok","recovery_kind":"analytic",
-            "native_faces":shell.len(),"shell_condition":"Closed","shell_exported":exported,
+        return ContactResult {
+            report: json!({"status":"ok","recovery_kind":"analytic",
+            "native_faces":shell.len(),"shell_condition":"Closed","shell_exported":false,
             "failed_regions":[],"failed_trims":0,"chart_cuts":0,"released_polygons":0,
             "max_native_vertex_displacement":recovery.native.max_vertex_displacement,
-            "max_deviation":null,"max_seam_deviation":null,"states":0,"trials":0,"seconds":0.0}));
+            "max_deviation":null,"max_seam_deviation":null,"states":0,"trials":0,"seconds":0.0}),
+            shell: Some(shell),
+            released_polygons: 0,
+        };
     }
     // This explicit mode authorizes only a bounded number of original
     // source polygons, regardless of whether their fitted parent is a
@@ -676,22 +693,231 @@ fn unresolved_contact_trial(
         max_trials: search_budget.trials,
     };
     let start = Instant::now();
-    let mut report = match recovery.construct_unresolved_contact_hybrid(&permitted, options) {
+    let (mut report, shell, released_polygons) = match recovery
+        .construct_unresolved_contact_hybrid(&permitted, options)
+    {
         Ok(search) => {
-            let mut report = refined_result_report(search.refined, shell_output, simplify)?;
+            let (mut report, shell) = refined_result(search.refined, simplify);
             report["seed_supports"] = json!(search.seed_supports);
             report["released_polygons"] = json!(search.released_polygons);
             report["states"] = json!(search.states);
             report["trials"] = json!(search.trials);
             report["ownership_alternative"] = json!(search.ownership_alternative);
-            report
+            (report, shell, search.released_polygons)
         }
-        Err(error) => {
-            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error),"search_failure":search_failure_report(&error)})
-        }
+        Err(error) => (
+            json!({"status":"rejected","error":error.to_string(),"failed_facet":hybrid_failed_facet(&error),"retained_trim":retained_trim_diagnostic(recovery, &error),"search_failure":search_failure_report(&error)}),
+            None,
+            0,
+        ),
     };
     report["seconds"] = json!(start.elapsed().as_secs_f64());
-    Ok(report)
+    ContactResult { report, shell, released_polygons }
+}
+
+struct ComponentRun {
+    report: Value,
+    shell: Option<Shell>,
+    released_polygons: usize,
+    recovery_seconds: f64,
+    carrier_trials: usize,
+    carrier_acceptances: usize,
+}
+
+fn recover_component(
+    mesh: &monstertruck_mesh::PolygonMesh,
+    options: &AnalyticRecoveryOptions,
+    budget: SurfaceRegionBudget,
+    limit: usize,
+    search_budget: SearchBudget,
+    simplify: bool,
+) -> Result<ComponentRun> {
+    let start = Instant::now();
+    let recovery = recover_analytic_mesh(mesh, options)?;
+    let recovery_seconds = start.elapsed().as_secs_f64();
+    let carrier_trials = recovery.discovery.carrier_alternative_trials;
+    let carrier_acceptances = recovery.discovery.carrier_alternative_acceptances;
+    let ContactResult { mut report, shell, released_polygons } =
+        unresolved_contact_result(&recovery, budget, limit, search_budget, simplify);
+    if shell.is_none() {
+        // Original source IDs are local to this component. Map supports
+        // through source ingestion before releasing the recovery evidence.
+        report["support_source_polygons"] = json!(
+            recovery
+                .evidence
+                .planar_supports
+                .iter()
+                .map(|support| support
+                    .source_face_indices
+                    .iter()
+                    .filter_map(|&id| recovery
+                        .evidence
+                        .provenance
+                        .original_polygon_ids
+                        .get(id)
+                        .copied())
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(ComponentRun {
+        report,
+        shell,
+        released_polygons,
+        recovery_seconds,
+        carrier_trials,
+        carrier_acceptances,
+    })
+}
+
+fn report_count(report: &Value, key: &str) -> usize {
+    report[key]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or_default()
+}
+
+#[derive(Default)]
+struct ComponentTotals {
+    recovery_seconds: f64,
+    hybrid_seconds: f64,
+    carrier_trials: usize,
+    carrier_acceptances: usize,
+    released: usize,
+    states: usize,
+    trials: usize,
+    hybrid: bool,
+    max_deviation: Option<f64>,
+    max_seam_deviation: Option<f64>,
+    max_displacement: f64,
+}
+
+impl ComponentTotals {
+    fn accumulate(&mut self, run: &ComponentRun) {
+        let report = &run.report;
+        self.recovery_seconds += run.recovery_seconds;
+        self.hybrid_seconds += report["seconds"].as_f64().unwrap_or_default();
+        self.carrier_trials += run.carrier_trials;
+        self.carrier_acceptances += run.carrier_acceptances;
+        self.released += run.released_polygons;
+        self.states += report_count(report, "states");
+        self.trials += report_count(report, "trials");
+        self.hybrid |= report["recovery_kind"] == "hybrid";
+        for (maximum, key) in [
+            (&mut self.max_deviation, "max_deviation"),
+            (&mut self.max_seam_deviation, "max_seam_deviation"),
+        ] {
+            if let Some(value) = report[key].as_f64() {
+                *maximum = Some(maximum.map_or(value, |m| m.max(value)));
+            }
+        }
+        self.max_displacement = self.max_displacement.max(
+            report["max_native_vertex_displacement"]
+                .as_f64()
+                .unwrap_or_default(),
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ComponentPolicy<'a> {
+    analytic: &'a AnalyticRecoveryOptions,
+    budget: SurfaceRegionBudget,
+    limit: usize,
+    search: SearchBudget,
+    simplify: bool,
+}
+
+fn component_unresolved_trial(
+    mesh: &monstertruck_mesh::PolygonMesh,
+    policy: ComponentPolicy<'_>,
+    shell_output: Option<&Path>,
+) -> Result<(Value, ComponentTotals)> {
+    let parts = partition_recovery_mesh(mesh)?;
+    let count = parts.len();
+    let mut totals = ComponentTotals::default();
+    let mut remaining = policy.limit;
+    let mut shell = Shell::new();
+    let mut reports = Vec::with_capacity(count);
+    let mut all_closed = true;
+    for part in parts {
+        let run = recover_component(
+            &part.mesh,
+            policy.analytic,
+            policy.budget,
+            remaining,
+            policy.search,
+            policy.simplify,
+        );
+        let mut report = match run {
+            Ok(mut run) => {
+                totals.accumulate(&run);
+                let released = run.released_polygons;
+                anyhow::ensure!(
+                    released <= remaining,
+                    "component exceeded remaining source release budget"
+                );
+                remaining -= released;
+                if let Some(mut recovered) = run.shell.take()
+                    && recovered.shell_condition() == ShellCondition::Closed
+                {
+                    shell.append(&mut recovered);
+                } else {
+                    all_closed = false;
+                }
+                run.report
+            }
+            Err(error) => {
+                all_closed = false;
+                json!({"status":"rejected","error":format!("{error:#}")})
+            }
+        };
+        report["independently_closed_source"] = json!(part.independently_closed);
+        report["source_polygons"] = json!(part.original_polygons.len());
+        // One unsplit component keeps the original source index space.
+        if count > 1 {
+            report["original_polygon_ids"] = json!(part.original_polygons);
+        }
+        reports.push(report);
+    }
+    all_closed &= !shell.is_empty()
+        && shell.shell_condition() == ShellCondition::Closed
+        && shell.singular_vertices().is_empty()
+        && shell.is_geometric_consistent();
+    let exported = if all_closed {
+        export_shell(Some(&shell), shell_output)?
+    } else {
+        false
+    };
+    if count == 1 {
+        let mut report = reports.pop().context("missing component report")?;
+        report["shell_exported"] = json!(exported);
+        if !all_closed && report["status"] == "ok" {
+            report["status"] = json!("rejected");
+            report["shell_condition"] = Value::Null;
+            report["error"] = json!("assembled native shell is not closed and nonsingular");
+        }
+        report["component_count"] = json!(count);
+        return Ok((report, totals));
+    }
+    let report = json!({
+        "status": if all_closed {"ok"} else {"rejected"},
+        "recovery_kind": if totals.hybrid {"hybrid"} else {"analytic"},
+        "native_faces": all_closed.then_some(shell.len()),
+        "shell_condition": all_closed.then_some("Closed"),
+        "shell_exported": exported,
+        "component_count": count,
+        "component_reports": reports,
+        "released_polygons": totals.released,
+        "max_native_vertex_displacement": totals.max_displacement,
+        "max_deviation": totals.max_deviation,
+        "max_seam_deviation": totals.max_seam_deviation,
+        "states": totals.states,
+        "trials": totals.trials,
+        "seconds": totals.hybrid_seconds,
+        "search_budget_scope": "per_component",
+    });
+    Ok((report, totals))
 }
 
 fn replay_support_trial(
@@ -874,21 +1100,38 @@ fn main() -> Result<()> {
     if !carrier_trials {
         options.max_carrier_trials = 0;
     }
+    let budget = SurfaceRegionBudget { vertex, chord };
+    if let Some((flag, limit, _)) = &mode
+        && flag == "--release-unresolved"
+    {
+        let (report, totals) = component_unresolved_trial(
+            &mesh,
+            ComponentPolicy {
+                analytic: &options,
+                budget,
+                limit: *limit,
+                search: search_budget,
+                simplify,
+            },
+            shell_output.as_deref(),
+        )?;
+        println!(
+            "{}",
+            json!({"source":path,"recovery_seconds":totals.recovery_seconds,
+            "wall_seconds":start.elapsed().as_secs_f64(),
+            "carrier_alternative_trials":totals.carrier_trials,"carrier_alternative_acceptances":totals.carrier_acceptances,
+            "vertex_budget":budget.vertex,"chord_budget":budget.chord,
+            "search_budget":{"states":search_budget.states,"trials":search_budget.trials,"scope":"per_component"},
+            "hybrid":report})
+        );
+        return Ok(());
+    }
     let recovery = recover_analytic_mesh(&mesh, &options)?;
     let recovery_seconds = start.elapsed().as_secs_f64();
-    let budget = SurfaceRegionBudget { vertex, chord };
     let report = match mode {
         Some((flag, limit, _)) if flag == "--release-conflicts" => {
             refined_trial(&recovery, budget, limit, shell_output.as_deref(), simplify)?
         }
-        Some((flag, limit, _)) if flag == "--release-unresolved" => unresolved_contact_trial(
-            &recovery,
-            budget,
-            limit,
-            search_budget,
-            shell_output.as_deref(),
-            simplify,
-        )?,
         Some((flag, limit, seeds)) if flag == "--replay-supports" => replay_support_trial(
             &recovery,
             budget,

@@ -23,6 +23,7 @@ mod source_collapse;
 mod source_sectors;
 mod source_sheet;
 mod source_topology;
+pub(super) use source_topology::certify_independent_source_group;
 mod spatial;
 mod station_graph;
 mod support;

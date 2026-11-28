@@ -38,6 +38,9 @@ impl Default for PlanarRecoveryOptions {
 
 mod analytic;
 mod carrier_identity;
+mod component_groups;
+mod component_partition;
+pub use component_partition::{RecoveryMeshComponent, partition_recovery_mesh};
 pub use analytic::{
     AnalyticDiscoveryStats, AnalyticRecoveryError, AnalyticRecoveryOptions,
     AnalyticRegionDiscovery, AxisDiscoverySummary, CircleAxisSummary, CoplanarSupportReassignment,
