@@ -21,14 +21,15 @@ use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::solid_extrusions::{profile_contains_with_rotated_ray, signed_area_curves};
 use anyhow::Result;
-use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
+use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::BTreeMap;
 
 mod circular;
 mod ruled;
 mod transitions;
 
-const LENGTH: f64 = NATIVE_STEP_RECOVERY_MM;
+// Distinct slice stations, vertex identities and nonzero extent are structural.
+const IDENTITY_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm;
 const DIRECTION: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 #[derive(Clone, Copy)]
@@ -37,10 +38,11 @@ struct Frame {
     x: [f64; 3],
     y: [f64; 3],
     axis: [f64; 3],
+    tolerance_mm: f64,
 }
 
 impl Frame {
-    fn new(origin: [f64; 3], axis: [f64; 3]) -> Option<Self> {
+    fn new(origin: [f64; 3], axis: [f64; 3], tolerance_mm: f64) -> Option<Self> {
         let seed_index = (0..3).min_by(|&a, &b| axis[a].abs().total_cmp(&axis[b].abs()))?;
         let mut seed = [0.0; 3];
         seed[seed_index] = 1.0;
@@ -50,6 +52,7 @@ impl Frame {
             x,
             y: cross(axis, x),
             axis,
+            tolerance_mm,
         })
     }
 
@@ -81,17 +84,17 @@ fn source_axes(solid: &ReducedSolid) -> Option<Vec<[f64; 3]>> {
     Some(directions)
 }
 
-fn valid_line(edge: &OrientedEdgeUse) -> bool {
+fn valid_line(edge: &OrientedEdgeUse, tolerance_mm: f64) -> bool {
     let CurveSupport::Line(line) = edge.support else {
         return false;
     };
     let Some(direction) = normalize(line.direction, DIRECTION) else {
         return false;
     };
-    distance(edge.start_mm, edge.end_mm) > LENGTH
+    distance(edge.start_mm, edge.end_mm) > IDENTITY_MM
         && [edge.start_mm, edge.end_mm].into_iter().all(|point| {
             point.iter().all(|v| v.is_finite())
-                && point_to_unit_line_distance(point, line.origin_mm, direction) <= LENGTH
+                && point_to_unit_line_distance(point, line.origin_mm, direction) <= tolerance_mm
         })
 }
 
@@ -107,15 +110,15 @@ fn valid_planar_face(face: &ReducedFace, frame: Frame, allow_inclined: bool) -> 
     for edge in face.loop_edges() {
         if ![edge.start_mm, edge.end_mm]
             .into_iter()
-            .all(|point| dot(sub(point, plane.origin_mm), normal).abs() <= LENGTH)
+            .all(|point| dot(sub(point, plane.origin_mm), normal).abs() <= frame.tolerance_mm)
         {
             return None;
         }
         match edge.support {
-            CurveSupport::Line(_) if valid_line(edge) => {}
+            CurveSupport::Line(_) if valid_line(edge, frame.tolerance_mm) => {}
             CurveSupport::Circle(circle) if transverse => {
                 circular::transverse_arc(edge, frame)?;
-                if dot(sub(circle.center_mm, plane.origin_mm), normal).abs() > LENGTH {
+                if dot(sub(circle.center_mm, plane.origin_mm), normal).abs() > frame.tolerance_mm {
                     return None;
                 }
             }
@@ -143,11 +146,11 @@ fn station_levels(solid: &ReducedSolid, frame: Frame) -> Option<Vec<f64>> {
         .flat_map(|edge| [frame.axial(edge.start_mm), frame.axial(edge.end_mm)])
         .collect::<Vec<_>>();
     levels.sort_by(f64::total_cmp);
-    levels.dedup_by(|a, b| (*a - *b).abs() <= LENGTH);
+    levels.dedup_by(|a, b| (*a - *b).abs() <= IDENTITY_MM);
     (levels.len() >= 2
         && levels
             .windows(2)
-            .all(|pair| pair[1] - pair[0] > 2.0 * LENGTH))
+            .all(|pair| pair[1] - pair[0] > 2.0 * IDENTITY_MM))
     .then_some(levels)
 }
 
@@ -163,7 +166,7 @@ impl SliceGraph {
         if self
             .points
             .insert(id, at)
-            .is_some_and(|old| distance2(old, at) > LENGTH)
+            .is_some_and(|old| distance2(old, at) > IDENTITY_MM)
         {
             return None;
         }
@@ -171,8 +174,8 @@ impl SliceGraph {
     }
 
     fn connect(&mut self, start: u64, end: u64, curve: RecoveredProfileCurve) -> Option<()> {
-        if distance2(*self.points.get(&start)?, curve.start_point()?) > LENGTH
-            || distance2(*self.points.get(&end)?, curve.end_point()?) > LENGTH
+        if distance2(*self.points.get(&start)?, curve.start_point()?) > IDENTITY_MM
+            || distance2(*self.points.get(&end)?, curve.end_point()?) > IDENTITY_MM
         {
             return None;
         }
@@ -199,7 +202,7 @@ impl SliceGraph {
         for edge in face.loop_edges() {
             let a = frame.axial(edge.start_mm);
             let b = frame.axial(edge.end_mm);
-            if (a - level).abs() <= LENGTH || (b - level).abs() <= LENGTH {
+            if (a - level).abs() <= IDENTITY_MM || (b - level).abs() <= IDENTITY_MM {
                 return None;
             }
             // The slice is strictly between source vertex stations, so no endpoint or coplanar-edge cases occur.
@@ -216,7 +219,7 @@ impl SliceGraph {
         let (pairs, remainder) = hits.as_chunks::<2>();
         for &[(a, start), (b, end)] in pairs {
             // Alternating intersections along this plane's finite trim recover all its material intervals, including holes.
-            if b - a <= LENGTH {
+            if b - a <= IDENTITY_MM {
                 return None;
             }
             let curve = RecoveredProfileCurve::Line {
@@ -264,7 +267,7 @@ fn section_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<usize>
         .collect::<Vec<_>>();
     if areas
         .iter()
-        .any(|a| !a.is_finite() || a.abs() <= LENGTH * LENGTH)
+        .any(|a| !a.is_finite() || a.abs() <= IDENTITY_MM * IDENTITY_MM)
     {
         return None;
     }
@@ -284,7 +287,7 @@ fn section_groups(rings: &[Vec<RecoveredProfileCurve>]) -> Option<Vec<Vec<usize>
         let witness = ring.first()?.start_point()?;
         for &j in outers.keys() {
             if areas[j] > -areas[i]
-                && profile_contains_with_rotated_ray(&rings[j], witness, LENGTH)?
+                && profile_contains_with_rotated_ray(&rings[j], witness, IDENTITY_MM)?
             {
                 parents.push(j);
             }
@@ -409,7 +412,7 @@ pub fn recover<K: CadKernel>(
     let face_ids = || solid.faces().map(|face| face.id).collect::<Vec<_>>();
     let mut candidates = Vec::new();
     for axis in axes {
-        let Some(frame) = Frame::new(origin, axis) else {
+        let Some(frame) = Frame::new(origin, axis, solid.recovery_tolerance_mm()) else {
             continue;
         };
         let Some(levels) = stations(&solid, frame) else {
@@ -580,15 +583,15 @@ mod tests {
         }];
         let island = rectangle(-0.5, -0.5, 1.0, 1.0);
         assert_eq!(
-            profile_contains_with_rotated_ray(&circle, [0.0, 0.0], LENGTH),
+            profile_contains_with_rotated_ray(&circle, [0.0, 0.0], IDENTITY_MM),
             Some(true)
         );
         assert_eq!(
-            profile_contains_with_rotated_ray(&circle, [3.0, 0.0], LENGTH),
+            profile_contains_with_rotated_ray(&circle, [3.0, 0.0], IDENTITY_MM),
             Some(false)
         );
         assert_eq!(
-            profile_contains_with_rotated_ray(&circle, [2.0, 0.0], LENGTH),
+            profile_contains_with_rotated_ray(&circle, [2.0, 0.0], IDENTITY_MM),
             None
         );
         let profiles = section_profiles(&[outer, circle, island]).unwrap();

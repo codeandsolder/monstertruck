@@ -5,7 +5,7 @@
 //! parity of transverse arc crossings below the slice. This distinguishes
 //! major/minor sectors, holes, disconnected sectors, and full periodic faces
 //! without assuming that every cylinder has a four-edge rectangular trim.
-use super::{DIRECTION, Frame, LENGTH, SliceGraph, valid_line};
+use super::{DIRECTION, Frame, IDENTITY_MM, SliceGraph, valid_line};
 use crate::brep::{CurveSupport, OrientedEdgeUse, SurfaceSupport};
 use crate::math2::{distance as distance2, sub as sub2};
 use crate::math3::{cross, norm, normalize, point_to_unit_line_distance};
@@ -33,7 +33,7 @@ pub(super) fn transverse_arc(edge: &OrientedEdgeUse, frame: Frame) -> Option<Tra
     let normal = normalize(circle.normal, DIRECTION)?;
     if norm(cross(normal, frame.axis)) > DIRECTION
         || !circle.radius_mm.is_finite()
-        || circle.radius_mm <= LENGTH
+        || circle.radius_mm <= IDENTITY_MM
         || !circle.center_mm.iter().all(|v| v.is_finite())
     {
         return None;
@@ -41,26 +41,36 @@ pub(super) fn transverse_arc(edge: &OrientedEdgeUse, frame: Frame) -> Option<Tra
     let center = frame.project(circle.center_mm);
     let station = frame.axial(circle.center_mm);
     for point in [edge.start_mm, edge.end_mm] {
-        if (frame.axial(point) - station).abs() > LENGTH
-            || (distance2(frame.project(point), center) - circle.radius_mm).abs() > LENGTH
+        if (frame.axial(point) - station).abs() > frame.tolerance_mm
+            || (distance2(frame.project(point), center) - circle.radius_mm).abs()
+                > frame.tolerance_mm
             || !point.iter().all(|v| v.is_finite())
         {
             return None;
         }
     }
     let closed = edge.start_vertex == edge.end_vertex;
-    if closed != (distance2(frame.project(edge.start_mm), frame.project(edge.end_mm)) <= LENGTH) {
+    if closed
+        != (distance2(frame.project(edge.start_mm), frame.project(edge.end_mm)) <= IDENTITY_MM)
+    {
         return None;
     }
     let RecoveredProfileCurve::CircleArc {
         start_angle_rad: start,
         end_angle_rad: end,
         ..
-    } = recovered_profile_curve(edge, frame.origin, frame.x, frame.y, frame.axis, LENGTH)?
+    } = recovered_profile_curve(
+        edge,
+        frame.origin,
+        frame.x,
+        frame.y,
+        frame.axis,
+        frame.tolerance_mm,
+    )?
     else {
         return None;
     };
-    (start.is_finite() && end.is_finite() && (end - start).abs() * circle.radius_mm > LENGTH)
+    (start.is_finite() && end.is_finite() && (end - start).abs() * circle.radius_mm > IDENTITY_MM)
         .then_some(TransverseArc {
             center,
             radius: circle.radius_mm,
@@ -95,7 +105,7 @@ impl CylinderTrim {
         let axis = normalize(cylinder.axis, DIRECTION)?;
         if norm(cross(axis, frame.axis)) > DIRECTION
             || !cylinder.radius_mm.is_finite()
-            || cylinder.radius_mm <= LENGTH
+            || cylinder.radius_mm <= IDENTITY_MM
             || !cylinder.axis_origin_mm.iter().all(|v| v.is_finite())
         {
             return None;
@@ -108,20 +118,20 @@ impl CylinderTrim {
             match edge.support {
                 CurveSupport::Circle(circle) => {
                     let arc = transverse_arc(edge, frame)?;
-                    if distance2(arc.center, center) > LENGTH
-                        || (arc.radius - radius).abs() > LENGTH
+                    if distance2(arc.center, center) > frame.tolerance_mm
+                        || (arc.radius - radius).abs() > frame.tolerance_mm
                         || point_to_unit_line_distance(
                             circle.center_mm,
                             cylinder.axis_origin_mm,
                             axis,
-                        ) > LENGTH
+                        ) > frame.tolerance_mm
                     {
                         return None;
                     }
                     arcs.push(arc);
                 }
                 CurveSupport::Line(line) => {
-                    if !valid_line(edge)
+                    if !valid_line(edge, frame.tolerance_mm)
                         || norm(cross(normalize(line.direction, DIRECTION)?, frame.axis))
                             > DIRECTION
                     {
@@ -129,9 +139,9 @@ impl CylinderTrim {
                     }
                     let a = frame.project(edge.start_mm);
                     let b = frame.project(edge.end_mm);
-                    if distance2(a, b) > LENGTH
-                        || (distance2(a, center) - radius).abs() > LENGTH
-                        || (distance2(b, center) - radius).abs() > LENGTH
+                    if distance2(a, b) > frame.tolerance_mm
+                        || (distance2(a, center) - radius).abs() > frame.tolerance_mm
+                        || (distance2(b, center) - radius).abs() > frame.tolerance_mm
                     {
                         return None;
                     }
@@ -139,19 +149,19 @@ impl CylinderTrim {
                     let end = frame.axial(edge.end_mm);
                     let low = start.min(end);
                     let high = start.max(end);
-                    if high - low <= LENGTH {
+                    if high - low <= IDENTITY_MM {
                         return None;
                     }
                     let delta = sub2(a, center);
                     let angle = delta[1].atan2(delta[0]).rem_euclid(TAU);
                     if let Some(previous) = generators.get_mut(&edge.edge_id) {
                         if previous.multiplicity != 1
-                            || (previous.low - low).abs() > LENGTH
-                            || (previous.high - high).abs() > LENGTH
+                            || (previous.low - low).abs() > IDENTITY_MM
+                            || (previous.high - high).abs() > IDENTITY_MM
                             || distance2(
                                 point(center, radius, previous.angle),
                                 point(center, radius, angle),
-                            ) > LENGTH
+                            ) > IDENTITY_MM
                         {
                             return None;
                         }
@@ -200,7 +210,7 @@ impl CylinderTrim {
         cuts.sort_by(f64::total_cmp);
         let mut occupied = None;
         for pair in cuts.windows(2) {
-            if (pair[1] - pair[0]) * self.radius <= LENGTH {
+            if (pair[1] - pair[0]) * self.radius <= IDENTITY_MM {
                 continue;
             }
             let sample = pair[0].midpoint(pair[1]);
@@ -255,7 +265,7 @@ impl CylinderTrim {
             } else {
                 next.angle
             };
-            if (end - hit.angle) * self.radius <= LENGTH {
+            if (end - hit.angle) * self.radius <= IDENTITY_MM {
                 return None;
             }
             intervals.push((end, self.occupied(hit.angle, end, level)?));

@@ -4,8 +4,8 @@
 //! original crossing edges supply both end profiles, including collapsed
 //! corner transitions. Axis-parallel cylinders have invariant section arcs. Independent full-source proof remains mandatory.
 use super::{
-    DIRECTION, Frame, LENGTH, circular::CylinderTrim, section_groups, slice_rings, station_levels,
-    valid_planar_face,
+    DIRECTION, Frame, IDENTITY_MM, circular::CylinderTrim, section_groups, slice_rings,
+    station_levels, valid_planar_face,
 };
 use crate::{
     brep::{OrientedEdgeUse, SurfaceSupport},
@@ -58,12 +58,15 @@ impl<'a> RuledSweep<'a> {
     fn point(&self, id: u64, frame: Frame, level: f64) -> Option<[f64; 2]> {
         let edge = self.edges.get(&id)?;
         let [a, b] = [edge.start_mm, edge.end_mm].map(|p| frame.axial(p));
-        if (a - b).abs() <= LENGTH || level < a.min(b) - LENGTH || level > a.max(b) + LENGTH {
+        if (a - b).abs() <= IDENTITY_MM
+            || level < a.min(b) - IDENTITY_MM
+            || level > a.max(b) + IDENTITY_MM
+        {
             return None;
         }
-        let point = if (a - level).abs() <= LENGTH {
+        let point = if (a - level).abs() <= IDENTITY_MM {
             edge.start_mm
-        } else if (b - level).abs() <= LENGTH {
+        } else if (b - level).abs() <= IDENTITY_MM {
             edge.end_mm
         } else {
             add(
@@ -106,12 +109,12 @@ impl<'a> RuledSweep<'a> {
                             let [_, end] = source_edge_ids.as_slice() else {
                                 return None;
                             };
-                            (distance2(end_mm, self.point(*end, frame, level)?) <= LENGTH)
+                            (distance2(end_mm, self.point(*end, frame, level)?) <= IDENTITY_MM)
                                 .then_some(Curve2d::Line { start_mm, end_mm })
                         }
                         RecoveredProfileCurve::CircleArc { .. } => {
-                            (distance2(start_mm, curve.start_point()?) <= LENGTH
-                                && distance2(end_mm, curve.end_point()?) <= LENGTH)
+                            (distance2(start_mm, curve.start_point()?) <= IDENTITY_MM
+                                && distance2(end_mm, curve.end_point()?) <= IDENTITY_MM)
                                 .then(|| recovered_profile_curve_to_ir(curve))
                         }
                         _ => None,
@@ -134,20 +137,20 @@ fn canonicalize_collapsed_corners(points: &mut [[f64; 2]]) -> Option<()> {
         return None;
     }
     let offset = (0..count)
-        .find(|&i| distance2(points[i], points[(i + 1) % count]) > LENGTH)
+        .find(|&i| distance2(points[i], points[(i + 1) % count]) > IDENTITY_MM)
         .map_or(0, |i| (i + 1) % count);
     points.rotate_left(offset);
     let mut start = 0;
     while start < count {
         let mut end = start + 1;
-        while end < count && distance2(points[end - 1], points[end]) <= LENGTH {
+        while end < count && distance2(points[end - 1], points[end]) <= IDENTITY_MM {
             end += 1;
         }
         let group = &mut points[start..end];
         let canonical = *group
             .iter()
             .min_by(|a, b| a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])))?;
-        if group.iter().any(|&p| distance2(p, canonical) > LENGTH) {
+        if group.iter().any(|&p| distance2(p, canonical) > IDENTITY_MM) {
             return None;
         }
         group.fill(canonical);
@@ -260,7 +263,7 @@ impl SectionRuns {
 fn same_profiles(a: &Profile2d, b: &Profile2d) -> bool {
     a.loops.len() == b.loops.len() && a.loops.iter().zip(&b.loops).all(|(a, b)| {
         a.curves.len() == b.curves.len() && a.curves.iter().zip(&b.curves).all(|(a,b)| {
-            !matches!(a, Curve2d::Line { start_mm, end_mm } if distance2(*start_mm,*end_mm) <= LENGTH)
+            !matches!(a, Curve2d::Line { start_mm, end_mm } if distance2(*start_mm,*end_mm) <= IDENTITY_MM)
                 && chains::matching_curve(a,b)
         })
     })
@@ -406,7 +409,7 @@ mod tests {
 
     #[test]
     fn collapsed_corners_preserve_cyclic_correspondence() -> Result<()> {
-        let mut points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [LENGTH * 0.2, 0.0]];
+        let mut points = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [IDENTITY_MM * 0.2, 0.0]];
         anyhow::Context::context(
             canonicalize_collapsed_corners(&mut points),
             "valid cyclic collapse",
@@ -421,8 +424,8 @@ mod tests {
     fn collapsed_corners_reject_transitive_displacement() {
         let mut points = [
             [0.0, 0.0],
-            [0.75 * LENGTH, 0.0],
-            [1.5 * LENGTH, 0.0],
+            [0.75 * IDENTITY_MM, 0.0],
+            [1.5 * IDENTITY_MM, 0.0],
             [2.0, 2.0],
         ];
         assert!(canonicalize_collapsed_corners(&mut points).is_none());

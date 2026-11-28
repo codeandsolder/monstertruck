@@ -1,7 +1,7 @@
 //! Reconstruct a constant extrusion host with material changes at witnessed
 //! transverse stations.  Unlike a slab union, this preserves continuous
 //! analytic side faces across station boundaries.
-use super::{DIRECTION, Frame, LENGTH, extrusion_node, section_profiles};
+use super::{DIRECTION, Frame, IDENTITY_MM, extrusion_node, section_profiles};
 use crate::brep::SurfaceSupport;
 use crate::cad_ir::{BooleanOp, CadModel, CadNode, NodeId, Profile2d};
 use crate::math2::distance;
@@ -35,8 +35,8 @@ fn same_curve(first: &RecoveredProfileCurve, second: &RecoveredProfileCurve) -> 
                 ..
             },
         ) => {
-            distance(*first_start, *second_start) <= LENGTH
-                && distance(*first_end, *second_end) <= LENGTH
+            distance(*first_start, *second_start) <= IDENTITY_MM
+                && distance(*first_end, *second_end) <= IDENTITY_MM
         }
         (
             RecoveredProfileCurve::CircleArc {
@@ -54,19 +54,19 @@ fn same_curve(first: &RecoveredProfileCurve, second: &RecoveredProfileCurve) -> 
                 ..
             },
         ) => {
-            distance(*first_center, *second_center) <= LENGTH
-                && (first_radius - second_radius).abs() <= LENGTH
+            distance(*first_center, *second_center) <= IDENTITY_MM
+                && (first_radius - second_radius).abs() <= IDENTITY_MM
                 && ((first_end - first_start) - (second_end - second_start)).abs()
                     * first_radius.max(*second_radius)
-                    <= LENGTH
+                    <= IDENTITY_MM
                 && first
                     .start_point()
                     .zip(second.start_point())
-                    .is_some_and(|(left, right)| distance(left, right) <= LENGTH)
+                    .is_some_and(|(left, right)| distance(left, right) <= IDENTITY_MM)
                 && first
                     .end_point()
                     .zip(second.end_point())
-                    .is_some_and(|(left, right)| distance(left, right) <= LENGTH)
+                    .is_some_and(|(left, right)| distance(left, right) <= IDENTITY_MM)
         }
         _ => false,
     }
@@ -122,7 +122,7 @@ fn events(
         let at = frame.axial(plane.origin_mm);
         let station_index = levels
             .iter()
-            .position(|level| (at - level).abs() <= LENGTH)?;
+            .position(|level| (at - level).abs() <= IDENTITY_MM)?;
         if station_index == 0 || station_index + 1 == levels.len() {
             continue;
         }
