@@ -158,6 +158,9 @@ pub(super) fn repair(
     }
     let index = RegionBoundaryIndex::new(evidence)?;
     let partition = index.repartition_connected(&labels, |label| original.carriers[label])?;
+    if options.source_chord_violation(&index, &partition).is_some() {
+        return Ok(Vec::new());
+    }
     let trims = index.assemble_shared_trims(&partition, &assembly.reconciled.positions, trim)?;
     let native = index.construct_native_trims(
         &partition,

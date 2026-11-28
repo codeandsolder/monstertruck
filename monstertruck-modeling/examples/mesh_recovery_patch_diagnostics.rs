@@ -804,7 +804,10 @@ fn main() -> Result<()> {
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
-    let mut options = AnalyticRecoveryOptions::default();
+    let mut options = AnalyticRecoveryOptions {
+        source_chord_budget: Some(chord),
+        ..AnalyticRecoveryOptions::default()
+    };
     if !carrier_trials {
         options.max_carrier_trials = 0;
     }

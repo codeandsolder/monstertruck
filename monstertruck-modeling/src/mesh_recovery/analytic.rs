@@ -50,6 +50,11 @@ pub struct AnalyticRecoveryOptions {
     pub max_linear_relative_chord_error: f64,
     /// Maximum continuous source chord error relative to circular profile scale.
     pub max_circular_relative_chord_error: f64,
+    /// Known absolute source chord/filled-facet deviation allowance, in model
+    /// units. Intersected with feature-relative recognition allowances. It
+    /// is not a kernel tolerance or a claim about the trimmed-face domain.
+    /// None means no declared source deflection is available.
+    pub source_chord_budget: Option<f64>,
     /// Search-node budget per overlapping region proposal component.
     pub max_partition_search_nodes: usize,
     /// Maximum source intervals tested by mixed-trim segmentation.
@@ -88,6 +93,7 @@ impl Default for AnalyticRecoveryOptions {
             max_linear_relative_chord_error: 0.25,
             // A quarter-turn circular chord has this relative sagitta.
             max_circular_relative_chord_error: 1.0 - std::f64::consts::FRAC_1_SQRT_2,
+            source_chord_budget: None,
             max_partition_search_nodes: 100_000,
             max_trim_interval_edges: 128,
             max_reconstruction_adjustment: 0.01,
@@ -114,6 +120,9 @@ impl AnalyticRecoveryOptions {
         if positive
             .iter()
             .any(|v| !v.is_finite() || *v <= 0.0 || *v >= 1.0)
+            || self
+                .source_chord_budget
+                .is_some_and(|budget| !budget.is_finite() || budget <= 0.0)
             || !self.max_reconstruction_adjustment.is_finite()
             || self.max_reconstruction_adjustment < 0.0
             || !self.source_position_uncertainty.is_finite()
@@ -129,6 +138,15 @@ impl AnalyticRecoveryOptions {
             return Err(AnalyticRecoveryError::InvalidOptions);
         }
         Ok(())
+    }
+
+    fn source_chord_violation(
+        self,
+        boundary: &RegionBoundaryIndex<'_>,
+        partition: &SurfaceRegionPartition,
+    ) -> Option<usize> {
+        self.source_chord_budget
+            .and_then(|budget| boundary.source_chord_violation(partition, budget))
     }
 
     /// Shared trim budget derived from the same source extent and relative
@@ -157,6 +175,10 @@ pub enum AnalyticRecoveryError {
     /// Invalid numerical options or inconsistent supplied discovery evidence.
     #[error("invalid analytic recovery options or source references")]
     InvalidOptions,
+    /// The original source support cannot be certified against the declared
+    /// filled-facet approximation allowance after partition construction.
+    #[error("source support {0} exceeds its declared chord budget")]
+    SourceChordBudget(usize),
     /// Invalid source geometry.
     #[error(transparent)]
     Source(#[from] MeshRecoveryError),
@@ -400,7 +422,8 @@ pub fn discover_analytic_regions(
     let mut axes = independent_axes(evidence, spatial, tracks, options);
     let (circle_axes, circles) = extend_with_circle_axes(evidence, &mut axes, options);
     let (active, refinement_passes, candidates) = refine_and_discover(evidence, &axes, options)?;
-    let boundary = RegionBoundaryIndex::new(&active)?;
+    let boundary =
+        RegionBoundaryIndex::new(&active)?.with_source_chord_budget(options.source_chord_budget);
     let selection = choose_partition(
         &active,
         evidence,
@@ -632,6 +655,9 @@ fn assemble_native(
             rejected: 0,
         }
     };
+    if let Some(support) = options.source_chord_violation(&boundary, &reconciled.partition) {
+        return Err(AnalyticRecoveryError::SourceChordBudget(support));
+    }
     let trims =
         boundary.assemble_shared_trims(&reconciled.partition, &reconciled.positions, trim)?;
     let native = boundary.construct_native_trims(
@@ -1252,7 +1278,10 @@ mod tests {
     }
 
     pub(super) fn sampled_cylinder_mesh() -> Result<PolygonMesh, Box<dyn std::error::Error>> {
-        let n = 32_usize;
+        sampled_prism(32)
+    }
+
+    fn sampled_prism(n: usize) -> Result<PolygonMesh, Box<dyn std::error::Error>> {
         let mut positions = Vec::new();
         for z in [0.0, 2.0] {
             for i in 0..n {
@@ -1275,6 +1304,38 @@ mod tests {
             },
             Faces::from_iter(polygons),
         )?)
+    }
+
+    #[test]
+    fn declared_source_chord_budget_discriminates_cocircular_planar_prism()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = sampled_prism(8)?;
+        let unbounded = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        assert_eq!(unbounded.discovery.selected.len(), 1);
+        let bounded = recover_analytic_mesh(
+            &mesh,
+            AnalyticRecoveryOptions {
+                source_chord_budget: Some(0.01),
+                ..Default::default()
+            },
+        )?;
+        assert!(bounded.discovery.selected.is_empty());
+        let shell = bounded.complete_shell().ok_or("closed original prism")?;
+        assert_eq!(shell.len(), 10);
+        let cylinder = recover_analytic_mesh(
+            &sampled_cylinder_mesh()?,
+            AnalyticRecoveryOptions {
+                // Unit radius, 32 sides: sagitta is 1-cos(pi/32), about 0.004815.
+                source_chord_budget: Some(0.005),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(cylinder.discovery.selected.len(), 1);
+        assert_eq!(
+            cylinder.complete_shell().ok_or("bounded cylinder")?.len(),
+            4
+        );
+        Ok(())
     }
 
     #[test]

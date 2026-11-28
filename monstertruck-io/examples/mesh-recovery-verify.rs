@@ -58,6 +58,9 @@ struct Args {
     /// Known positional uncertainty of source samples, in source units.
     #[arg(long, default_value_t = 0.0)]
     source_position_uncertainty: f64,
+    /// Known source tessellation deflection in model units (not kernel tolerance).
+    #[arg(long)]
+    source_chord_budget: Option<f64>,
     /// Explicitly permit cancellation of proven reverse coincident sheets.
     #[arg(long)]
     normalize_coincident_sheets: bool,
@@ -215,6 +218,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
             max_planar_displacement: args.max_planar_displacement,
             max_reconstruction_adjustment: args.max_reconstruction_adjustment,
             source_position_uncertainty: args.source_position_uncertainty,
+            source_chord_budget: args.source_chord_budget,
             normalize_coincident_sheets: args.normalize_coincident_sheets,
             ..Default::default()
         },

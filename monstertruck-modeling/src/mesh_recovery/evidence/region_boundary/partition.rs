@@ -91,6 +91,61 @@ pub struct SurfaceRegionPartition {
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
+    // The caller's known source accuracy limits every proposal family, even
+    // when an independently estimated feature-relative allowance is larger.
+    pub(in crate::mesh_recovery) const fn with_source_chord_budget(
+        mut self,
+        budget: Option<f64>,
+    ) -> Self {
+        self.source_chord_budget = budget;
+        self
+    }
+
+    fn support_chord_admissible(
+        &self,
+        support: usize,
+        carrier: SurfaceCarrier,
+        budget: f64,
+    ) -> bool {
+        match carrier {
+            SurfaceCarrier::LinearRevolution { .. } => {
+                // Bound the filled facet, not just its perimeter. The affine
+                // meridian certificate also covers the interior of n-gons.
+                super::rim_linear::absolute_facet_admissible(
+                    self.evidence,
+                    support,
+                    carrier,
+                    budget,
+                )
+                .is_some()
+            }
+            _ => self
+                .approximation_bound(
+                    &[support],
+                    carrier,
+                    budget,
+                    ApproximationBudget::Absolute(budget),
+                )
+                .is_some_and(|bound| bound <= 1.0),
+        }
+    }
+
+    // Recheck the original filled facets after an ownership/refit transaction.
+    // Region indices may have changed; original support membership has not.
+    pub(in crate::mesh_recovery) fn source_chord_violation(
+        &self,
+        partition: &SurfaceRegionPartition,
+        budget: f64,
+    ) -> Option<usize> {
+        (0..self.evidence.planar_supports.len()).find(|&support| {
+            partition
+                .region_by_support
+                .get(support)
+                .and_then(|&region| partition.carriers.get(region).copied().flatten())
+                .is_none_or(|carrier| !self.support_chord_admissible(support, carrier, budget))
+        })
+    }
+
     /// Rebuild connected ownership after a local carrier reassignment.
     /// Region IDs are the smallest source support in each connected component.
     pub(in crate::mesh_recovery) fn repartition_connected<L: Copy + Eq>(
@@ -242,7 +297,13 @@ impl<'a> RegionBoundaryIndex<'a> {
         }
         let relative_chord_bound =
             self.approximation_bound(supports, carrier, vertex_tolerance, approximation)?;
-        if relative_chord_bound > 1.0 {
+        if relative_chord_bound > 1.0
+            || self.source_chord_budget.is_some_and(|budget| {
+                supports
+                    .iter()
+                    .any(|&support| !self.support_chord_admissible(support, carrier, budget))
+            })
+        {
             return None;
         }
         Some(SurfaceRegionProposal {

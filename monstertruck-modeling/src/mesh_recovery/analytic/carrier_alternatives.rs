@@ -112,7 +112,11 @@ impl CarrierAlternatives {
             let proposed = replace_carrier(alternative, slot, variant);
             let candidate = match assemble_native(evidence, proposed.partition.clone(), options) {
                 Ok(candidate) => candidate,
-                Err(AnalyticRecoveryError::Boundary(_) | AnalyticRecoveryError::Native(_)) => {
+                Err(
+                    AnalyticRecoveryError::Boundary(_)
+                    | AnalyticRecoveryError::Native(_)
+                    | AnalyticRecoveryError::SourceChordBudget(_),
+                ) => {
                     rejected.insert(variant.id);
                     continue;
                 }

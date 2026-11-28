@@ -86,6 +86,9 @@ const fn speculative_error(
     match error {
         AnalyticRecoveryError::Boundary(error) => Ok(JointFitRejection::CandidateBoundary(error)),
         AnalyticRecoveryError::Native(error) => Ok(JointFitRejection::CandidateNative(error)),
+        AnalyticRecoveryError::SourceChordBudget(support) => {
+            Ok(JointFitRejection::SourceChordBudget(support))
+        }
         other => Err(other),
     }
 }
@@ -203,6 +206,12 @@ fn fit_partition(
     };
     let trim = options.trim_options(evidence);
     let boundary = RegionBoundaryIndex::new(evidence)?;
+    if let Some(support) = options.source_chord_violation(&boundary, &candidate.partition) {
+        return Ok(Err(rejection(
+            regions.iter().copied().collect(),
+            JointFitRejection::SourceChordBudget(support),
+        )));
+    }
     let mut trims =
         boundary.assemble_shared_trims(&candidate.partition, &candidate.positions, trim)?;
     let native_options = NativeTrimOptions {
