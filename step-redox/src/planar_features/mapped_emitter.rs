@@ -1,6 +1,6 @@
 use super::{
-    BoundaryFeatureCandidate, EntityInstance, FeaturePolarity, HashMap, HashSet, MIN_GROUP,
-    Parameter, PlanarFeatureStats, PlaneFrame, ReferenceGraph, Result, ShellContext, StyleRef,
+    BoundaryFeatureCandidate, EntityInstance, FeaturePolarity, HashMap, HashSet, Parameter,
+    PlanarFeatureStats, PlaneFrame, ReferenceGraph, Result, ShellContext, StyleRef,
     append_refs_to_list_param, bail, build_index, collect_styles_by_target, entity_id, entity_ref,
     entity_ref_value, grouped_boundary_features_with_index, patch_presentation_lists, plane_frame,
     push_point, push_simple, ref_list_param, remove_refs_from_list_param,
@@ -8,6 +8,8 @@ use super::{
     toggle_tf,
 };
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+// Emission profitability policy, not a feature-recognition condition.
+const MIN_GROUP: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum StyleKey {

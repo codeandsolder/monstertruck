@@ -328,6 +328,7 @@ impl ParserPeelJournal {
                 plan.stats.families
             );
         }
+        plan.require_progress()?;
         // Prove that the next projection is actually materializable before
         // committing either topology removals or semantic replay. A failed
         // transaction leaves the journal (and original input) unchanged.
@@ -639,7 +640,6 @@ const WHOLE_SOLID_CANDIDATE_PROVIDERS: [WholeSolidCandidateProvider; 2] = [
     recover_boundary_feature_candidates,
     recover_reduced_brep_candidates,
 ];
-const MAX_LOCAL_REDUCTION_ROUNDS: usize = 32;
 
 /// Build the compact complete semantic IR for a normalized STEP exchange.
 ///
@@ -878,7 +878,7 @@ fn recover_kernel_boundary_feature_fragment<
     let mut edited = None::<K::EditedSource>;
     let mut replay = Vec::<RecoveredBoundaryFeatureFamily>::new();
 
-    for pass in 0..MAX_LOCAL_REDUCTION_ROUNDS {
+    for pass in 0.. {
         let Some(native_pass) =
             prepare_native_boundary_pass(source, &projected_entities, index, provenance, pass)?
         else {
@@ -889,6 +889,7 @@ fn recover_kernel_boundary_feature_fragment<
             plan,
             families,
         } = native_pass;
+        plan.require_progress()?;
         // The native geometry transaction commits first. Then update only
         // shell membership and FACE_BOUND references in the disposable source
         // projection. Its preflight is atomic, and we never clone/reimport a
@@ -922,9 +923,6 @@ fn recover_kernel_boundary_feature_fragment<
             feature.original_source_ids = pass == 0;
             feature
         }));
-        if pass + 1 == MAX_LOCAL_REDUCTION_ROUNDS {
-            bail!("kernel boundary-feature peeling did not reach a fixed point");
-        }
     }
     let Some(edited) = edited else {
         return Ok(None);
@@ -1771,7 +1769,7 @@ fn recover_local_reductions_to_fixed_point(
     mutation_mode: ReducedBrepMutationMode,
 ) -> Result<BTreeMap<u64, CadFragment>> {
     let mut recovered = BTreeMap::new();
-    for _ in 0..MAX_LOCAL_REDUCTION_ROUNDS {
+    loop {
         let view = journal.view(source, index)?;
         if !recover_boundary_feature_pass(journal, view.as_ref(), index, active_targets)? {
             return Ok(recovered);
@@ -1791,7 +1789,6 @@ fn recover_local_reductions_to_fixed_point(
             return Ok(recovered);
         }
     }
-    bail!("local recovery did not reach a fixed point after {MAX_LOCAL_REDUCTION_ROUNDS} rounds")
 }
 
 fn recover_replayed_boundary_hosts(
@@ -2491,25 +2488,10 @@ fn feature_host_outward_directions(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<Vec<[f64; 3]>> {
-    let mut out = Vec::with_capacity(host_face_ids.len());
-    for &face_id in host_face_ids {
-        let surface_id = crate::brep::face_surface(face_id, entities, index)?;
-        let crate::brep::SurfaceSupport::Plane(plane) =
-            crate::brep::surface_support(surface_id, entities, index)
-        else {
-            return None;
-        };
-        let sign = match crate::brep::face_sense(face_id, entities, index)?.as_str() {
-            "T" => 1.0,
-            "F" => -1.0,
-            _ => return None,
-        };
-        out.push([
-            sign * plane.normal[0],
-            sign * plane.normal[1],
-            sign * plane.normal[2],
-        ]);
-    }
+    let out = host_face_ids
+        .iter()
+        .map(|&face| crate::planar_features::host_outward_direction(face, entities, index))
+        .collect::<Option<Vec<_>>>()?;
     (!out.is_empty()).then_some(out)
 }
 
