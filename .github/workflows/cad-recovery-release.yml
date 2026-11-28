@@ -18,12 +18,12 @@ jobs:
           persist-credentials: false
       - name: Resolve repository compiler
         id: compiler
-        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
+        uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@97a50dd3304be8cf19738aa1c027ac4ecd1f3d2b # main
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
           toolchain: ${{ steps.compiler.outputs.channel }}
       - name: Setup mandatory sccache
-        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
+        uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@97a50dd3304be8cf19738aa1c027ac4ecd1f3d2b # main
         with:
           rust-toolchain: ${{ steps.compiler.outputs.channel }}
           cache-scope: step-recovery-release
@@ -62,4 +62,4 @@ jobs:
           if-no-files-found: warn
       - name: Finalize mandatory sccache
         if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@97a50dd3304be8cf19738aa1c027ac4ecd1f3d2b # main
