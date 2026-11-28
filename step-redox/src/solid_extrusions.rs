@@ -1,6 +1,5 @@
 use crate::brep::{
-    self, BSplineSupport, CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport,
-    SurfaceSupport,
+    self, BSplineSupport, CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport,
 };
 use crate::circular_edges::{circle_angle_3d, circle_edge_sweep, directional_sweep};
 use crate::math2::{
@@ -2733,6 +2732,7 @@ fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::brep::CircleSupport;
 
     #[test]
     fn real_hooked_tube_proposes_top_cap_with_attached_partial_bottom() -> anyhow::Result<()> {

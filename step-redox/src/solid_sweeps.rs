@@ -334,7 +334,7 @@ fn detect_one_revolved_round_tail(
                         profile_y_axis,
                         path_tangent,
                         segments: vec![
-                            span.motion.clone(),
+                            span.motion,
                             RecoveredSweepSegment::Translation {
                                 vector_mm: translation,
                             },

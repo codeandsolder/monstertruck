@@ -14,10 +14,7 @@ use std::f64::consts::TAU;
 const GEOM_TOL_MM: f64 = TOL.solid_geometry_mm;
 
 /// Propose a circle; the returned support is not yet a curve certificate.
-pub(crate) fn propose_spline_circle(
-    curve: &NurbsCurve<Vector4>,
-    tolerance: f64,
-) -> Option<CircleSupport> {
+pub fn propose_spline_circle(curve: &NurbsCurve<Vector4>, tolerance: f64) -> Option<CircleSupport> {
     let candidate = propose_circle(curve.non_rationalized(), tolerance)?;
     let center = candidate.center;
     let normal = candidate.normal;
@@ -38,7 +35,7 @@ pub(crate) fn propose_spline_circle(
 /// circle is preferred when available; otherwise propose and prove one from
 /// the actual rational curve. Parameter orientation is recovered from the
 /// global angular proof, not derivative samples.
-pub(crate) fn normalize_circular_edge(
+pub fn normalize_circular_edge(
     edge: &OrientedEdgeUse,
     expected: Option<CircleSupport>,
 ) -> Option<OrientedEdgeUse> {
@@ -80,7 +77,7 @@ pub(crate) fn normalize_circular_edge(
     ((sweep.abs() - coverage.sweep_rad).abs() <= angle_tolerance).then_some(normalized)
 }
 
-pub(crate) fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
+pub fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
     let start = circle_angle_3d(edge.start_mm, circle)?;
     let end = circle_angle_3d(edge.end_mm, circle)?;
     let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
@@ -92,7 +89,7 @@ pub(crate) fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -
     ))
 }
 
-pub(crate) fn directional_sweep(start: f64, end: f64, increasing: bool, closed: bool) -> f64 {
+pub fn directional_sweep(start: f64, end: f64, increasing: bool, closed: bool) -> f64 {
     if closed {
         return if increasing { TAU } else { -TAU };
     }
@@ -103,7 +100,7 @@ pub(crate) fn directional_sweep(start: f64, end: f64, increasing: bool, closed: 
     }
 }
 
-pub(crate) fn circle_angle_3d(point: [f64; 3], circle: CircleSupport) -> Option<f64> {
+pub fn circle_angle_3d(point: [f64; 3], circle: CircleSupport) -> Option<f64> {
     let y_direction = normalize(
         cross(circle.normal, circle.x_direction),
         TOL.solid_direction,

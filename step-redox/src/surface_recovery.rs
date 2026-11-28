@@ -584,13 +584,13 @@ pub fn analyze_toroidal_surface(
         return None;
     }
     let weights = parsed.weights?;
-    let u = normalized_expanded_knots(
+    let u_knots = normalized_expanded_knots(
         parsed.u_degree,
         parsed.control_points.len(),
         &integer_parameter_list(&parsed.u_multiplicities)?,
         &numeric_parameter_list(&parsed.u_knots)?,
     )?;
-    let v = normalized_expanded_knots(
+    let v_knots = normalized_expanded_knots(
         parsed.v_degree,
         parsed.control_points.first()?.len(),
         &integer_parameter_list(&parsed.v_multiplicities)?,
@@ -621,7 +621,10 @@ pub fn analyze_toroidal_surface(
         })
         .collect::<Option<Vec<_>>>()?;
     let net = BsplineSurface::new(
-        (KnotVector::try_from(u).ok()?, KnotVector::try_from(v).ok()?),
+        (
+            KnotVector::try_from(u_knots).ok()?,
+            KnotVector::try_from(v_knots).ok()?,
+        ),
         controls,
     )
     .ok()?;

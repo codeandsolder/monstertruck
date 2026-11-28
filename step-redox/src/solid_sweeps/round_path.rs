@@ -56,7 +56,7 @@ impl Carrier {
         }
     }
 
-    fn radius(&self) -> Option<f64> {
+    const fn radius(&self) -> Option<f64> {
         match self {
             Self::Cylinder(run) => Some(run.radius_mm),
             Self::Torus(bend) => Some(bend.minor_radius_mm),
@@ -64,7 +64,7 @@ impl Carrier {
         }
     }
 
-    fn is_cap(&self) -> bool { matches!(self, Self::Cap(_)) }
+    const fn is_cap(&self) -> bool { matches!(self, Self::Cap(_)) }
 
     fn contains_section(&self, circle: CircleSupport, radius: f64) -> bool {
         if !near(circle.radius_mm, radius) {
@@ -278,7 +278,7 @@ struct Interface {
 }
 
 impl Interface {
-    fn other(self, group: usize) -> Option<usize> {
+    const fn other(self, group: usize) -> Option<usize> {
         let [a, b] = self.groups;
         if group == a {
             Some(b)
@@ -494,6 +494,11 @@ pub(super) fn bend_evidence(
     })
 }
 
+enum BendTrim {
+    CrossSection,
+    MajorInterval(f64, f64),
+}
+
 struct BendChart<'a> {
     bend: &'a TorusBend,
     start_radial: [f64; 3],
@@ -509,11 +514,7 @@ impl BendChart<'_> {
         (at <= self.angle.abs() + self.tolerance).then_some(at)
     }
 
-    fn edge_interval(
-        &self,
-        edge: &OrientedEdgeUse,
-        circle: CircleSupport,
-    ) -> Option<Option<(f64, f64)>> {
+    fn edge_interval(&self, edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<BendTrim> {
         for point in [edge.start_mm, edge.end_mm] {
             if !point_on_torus(point, self.bend) {
                 return None;
@@ -523,7 +524,7 @@ impl BendChart<'_> {
         match classify_torus_boundary_circle(&circle, self.bend)? {
             TorusBoundaryCircle::CrossSection { radial_direction } => {
                 self.station(radial_direction)?;
-                Some(None)
+                Some(BendTrim::CrossSection)
             }
             TorusBoundaryCircle::MajorTrace => {
                 let sweep = circle_edge_sweep(edge, circle)?;
@@ -538,7 +539,7 @@ impl BendChart<'_> {
                 let end = start + sweep.abs();
                 (sweep.abs() > TOL.source_sweep_curve_parameter
                     && end <= self.angle.abs() + self.tolerance)
-                    .then_some(Some((start, end)))
+                    .then_some(BendTrim::MajorInterval(start, end))
             }
         }
     }
@@ -552,8 +553,10 @@ impl BendChart<'_> {
                     let CurveSupport::Circle(circle) = edge.support else {
                         return None;
                     };
-                    if let Some(interval) = self.edge_interval(&edge, circle)? {
-                        intervals.push(interval)
+                    if let BendTrim::MajorInterval(start, end) =
+                        self.edge_interval(&edge, circle)?
+                    {
+                        intervals.push((start, end));
                     }
                 }
             }
