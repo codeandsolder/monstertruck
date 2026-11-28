@@ -129,7 +129,7 @@ pub fn summarize(
     let history = stats
         .refinement_passes
         .iter()
-        .map(|p| json!({"support_count":p.support_count,"split_supports":p.split_supports}))
+        .map(|p| json!({"support_count":p.support_count,"split_supports":p.split_supports,"split_facets":p.split_facets}))
         .collect::<Vec<_>>();
     let mut result = json!({
         "axes":axes,"candidates":stats.circular_candidates.iter().map(|c|candidate_summary(active,c)).collect::<Vec<_>>(),

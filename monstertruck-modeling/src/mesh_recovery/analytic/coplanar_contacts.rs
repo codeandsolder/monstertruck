@@ -261,7 +261,7 @@ mod tests {
         )?;
         let options = AnalyticRecoveryOptions::default();
         let original = analyze_mesh_evidence(&mesh, options.evidence)?;
-        let evidence = original.refine_planar_supports(&[original.source_planar_support[chord]])?;
+        let evidence = original.refine_source_facets(&[chord])?;
         let wrong = evidence.source_planar_support[chord];
         let plane = evidence.source_planar_support[chord + 1];
         assert_ne!(wrong, plane);

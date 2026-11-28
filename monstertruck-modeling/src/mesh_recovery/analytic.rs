@@ -233,8 +233,10 @@ pub struct AxisDiscoverySummary {
 pub struct SupportRefinementPass {
     /// Number of supports before splitting.
     pub support_count: usize,
-    /// Supports split into original polygons.
+    /// Number of parent planar supports affected.
     pub split_supports: usize,
+    /// Number of individually requested original facets.
+    pub split_facets: usize,
 }
 
 /// Evidence from a selected independently measured surface proposal.
@@ -504,7 +506,7 @@ fn refine_and_discover(
                 }
                 continue;
             };
-            split.extend(graph.mixed_support_refinements());
+            split.extend(graph.mixed_support_refinement_facets());
             // On the final (unchanged) pass, the exact same graph also
             // supplies discovery. Once any refinement is requested,
             // earlier proposals refer to obsolete support IDs and all
@@ -515,13 +517,19 @@ fn refine_and_discover(
         }
         passes.push(SupportRefinementPass {
             support_count: active.planar_supports.len(),
-            split_supports: split.len(),
+            split_supports: split
+                .iter()
+                .map(|&id| active.source_planar_support[id])
+                .collect::<BTreeSet<_>>()
+                .len(),
+            split_facets: split.len(),
         });
         if split.is_empty() {
             return Ok((active, passes, candidates.finish()));
         }
-        // Monotone, finite refinement: each split makes original singletons.
-        active = active.refine_planar_supports(&split.into_iter().collect::<Vec<_>>())?;
+        // Monotone, finite refinement: each request isolates a facet from
+        // a nonsingleton support. Unaffected connected planar domains survive.
+        active = active.refine_source_facets(&split.into_iter().collect::<Vec<_>>())?;
     }
 }
 
