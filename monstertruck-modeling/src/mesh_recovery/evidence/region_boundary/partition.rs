@@ -91,6 +91,61 @@ pub struct SurfaceRegionPartition {
 }
 
 impl<'a> RegionBoundaryIndex<'a> {
+    // The caller's known source accuracy limits every proposal family, even
+    // when an independently estimated feature-relative allowance is larger.
+    pub(in crate::mesh_recovery) const fn with_source_chord_budget(
+        mut self,
+        budget: Option<f64>,
+    ) -> Self {
+        self.source_chord_budget = budget;
+        self
+    }
+
+    fn support_chord_admissible(
+        &self,
+        support: usize,
+        carrier: SurfaceCarrier,
+        budget: f64,
+    ) -> bool {
+        match carrier {
+            SurfaceCarrier::LinearRevolution { .. } => {
+                // Bound the filled facet, not just its perimeter. The affine
+                // meridian certificate also covers the interior of n-gons.
+                super::rim_linear::absolute_facet_admissible(
+                    self.evidence,
+                    support,
+                    carrier,
+                    budget,
+                )
+                .is_some()
+            }
+            _ => self
+                .approximation_bound(
+                    &[support],
+                    carrier,
+                    budget,
+                    ApproximationBudget::Absolute(budget),
+                )
+                .is_some_and(|bound| bound <= 1.0),
+        }
+    }
+
+    // Recheck the original filled facets after an ownership/refit transaction.
+    // Region indices may have changed; original support membership has not.
+    pub(in crate::mesh_recovery) fn source_chord_violation(
+        &self,
+        partition: &SurfaceRegionPartition,
+        budget: f64,
+    ) -> Option<usize> {
+        (0..self.evidence.planar_supports.len()).find(|&support| {
+            partition
+                .region_by_support
+                .get(support)
+                .and_then(|&region| partition.carriers.get(region).copied().flatten())
+                .is_none_or(|carrier| !self.support_chord_admissible(support, carrier, budget))
+        })
+    }
+
     /// Rebuild connected ownership after a local carrier reassignment.
     /// Region IDs are the smallest source support in each connected component.
     pub(in crate::mesh_recovery) fn repartition_connected<L: Copy + Eq>(
@@ -242,7 +297,13 @@ impl<'a> RegionBoundaryIndex<'a> {
         }
         let relative_chord_bound =
             self.approximation_bound(supports, carrier, vertex_tolerance, approximation)?;
-        if relative_chord_bound > 1.0 {
+        if relative_chord_bound > 1.0
+            || self.source_chord_budget.is_some_and(|budget| {
+                supports
+                    .iter()
+                    .any(|&support| !self.support_chord_admissible(support, carrier, budget))
+            })
+        {
             return None;
         }
         Some(SurfaceRegionProposal {
@@ -362,16 +423,14 @@ impl<'a> RegionBoundaryIndex<'a> {
         let parent_by_support = planar_parents(self.evidence, planar_baseline)
             .ok_or(RegionBoundaryError::InvalidEvidence)?;
         let count = self.evidence.planar_supports.len();
-        let mut by_support = vec![Vec::new(); count];
-        for (id, proposal) in proposals.iter().enumerate() {
+        for proposal in proposals {
             if !std::ptr::eq(proposal.evidence, self.evidence) {
                 return Err(RegionBoundaryError::InvalidEvidence);
             }
             for &support in &proposal.supports {
-                by_support
-                    .get_mut(support)
-                    .ok_or(RegionBoundaryError::InvalidSupport(support))?
-                    .push(id);
+                if support >= count {
+                    return Err(RegionBoundaryError::InvalidSupport(support));
+                }
             }
         }
         let mut order = (0..proposals.len()).collect::<Vec<_>>();
@@ -391,6 +450,19 @@ impl<'a> RegionBoundaryIndex<'a> {
                 })
                 .then(a.cmp(&b))
         });
+        // Ownership optimization depends on membership and independent
+        // profile evidence, not on the number of geometrically distinct
+        // carriers on that membership. The highest-ranked representative
+        // dominates the identical conflicts and score of other variants.
+        // Keep their original proposal IDs available to native feedback.
+        let mut represented = std::collections::BTreeSet::new();
+        order.retain(|&id| represented.insert(proposals[id].supports.as_slice()));
+        let mut by_support = vec![Vec::new(); count];
+        for &id in &order {
+            for &support in &proposals[id].supports {
+                by_support[support].push(id);
+            }
+        }
         let mut components = overlap_components(proposals, &by_support, &order);
         let mut selected = Vec::new();
         let mut exact_components = 0;

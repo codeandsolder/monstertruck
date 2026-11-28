@@ -452,7 +452,7 @@ mod tests {
                     let volume = evidence.closed_source_volume().ok_or("closed source")?;
                     assert!((volume - if reversed { -1.0 } else { 1.0 }).abs() < 1e-12);
                     let recovered =
-                        recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+                        recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
                     let shell = recovered
                         .complete_shell()
                         .ok_or("closed recovered pyramids")?;

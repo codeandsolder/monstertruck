@@ -1,7 +1,7 @@
 //! Locally grow affine radial profiles from independently observed source
 //! circles, including irregular end trims and zero-radius cone tips.
 
-use super::super::super::sample_fit::normal_basis;
+use super::super::super::{carrier_identity::append_distinct_proposals, sample_fit::normal_basis};
 use super::super::{SourceCircleObservation, StationLinearCandidate};
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
@@ -54,6 +54,23 @@ impl Profile {
     }
 }
 
+fn azimuth_direction(angles: &mut [f64], u: Vector3, v: Vector3) -> Option<Vector3> {
+    angles.sort_unstable_by(f64::total_cmp);
+    angles.first().zip(angles.last()).map(|(&first, &last)| {
+        let mut gap = first + std::f64::consts::TAU - last;
+        let mut start = first;
+        for pair in angles.windows(2) {
+            if pair[1] - pair[0] > gap {
+                gap = pair[1] - pair[0];
+                start = pair[1];
+            }
+        }
+        let midpoint = (std::f64::consts::TAU - gap).mul_add(0.5, start);
+        let (sin, cos) = midpoint.sin_cos();
+        (u * cos + v * sin).normalize()
+    })
+}
+
 // A linear radial profile admits a bound on the entire filled facet.
 // For p = sum(w_i p_i) in its convex hull, r(p) = sum(w_i r_i).
 // Triangle inequality bounds rho(p) above. For one unit transverse
@@ -89,25 +106,13 @@ pub(super) fn facet_bound(
             }
             samples.push((radial, expected, rho));
         }
-        angles.sort_unstable_by(f64::total_cmp);
-        let first = *angles.first()?;
-        let last = *angles.last()?;
-        let mut gap = first + std::f64::consts::TAU - last;
-        let mut start = first;
-        for pair in angles.windows(2) {
-            if pair[1] - pair[0] > gap {
-                gap = pair[1] - pair[0];
-                start = pair[1];
-            }
-        }
-        let midpoint = (std::f64::consts::TAU - gap).mul_add(0.5, start);
-        let (sin, cos) = midpoint.sin_cos();
-        let direction = (u * cos + v * sin).normalize();
+        let direction = azimuth_direction(&mut angles, u, v);
         for (radial, expected, rho) in samples {
             let budget = fraction.mul_add(expected, tolerance);
-            let bound = (expected - radial.dot(direction))
-                .max(rho - expected)
-                .max(0.0);
+            // With no resolved azimuth, the zero lower bound on radial
+            // length still proves sufficiently small near-apex facets.
+            let lower = direction.map_or(0.0, |direction| radial.dot(direction));
+            let bound = (expected - lower).max(rho - expected).max(0.0);
             if !budget.is_finite() || budget <= 0.0 || bound > budget {
                 return None;
             }
@@ -115,6 +120,71 @@ pub(super) fn facet_bound(
         }
     }
     Some(maximum)
+}
+
+// Absolute spatial distance bound for the filled source polygon and the
+// physical cylindrical/conical carrier, including the correct apex ray.
+// The orthogonal distance to the infinite meridian line is |rho-r|/hypot(1,s).
+// Upper and lower radial residuals have the same convex-combination
+// certificate as the relative profile bound above. The subset on which
+// orthogonal projection falls beyond the apex is convex (r+s²*rho <= 0).
+// Its extreme points are original polygon vertices or lie on the zero
+// projection boundary, where apex distance equals the line distance.
+// Checking beyond-apex vertices therefore also bounds this entire subset.
+pub(super) fn absolute_facet_admissible(
+    evidence: &MeshEvidence,
+    support: usize,
+    carrier: SurfaceCarrier,
+    budget: f64,
+) -> Option<()> {
+    let profile = Profile::from_carrier(carrier)?;
+    let scale = profile.slope.hypot(1.0);
+    let meridian_budget = budget * scale;
+    if !meridian_budget.is_finite() || budget <= 0.0 {
+        return None;
+    }
+    let (u, v) = normal_basis(profile.axis);
+    for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
+        let ids = evidence.source_polygon_vertices(polygon)?;
+        let mut angles = Vec::with_capacity(ids.len());
+        let mut samples = Vec::with_capacity(ids.len());
+        let mut above = 0.0_f64;
+        let mut max_expected = 0.0_f64;
+        for &id in ids {
+            let (z, radial) = profile.sample(*evidence.positions.get(id)?);
+            let expected = profile.expected(z);
+            let rho = radial.magnitude();
+            if !expected.is_finite() || !rho.is_finite() {
+                return None;
+            }
+            if profile.slope == 0.0 {
+                if expected < 0.0 {
+                    return None;
+                }
+            } else if (rho * profile.slope).mul_add(profile.slope, expected) < 0.0
+                && rho.hypot(expected / profile.slope) > budget
+            {
+                return None;
+            }
+            if rho > 0.0 {
+                angles.push(radial.dot(v).atan2(radial.dot(u)));
+            }
+            above = above.max(rho - expected);
+            max_expected = max_expected.max(expected);
+            samples.push((radial, expected));
+        }
+        let below = azimuth_direction(&mut angles, u, v).map_or(max_expected, |direction| {
+            samples
+                .into_iter()
+                .map(|(radial, expected)| expected - radial.dot(direction))
+                .fold(0.0_f64, f64::max)
+                .min(max_expected)
+        });
+        if above.max(below) > meridian_budget {
+            return None;
+        }
+    }
+    Some(())
 }
 
 #[derive(Clone, Copy)]
@@ -380,12 +450,11 @@ impl<'a> LocalGrowth<'a> {
         })
     }
 
-    fn proposal(
+    fn seed_profile(
         &self,
-        index: &RegionBoundaryIndex<'a>,
         circle: &SourceCircleObservation,
         seed: usize,
-    ) -> Option<SurfaceRegionProposal<'a>> {
+    ) -> Option<(Profile, usize, f64)> {
         let mut profile = Profile {
             origin: circle.center,
             axis: circle.normal,
@@ -408,6 +477,16 @@ impl<'a> LocalGrowth<'a> {
             return None;
         }
         profile.slope = (radial.magnitude() - circle.radius) / z;
+        Some((profile, slope_sample, tolerance))
+    }
+
+    fn proposal(
+        &self,
+        index: &RegionBoundaryIndex<'a>,
+        circle: &SourceCircleObservation,
+        seed: usize,
+        (profile, slope_sample, tolerance): (Profile, usize, f64),
+    ) -> Option<SurfaceRegionProposal<'a>> {
         let supports = self.grow(profile, seed, tolerance);
         if supports.len() < 2 {
             return None;
@@ -689,22 +768,47 @@ impl<'a> RegionBoundaryIndex<'a> {
         let Some(growth) = LocalGrowth::new(self, options) else {
             return Vec::new();
         };
-        let mut proposals = Vec::new();
-        let mut seen = BTreeSet::new();
+        let Some(&reference) = self.evidence.positions.first() else {
+            return Vec::new();
+        };
+        let extent = self
+            .evidence
+            .positions
+            .iter()
+            .map(|&point| (point - reference).magnitude())
+            .fold(0.0_f64, f64::max);
+        let identity_tolerance = options.absolute_tolerance.min(crate::KERNEL_EPSILON * 0.1);
+        let mut candidates = Vec::new();
         for circle in circles {
-            let mut completed = BTreeSet::new();
+            let mut completed = Vec::<(f64, Vec<usize>)>::new();
+            // The same circle fixes all parameters except slope. Bound
+            // profile differences over the entire possible growth domain,
+            // not just the seed support, before skipping another seed.
+            let axial_extent = (reference - circle.center).dot(circle.normal).abs() + extent;
             for seed in growth.seeds(circle) {
-                if completed.contains(&seed) {
+                let Some(parameters) = growth.seed_profile(circle, seed) else {
+                    continue;
+                };
+                let slope = parameters.0.slope;
+                if completed.iter().any(|(previous, supports)| {
+                    supports.binary_search(&seed).is_ok()
+                        && (previous - slope).abs() * axial_extent <= identity_tolerance
+                }) {
                     continue;
                 }
-                if let Some(proposal) = growth.proposal(self, circle, seed) {
-                    completed.extend(proposal.supports().iter().copied());
-                    if seen.insert(proposal.supports().to_vec()) {
-                        proposals.push(proposal);
-                    }
+                if let Some(proposal) = growth.proposal(self, circle, seed, parameters) {
+                    completed.push((slope, proposal.supports().to_vec()));
+                    candidates.push(proposal);
                 }
             }
         }
+        let mut proposals = Vec::new();
+        append_distinct_proposals(
+            self.evidence,
+            candidates,
+            identity_tolerance,
+            &mut proposals,
+        );
         proposals
     }
 }
@@ -716,6 +820,46 @@ mod tests {
         CircleAxisOptions, EvidenceOptions, analyze_mesh_evidence, discover_circle_axes,
     };
     use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
+
+    #[test]
+    fn absolute_cone_bound_uses_spatial_distance_and_rejects_wrong_apex_ray()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let evidence_for = |points: Vec<Point3>| -> Result<_, Box<dyn std::error::Error>> {
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions: points,
+                    ..Default::default()
+                },
+                Faces::from_iter([[0, 1, 2]]),
+            )?;
+            Ok(crate::mesh_recovery::analyze_mesh_evidence(
+                &mesh,
+                Default::default(),
+            )?)
+        };
+        let carrier = |slope| SurfaceCarrier::LinearRevolution {
+            origin: Point3::new(0.0, 0.0, 0.0),
+            axis: Vector3::new(0.0, 0.0, 1.0),
+            radius_at_origin: 0.0,
+            slope,
+        };
+        let shallow = evidence_for(vec![
+            Point3::new(0.001, 0.0, -1.0),
+            Point3::new(0.001, 0.001, -1.0),
+            Point3::new(0.002, 0.0, -1.0),
+        ])?;
+        // Its radial residual is less than 0.02, but the physical cone ray
+        // is on the other side of the apex, about one unit away.
+        assert!(absolute_facet_admissible(&shallow, 0, carrier(0.01), 0.02).is_none());
+        let steep = evidence_for(vec![
+            Point3::new(4.04, 0.0, 1.0),
+            Point3::new(4.04, 0.001, 1.0),
+            Point3::new(4.041, 0.0, 1.0),
+        ])?;
+        // Radial residual ≈0.04, orthogonal meridian distance <0.01.
+        assert!(absolute_facet_admissible(&steep, 0, carrier(4.0), 0.011).is_some());
+        Ok(())
+    }
 
     fn options() -> RimLinearOptions {
         RimLinearOptions {
@@ -1202,7 +1346,7 @@ mod tests {
             .ok_or("missing apex-inclusive cone")?;
         assert!(p.independently_tested_profile());
         assert!(p.relative_chord_bound() < 1.0);
-        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
+        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, &Default::default())?;
         let shell = recovered
             .complete_shell()
             .ok_or("missing complete cone cap")?;

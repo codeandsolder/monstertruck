@@ -81,7 +81,7 @@ pub(super) fn expand(
     original: &SurfaceRegionPartition,
     assembly: &NativeAssembly,
     regions: &BTreeSet<usize>,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<Option<(SurfaceRegionPartition, BTreeSet<usize>, usize)>, AnalyticRecoveryError> {
     let policy = OwnershipGrowthOptions {
         maximum_adjustment: options.max_reconstruction_adjustment,
