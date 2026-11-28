@@ -551,7 +551,7 @@ mod tests {
         let source = surface(ElementarySurface::Sphere(Processor::new(raw)));
         let target = surface(ElementarySurface::Sphere(Processor::with_transform(
             raw,
-            Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::z()), (std::f64::consts::PI)),
+            Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::z()), std::f64::consts::PI),
         )));
         assert_eq!(
             same_surface_domain(&source, &target, 1.0e-9, 1.0e-9),

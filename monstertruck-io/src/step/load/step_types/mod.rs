@@ -25,9 +25,9 @@ use step_p21::{Holder, ast::Name, primitive::Logical, tables::PlaceHolder};
 use super::Table;
 use super::step_geometry::{
     self, AffinePoint, BsplineCurve, BsplineSurface, Conic2D, Conic3D, Curve2D, Curve3D,
-    ElementarySurface, GeometryTransform, Homogeneous, InnerProduct, IntersectionCurve, Invertible,
+    ElementarySurface, GeometryTransform, Homogeneous, IntersectionCurve, Invertible,
     KERNEL_EPSILON, KnotVector, Matrix3, Matrix4, NurbsCurve, NurbsSurface, Origin, Point2, Point3,
-    PolylineCurve, Processor, RevolutionSurface, SearchNearestParameter, Sphere, SquareLinearMap,
+    PolylineCurve, Processor, RevolutionSurface, SearchNearestParameter, Sphere,
     StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
     Tolerance, Torus, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector2,
     Vector3, Vector4, Zero,

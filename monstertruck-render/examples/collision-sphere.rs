@@ -51,7 +51,7 @@ impl App for MyApp {
             matrix: matrix
                 .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective((std::f64::consts::PI / 4.0)),
+            method: ProjectionMethod::perspective(std::f64::consts::PI / 4.0),
             near_clip: 0.1,
             far_clip: 40.0,
         };

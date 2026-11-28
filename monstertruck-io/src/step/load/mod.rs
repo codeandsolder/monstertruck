@@ -86,7 +86,7 @@ impl From<String> for LoadError {
 use step_geometry::{
     AffinePoint, Curve3D, InnerProduct, IntersectionCurve, Invertible, KERNEL_EPSILON, Matrix3,
     Matrix4, MetricSpace, ParametricSurface3D, Point2, Point3, PolylineCurve,
-    SearchNearestParameter, SearchParameter, SquareLinearMap, Surface,
+    SearchNearestParameter, SearchParameter, Surface,
 };
 pub use step_types::*;
 

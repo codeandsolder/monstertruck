@@ -11,12 +11,11 @@ use super::step_geometry::{
 use super::{
     AffinePoint, Assembly, BoundResolution, Curve3D, EdgeAnyHolder, EdgeCurve, EdgeCurveHolder,
     EdgeEntity, EdgeLoopHolder, EntityTable, FaceAnyHolder, FaceBoundHolder, FaceSurfaceHolder,
-    GeometricCurveSetHolder, GeometricSetSelect, HashMap, InnerProduct, IntersectionCurve,
-    IntoOwned, Invertible, ItemDefinedTransformation, KERNEL_EPSILON, LoadError,
-    ManifoldSolidBrepHolder, Matrix3, Matrix4, MetricSpace, Name,
-    NextAssemblyUsageOccurrenceHolder, NodeEntity, OrientedShellHolder, ParametricSurface3D,
-    PlaceHolder, Point2, Point3, PolylineCurve, ProductDefinitionHolder, Result,
-    SearchNearestParameter, SearchParameter, ShellAnyHolder, ShellBasedSurfaceModelHolder,
+    GeometricCurveSetHolder, GeometricSetSelect, HashMap, IntersectionCurve, IntoOwned, Invertible,
+    ItemDefinedTransformation, KERNEL_EPSILON, LoadError, ManifoldSolidBrepHolder, Matrix3,
+    Matrix4, MetricSpace, Name, NextAssemblyUsageOccurrenceHolder, NodeEntity, OrientedShellHolder,
+    ParametricSurface3D, PlaceHolder, Point2, Point3, PolylineCurve, ProductDefinitionHolder,
+    Result, SearchNearestParameter, SearchParameter, ShellAnyHolder, ShellBasedSurfaceModelHolder,
     ShellHolder, ShellLoadReport, StepConvertingError, Surface, SurfaceAny, Table,
     VertexPointHolder, step_geometry, step_p21,
 };

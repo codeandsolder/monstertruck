@@ -1316,7 +1316,7 @@ fn tilted_great_circle_on_sphere_is_not_claimed_as_exact_uv_line() {
     let surface = Surface::Elementary(ElementarySurface::Sphere(sphere));
     let curve = Curve3D::Conic(Conic3D::Ellipse(
         Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU))).transformed(
-            Matrix4::from_axis_angle(&Vector3::y_axis(), (std::f64::consts::FRAC_PI_4)),
+            Matrix4::from_axis_angle(&Vector3::y_axis(), std::f64::consts::FRAC_PI_4),
         ),
     ));
 

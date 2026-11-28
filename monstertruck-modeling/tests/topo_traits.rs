@@ -508,7 +508,7 @@ fn shell_multi_sweep() {
 struct CircleMapping;
 impl GeometricMapping<Point3> for CircleMapping {
     fn mapping(self) -> impl Fn(&Point3) -> Point3 {
-        move |p| Matrix4::from_axis_angle(&Vector3::y_axis(), (PI / 2.0)).apply_point(*p)
+        move |p| Matrix4::from_axis_angle(&Vector3::y_axis(), PI / 2.0).apply_point(*p)
     }
 }
 impl GeometricMapping<Line> for CircleMapping {
@@ -519,7 +519,7 @@ impl GeometricMapping<Line> for CircleMapping {
 }
 impl GeometricMapping<Surface> for CircleMapping {
     fn mapping(self) -> impl Fn(&Surface) -> Surface {
-        move |surface| surface.transformed(Matrix4::from_axis_angle(&Vector3::y_axis(), (PI / 2.0)))
+        move |surface| surface.transformed(Matrix4::from_axis_angle(&Vector3::y_axis(), PI / 2.0))
     }
 }
 

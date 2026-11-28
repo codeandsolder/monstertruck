@@ -6,7 +6,7 @@ use monstertruck_modeling::mesh_recovery::{
     CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, RegionContactGraph,
     SurfaceCarrier, measure_circular_meridian,
 };
-use monstertruck_modeling::{InnerProduct, Point3, Vector3};
+use monstertruck_modeling::{Point3, Vector3};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -67,8 +67,7 @@ use monstertruck_io::step::load::{
     step_geometry::{
         Curve3D, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
         re_exports::{
-            AffinePoint, InnerProduct, ParametricCurve, ParametricSurface, ParametricSurface3D,
-            Point3, Vector3,
+            AffinePoint, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Vector3,
         },
     },
 };
@@ -432,7 +431,7 @@ fn argmin_on_span(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
 /// Native math types are available through the STEP geometry prelude.
 mod matrix {
     use monstertruck_io::step::load::step_geometry::re_exports::{
-        GeometryTransform, Matrix4, Point3, SquareLinearMap,
+        GeometryTransform, Matrix4, Point3,
     };
 
     pub fn invert(matrix: &Matrix4) -> Option<Matrix4> { matrix.try_inverse() }

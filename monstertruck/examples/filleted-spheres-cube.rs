@@ -178,13 +178,12 @@ fn sampled_face_trim(edge: &Edge, surface: &Surface, tolerance: f64) -> Option<E
             .into_iter()
             .map(|point| {
                 let uv = surface
-                    .search_parameter(point, hint.map(Into::into), 50)
-                    .or_else(|| surface.search_nearest_parameter(point, hint.map(Into::into), 50))
+                    .search_parameter(point, hint, 50)
+                    .or_else(|| surface.search_nearest_parameter(point, hint, 50))
                     .or_else(|| surface.search_parameter(point, None, 50))
-                    .or_else(|| surface.search_nearest_parameter(point, None, 50))
-                    .map(Point2::from)?;
+                    .or_else(|| surface.search_nearest_parameter(point, None, 50))?;
                 hint = Some(uv);
-                Some(uv)
+                Some(Point2::new(uv.0, uv.1))
             })
             .collect::<Option<Vec<_>>>()?;
         if boundary.len() < 2 {

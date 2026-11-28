@@ -6,7 +6,7 @@ use monstertruck_io::step::load::{
     Table,
     convert::StepCompressedTrimmedShell,
     step_geometry::{
-        BoundedCurve, Curve3D, ElementarySurface, InnerProduct, MetricSpace, ParameterBoundary2D,
+        BoundedCurve, Curve3D, ElementarySurface, MetricSpace, ParameterBoundary2D,
         ParameterDivision1D, Point3, PolygonMesh, PolylineCurve, SearchNearestParameter,
         SearchParameter, Surface, SweepSurface,
     },

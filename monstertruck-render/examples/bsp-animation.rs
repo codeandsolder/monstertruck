@@ -9,7 +9,7 @@ use monstertruck_gpu::{
     BackendBufferConfig, Camera, Light, LightType, StudioConfig, WindowScene, WindowSceneDescriptor,
 };
 use monstertruck_modeling::{
-    BoundedSurface, BsplineSurface, InnerProduct, KnotVector, Matrix4, Point3, Vector3, Vector4,
+    BoundedSurface, BsplineSurface, KnotVector, Matrix4, Point3, Vector3, Vector4,
 };
 use monstertruck_render::{
     CreatorCreator, InstanceCreator, PolygonInstance, PolygonState, StructuredMesh,

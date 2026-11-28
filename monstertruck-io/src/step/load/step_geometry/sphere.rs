@@ -4,7 +4,6 @@ use super::{
     Vector3,
 };
 #[cfg(test)]
-use monstertruck_geometry::prelude::InnerProduct;
 use std::f64::consts::PI;
 use std::ops::Bound;
 impl ParametricSurface for Sphere {
