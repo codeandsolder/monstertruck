@@ -37,7 +37,7 @@ fn test_scene(backend: Backends) -> common::TestResult<Scene> {
             studio: StudioConfig {
                 camera: Camera {
                     matrix: camera_matrix,
-                    method: ProjectionMethod::perspective((std::f64::consts::PI / 4.0)),
+                    method: ProjectionMethod::perspective(std::f64::consts::PI / 4.0),
                     near_clip: 0.1,
                     far_clip: 100.0,
                 },
