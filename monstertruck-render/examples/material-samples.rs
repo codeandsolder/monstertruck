@@ -10,7 +10,7 @@
 //! and no roughness in microfacet.
 
 mod app;
-use app::{App, AppResult, async_trait};
+use app::{App, AppResult};
 use monstertruck_gpu::{
     BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
     WindowSceneDescriptor, wgpu,
@@ -31,7 +31,6 @@ struct MyApp {
     matrices: Vec<Matrix4>,
 }
 
-#[async_trait(?Send)]
 impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let side_length = f64::from(N + 1) * 1.5;

@@ -1,6 +1,6 @@
 use crate::PolygonMesh;
 use derive_more::{Deref, DerefMut, From, Into};
-use gloo::console;
+use gloo_console as console;
 use monstertruck_io::step::load::Table as StepTable;
 use monstertruck_io::step::load::step_geometry::{Curve3D, Point3, Surface};
 use monstertruck_meshing::tessellation::{MeshedShape, RobustMeshableShape};

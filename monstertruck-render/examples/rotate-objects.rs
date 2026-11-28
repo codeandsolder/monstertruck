@@ -24,7 +24,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 mod app;
-use app::{App, AppResult, ControlFlow, async_trait};
+use app::{App, AppResult, ControlFlow};
 
 const NUM_OF_OBJECTS: u32 = 8;
 
@@ -135,7 +135,6 @@ impl MyRender {
     }
 }
 
-#[async_trait(?Send)]
 impl App for MyRender {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
