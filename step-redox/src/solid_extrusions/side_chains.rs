@@ -3,11 +3,12 @@
 //! the number of STEP edges representing them.
 
 use super::{
-    ANGLE_TOL_RAD, DIR_TOL, FaceInfo, GEOM_TOL_MM, OrientedEdgeUse, TAU, add, circle_edge_sweep,
-    cross, distance, dot, norm, normalize, raw_loop_is_continuous, side_support_residual, sub,
+    ANGLE_TOL_RAD, DIR_TOL, FaceInfo, GEOM_TOL_MM, OrientedEdgeUse, TAU, add, cross, distance, dot,
+    norm, normalize, raw_loop_is_continuous, side_support_residual, sub,
     translated_profile_edge_residual,
 };
 use crate::brep::{CircleSupport, CurveSupport, CylinderSupport, SurfaceSupport};
+use crate::circular_edges::circle_edge_sweep;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq)]

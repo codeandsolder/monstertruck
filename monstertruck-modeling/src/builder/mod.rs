@@ -722,8 +722,14 @@ fn normalize_composite_segments(
                 {
                     return Err(Error::InvalidCompositeSweepSegment);
                 }
-                let axis = axis / axis_magnitude;
-                let part_angle = angle / crate::usize_to_f64(division);
+                // All segment connectors must agree on the oriented axis.
+                // A negative arc around an unchanged revolution axis produces
+                // a reversed surface normal when the final segment is joined
+                // directly to the original wire instead of calling revolve().
+                // Canonicalize signed rotations before either construction.
+                let sign = angle.0.signum();
+                let axis = axis * (sign / axis_magnitude);
+                let part_angle = Rad(angle.0.abs() / crate::usize_to_f64(division));
                 normalized.extend((0..division).map(|_| ValidatedCompositeSegment::Rotation {
                     origin,
                     axis,

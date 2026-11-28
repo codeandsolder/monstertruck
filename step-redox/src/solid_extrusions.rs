@@ -2,6 +2,7 @@ use crate::brep::{
     self, BSplineSupport, CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport,
     SurfaceSupport,
 };
+use crate::circular_edges::{circle_angle_3d, circle_edge_sweep, directional_sweep};
 use crate::math2::{
     cross as cross2, distance as distance2, dot as dot2, norm as norm2, normalize as normalize2,
     sub as sub2,
@@ -2643,42 +2644,6 @@ fn merged_source_ids(first: &[u64], second: &[u64]) -> Vec<u64> {
     ids.sort_unstable();
     ids.dedup();
     ids
-}
-
-pub fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
-    let start = circle_angle_3d(edge.start_mm, circle)?;
-    let end = circle_angle_3d(edge.end_mm, circle)?;
-    let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
-    Some(directional_sweep(
-        start,
-        end,
-        edge.parameter_forward,
-        closed,
-    ))
-}
-
-fn directional_sweep(start: f64, end: f64, increasing: bool, closed: bool) -> f64 {
-    if closed {
-        return if increasing { TAU } else { -TAU };
-    }
-    if increasing {
-        (end - start).rem_euclid(TAU)
-    } else {
-        -((start - end).rem_euclid(TAU))
-    }
-}
-
-fn circle_angle_3d(point: [f64; 3], circle: CircleSupport) -> Option<f64> {
-    let y_direction = normalize(cross(circle.normal, circle.x_direction))?;
-    let relative = sub(point, circle.center_mm);
-    if dot(relative, circle.normal).abs() > GEOM_TOL_MM {
-        return None;
-    }
-    let radial = norm(relative);
-    if (radial - circle.radius_mm).abs() > GEOM_TOL_MM {
-        return None;
-    }
-    Some(dot(relative, y_direction).atan2(dot(relative, circle.x_direction)))
 }
 
 fn point_angle_2d(point: [f64; 2], center: [f64; 2]) -> Option<f64> {

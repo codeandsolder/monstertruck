@@ -10,10 +10,10 @@ use super::{
     same_torus, torus_major_direction,
 };
 use crate::brep::{CircleSupport, CurveSupport, OrientedEdgeUse, PlaneSupport, SurfaceSupport};
+use crate::circular_edges::circle_edge_sweep;
 use crate::circular_edges::normalize_circular_edge;
 use crate::math3::{cross, distance, dot, mul, norm, normalize, point_to_unit_line_distance, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
-use crate::solid_extrusions::circle_edge_sweep;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES as TOL;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::f64::consts::TAU;
