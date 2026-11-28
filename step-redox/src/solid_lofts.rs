@@ -9,11 +9,11 @@ use crate::cad_ir::{CadModel, CadNode, LoftSection, Profile2d, RigidTransform};
 use crate::cad_recovery::{CadFragment, CadFragmentSource};
 use crate::math3::{cross, distance, dot, normalize, sub};
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use step_p21::ast::EntityInstance;
 
-const TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.loft_direction;
 
 #[derive(Clone, Copy)]
@@ -256,7 +256,7 @@ fn candidate(
         .collect::<Option<Vec<_>>>()?;
     let cap_ids = face_partition_proven(solid, &sections, axis)?;
     let span = sections.last()?.level - sections.first()?.level;
-    if span <= TOL_MM {
+    if span <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
         return None;
     }
     let transforms = sections
@@ -494,7 +494,7 @@ fn terminal_ruled_extension(solid: &ReducedSolid, cap: &ReducedFace) -> Option<R
         .map(|edge| matching_shoulder.get(&edge.start_vertex).copied())
         .collect::<Option<Vec<_>>>()?;
     let depth = dot(sub(shoulder_vertices[0].point, origin), axis);
-    if depth.abs() <= TOL_MM
+    if depth.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || shoulder_vertices
             .iter()
             .any(|v| (dot(sub(v.point, origin), axis) - depth).abs() > TOL_MM)
@@ -836,7 +836,9 @@ fn terminal_sectioned_ruled_extension(
         };
         let previous = sections.last()?;
         let delta = stage.level - previous.level;
-        if delta.abs() <= TOL_MM || (direction != 0.0 && delta.signum() != direction.signum()) {
+        if delta.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+            || (direction != 0.0 && delta.signum() != direction.signum())
+        {
             break;
         }
         if propagate_wall_slopes(solid, &walls, previous, &mut stage, [x, y, axis], origin)

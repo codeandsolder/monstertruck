@@ -1,7 +1,7 @@
 use crate::brep::{self, BSplineSupport, CurveSupport, SplineExtrusionSupport, SurfaceSupport};
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use num_traits::ToPrimitive;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -12,7 +12,7 @@ const DIRECTION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_direction_qua
 const SCALAR_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_scalar_quant_mm;
 const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
 const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
-pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
+pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 
 mod bounded;
 mod cell_correspondence;
@@ -871,7 +871,7 @@ fn normalize_linear_chains(
                 let first = dot(a, direction);
                 let second = dot(b, direction);
                 let overlap = first.max(second).min(length) - first.min(second).max(0.);
-                if overlap > ANALYTIC_BOUNDARY_PROOF_TOL_MM {
+                if overlap > DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
                     return Err("overlapping linear boundary intervals".into());
                 }
             }
@@ -957,7 +957,7 @@ fn edge_is_proven_closed_circle(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     if edge.start_vertex != edge.end_vertex {
         return false;
     }
@@ -1016,7 +1016,7 @@ fn resolve_geometric_curve_support(
 }
 
 fn bspline_line_support(spline: &BSplineSupport) -> Option<brep::LineSupport> {
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     if spline.control_points_mm.len() < 2 {
         return None;
     }
@@ -1074,7 +1074,7 @@ fn circle_section_of_plane_and_support(
     other: &SupportLocusKey,
 ) -> Option<([f64; 3], [f64; 3], f64)> {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let SupportLocusKey::Plane { normal, offset_mm } = plane else {
         return None;
     };
@@ -1136,7 +1136,7 @@ fn bspline_is_circular_section_of_supports(
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
 ) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let section = circle_section_of_plane_and_support(&loci[0], &loci[1])
         .or_else(|| circle_section_of_plane_and_support(&loci[1], &loci[0]));
     let Some((center, axis, radius)) = section else {
@@ -1148,7 +1148,7 @@ fn bspline_is_circular_section_of_supports(
 /// A point on the single physical cone nappe. Checking a quadratic cone
 /// equation alone would incorrectly identify both nappes as one carrier.
 fn point_lies_on_cone_nappe(point: [f64; 3], locus: &SupportLocusKey) -> bool {
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let SupportLocusKey::Cone {
         apex_mm,
         axis,
@@ -1181,7 +1181,7 @@ fn line_segment_lies_on_cone(
     locus: &SupportLocusKey,
 ) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(start) = dequantize_vector(endpoints_mm[0], POINT_Q_MM) else {
         return false;
     };
@@ -1206,7 +1206,7 @@ fn line_segment_lies_on_cone(
 
 fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     match (&loci[0], &loci[1]) {
         (
             SupportLocusKey::Plane { normal: first, .. },
@@ -1283,7 +1283,7 @@ fn support_pair_can_intersect(loci: &[SupportLocusKey; 2]) -> bool {
 
 fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(direction) = normalize(line.direction, 0.0) else {
         return false;
     };
@@ -1326,7 +1326,7 @@ fn line_lies_on_support(line: brep::LineSupport, support: &SupportLocusKey) -> b
 
 fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey) -> bool {
     const ANGULAR_TOLERANCE: f64 = 4.0 * DIRECTION_Q;
-    const LOCUS_TOLERANCE_MM: f64 = 4.0 * SCALAR_Q_MM;
+    const LOCUS_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
     let Some(normal) = normalize(circle.normal, 0.0) else {
         return false;
     };
@@ -1377,7 +1377,7 @@ fn circle_lies_on_support(circle: brep::CircleSupport, support: &SupportLocusKey
             let axial = dot(delta, axis);
             let signed_axial = if *positive_nappe { axial } else { -axial };
             let radial_center = sub(delta, mul(axis, axial));
-            signed_axial > LOCUS_TOLERANCE_MM
+            signed_axial > 0.0
                 && norm(cross(normal, axis)) <= ANGULAR_TOLERANCE
                 && norm(radial_center) <= LOCUS_TOLERANCE_MM
                 && signed_axial.mul_add(-slope, circle.radius_mm).abs() <= LOCUS_TOLERANCE_MM
@@ -1415,7 +1415,7 @@ fn boundary_surface_support(
             surface_id,
             entities,
             index,
-            DEFAULT_STEP_RECOVERY_TOLERANCES.source_analytic_fit_mm,
+            NATIVE_STEP_RECOVERY_MM,
         )
     {
         return SurfaceSupport::Plane(brep::PlaneSupport {
@@ -1582,7 +1582,7 @@ fn spline_extrusion_cylinder_key(
     forward: bool,
     cells: &mut CellWitnesses,
 ) -> Option<OrientedSupportKey> {
-    const FIT_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.source_analytic_fit_mm;
+    const FIT_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 
     if surface.max_residual_mm > FIT_TOL_MM {
         return None;
@@ -1963,7 +1963,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_boundary_cell_crossings_preserve_the_original_quantum() -> anyhow::Result<()> {
+    fn complete_boundary_cell_crossings_obey_physical_accuracy() -> anyhow::Result<()> {
         let fixtures = [
             (
                 15,
@@ -1988,11 +1988,13 @@ mod tests {
                 assert_ne!(result.first.signature, result.second.signature);
                 result.equivalent
             };
-            // Crossing a cell boundary by 0.02 quantum is admissible, but
-            // even neighbouring cell indices do not prove a 1.8-quantum gap.
+            // The quantization grid is not a reconstruction tolerance.
+            // Verify sub-budget and excessive translations of complete solids.
             assert!(compare(0.49, 0.51), "solid #{solid}");
             assert!(compare(0.51, 0.49), "solid #{solid}: symmetry");
-            assert!(!compare(-0.4, 1.4), "solid #{solid}: excessive gap");
+            assert!(compare(-40.0, 40.0), "solid #{solid}: 8 nm");
+            assert!(compare(40.0, -40.0), "solid #{solid}: 8 nm reversed");
+            assert!(!compare(-60.0, 60.0), "solid #{solid}: 12 nm");
         }
         Ok(())
     }

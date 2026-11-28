@@ -93,15 +93,17 @@ fn reads_representation_length_uncertainty_with_hard_cap() -> anyhow::Result<()>
             })
             .map(entity_id)
             .ok_or_else(|| anyhow::anyhow!("fixture has no MANIFOLD_SOLID_BREP"))?;
-        Ok(source_tolerance_by_representation_item(entities, &index)
-            .get(&solid_id)
-            .copied())
+        Ok(
+            declared_source_uncertainty_by_representation_item(entities, &index)
+                .get(&solid_id)
+                .copied(),
+        )
     }
 
     let source = std::str::from_utf8(include_bytes!(
         "../../validation/fixtures/native_conical_frustum.step"
     ))?;
-    assert_eq!(tolerance_from(source)?, Some(GEOM_TOL_MM));
+    assert_eq!(tolerance_from(source)?, Some(1.0e-7));
 
     let widened = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-06)", 1);
     assert!(
@@ -586,13 +588,9 @@ fn cone_profile_uses_neighbor_constraint_plus_repeated_trim_circle() -> anyhow::
         index: &index,
     };
 
-    assert!(
+    let (segment, residual) =
         test_linear_profile_segment(0, &cone_face, &context, REVOLUTION_SOURCE_SUPPORT_TOL_MM)
-            .is_none()
-    );
-
-    let (segment, residual) = test_linear_profile_segment(0, &cone_face, &context, 1.0e-5)
-        .ok_or_else(|| anyhow::anyhow!("expected recovered test geometry"))?;
+            .ok_or_else(|| anyhow::anyhow!("expected recovered test geometry"))?;
 
     // The cylinder constrains radius while preserving the repeated trim-circle
     // axial coordinate; the plane constrains axial position while preserving
@@ -600,8 +598,8 @@ fn cone_profile_uses_neighbor_constraint_plus_repeated_trim_circle() -> anyhow::
     // sole source of truth when its own parameters disagree within STEP uncertainty.
     assert_eq!(segment.a, [1.5, 0.5000005]);
     assert_eq!(segment.b, [2.0000004, 1.0]);
-    assert!(residual > REVOLUTION_SOURCE_SUPPORT_TOL_MM);
-    assert!(residual < 1.0e-5);
+    assert!(residual > DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm);
+    assert!(residual <= REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     Ok(())
 }
 

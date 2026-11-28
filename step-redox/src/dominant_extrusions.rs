@@ -2,11 +2,11 @@ use crate::math3::{canonical_direction, dot, norm};
 use crate::solid_revolutions::{
     SolidFaceSignature, SolidSurfaceGeometrySignature, SolidSurfaceSignature,
 };
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::cmp::Ordering;
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.dominant_extrusion_direction;
 const MIN_COMPATIBLE_SIDE_FRACTION: f64 = 0.5;
 

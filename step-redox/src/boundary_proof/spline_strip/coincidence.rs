@@ -394,7 +394,7 @@ pub struct SplineCapPrecisionGap {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SplineCapPrecisionAudit {
     pub solid_id: u64,
-    pub authored_uncertainty_mm: f64,
+    pub authored_uncertainty_mm: Option<f64>,
     pub target_bound_mm: f64,
     pub strip_faces: usize,
     pub fully_certified_strip_faces: usize,
@@ -460,12 +460,12 @@ fn verify_source_strip_cap_rows(
 /// Read-only STEP/source-context precision audit for complete B-spline strips.
 ///
 /// Cap curves are independently bounded against the two source surface rows.
-/// Source uncertainty must be explicit, unit-correct, and subject to the
-/// existing revolution uncertainty ceiling; no default precision is assumed.
+/// An explicit requested bound uses the project physical budget, independent
+/// of author metadata. With no requested bound, audit the declared precision.
 /// This is not the strict complete-source boundary proof.
 ///
 /// # Errors
-/// Invalid STEP structure, missing source solid or uncertainty context, or
+/// Invalid STEP structure, missing source solid or required uncertainty, or
 /// unresolvable/conflicting source length unit.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub fn audit_source_spline_cap_precision(
@@ -490,15 +490,15 @@ pub fn audit_source_spline_cap_precision(
     let declared = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
         entities, &index,
     );
-    let authored_uncertainty_mm = *declared
-        .get(&solid_id)
-        .context("missing trusted source-declared precision")?;
-    let target_bound_mm = requested_bound_mm.unwrap_or(authored_uncertainty_mm);
+    let authored_uncertainty_mm = declared.get(&solid_id).copied();
+    let target_bound_mm = requested_bound_mm
+        .or(authored_uncertainty_mm)
+        .context("missing requested or source-declared precision")?;
     ensure!(
         target_bound_mm.is_finite()
             && target_bound_mm > 0.0
-            && target_bound_mm <= authored_uncertainty_mm,
-        "requested bound must be positive and no larger than author-declared STEP uncertainty",
+            && target_bound_mm <= monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        "requested bound must be positive and within native recovery accuracy",
     );
     let mm_per_unit = crate::source_edge_locus::source_solid_length_scale_mm(solid_id, entities)?;
     let coordinate_tolerance = target_bound_mm / mm_per_unit;
@@ -639,8 +639,8 @@ mod tests {
         assert_eq!(report.cap_witnesses.len(), 26);
         assert_eq!(report.unresolved_strip_faces.len(), 0);
         assert_eq!(
-            report.authored_uncertainty_mm.to_bits(),
-            1.0e-5_f64.to_bits()
+            report.authored_uncertainty_mm.map(f64::to_bits),
+            Some(1.0e-5_f64.to_bits())
         );
         let maximum = report
             .cap_witnesses
@@ -648,7 +648,7 @@ mod tests {
             .map(|e| e.bound_mm)
             .reduce(f64::max)
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
-        assert!(maximum <= report.authored_uncertainty_mm);
+        assert!(maximum <= report.target_bound_mm);
 
         let strict =
             audit_source_spline_cap_precision(original, 0, *solid, Some(super::super::TOL))?;
@@ -683,7 +683,7 @@ mod tests {
                 original,
                 0,
                 *solid,
-                Some(2.0 * report.authored_uncertainty_mm)
+                Some(2.0 * report.target_bound_mm)
             )
             .is_err()
         );
@@ -694,7 +694,7 @@ mod tests {
         assert_ne!(micron_precision, original_utf8);
         let narrow =
             audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid, None)?;
-        assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
+        assert_eq!(narrow.authored_uncertainty_mm, Some(1.0e-9));
         assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
         assert_eq!(
             narrow.unresolved_strip_faces.len(),
@@ -722,7 +722,7 @@ mod tests {
         assert!(independent_oblique.unresolved_strip_faces.is_empty());
 
         eprintln!(
-            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
+            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {:?} mm",
             report.fully_certified_strip_faces,
             report.cap_witnesses.len(),
             maximum,

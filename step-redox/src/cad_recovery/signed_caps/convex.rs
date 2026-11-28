@@ -5,9 +5,9 @@
 use crate::{
     math2, math3, profile_curves::RecoveredProfileCurve, solid_extrusions::RecoveredSolidExtrusion,
 };
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 
-const TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const TOL: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 type Plane2 = ([f64; 2], f64);

@@ -15,6 +15,7 @@ use super::{
     discover_circle_axes, measure_curvature_spatial, trace_curvature_tracks,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
+use monstertruck_core::tolerance::MESH_RECOVERY_MM;
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::BTreeSet;
@@ -96,7 +97,7 @@ impl Default for AnalyticRecoveryOptions {
             source_chord_budget: None,
             max_partition_search_nodes: 100_000,
             max_trim_interval_edges: 128,
-            max_reconstruction_adjustment: 0.01,
+            max_reconstruction_adjustment: MESH_RECOVERY_MM,
             source_position_uncertainty: 0.0,
             max_joint_fit_trials: 8,
             max_carrier_trials: 8,

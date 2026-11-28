@@ -1,11 +1,11 @@
 use crate::step_entities::{cartesian_point, number as numeric_value};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const MIN_FAMILY_INSTANCES: usize = 4;
 const MIN_LATTICE_FAMILY_VOTES: usize = 4;
 

@@ -1,14 +1,14 @@
 use crate::math3::{canonical_direction, cross, dot, norm, normalize as normalize3};
 use crate::step_entities::{cartesian_point, direction_components, named_entity_parameters};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record};
 
 use crate::patterns::{InstancePattern, linear_pattern_sites};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

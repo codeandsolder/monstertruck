@@ -35,7 +35,7 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
         carrier(intersection.surface1())?,
     ];
     let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
-        .solid_geometry_mm
+        .numerical_geometry_mm
         .min(tolerance);
     // Use a finer sampling budget than the requested export accuracy, since
     // the whole-polyline bound amplifies carrier errors near tangency.

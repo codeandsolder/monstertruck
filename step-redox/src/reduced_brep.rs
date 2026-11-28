@@ -8,7 +8,7 @@ use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::EntityInstance;
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.reduced_brep_direction;
 
 /// Geometry/topology view used by inverse-feature reducers.

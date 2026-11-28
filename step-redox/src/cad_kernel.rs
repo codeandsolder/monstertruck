@@ -1,6 +1,6 @@
 use crate::cad_ir::{CadModel, NodeId};
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 
 /// User-facing geometry accuracy contract at the unit-aware Step Redox boundary.
 ///
@@ -16,9 +16,8 @@ pub enum GeometryPolicy {
 }
 
 impl GeometryPolicy {
-    /// Project-wide Standard preset: 0.01 mm.
-    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
-        DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
+    /// Project-wide native reconstruction preset: 10 nm.
+    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 
     #[must_use = "The returned policy configures the requested millimeter tolerance."]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
@@ -382,7 +381,7 @@ pub mod monstertruck {
         tolerance: f64,
     ) -> Option<Vec<Point3>> {
         let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
-            .solid_geometry_mm
+            .numerical_geometry_mm
             .min(tolerance);
         let globally_proven = matches!(guide, Curve::NurbsCurve(_))
             && surfaces.iter().all(|&carrier| {
@@ -3192,10 +3191,10 @@ pub mod monstertruck {
         }
 
         #[test]
-        fn project_standard_maps_exactly_to_point_zero_one_mm() {
+        fn project_standard_maps_to_native_recovery_accuracy() {
             assert_eq!(
                 monstertruck_policy(GeometryPolicy::project_standard()).tolerance(),
-                Some(0.01)
+                Some(monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM)
             );
         }
 

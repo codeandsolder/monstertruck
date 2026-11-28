@@ -13,7 +13,7 @@ use crate::math3::{
 pub use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::step_graph::{build_index, entity_id, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
@@ -25,7 +25,7 @@ mod signed_cap_pairs;
 pub(crate) use signed_cap_pairs::detect_signed_cap_pairs_for_solid_with_index;
 pub use signed_cap_pairs::{CapInterval, SignedCapPairProposal, detect_signed_cap_pairs};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
 
@@ -255,7 +255,8 @@ pub(crate) fn source_cap_extrusion_proposal_at_station(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<RecoveredSourceCapExtrusion> {
-    if !height_mm.is_finite() || height_mm <= GEOM_TOL_MM {
+    if !height_mm.is_finite() || height_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let cap = face_info(cap_face_id, entities, index)?;
@@ -603,7 +604,9 @@ fn cap_side_generator_length(
             let Some(other) = other else { continue };
             let delta = sub(other, source_point);
             let height = dot(delta, inward);
-            if height <= GEOM_TOL_MM || norm(sub(delta, mul(inward, height))) > GEOM_TOL_MM {
+            if height <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+                || norm(sub(delta, mul(inward, height))) > GEOM_TOL_MM
+            {
                 continue;
             }
             if connector.is_some_and(|old: f64| (old - height).abs() > GEOM_TOL_MM) {
@@ -784,7 +787,10 @@ pub(crate) fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec
             let Some(y_axis) = normalize(cross(circle.normal, circle.x_direction)) else {
                 return Vec::new();
             };
-            if !sweep.is_finite() || sweep.abs() <= DIR_TOL || circle.radius_mm <= GEOM_TOL_MM {
+            if !sweep.is_finite()
+                || sweep.abs() <= DIR_TOL
+                || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+            {
                 return Vec::new();
             }
             FRACTIONS
@@ -859,7 +865,11 @@ fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
         } => {
             let delta = sub2(*end_mm, *start_mm);
             let length2 = dot2(delta, delta);
-            if length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+            if length2
+                <= DEFAULT_STEP_RECOVERY_TOLERANCES
+                    .numerical_geometry_mm
+                    .powi(2)
+            {
                 return false;
             }
             let t = (dot2(sub2(point, *start_mm), delta) / length2).clamp(0.0, 1.0);
@@ -1034,7 +1044,12 @@ pub(crate) fn strict_profile_contains(
             } => {
                 let edge = sub2(*b, *a);
                 let length2 = dot2(edge, edge);
-                if !length2.is_finite() || length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+                if !length2.is_finite()
+                    || length2
+                        <= DEFAULT_STEP_RECOVERY_TOLERANCES
+                            .numerical_geometry_mm
+                            .powi(2)
+                {
                     return None;
                 }
                 let t = (dot2(sub2(point, *a), edge) / length2).clamp(0.0, 1.0);
@@ -1060,7 +1075,9 @@ pub(crate) fn strict_profile_contains(
                 end_angle_rad: end,
                 ..
             } => {
-                if *radius <= GEOM_TOL_MM || !radius.is_finite() {
+                if *radius <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+                    || !radius.is_finite()
+                {
                     return None;
                 }
                 crossings +=
@@ -1387,7 +1404,9 @@ fn ordered_cap_pair(
 
     let z_axis = canonical_direction(first_plane.normal);
     let separation = dot(z_axis, second_plane.origin_mm) - dot(z_axis, first_plane.origin_mm);
-    if !separation.is_finite() || separation.abs() <= GEOM_TOL_MM {
+    if !separation.is_finite()
+        || separation.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let (bottom_index, top_index, height_mm) = if separation > 0.0 {
@@ -2456,7 +2475,7 @@ pub(crate) fn recovered_profile_curve(
             } else {
                 !edge.parameter_forward
             };
-            let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+            let closed = edge.start_vertex == edge.end_vertex;
             let sweep = directional_sweep(start_angle, end_angle, increasing, closed);
             Some(RecoveredProfileCurve::CircleArc {
                 source_edge_ids: vec![edge.edge_id],
@@ -2648,7 +2667,7 @@ fn merged_source_ids(first: &[u64], second: &[u64]) -> Vec<u64> {
 fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
     let start = circle_angle_3d(edge.start_mm, circle)?;
     let end = circle_angle_3d(edge.end_mm, circle)?;
-    let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+    let closed = edge.start_vertex == edge.end_vertex;
     Some(directional_sweep(
         start,
         end,

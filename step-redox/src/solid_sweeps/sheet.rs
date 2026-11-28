@@ -8,12 +8,12 @@ use crate::math3::{
     add, canonical_direction, cross, distance, dot, mul, norm, normalize,
     point_to_unit_line_distance, sub,
 };
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::EntityInstance;
 
-const SHEET_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_geometry_mm;
+const SHEET_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

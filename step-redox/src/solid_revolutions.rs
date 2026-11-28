@@ -8,7 +8,7 @@ use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::ReducedSolid;
 use crate::step_entities::{parameter_number, representation_items_and_context};
 use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record};
@@ -22,14 +22,12 @@ use profile_graph::{
 mod meridian;
 use meridian::{MeridianArc, MeridianCurve, MeridianLine, MeridianProfile};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
-/// Default source-evidence tolerance when STEP provides no trusted uncertainty context.
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+/// Native source fitting budget, independent of the exporter uncertainty.
 pub(crate) const REVOLUTION_SOURCE_SUPPORT_TOL_MM: f64 = GEOM_TOL_MM;
 /// Hard ceiling for source-declared length uncertainty used by revolution recovery.
-/// This is 10 nm / 100x the strict default: enough for known exporter roundoff,
-/// still far below any dimension we want to approximate semantically.
-pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 =
-    DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_max_source_uncertainty_mm;
+/// Author metadata may not enlarge the project recovery budget.
+pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -47,10 +45,7 @@ pub struct RecoveredSolidRevolution {
     /// Worst observed disagreement between source trim evidence and the recovered
     /// analytic/profile geometry.
     pub max_residual_mm: f64,
-    /// Maximum source-evidence residual admitted for this recovery. Exact/legacy
-    /// paths use `GEOM_TOL_MM`; a straight analytic path may inherit a larger,
-    /// explicitly declared representation-context uncertainty, capped by
-    /// `MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM`.
+    /// Maximum source fitting residual admitted by the project accuracy policy.
     pub source_tolerance_mm: f64,
 }
 
@@ -276,10 +271,9 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
-/// Effective recovery tolerance: an authored uncertainty smaller than the
-/// kernel's geometric proof quantum does not tighten the existing source
-/// construction path. Do not use this floored value as a claim about what
-/// the file itself declares.
+/// Native recovery budget for each representation with trusted uncertainty.
+/// Missing metadata uses the same budget at callers; use the literal
+/// uncertainty reader for diagnostics that report what the file declares.
 pub(crate) fn source_tolerance_by_representation_item(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
@@ -763,7 +757,7 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
         || point_to_unit_line_distance(interface_circle.center_mm, axis_origin_mm, axis_direction)
             > GEOM_TOL_MM
         || !interface_circle.radius_mm.is_finite()
-        || interface_circle.radius_mm <= GEOM_TOL_MM
+        || interface_circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -1220,7 +1214,7 @@ fn detect_full_ring_torus(
     };
     if !first.major_radius_mm.is_finite()
         || !first.minor_radius_mm.is_finite()
-        || first.minor_radius_mm <= GEOM_TOL_MM
+        || first.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || first.major_radius_mm <= first.minor_radius_mm + GEOM_TOL_MM
     {
         return None;
@@ -1326,7 +1320,9 @@ fn detect_spherical_cap(
     }
     let (plane_face, plane) = plane_face?;
     let (_, first_sphere) = *sphere_faces.first()?;
-    if !first_sphere.radius_mm.is_finite() || first_sphere.radius_mm <= GEOM_TOL_MM {
+    if !first_sphere.radius_mm.is_finite()
+        || first_sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
 
@@ -1518,9 +1514,9 @@ fn detect_hemispherical_end(
     let (plane_index, plane_face, plane) = plane_face?;
 
     if !first_sphere.radius_mm.is_finite()
-        || first_sphere.radius_mm <= GEOM_TOL_MM
+        || first_sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || !first_cylinder.radius_mm.is_finite()
-        || first_cylinder.radius_mm <= GEOM_TOL_MM
+        || first_cylinder.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -1835,8 +1831,8 @@ fn detect_mixed_curved_revolution_with_synthetic(
     for (face_index, torus) in torus_faces {
         if !torus.major_radius_mm.is_finite()
             || !torus.minor_radius_mm.is_finite()
-            || torus.minor_radius_mm <= GEOM_TOL_MM
-            || torus.major_radius_mm <= GEOM_TOL_MM
+            || torus.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+            || torus.major_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
             || !parallel(torus.axis, axis_direction)
             || point_to_unit_line_distance(torus.center_mm, axis_origin_mm, axis_direction)
                 > GEOM_TOL_MM
@@ -1858,7 +1854,7 @@ fn detect_mixed_curved_revolution_with_synthetic(
     let mut sphere_supports = Vec::<brep::SphereSupport>::new();
     for (face_index, sphere) in sphere_faces {
         if !sphere.radius_mm.is_finite()
-            || sphere.radius_mm <= GEOM_TOL_MM
+            || sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
             || point_to_unit_line_distance(sphere.center_mm, axis_origin_mm, axis_direction)
                 > GEOM_TOL_MM
         {
@@ -1947,7 +1943,7 @@ fn sphere_profile_arc(
 ) -> Option<(MeridianCurve, f64)> {
     if face_indices.is_empty()
         || !sphere.radius_mm.is_finite()
-        || sphere.radius_mm <= GEOM_TOL_MM
+        || sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || point_to_unit_line_distance(sphere.center_mm, axis_origin_mm, axis_direction)
             > GEOM_TOL_MM
     {
@@ -2081,7 +2077,9 @@ fn sphere_parallel_boundary_point(
     axis_origin_mm: [f64; 3],
     axis_direction: [f64; 3],
 ) -> Option<([f64; 2], f64)> {
-    if !parallel(circle.normal, axis_direction) || circle.radius_mm <= GEOM_TOL_MM {
+    if !parallel(circle.normal, axis_direction)
+        || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let axial = axial_coordinate(circle.center_mm, axis_origin_mm, axis_direction);
@@ -2134,8 +2132,8 @@ fn torus_profile_arc(
     edge_faces: &HashMap<u64, Vec<usize>>,
 ) -> Option<(MeridianCurve, f64)> {
     if face_indices.is_empty()
-        || torus.major_radius_mm <= GEOM_TOL_MM
-        || torus.minor_radius_mm <= GEOM_TOL_MM
+        || torus.major_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+        || torus.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -2262,7 +2260,9 @@ fn torus_parallel_boundary_point(
     axis_origin_mm: [f64; 3],
     axis_direction: [f64; 3],
 ) -> Option<([f64; 2], f64)> {
-    if !parallel(circle.normal, axis_direction) || circle.radius_mm <= GEOM_TOL_MM {
+    if !parallel(circle.normal, axis_direction)
+        || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let axial = axial_coordinate(circle.center_mm, axis_origin_mm, axis_direction);
@@ -2406,7 +2406,7 @@ fn cylinder_profile_segment_with_angular_trims(
         || !parallel(cylinder.axis, axis)
         || point_to_unit_line_distance(cylinder.axis_origin_mm, axis_origin, axis) > GEOM_TOL_MM
         || !cylinder.radius_mm.is_finite()
-        || cylinder.radius_mm <= GEOM_TOL_MM
+        || cylinder.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -2669,7 +2669,7 @@ fn cone_profile_segment_with_angular_trims_inner(
             }
             CurveSupport::Circle(circle) => {
                 if !circle.radius_mm.is_finite()
-                    || circle.radius_mm <= GEOM_TOL_MM
+                    || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                     || !parallel(circle.normal, axis)
                     || point_to_unit_line_distance(circle.center_mm, axis_origin, axis)
                         > GEOM_TOL_MM
@@ -2707,7 +2707,8 @@ fn cone_profile_segment_with_angular_trims_inner(
                                     axis,
                                 ) > GEOM_TOL_MM
                                 || !cylinder.radius_mm.is_finite()
-                                || cylinder.radius_mm <= GEOM_TOL_MM
+                                || cylinder.radius_mm
+                                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                             {
                                 return None;
                             }
@@ -3167,7 +3168,8 @@ fn plane_profile_segment_with_angular_trims(
             match &edge.support {
                 CurveSupport::Circle(circle) => {
                     if !circle.radius_mm.is_finite()
-                        || circle.radius_mm <= GEOM_TOL_MM
+                        || circle.radius_mm
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                         || !parallel(circle.normal, axis)
                         || point_to_unit_line_distance(circle.center_mm, axis_origin, axis)
                             > GEOM_TOL_MM

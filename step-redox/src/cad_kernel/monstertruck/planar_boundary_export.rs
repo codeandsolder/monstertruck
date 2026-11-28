@@ -118,7 +118,7 @@ pub(super) fn certified_planar_boundary_step_guide(
         return None;
     };
     let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
-        .solid_geometry_mm
+        .numerical_geometry_mm
         .min(tolerance);
     let mut exact = certified_planar_boundary_isocurve(plane, surface, proof_tolerance)?;
     if points.len() < 2 {

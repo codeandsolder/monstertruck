@@ -8,9 +8,9 @@ use crate::{
     profile_curves::RecoveredProfileCurve,
     solid_extrusions::{RecoveredSourceCapExtrusion, angle_on_arc, signed_area_curves},
 };
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 
-const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const LENGTH: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIRECTION: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 #[derive(Clone, Copy)]

@@ -21,14 +21,14 @@ use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::solid_extrusions::{profile_contains_with_rotated_ray, signed_area_curves};
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use std::collections::BTreeMap;
 
 mod circular;
 mod ruled;
 mod transitions;
 
-const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const LENGTH: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIRECTION: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 #[derive(Clone, Copy)]

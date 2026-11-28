@@ -1,11 +1,13 @@
 //! Canonical cells are a representation, not geometric discontinuities.
 //! Only independently certified signatures may be compared here. A cell
-//! crossing requires unrounded witnesses spanning at most one original
-//! quantum, a unique global correspondence and complete signature equality.
+//! crossing requires unrounded witnesses within the physical recovery
+//! budget, unique correspondence and complete signature equality.
 use super::{
     AnalyticBoundarySignature, BoundaryChainKey, DIRECTION_Q, OrientedSupportKey, POINT_Q_MM,
     PointKey, SCALAR_Q_MM, canonical_boundary_direction, point_key, quantize,
 };
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
+use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,6 +20,13 @@ pub(super) enum CellKind {
 }
 
 impl CellKind {
+    const fn comparison_limit(self) -> f64 {
+        match self {
+            Self::Point | Self::Offset | Self::Radius => NATIVE_STEP_RECOVERY_MM,
+            Self::Direction | Self::Slope => DIRECTION_Q,
+        }
+    }
+
     const fn quantum(self) -> f64 {
         match self {
             Self::Point => POINT_Q_MM,
@@ -34,13 +43,13 @@ struct CellKey {
 }
 
 impl CellKey {
-    fn adjacent(self, other: Self) -> bool {
+    fn possibly_matches(self, other: Self) -> bool {
         self.kind == other.kind
-            && self
-                .components
-                .iter()
-                .zip(other.components)
-                .all(|(a, b)| a.abs_diff(b) <= 1)
+            && self.components.iter().zip(other.components).all(|(a, b)| {
+                a.abs_diff(b).to_f64().is_some_and(|delta| {
+                    delta <= self.kind.comparison_limit() / self.kind.quantum() + 1.0
+                })
+            })
     }
 }
 
@@ -49,7 +58,7 @@ type BoundsByCell = BTreeMap<CellKey, RawBounds>;
 
 /// Track the actual values used to construct cells, not their decoded centres.
 /// Ordinary equal-signature proofs do not allocate this map; it is collected
-/// only when a complete adjacent-cell correspondence could be relevant.
+/// only when a complete geometric correspondence could be relevant.
 #[derive(Default)]
 pub(super) struct CellWitnesses(Option<BoundsByCell>);
 
@@ -103,7 +112,11 @@ impl CellWitnesses {
         let Some((blo, bhi)) = other.0.as_ref().and_then(|cells| cells.get(&b)) else {
             return false;
         };
-        (0..3).all(|i| ahi[i].max(bhi[i]) - alo[i].min(blo[i]) <= a.kind.quantum())
+        let span: [f64; 3] = std::array::from_fn(|i| ahi[i].max(bhi[i]) - alo[i].min(blo[i]));
+        match a.kind {
+            CellKind::Point => crate::math3::norm(span) <= a.kind.comparison_limit(),
+            _ => span.iter().all(|&d| d <= a.kind.comparison_limit()),
+        }
     }
 }
 
@@ -368,7 +381,7 @@ pub(super) fn compare(
     if points_b.difference(&points_a).any(|point| {
         !missing
             .iter()
-            .any(|target| point_cell(*target).adjacent(point_cell(*point)))
+            .any(|target| point_cell(*target).possibly_matches(point_cell(*point)))
     }) {
         return Some(false);
     }
@@ -377,7 +390,7 @@ pub(super) fn compare(
     let raw_a = raw_a()?;
     let raw_b = raw_b()?;
     let raw_fits = |target: CellKey, key: CellKey| {
-        target == key || (target.adjacent(key) && raw_a.fits(target, &raw_b, key))
+        target == key || (target.possibly_matches(key) && raw_a.fits(target, &raw_b, key))
     };
     let point_map = correspondence(&points_a, &points_b, |target, key| {
         raw_fits(point_cell(*target), point_cell(*key))

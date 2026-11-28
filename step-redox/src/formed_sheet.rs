@@ -6,7 +6,7 @@ use crate::step_entities::{
     cartesian_point, direction_components as direction, number as numeric_value,
 };
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -21,7 +21,7 @@ pub use reference_skin::{
 #[cfg(test)]
 use reference_skin::{closest_axis_intersection, rational_bezier_point};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.sheet_geometry_mm;
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.formed_sheet_direction;
 const MIN_COAXIAL_PAIRS: usize = 3;
 const MIN_PARALLEL_PLANE_PAIRS: usize = 2;

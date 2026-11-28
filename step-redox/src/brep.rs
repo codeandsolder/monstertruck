@@ -7,7 +7,7 @@ use crate::step_entities::{
 };
 use crate::step_graph::{entity_ref_value, simple_record, simple_record_mut};
 use crate::surface_recovery;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
@@ -428,7 +428,7 @@ pub fn surface_support(
         surface_id,
         entities,
         index,
-        DEFAULT_STEP_RECOVERY_TOLERANCES.source_feature_incidence_mm,
+        NATIVE_STEP_RECOVERY_MM,
     ) {
         return SurfaceSupport::SplineExtrusion(SplineExtrusionSupport {
             profile: BSplineSupport {
@@ -445,7 +445,7 @@ pub fn surface_support(
         surface_id,
         entities,
         index,
-        DEFAULT_STEP_RECOVERY_TOLERANCES.source_feature_incidence_mm,
+        NATIVE_STEP_RECOVERY_MM,
     ) {
         return SurfaceSupport::Plane(PlaneSupport {
             origin_mm: evidence.origin_mm,

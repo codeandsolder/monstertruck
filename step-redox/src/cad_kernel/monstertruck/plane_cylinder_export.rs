@@ -160,7 +160,7 @@ pub(super) fn exact_plane_cylinder_step_guide(
     };
     let section = Section::new(plane, surface)?;
     let proof = DEFAULT_STEP_RECOVERY_TOLERANCES
-        .solid_geometry_mm
+        .numerical_geometry_mm
         .min(tolerance);
     let axial = section.normal.dot(section.axis).abs()
         <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit;

@@ -15,7 +15,7 @@ use crate::solid_sweeps::{
     RecoveredRoundSweep, RecoveredSweepSegment,
 };
 use anyhow::{Result, bail};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 
 /// Build the *proposal* from one source cap and an observed axial station.
 ///
@@ -169,7 +169,7 @@ fn validate_round_sweep_proof(sweep: &RecoveredRoundSweep) -> Result<()> {
         || !sweep.profile_radius_mm.is_finite()
         || sweep.profile_radius_mm <= 0.0
         || !sweep.max_residual_mm.is_finite()
-        || sweep.max_residual_mm > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_strict_residual_mm
+        || sweep.max_residual_mm > NATIVE_STEP_RECOVERY_MM
         || sweep.segments.is_empty()
     {
         bail!("round sweep proof is invalid");
@@ -316,8 +316,7 @@ pub fn recover_revolved_round_tail_fragment(
         || !recovered.profile_radius_mm.is_finite()
         || recovered.profile_radius_mm <= 0.0
         || !recovered.max_residual_mm.is_finite()
-        || recovered.max_residual_mm
-            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm
+        || recovered.max_residual_mm > NATIVE_STEP_RECOVERY_MM
         || recovered.segments.len() != 2
     {
         bail!("revolved round-tail proof is invalid");
@@ -552,7 +551,7 @@ pub fn recover_open_rectangular_sweep_fragment(
         || !sweep.profile_thickness_mm.is_finite()
         || sweep.profile_thickness_mm <= 0.0
         || !sweep.max_residual_mm.is_finite()
-        || sweep.max_residual_mm > DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm
+        || sweep.max_residual_mm > NATIVE_STEP_RECOVERY_MM
     {
         bail!("open rectangular sweep proof is invalid");
     }
@@ -945,8 +944,7 @@ pub fn recover_radial_slot_revolution_fragment(
     });
 
     let max_radius_mm = maximum_revolution_radius(base)?;
-    let cutter_margin_mm = (10.0 * base.source_tolerance_mm)
-        .max(DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_loose_residual_mm);
+    let cutter_margin_mm = (10.0 * base.source_tolerance_mm).max(NATIVE_STEP_RECOVERY_MM);
     let cutter_depth_mm = max_radius_mm + cutter_margin_mm;
     // The detector proves that the open end coincides with exactly one global
     // axial extreme of the host. Extend the cutter only through that already-open
@@ -1177,9 +1175,7 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
             RecoveredProfileCurve::Line {
                 start_mm, end_mm, ..
             } => {
-                if start_mm[0] < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
-                    || end_mm[0] < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
-                {
+                if start_mm[0] < -NATIVE_STEP_RECOVERY_MM || end_mm[0] < -NATIVE_STEP_RECOVERY_MM {
                     bail!("solid revolution profile contains a negative radius");
                 }
             }
@@ -1191,7 +1187,7 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
                 ..
             } => {
                 let sweep = end_angle_rad - start_angle_rad;
-                if sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+                if sweep.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_revolution_angle_floor_rad
                     || sweep.abs()
                         > std::f64::consts::TAU
                             + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_arc_angle_slack_rad
@@ -1199,7 +1195,7 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
                     bail!("solid revolution circular meridian has invalid sweep");
                 }
                 if circle_arc_min_radius(center_mm[0], *radius_mm, *start_angle_rad, *end_angle_rad)
-                    < -DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+                    < -NATIVE_STEP_RECOVERY_MM
                 {
                     bail!("solid revolution circular meridian crosses negative radius");
                 }
@@ -1218,9 +1214,7 @@ fn validate_solid_revolution(revolution: &RecoveredSolidRevolution) -> Result<()
         let Some(start) = next.start_point() else {
             bail!("solid revolution profile curve has no start point");
         };
-        if (end[0] - start[0]).hypot(end[1] - start[1])
-            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
-        {
+        if (end[0] - start[0]).hypot(end[1] - start[1]) > NATIVE_STEP_RECOVERY_MM {
             bail!("solid revolution profile curves are not topologically continuous");
         }
     }
@@ -1289,7 +1283,7 @@ fn validate_solid_extrusion(extrusion: &RecoveredSolidExtrusion) -> Result<()> {
     if !extrusion.max_residual_mm.is_finite()
         || extrusion.max_residual_mm < 0.0
         || extrusion.max_residual_mm
-            > DEFAULT_STEP_RECOVERY_TOLERANCES.source_slot_boundary_mm
+            > NATIVE_STEP_RECOVERY_MM
                 + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tolerance_slack_mm
     {
         bail!("solid extrusion has invalid proof residual");
@@ -1435,10 +1429,10 @@ fn angle_on_sweep(angle: f64, start: f64, end: f64) -> bool {
     let sweep = end - start;
     if sweep >= 0.0 {
         (angle - start).rem_euclid(std::f64::consts::TAU)
-            <= sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+            <= sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_revolution_angle_floor_rad
     } else {
         (start - angle).rem_euclid(std::f64::consts::TAU)
-            <= -sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
+            <= -sweep + DEFAULT_STEP_RECOVERY_TOLERANCES.source_revolution_angle_floor_rad
     }
 }
 
@@ -1460,9 +1454,7 @@ pub(super) const fn local_frame_transform(
 
 fn normalize3(vector: [f64; 3]) -> Result<[f64; 3]> {
     let length = norm(vector);
-    if !length.is_finite()
-        || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
-    {
+    if !length.is_finite() || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_brep_direction {
         bail!("cannot normalize zero or non-finite CAD frame vector");
     }
     Ok([vector[0] / length, vector[1] / length, vector[2] / length])

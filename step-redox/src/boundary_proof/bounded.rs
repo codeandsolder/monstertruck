@@ -126,7 +126,7 @@ fn circle_on_torus(
     major: f64,
     minor: f64,
 ) -> bool {
-    if !(major > minor && minor > TOL) {
+    if !(major > minor && minor > POINT_Q_MM) {
         return false;
     }
     let delta = sub(circle.center_mm, center);
@@ -155,7 +155,7 @@ pub(super) fn circle_on_curved_support(
     let Some(normal) = normalize(circle.normal, 0.) else {
         return false;
     };
-    if !circle.radius_mm.is_finite() || circle.radius_mm <= TOL {
+    if !circle.radius_mm.is_finite() || circle.radius_mm <= POINT_Q_MM {
         return false;
     }
     let circle = brep::CircleSupport { normal, ..circle };
@@ -241,7 +241,7 @@ fn fit_circle(spline: &BSplineSupport) -> Option<brep::CircleSupport> {
     );
     let center = add(first, displacement);
     let radius = norm(displacement);
-    if !radius.is_finite() || radius <= TOL {
+    if !radius.is_finite() || radius <= POINT_Q_MM {
         return None;
     }
     Some(brep::CircleSupport {
@@ -280,7 +280,7 @@ fn circle_arc(
     loci: &[SupportLocusKey; 2],
     cells: &mut CellWitnesses,
 ) -> Option<BoundedEdge> {
-    if !circle.radius_mm.is_finite() || circle.radius_mm <= TOL {
+    if !circle.radius_mm.is_finite() || circle.radius_mm <= POINT_Q_MM {
         return None;
     }
     let raw_normal = normalize(circle.normal, 0.)?;
@@ -404,7 +404,7 @@ impl CylinderSectionChart {
             return None;
         }
         let radius = dequantize_scalar(radius)?;
-        if radius <= TOL {
+        if radius <= POINT_Q_MM {
             return None;
         }
         Some(Self {
