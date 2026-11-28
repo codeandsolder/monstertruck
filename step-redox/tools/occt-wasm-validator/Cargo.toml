@@ -17,7 +17,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 occt-wasm = { git = "https://github.com/codeandsolder/occt-wasm-truck.git", rev = "482f09abd3578f936df15910dee04ddcad6b111f" }
 sha2 = "0.11"
 tempfile = "3"
-wreq = { git = "https://github.com/codeandsolder/wreq-exp.git", rev = "7c0668c3b3e137f233c0aaee132028ab39572dbd", features = ["stream", "system-proxy"] }
+wreq = { git = "https://github.com/codeandsolder/wreq-exp.git", rev = "032201ede57f9ff30455e2b4351f6cefb96d9bbd", features = ["stream", "system-proxy"] }
 tokio = { version = "1", features = ["rt", "time", "net"] }
 futures-util = "0.3"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
