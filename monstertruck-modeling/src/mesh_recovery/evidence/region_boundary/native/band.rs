@@ -20,6 +20,7 @@ use std::f64::consts::{PI, TAU};
 
 mod holed;
 mod torus_rim;
+pub(super) use torus_rim::missing_source_vertex;
 mod variable_rim;
 
 #[derive(Clone, Copy)]

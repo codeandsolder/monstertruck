@@ -720,7 +720,9 @@ impl HybridSource<'_> {
         native: &NativeTrimGraph,
     ) -> CrossingChoices {
         let mut choices = BTreeSet::new();
-        for region in native.regions.iter().filter(|r| r.requires_chart_cut) {
+        for region in native.regions.iter().filter(|r| {
+            r.requires_chart_cut || matches!(r.faces, Err(NativeTrimError::SourceDomainCoverage(_)))
+        }) {
             let whole = partition
                 .region_by_support
                 .iter()
@@ -735,6 +737,29 @@ impl HybridSource<'_> {
             // a localized span or an affected cycle. These are hypotheses,
             // not assertions that a chart proof failed for geometric reasons.
             let mut fallback = vec![whole];
+            if let Err(NativeTrimError::SourceDomainCoverage(vertex)) = region.faces {
+                let implicated = self
+                    .evidence
+                    .source_planar_support
+                    .iter()
+                    .enumerate()
+                    .filter(|(polygon, _)| {
+                        self.evidence
+                            .source_polygon_vertices(*polygon)
+                            .is_some_and(|ids| ids.contains(&vertex))
+                    })
+                    .map(|(_, &support)| support)
+                    .collect::<BTreeSet<_>>();
+                let local = implicated
+                    .iter()
+                    .copied()
+                    .filter(|&support| partition.region_by_support[support] == region.region)
+                    .collect::<Vec<_>>();
+                if !local.is_empty() {
+                    fallback.push(local);
+                    fallback.extend(implicated.iter().map(|&support| vec![support]));
+                }
+            }
             if let Some(boundary) = graph
                 .regions
                 .iter()

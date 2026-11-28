@@ -156,7 +156,8 @@ pub(super) fn repair(
     for (&support, &(target, _)) in &selected {
         labels[support] = target;
     }
-    let index = RegionBoundaryIndex::new(evidence)?;
+    let index =
+        RegionBoundaryIndex::new(evidence)?.with_source_chord_budget(options.source_chord_budget);
     let partition = index.repartition_connected(&labels, |label| original.carriers[label])?;
     if options.source_chord_violation(&index, &partition).is_some() {
         return Ok(Vec::new());

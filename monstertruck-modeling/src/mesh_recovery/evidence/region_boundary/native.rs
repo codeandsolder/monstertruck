@@ -72,6 +72,9 @@ pub enum NativeTrimError {
     /// Shared trims cross on a locally injective revolution chart.
     #[error("crossing shared trim on linear revolution")]
     RevolutionTrimCrossing,
+    /// An original source vertex is provably outside the finite recovered domain.
+    #[error("source vertex {0} lies outside the native face domain budget")]
+    SourceDomainCoverage(usize),
     /// Native curve containment or endpoint consistency failed.
     #[error("native face geometry inconsistent")]
     FaceGeometry,
@@ -279,6 +282,7 @@ impl RegionBoundaryIndex<'_> {
             graph,
             positions,
             options,
+            source_domain_budget: self.source_chord_budget,
             approximated: &std::collections::BTreeSet::new(),
             lifted_deviations: &[],
         }
@@ -298,6 +302,7 @@ struct RegionAssemblyInput<'a> {
     graph: &'a SharedTrimGraph,
     positions: &'a [Point3],
     options: NativeTrimOptions,
+    source_domain_budget: Option<f64>,
     approximated: &'a std::collections::BTreeSet<usize>,
     lifted_deviations: &'a [Option<f64>],
 }
@@ -450,6 +455,7 @@ impl RegionAssemblyInput<'_> {
             options: self.options,
             trims,
             groups: &groups,
+            source_domain_budget: self.source_domain_budget,
         };
         let regions = self
             .graph
@@ -480,6 +486,7 @@ struct FaceAssembly<'a> {
     options: NativeTrimOptions,
     trims: &'a [Result<Vec<Edge>, NativeTrimError>],
     groups: &'a [Vec<usize>],
+    source_domain_budget: Option<f64>,
 }
 struct RegionWires {
     wires: Vec<Wire>,
@@ -591,19 +598,19 @@ impl FaceAssembly<'_> {
                 self.positions,
                 self.options,
             )?;
+            let context = band::BandContext {
+                carrier,
+                surface: &surface,
+                outward,
+                evidence: self.evidence,
+                supports,
+                positions: self.positions,
+                graph: self.chart.graph,
+                lifted_deviations: self.chart.lifted_deviations,
+                options: self.options,
+            };
             if boundary.loops.is_empty()
-                && let Some(faces) = (band::BandContext {
-                    carrier,
-                    surface: &surface,
-                    outward,
-                    evidence: self.evidence,
-                    supports,
-                    positions: self.positions,
-                    graph: self.chart.graph,
-                    lifted_deviations: self.chart.lifted_deviations,
-                    options: self.options,
-                })
-                .closed_torus()
+                && let Some(faces) = context.closed_torus()
             {
                 chart_seams = 8;
                 return Ok(faces);
@@ -618,7 +625,7 @@ impl FaceAssembly<'_> {
                 let faces = plan.faces(&wires, &surface)?;
                 requires_chart_cut = false;
                 chart_seams = 2;
-                return Ok(faces);
+                return validate_source_domain(&context, faces, self.source_domain_budget);
             }
             let outer = areas
                 .iter()
@@ -630,11 +637,16 @@ impl FaceAssembly<'_> {
             if let [id] = outer.as_slice() {
                 wires.swap(0, *id);
             }
-            let face = Face::new(wires, surface).map_err(|_| NativeTrimError::FaceTopology)?;
+            let face =
+                Face::new(wires, surface.clone()).map_err(|_| NativeTrimError::FaceTopology)?;
             if !face.is_geometric_consistent() {
                 return Err(NativeTrimError::FaceGeometry);
             }
-            Ok(vec![face])
+            if requires_chart_cut {
+                Ok(vec![face])
+            } else {
+                validate_source_domain(&context, vec![face], self.source_domain_budget)
+            }
         })();
         NativeRegionFace {
             region: region.region,
@@ -648,6 +660,19 @@ impl FaceAssembly<'_> {
             chart_seams,
         }
     }
+}
+
+fn validate_source_domain(
+    context: &band::BandContext<'_>,
+    faces: Vec<Face>,
+    budget: Option<f64>,
+) -> Result<Vec<Face>, NativeTrimError> {
+    if let Some(vertex) =
+        budget.and_then(|budget| band::missing_source_vertex(context, &faces, budget))
+    {
+        return Err(NativeTrimError::SourceDomainCoverage(vertex));
+    }
+    Ok(faces)
 }
 
 fn trim_intervals(

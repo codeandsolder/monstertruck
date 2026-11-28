@@ -527,6 +527,7 @@ impl HybridInput<'_> {
             graph: &plan.graph,
             positions: &points,
             options: self.strict,
+            source_domain_budget: Some(self.patch.budget.vertex),
             approximated: &self.selected,
             lifted_deviations: &deviations,
         }

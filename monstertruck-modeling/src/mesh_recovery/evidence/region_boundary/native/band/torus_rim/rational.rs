@@ -2,6 +2,8 @@
 //! polynomial approximations of regular analytic intersection branches.
 //! No tensor-circle assumption is made for a general section spline.
 mod controls;
+mod domain;
+pub(in super::super::super) use domain::missing_source_vertex;
 mod holes;
 pub(in super::super) use holes::hole_bounds;
 mod interval;

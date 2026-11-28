@@ -285,7 +285,8 @@ fn try_fit(
     if candidate.refitted_regions == 0 && candidate.positions == assembly.reconciled.positions {
         return Ok(Err(JointFitRejection::Unchanged));
     }
-    let boundary = RegionBoundaryIndex::new(evidence)?;
+    let boundary =
+        RegionBoundaryIndex::new(evidence)?.with_source_chord_budget(options.source_chord_budget);
     if let Some(support) = options.source_chord_violation(&boundary, &candidate.partition) {
         return Ok(Err(JointFitRejection::SourceChordBudget(support)));
     }

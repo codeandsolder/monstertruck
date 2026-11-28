@@ -597,17 +597,19 @@ pub fn construct_analytic_recovery(
         joint_fit_rejections.insert(0, rejection);
     }
     let trim = options.trim_options(&evidence);
-    RegionBoundaryIndex::new(&evidence)?.repair_planar_crossings(
-        &assembly.reconciled.partition,
-        &assembly.reconciled.positions,
-        &mut assembly.trims,
-        &mut assembly.native,
-        NativeTrimOptions {
-            max_vertex_displacement: trim.absolute_tolerance,
-            intersection_tolerance: KERNEL_EPSILON * 0.1,
-            angular_resolution: options.axis_relative_resolution,
-        },
-    )?;
+    RegionBoundaryIndex::new(&evidence)?
+        .with_source_chord_budget(options.source_chord_budget)
+        .repair_planar_crossings(
+            &assembly.reconciled.partition,
+            &assembly.reconciled.positions,
+            &mut assembly.trims,
+            &mut assembly.native,
+            NativeTrimOptions {
+                max_vertex_displacement: trim.absolute_tolerance,
+                intersection_tolerance: KERNEL_EPSILON * 0.1,
+                angular_resolution: options.axis_relative_resolution,
+            },
+        )?;
     Ok(RecoveredAnalyticMesh {
         evidence,
         discovery: stats,
@@ -633,7 +635,8 @@ fn assemble_native(
     partition: SurfaceRegionPartition,
     options: &AnalyticRecoveryOptions,
 ) -> Result<NativeAssembly, AnalyticRecoveryError> {
-    let boundary = RegionBoundaryIndex::new(evidence)?;
+    let boundary =
+        RegionBoundaryIndex::new(evidence)?.with_source_chord_budget(options.source_chord_budget);
     let trim = options.trim_options(evidence);
     let reconciled = if options.max_planar_displacement > 0.0 {
         boundary.reconcile_planes(

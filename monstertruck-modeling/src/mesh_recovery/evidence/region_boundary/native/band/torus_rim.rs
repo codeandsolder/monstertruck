@@ -17,6 +17,7 @@ use std::{
     f64::consts::{PI, TAU},
 };
 pub(super) mod rational;
+pub(in super::super) use rational::missing_source_vertex;
 mod simplicity;
 
 #[derive(Clone, Copy, Debug)]

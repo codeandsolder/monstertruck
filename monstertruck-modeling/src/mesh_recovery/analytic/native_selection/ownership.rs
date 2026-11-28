@@ -205,7 +205,8 @@ fn fit_partition(
         Err(reason) => return Ok(Err(rejection(regions.iter().copied().collect(), reason))),
     };
     let trim = options.trim_options(evidence);
-    let boundary = RegionBoundaryIndex::new(evidence)?;
+    let boundary =
+        RegionBoundaryIndex::new(evidence)?.with_source_chord_budget(options.source_chord_budget);
     if let Some(support) = options.source_chord_violation(&boundary, &candidate.partition) {
         return Ok(Err(rejection(
             regions.iter().copied().collect(),
