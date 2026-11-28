@@ -34,7 +34,6 @@
 
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
-use proc_macro_error::proc_macro_error;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 #[cfg(test)]
@@ -298,7 +297,6 @@ where I: IntoIterator<Item = &'a Variant> + 'a + Copy
 }
 
 /// Derive macro generating an impl of the trait `BoundedCurve` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(BoundedCurve)]
 pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -352,7 +350,6 @@ pub fn derive_bounded_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `BoundedSurface` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(BoundedSurface)]
 pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -401,7 +398,6 @@ pub fn derive_bounded_surface(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `Cut` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(Cut)]
 pub fn derive_cut(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -448,7 +444,6 @@ pub fn derive_cut(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `Invertible` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(Invertible)]
 pub fn derive_invertible(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -500,7 +495,6 @@ pub fn derive_invertible(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision1D` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParameterDivision1D)]
 pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -555,7 +549,6 @@ pub fn derive_parameter_division_1d(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParameterDivision2D` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParameterDivision2D)]
 pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -604,7 +597,6 @@ pub fn derive_parameter_division_2d(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParametricCurve` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricCurve)]
 pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -669,7 +661,6 @@ pub fn derive_parametric_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ParametricSurface` for Enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricSurface)]
 pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -770,12 +761,51 @@ pub fn derive_parametric_surface(input: TokenStream) -> TokenStream {
     derive_try!(traits_scope(&implementation)).into()
 }
 
+fn surface3d_enum_methods(
+    variants: &punctuated::Punctuated<Variant, token::Comma>,
+    trait_name0: &TokenStream2,
+    trait_name1: &TokenStream2,
+    bounds_override: Option<&syn::Path>,
+) -> (Vec<TokenStream2>, Vec<TokenStream2>) {
+    let mut methods0 = methods!(
+        variants,
+        trait_name0,
+        fn evaluate(&self, s: f64, t: f64) -> Self::Point,
+        fn derivative_u(&self, s: f64, t: f64) -> Self::Vector,
+        fn derivative_v(&self, s: f64, t: f64) -> Self::Vector,
+        fn derivative_uu(&self, s: f64, t: f64) -> Self::Vector,
+        fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector,
+        fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector,
+        fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
+        fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
+        fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
+        fn period_u(&self,) -> Option<f64>,
+        fn period_v(&self,) -> Option<f64>,
+    );
+    if let Some(bounds) = bounds_override {
+        methods0.push(quote! {
+            fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { #bounds(self) }
+        });
+    } else {
+        methods0.extend(methods!(variants, trait_name0,
+            fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
+        ));
+    }
+    let methods1 = methods!(
+        variants,
+        trait_name1,
+        fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3,
+        fn closed_chart_periods(&self,) -> (Option<f64>, Option<f64>),
+        fn collapsed_boundary_parameter(&self, point: monstertruck_traits::__private::Point3, hint: monstertruck_traits::__private::Point2, tolerance: f64) -> Option<monstertruck_traits::__private::Point2>,
+    );
+    (methods0, methods1)
+}
+
 /// Derive macro generating an impl of the trait `ParametricSurface3D` for Enums or single field tuple structs.
 ///
 /// `#[surface_intrinsic_bounds(path)]` delegates intrinsic parameter-domain
 /// classification to a function of the complete wrapper. This is useful
 /// when interchange-specific semantics differ from the underlying carrier.
-#[proc_macro_error]
 #[proc_macro_derive(ParametricSurface3D, attributes(surface_intrinsic_bounds))]
 pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -799,36 +829,11 @@ pub fn derive_parametric_surface3d(input: TokenStream) -> TokenStream {
     let implementation = match input.data {
         Data::Enum(DataEnum { ref variants, .. }) => {
             let top_ty = derive_try!(enum_field_type(variants, &ty));
-            let mut methods0 = methods!(
+            let (methods0, methods1) = surface3d_enum_methods(
                 variants,
-                trait_name0,
-                fn evaluate(&self, s: f64, t: f64) -> Self::Point,
-                fn derivative_u(&self, s: f64, t: f64) -> Self::Vector,
-                fn derivative_v(&self, s: f64, t: f64) -> Self::Vector,
-                fn derivative_uu(&self, s: f64, t: f64) -> Self::Vector,
-                fn derivative_uv(&self, s: f64, t: f64) -> Self::Vector,
-                fn derivative_vv(&self, s: f64, t: f64) -> Self::Vector,
-                fn derivative_mn(&self, m: usize, n: usize, s: f64, t: f64) -> Self::Vector,
-                fn derivatives(&self, max_order: usize, u: f64, v: f64) -> monstertruck_traits::__private::SurfaceDerivatives<Self::Vector>,
-                fn parameter_range(&self,) -> (monstertruck_traits::ParameterRange, monstertruck_traits::ParameterRange),
-                fn period_u(&self,) -> Option<f64>,
-                fn period_v(&self,) -> Option<f64>,
-            );
-            if let Some(bounds) = &bounds_override {
-                methods0.push(quote! {
-                    fn parameter_bounds_are_intrinsic(&self) -> (bool, bool) { #bounds(self) }
-                });
-            } else {
-                methods0.extend(methods!(variants, trait_name0,
-                    fn parameter_bounds_are_intrinsic(&self,) -> (bool, bool),
-                ));
-            }
-            let methods1 = methods!(
-                variants,
-                trait_name1,
-                fn normal(&self, u: f64, v: f64) -> monstertruck_traits::__private::Vector3,
-                fn closed_chart_periods(&self,) -> (Option<f64>, Option<f64>),
-                fn collapsed_boundary_parameter(&self, point: monstertruck_traits::__private::Point3, hint: monstertruck_traits::__private::Point2, tolerance: f64) -> Option<monstertruck_traits::__private::Point2>,
+                &trait_name0,
+                &trait_name1,
+                bounds_override.as_ref(),
             );
             quote! {
                 #[automatically_derived]
@@ -1031,28 +1036,24 @@ fn derive_search(
 }
 
 /// Derives nearest-parameter search for curves.
-#[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD1)]
 pub fn derive_snp_d1(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Nearest, SearchDimension::Curve)
 }
 
 /// Derives nearest-parameter search for surfaces.
-#[proc_macro_error]
 #[proc_macro_derive(SearchNearestParameterD2)]
 pub fn derive_snp_d2(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Nearest, SearchDimension::Surface)
 }
 
 /// Derives exact parameter search for curves.
-#[proc_macro_error]
 #[proc_macro_derive(SearchParameterD1)]
 pub fn derive_sp_d1(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Exact, SearchDimension::Curve)
 }
 
 /// Derives exact parameter search for surfaces.
-#[proc_macro_error]
 #[proc_macro_derive(SearchParameterD2)]
 pub fn derive_sp_d2(input: TokenStream) -> TokenStream {
     derive_search(input, SearchOperation::Exact, SearchDimension::Surface)
@@ -1134,21 +1135,18 @@ fn derive_transform(input: TokenStream, matrix: &TokenStream2) -> TokenStream {
 }
 
 /// Derive macro generating an impl of `Transformed<Matrix3>` for enums or single-field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(TransformedM3)]
 pub fn derive_transform_m3(input: TokenStream) -> TokenStream {
     derive_transform(input, &quote! { monstertruck_traits::__private::Matrix3 })
 }
 
 /// Derive macro generating an impl of `Transformed<Matrix4>` for enums or single-field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(TransformedM4)]
 pub fn derive_transform_m4(input: TokenStream) -> TokenStream {
     derive_transform(input, &quote! { monstertruck_traits::__private::Matrix4 })
 }
 
 /// Derive macro generating an impl of the trait `StepLength` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepLength)]
 pub fn derive_step_length(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1244,12 +1242,10 @@ fn derive_step_format_impl(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `StepFormat` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepFormat)]
 pub fn derive_step_format(input: TokenStream) -> TokenStream { derive_step_format_impl(input) }
 
 /// Derive macro generating an impl of the trait `StepCurve` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepCurve)]
 pub fn derive_step_curve(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1297,7 +1293,6 @@ pub fn derive_step_curve(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `StepSurface` for enums or single field tuple structs.
-#[proc_macro_error]
 #[proc_macro_derive(StepSurface)]
 pub fn derive_step_surface(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -1345,7 +1340,6 @@ pub fn derive_step_surface(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro generating an impl of the trait `ToSameGeometry<Self>` for structs.
-#[proc_macro_error]
 #[proc_macro_derive(SelfSameGeometry)]
 pub fn derive_self_same_geometry(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

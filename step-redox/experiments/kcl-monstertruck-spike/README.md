@@ -46,6 +46,16 @@ recasting API still live in `kcl-lib`. This spike therefore makes `kcl-lib` an *
 not compile it at all; it simply emits KCL. Production recovery should not depend on the
 KCL runtime or Zoo engine protocol.
 
+The spike has its own Cargo workspace and lockfile, so enabling every feature in
+the main CAD workspace does not resolve or compile the KCL engine. Run the
+standalone conformance check with:
+
+```sh
+cargo run --locked --manifest-path step-redox/experiments/kcl-monstertruck-spike/Cargo.toml --features kcl-conformance
+```
+
+Run from an output directory of your choice: the experiment writes `box.kcl` and
+`box.step` there. The dedicated manual CI job uses a temporary output directory.
 Parse/recast conformance belongs in optional tooling/CI until the standalone syntax
 crate exposes the parser/typed AST.
 
