@@ -241,6 +241,19 @@ mod plane {
 }
 use plane::Plane;
 
+fn input_shader() -> String {
+    std::env::args().nth(1).map_or_else(
+        || DEFAULT_SHADER.to_string(),
+        |path| match std::fs::read_to_string(path) {
+            Ok(code) => code,
+            Err(error) => {
+                println!("{error:?}");
+                DEFAULT_SHADER.to_string()
+            }
+        },
+    )
+}
+
 #[expect(
     clippy::future_not_send,
     reason = "winit event loops and windows are deliberately thread-affine"
@@ -256,18 +269,7 @@ async fn run(
         &SurfaceSceneDescriptor::default(),
     )
     .await?;
-    let args: Vec<_> = std::env::args().collect();
-    let source = if args.len() > 1 {
-        match std::fs::read_to_string(&args[1]) {
-            Ok(code) => code,
-            Err(error) => {
-                println!("{error:?}");
-                DEFAULT_SHADER.to_string()
-            }
-        }
-    } else {
-        DEFAULT_SHADER.to_string()
-    };
+    let source = input_shader();
     let Some(mut plane) = Plane::new(scene.device(), &source).or_else(|| {
         eprintln!("input shader is invalid; falling back to the built-in shader");
         Plane::new(scene.device(), DEFAULT_SHADER)
