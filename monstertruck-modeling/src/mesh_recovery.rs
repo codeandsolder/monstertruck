@@ -38,6 +38,11 @@ impl Default for PlanarRecoveryOptions {
 
 mod analytic;
 mod carrier_identity;
+mod collapsed_aperture;
+pub use collapsed_aperture::{
+    AperturePolygonOrigin, CollapsedApertureCandidate, CollapsedApertureEvidence,
+    collapsed_aperture_candidates,
+};
 mod component_groups;
 mod component_partition;
 mod native_recovery;
