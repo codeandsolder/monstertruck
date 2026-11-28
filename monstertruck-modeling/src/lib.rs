@@ -140,7 +140,7 @@ pub use fillet_impl::{
 
 /// Font outline ingestion and conversion to wires.
 ///
-/// Requires the `font` feature flag. Re-exports from [`ttf_parser`].
+/// Requires the `font` feature flag. Uses native [`skrifa`] font instances.
 #[cfg(feature = "font")]
 pub mod text;
 
