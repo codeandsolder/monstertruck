@@ -76,7 +76,7 @@ fn local_controls(net: &BsplineSurface<Vector4>, chart: ToroidalTensorChart) -> 
 
 // Extract the tensor product of the same one-dimensional interval blossom
 // used by the rational rim proof. Neither axis is sampled or knot-snapped.
-fn spans_along_rows(net: &Net, knots: &[f64]) -> Option<Vec<Net>> {
+fn spans_along_rows(net: &[Vec<IntervalControl>], knots: &[f64]) -> Option<Vec<Net>> {
     let mut spans = Vec::<Net>::new();
     for row in net {
         let extracted = interval_bezier_spans(row, knots)?;
@@ -93,7 +93,7 @@ fn spans_along_rows(net: &Net, knots: &[f64]) -> Option<Vec<Net>> {
     Some(spans)
 }
 
-fn transpose(net: &Net) -> Option<Net> {
+fn transpose(net: &[Vec<IntervalControl>]) -> Option<Net> {
     let count = net.first()?.len();
     if net.iter().any(|row| row.len() != count) {
         return None;
@@ -105,7 +105,7 @@ fn transpose(net: &Net) -> Option<Net> {
     )
 }
 
-fn split_rows(net: &Net) -> Option<[Net; 2]> {
+fn split_rows(net: &[Vec<IntervalControl>]) -> Option<[Net; 2]> {
     let mut first = Vec::with_capacity(net.len());
     let mut last = Vec::with_capacity(net.len());
     for row in net {
@@ -120,7 +120,7 @@ fn split_rows(net: &Net) -> Option<[Net; 2]> {
     Some([first, last])
 }
 
-fn split(net: &Net, along_u: bool) -> Option<[Net; 2]> {
+fn split(net: &[Vec<IntervalControl>], along_u: bool) -> Option<[Net; 2]> {
     if !along_u {
         return split_rows(net);
     }
@@ -128,7 +128,7 @@ fn split(net: &Net, along_u: bool) -> Option<[Net; 2]> {
     Some([transpose(&a)?, transpose(&b)?])
 }
 
-fn oriented_normal(net: &Net, major: f64) -> Option<Interval> {
+fn oriented_normal(net: &[Vec<IntervalControl>], major: f64) -> Option<Interval> {
     let bounds = RationalControlBounds::from_controls(net.iter().flatten())?;
     let [x, y, z] = bounds.position;
     let rho = x.square().plus(y.square()).sqrt()?;
@@ -159,7 +159,7 @@ fn oriented_normal(net: &Net, major: f64) -> Option<Interval> {
 }
 
 fn certify_patch(
-    net: &Net,
+    net: &[Vec<IntervalControl>],
     chart: ToroidalTensorChart,
     depth: usize,
     remaining: &mut usize,

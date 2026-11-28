@@ -288,8 +288,8 @@ impl RationalControlBounds {
         ];
         for p in controls {
             weight = weight.union(p[3]);
-            for i in 0..3 {
-                position[i] = position[i].union(p[i].checked_div(p[3])?);
+            for (i, bound) in position.iter_mut().enumerate() {
+                *bound = bound.union(p[i].checked_div(p[3])?);
             }
         }
         (weight.lo > 0.0 && weight.finite()).then_some(Self { weight, position })
@@ -311,8 +311,8 @@ impl RationalControlBounds {
             .map(|(a, b)| std::array::from_fn::<_, 4, _>(|i| b[i].minus(a[i]).scale(degree)));
         let mut bounds = derivative.next()?;
         for p in derivative {
-            for i in 0..4 {
-                bounds[i] = bounds[i].union(p[i]);
+            for (bound, value) in bounds.iter_mut().zip(p) {
+                *bound = bound.union(value);
             }
         }
         let rate = |i: usize| {

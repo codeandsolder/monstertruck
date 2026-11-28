@@ -239,8 +239,7 @@ mod tests {
     #[test]
     fn narrow_fold_is_rejected_even_within_the_tensor_position_budget() -> anyhow::Result<()> {
         let net = example().ok_or_else(|| anyhow::anyhow!("torus construction failed"))?;
-        let chart = certified_toroidal_tensor(&net, TOL)
-            .ok_or_else(|| anyhow::anyhow!("original tensor not certified"))?;
+        assert!(certified_toroidal_tensor(&net, TOL).is_some());
         // Split the first quadratic rational arc with exact de Casteljau
         // geometry, preserving a very narrow positive knot interval.
         assert_eq!(net.udegree(), 2);
@@ -266,7 +265,11 @@ mod tests {
         // Reverse the first u tangent at an interior meridian knot without
         // changing either boundary circle or any weight. The displacement
         // is smaller than the global positional proof budget.
-        let tangent = chart.axis.cross(chart.radial);
+        let start = project_positive_homogeneous_point(points[0][2])
+            .ok_or_else(|| anyhow::anyhow!("invalid start pole"))?;
+        let next = project_positive_homogeneous_point(points[1][2])
+            .ok_or_else(|| anyhow::anyhow!("invalid adjacent pole"))?;
+        let tangent = (next - start).normalize();
         let delta = tangent * (-2.0e-8 * controls[1][2].w);
         controls[1][2].x += delta.x;
         controls[1][2].y += delta.y;
