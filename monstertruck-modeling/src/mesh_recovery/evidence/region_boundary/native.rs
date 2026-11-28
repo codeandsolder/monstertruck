@@ -135,6 +135,8 @@ pub struct NativeRegionFace {
 /// Native graph constructed once from the reconciled global trim graph.
 #[derive(Debug)]
 pub struct NativeTrimGraph {
+    /// Original declared source fidelity budget, preserved across hybrid transactions.
+    pub source_chord_budget: Option<f64>,
     /// Native vertices at original source junction IDs; unused or unresolved
     /// source samples have no native vertex.
     pub vertices: Vec<Option<Vertex>>,
@@ -288,6 +290,7 @@ impl RegionBoundaryIndex<'_> {
         }
         .assemble(&mut trims)?;
         Ok(NativeTrimGraph {
+            source_chord_budget: self.source_chord_budget,
             vertices,
             trims,
             regions,
@@ -1578,6 +1581,119 @@ mod tests {
             native_options(),
         )?)
     }
+    #[test]
+    fn finite_cylinder_domain_witness_distinguishes_notch_from_carrier()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let axis = Vector3::unit_z();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (u, v) = normal_basis(axis);
+        let point = |[theta, z]: [f64; 2]| origin + u * theta.cos() + v * theta.sin() + axis * z;
+        let uv = [
+            [0.2, 0.0],
+            [0.3, 1.0],
+            [0.2, 2.0],
+            [1.0, 1.5],
+            [1.1, 1.5],
+            [1.0, 1.6],
+        ];
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions: uv.map(point).to_vec(),
+                ..Default::default()
+            },
+            Faces::from_iter([vec![0, 1, 2], vec![3, 4, 5]]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let supports = evidence.source_planar_support.clone();
+        let carrier = SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin: 1.0,
+            slope: 0.0,
+        };
+        let (surface, outward) = native_surface(
+            carrier,
+            &evidence,
+            &supports,
+            &evidence.positions,
+            native_options(),
+        )?;
+        assert!(outward);
+        let graph = SharedTrimGraph {
+            trims: Vec::new(),
+            regions: Vec::new(),
+            ambiguous_edges: Vec::new(),
+            limited_paths: 0,
+        };
+        // This is a genuine curved wire on the native cylinder, not a
+        // polygonal substitute for its UV domain. Its upper notch omits
+        // the second source triangle despite an exact carrier fit.
+        let domain = [
+            [0., 0.],
+            [2., 0.],
+            [2., 2.],
+            [1.2, 2.],
+            [1.2, 0.8],
+            [0.8, 0.8],
+            [0.8, 2.],
+            [0., 2.],
+        ];
+        let vertices = domain.map(|p| builder::vertex(point(p)));
+        let mut edges = Vec::new();
+        for (i, [theta, z]) in domain.into_iter().enumerate() {
+            let j = (i + 1) % domain.len();
+            let [next, height] = domain[j];
+            let edge = if theta == next {
+                builder::line(&vertices[i], &vertices[j])
+            } else {
+                assert_eq!(z, height);
+                native_circle_edge(
+                    &vertices[i],
+                    &vertices[j],
+                    origin + axis * z,
+                    axis,
+                    1.0,
+                    next - theta,
+                    native_options().intersection_tolerance,
+                )?
+            };
+            edges.push(edge);
+        }
+        let face = Face::new(vec![edges.into_iter().collect::<Wire>()], surface.clone())?;
+        assert!(face.is_geometric_consistent());
+        let context = band::BandContext {
+            carrier,
+            surface: &surface,
+            outward,
+            evidence: &evidence,
+            supports: &supports,
+            positions: &evidence.positions,
+            graph: &graph,
+            lifted_deviations: &[],
+            options: native_options(),
+        };
+        let faces = [face];
+        let witness = band::missing_source_vertex(&context, &faces, 0.05)
+            .ok_or("missing source vertex in notch")?;
+        assert!(
+            uv[3..]
+                .iter()
+                .any(|&p| (evidence.positions[witness] - point(p)).magnitude() < 1e-8)
+        );
+        assert!(
+            band::missing_source_vertex(
+                &band::BandContext {
+                    supports: &supports[..1],
+                    ..context
+                },
+                &faces,
+                0.05
+            )
+            .is_none()
+        );
+        Ok(())
+    }
+
     #[test]
     fn native_cube_owns_each_shared_edge_once() -> Result<(), Box<dyn std::error::Error>> {
         let positions = vec![

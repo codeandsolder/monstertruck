@@ -283,6 +283,7 @@ mod tests {
             .collect();
         let mut result = HybridRecovery {
             native: NativeTrimGraph {
+                source_chord_budget: None,
                 vertices: vertices.into_iter().map(Some).collect(),
                 trims: vec![Ok(vec![diagonal.clone()])],
                 regions,

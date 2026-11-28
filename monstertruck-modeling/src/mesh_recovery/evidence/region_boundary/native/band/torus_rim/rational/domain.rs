@@ -4,7 +4,7 @@
 //! interval enclosures of the actual rational boundary, not sampled chords.
 //! An inconclusive chart never constitutes a missing-coverage witness.
 
-use super::{BandContext, Frame, Interval, Piece, Ring, angle, lift_cycle};
+use super::{BandContext, Frame, Interval, Piece, Ring, angle, lift_cycle, simplicity};
 use crate::{Face, Point3, Wire, mesh_recovery::SurfaceCarrier};
 use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
@@ -29,8 +29,7 @@ fn angular_ball(center: Interval, norm: Interval, budget: Interval) -> Option<In
     Some(center.add(Interval::range(-error, error)))
 }
 
-fn source_ball(frame: Frame, p: Point3, budget: f64) -> Option<ChartBox> {
-    let [x, y, z, _] = frame.local([p.x, p.y, p.z, 1.0].map(Interval::point));
+fn chart_budget(frame: Frame, budget: f64) -> Option<Interval> {
     // The local basis is orthonormal up to rounding. Include its measured
     // operator norm upper bound and arithmetic roundoff, not a geometric
     // tolerance expansion. For orthonormal axes, the Gershgorin bound is 1.
@@ -52,7 +51,11 @@ fn source_ball(frame: Frame, p: Point3, budget: f64) -> Option<ChartBox> {
                 .hi
         })
         .fold(0.0_f64, f64::max);
-    let budget = Interval::point(budget).mul(Interval::point(norm2).sqrt()?);
+    Some(Interval::point(budget).mul(Interval::point(norm2).sqrt()?))
+}
+
+fn source_ball(frame: Frame, p: Point3, budget: Interval) -> Option<ChartBox> {
+    let [x, y, z, _] = frame.local([p.x, p.y, p.z, 1.0].map(Interval::point));
     let rho = x.square().add(y.square()).sqrt()?;
     let u = angular_ball(angle(x, y)?, rho, budget)?;
     let v = if let Some(major) = frame.major {
@@ -73,6 +76,13 @@ struct Domain {
 impl Domain {
     fn new(context: &BandContext<'_>, frame: Frame, wire: &Wire) -> Option<Self> {
         let edges = wire.iter().cloned().collect::<Vec<_>>();
+        if edges
+            .iter()
+            .zip(edges.iter().cycle().skip(1))
+            .any(|(a, b)| a.back() != b.front())
+        {
+            return None;
+        }
         let first = frame.endpoint(frame.local({
             let p = edges.first()?.front().point();
             [p.x, p.y, p.z, 1.0].map(Interval::point)
@@ -80,6 +90,16 @@ impl Domain {
         let (pieces, end) = lift_cycle(frame, &edges, first).ok()?;
         // A noncontractible or singular wire needs a different chart.
         if (0..2).any(|i| end[i].sub(first[i]).magnitude() > frame.tolerance(i)) {
+            return None;
+        }
+        // Tolerance-close endpoints do not by themselves establish a
+        // continuous chart cycle. Require compatible interval endpoints
+        // at every polynomial span junction, including the closing seam.
+        if pieces
+            .iter()
+            .zip(pieces.iter().cycle().skip(1))
+            .any(|(a, b)| (0..2).any(|axis| a.end[axis].intersection(b.start[axis]).is_none()))
+        {
             return None;
         }
         let bounds = pieces
@@ -104,7 +124,11 @@ impl Domain {
                 } else {
                     v.lo.cos().min(v.hi.cos())
                 };
-                profile_radius.mul_add(minimum, radial_center)
+                Interval::point(minimum)
+                    .sub(Interval::point(128.0 * f64::EPSILON))
+                    .scale(profile_radius)
+                    .add(Interval::point(radial_center))
+                    .lo
                     > context.options.intersection_tolerance
             }
             SurfaceCarrier::LinearRevolution {
@@ -112,14 +136,15 @@ impl Domain {
                 slope,
                 ..
             } => {
-                slope
-                    .mul_add(bounds[1].lo, radius_at_origin)
-                    .min(slope.mul_add(bounds[1].hi, radius_at_origin))
+                bounds[1]
+                    .scale(slope)
+                    .add(Interval::point(radius_at_origin))
+                    .lo
                     > context.options.intersection_tolerance
             }
             SurfaceCarrier::Plane { .. } => false,
         };
-        if !regular {
+        if !regular || simplicity::cycle(frame, &pieces, false).is_err() {
             return None;
         }
         // Certify the oriented compact side of the loop, rather than
@@ -141,6 +166,9 @@ impl Domain {
     }
 
     fn excludes(&self, frame: Frame, query: ChartBox) -> bool {
+        if query[0].width() >= TAU || frame.periodic_height() && query[1].width() >= TAU {
+            return false;
+        }
         // A compact lifted chart may straddle either periodic seam. Test
         // every potentially overlapping copy, not just the nearest center.
         let query: ChartBox =
@@ -232,6 +260,7 @@ pub(in super::super::super::super) fn missing_source_vertex(
         },
         1.0,
     )?;
+    let budget = chart_budget(frame, budget)?;
     // Only the outer loop is needed for a positive exclusion witness.
     // Ignoring holes may miss exclusions, but cannot create one.
     let domains = faces
@@ -342,6 +371,7 @@ mod tests {
         assert!(!domain.excludes(frame(), query(0.5, 1.5)));
         assert!(!domain.excludes(frame(), query(0.8, 1.5)));
         assert!(!domain.excludes(frame(), query(0.5 - TAU, 1.5)));
+        assert!(!domain.excludes(frame(), [Interval::range(-TAU, TAU), Interval::point(1.5)]));
         Ok(())
     }
 
@@ -350,10 +380,22 @@ mod tests {
     {
         let frame = frame();
         let point = Point3::new(1.0, 0.0, 2.0);
-        let bounds = source_ball(frame, point, 0.1).ok_or("regular chart")?;
+        let bounds = source_ball(
+            frame,
+            point,
+            chart_budget(frame, 0.1).ok_or("chart budget")?,
+        )
+        .ok_or("regular chart")?;
         assert!(bounds[0].contains(0.1));
         assert!(bounds[1].contains(2.1));
-        assert!(source_ball(frame, point, 1.1).is_none());
+        assert!(
+            source_ball(
+                frame,
+                point,
+                chart_budget(frame, 1.1).ok_or("chart budget")?
+            )
+            .is_none()
+        );
         Ok(())
     }
 }
