@@ -1,3 +1,4 @@
+mod round_path;
 pub(crate) mod sheet;
 pub use sheet::{
     RecoveredOpenRectangularSweep, RecoveredPlanarSweepLeg, RecoveredRectangularTaperTip,
@@ -87,13 +88,6 @@ struct SphereEnd {
     face_ids: Vec<u64>,
 }
 
-struct ClosedRoundSupports {
-    cylinders: Vec<CylinderRun>,
-    tori: Vec<TorusBend>,
-    profile_radius_mm: f64,
-    corner_radius_mm: f64,
-}
-
 #[must_use = "The computed detect round sweeps collection is returned and must be retained or inspected."]
 pub(crate) fn detect_round_sweeps(
     entities: &[EntityInstance],
@@ -103,9 +97,7 @@ pub(crate) fn detect_round_sweeps(
     let mut out = Vec::new();
 
     for &solid_id in solid_ids {
-        if let Some(sweep) = detect_one_closed_round_sweep(solid_id, entities, index)
-            .or_else(|| detect_one_open_round_sweep(solid_id, entities, index))
-        {
+        if let Some(sweep) = round_path::detect(solid_id, entities, index) {
             out.push(sweep);
         }
     }
@@ -128,420 +120,6 @@ pub(crate) fn detect_revolved_round_tails(
     }
     out.sort_by_key(|candidate| candidate.solid_id);
     out
-}
-
-fn detect_one_closed_round_sweep(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<RecoveredRoundSweep> {
-    let mut face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    if face_ids.len() < 8 {
-        return None;
-    }
-    face_ids.sort_unstable();
-    let ClosedRoundSupports {
-        cylinders,
-        tori,
-        profile_radius_mm,
-        corner_radius_mm,
-    } = collect_closed_round_supports(&face_ids, entities, index)?;
-    prove_closed_source_topology(&face_ids, entities, index)?;
-
-    let plane_normal = tori.first()?.axis;
-    if tori
-        .iter()
-        .any(|torus| 1.0 - dot(plane_normal, torus.axis).abs() > DIR_TOL)
-    {
-        return None;
-    }
-    if cylinders
-        .iter()
-        .any(|cylinder| dot(cylinder.direction, plane_normal).abs() > DIR_TOL)
-    {
-        return None;
-    }
-
-    let mut cylinder_corners = Vec::<[usize; 2]>::new();
-    let mut max_residual_mm: f64 = 0.0;
-    for cylinder in &cylinders {
-        let mut connected = Vec::new();
-        for (torus_index, torus) in tori.iter().enumerate() {
-            let residual = (point_to_unit_line_distance(
-                torus.center_mm,
-                cylinder.origin_mm,
-                cylinder.direction,
-            ) - corner_radius_mm)
-                .abs();
-            if residual <= GEOM_TOL_MM {
-                connected.push(torus_index);
-                max_residual_mm = max_residual_mm.max(residual);
-            }
-        }
-        if connected.len() != 2 {
-            return None;
-        }
-        cylinder_corners.push([connected[0], connected[1]]);
-    }
-
-    let mut corner_edges = vec![Vec::<(usize, usize)>::new(); tori.len()];
-    for (cylinder_index, [a, b]) in cylinder_corners.iter().copied().enumerate() {
-        corner_edges[a].push((cylinder_index, b));
-        corner_edges[b].push((cylinder_index, a));
-    }
-    if corner_edges.iter().any(|edges| edges.len() != 2) {
-        return None;
-    }
-
-    for (run_index, [first_corner, second_corner]) in cylinder_corners.iter().copied().enumerate() {
-        prove_cylinder_trim(
-            &cylinders[run_index],
-            &tori[first_corner],
-            &tori[second_corner],
-            profile_radius_mm,
-            entities,
-            index,
-        )?;
-    }
-    for (torus_index, attached_runs) in corner_edges.iter().enumerate() {
-        prove_torus_trim(
-            &tori[torus_index],
-            &cylinders[attached_runs[0].0],
-            &cylinders[attached_runs[1].0],
-            entities,
-            index,
-        )?;
-    }
-
-    let start_corner =
-        (0..tori.len()).min_by(|&a, &b| lex_point(tori[a].center_mm, tori[b].center_mm))?;
-
-    let builder = ClosedRoundSweepBuilder {
-        solid_id,
-        face_ids: &face_ids,
-        profile_radius_mm,
-        corner_radius_mm,
-        plane_normal,
-        tori: &tori,
-        cylinders: &cylinders,
-        max_residual_mm,
-    };
-    let mut starts = corner_edges[start_corner].clone();
-    starts.sort_by(|a, b| lex_point(tori[a.1].center_mm, tori[b.1].center_mm));
-    for (_, next_corner) in starts {
-        let Some((corner_order, edge_order)) =
-            ordered_cycle(start_corner, next_corner, &corner_edges)
-        else {
-            continue;
-        };
-        if let Some(recovered) = builder.build(&corner_order, &edge_order) {
-            return Some(recovered);
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OpenRoundCap {
-    run_index: usize,
-    center_mm: [f64; 3],
-}
-
-fn source_open_round_cap(
-    face_id: u64,
-    plane: brep::PlaneSupport,
-    cylinders: &[CylinderRun],
-    profile_radius_mm: f64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<OpenRoundCap> {
-    let face_bounds = brep::face_loops(face_id, entities, index)?;
-    let [outer_bound] = face_bounds.as_slice() else {
-        return None;
-    };
-    if !outer_bound.outer || outer_bound.edges.len() < 2 {
-        return None;
-    }
-    let mut cap_run = None;
-    for edge in &outer_bound.edges {
-        let CurveSupport::Circle(circle) = edge.support else {
-            return None;
-        };
-        if !near(circle.radius_mm, profile_radius_mm)
-            || distance(circle.center_mm, plane.origin_mm) > GEOM_TOL_MM
-            || 1.0
-                - dot(
-                    normalize(circle.normal, GEOM_TOL_MM)?,
-                    normalize(plane.normal, GEOM_TOL_MM)?,
-                )
-                .abs()
-                > DIR_TOL
-        {
-            return None;
-        }
-        let matches = cylinders
-            .iter()
-            .enumerate()
-            .filter_map(|(run_index, run)| {
-                run.face_ids
-                    .iter()
-                    .any(|&id| {
-                        brep::face_loops(id, entities, index).is_some_and(|loops| {
-                            loops.iter().any(|loop_| {
-                                loop_.edges.iter().any(|item| item.edge_id == edge.edge_id)
-                            })
-                        })
-                    })
-                    .then_some(run_index)
-            })
-            .collect::<Vec<_>>();
-        let [run_index] = matches.as_slice() else {
-            return None;
-        };
-        if cap_run.is_some_and(|previous| previous != *run_index) {
-            return None;
-        }
-        cap_run = Some(*run_index);
-    }
-    let run_index = cap_run?;
-    let run = &cylinders[run_index];
-    if point_to_unit_line_distance(plane.origin_mm, run.origin_mm, run.direction) > GEOM_TOL_MM
-        || 1.0 - dot(normalize(plane.normal, GEOM_TOL_MM)?, run.direction).abs() > DIR_TOL
-    {
-        return None;
-    }
-    Some(OpenRoundCap {
-        run_index,
-        center_mm: plane.origin_mm,
-    })
-}
-
-/// Recover an open, planar-capped circular rod with any number of analytic
-/// straight runs and tangent toroidal elbows. Segment counts and source-face
-/// partitions are inferred from the actual closed manifold, not fixed to a
-/// particular STEP exporter's two-half-face decomposition.
-#[expect(
-    clippy::too_many_lines,
-    reason = "open sweep recovery is a sequential, source-proven geometry and topology construction"
-)]
-fn detect_one_open_round_sweep(
-    solid_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<RecoveredRoundSweep> {
-    let mut face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    if face_ids.len() < 5 {
-        return None;
-    }
-    face_ids.sort_unstable();
-    let mut cylinders = Vec::<CylinderRun>::new();
-    let mut tori = Vec::<TorusBend>::new();
-    let mut plane_faces = Vec::new();
-    let mut radius_samples = Vec::new();
-    for &face_id in &face_ids {
-        let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
-            SurfaceSupport::Cylinder(support) => {
-                let mut run = canonical_cylinder(support)?;
-                radius_samples.push(run.radius_mm);
-                if let Some(existing) = cylinders.iter_mut().find(|old| same_cylinder(old, &run)) {
-                    existing.face_ids.push(face_id);
-                } else {
-                    run.face_ids.push(face_id);
-                    cylinders.push(run);
-                }
-            }
-            SurfaceSupport::Torus(support) => {
-                let mut bend = canonical_torus(support)?;
-                radius_samples.push(bend.minor_radius_mm);
-                if let Some(existing) = tori.iter_mut().find(|old| same_torus(old, &bend)) {
-                    existing.face_ids.push(face_id);
-                } else {
-                    bend.face_ids.push(face_id);
-                    tori.push(bend);
-                }
-            }
-            SurfaceSupport::Plane(plane) => plane_faces.push((face_id, plane)),
-            _ => return None,
-        }
-    }
-    if tori.is_empty() || plane_faces.len() != 2 || cylinders.len() != tori.len() + 1 {
-        return None;
-    }
-    prove_closed_manifold_source_topology(&face_ids, entities, index)?;
-    let radius = common_value(&radius_samples)?;
-    if radius <= GEOM_TOL_MM {
-        return None;
-    }
-    let caps = plane_faces
-        .into_iter()
-        .map(|(id, plane)| source_open_round_cap(id, plane, &cylinders, radius, entities, index))
-        .collect::<Option<Vec<_>>>()?;
-    if caps[0].run_index == caps[1].run_index {
-        return None;
-    }
-    let mut bend_runs = Vec::with_capacity(tori.len());
-    let mut run_bends = vec![Vec::<usize>::new(); cylinders.len()];
-    let mut max_residual_mm = 0.0_f64;
-    for (bend_index, bend) in tori.iter().enumerate() {
-        let adjacent = cylinders
-            .iter()
-            .enumerate()
-            .filter_map(|(run_index, run)| {
-                let axis_alignment = dot(run.direction, bend.axis).abs();
-                let residual =
-                    (point_to_unit_line_distance(bend.center_mm, run.origin_mm, run.direction)
-                        - bend.major_radius_mm)
-                        .abs();
-                (axis_alignment <= DIR_TOL
-                    && residual <= GEOM_TOL_MM
-                    && near(run.radius_mm, bend.minor_radius_mm))
-                .then_some((run_index, residual))
-            })
-            .collect::<Vec<_>>();
-        let [(first, first_residual), (second, second_residual)] = adjacent.as_slice() else {
-            return None;
-        };
-        if dot(cylinders[*first].direction, cylinders[*second].direction).abs() > 1.0 - DIR_TOL {
-            return None;
-        }
-        prove_torus_trim(
-            bend,
-            &cylinders[*first],
-            &cylinders[*second],
-            entities,
-            index,
-        )?;
-        max_residual_mm = max_residual_mm.max(*first_residual).max(*second_residual);
-        bend_runs.push([*first, *second]);
-        run_bends[*first].push(bend_index);
-        run_bends[*second].push(bend_index);
-    }
-    if run_bends.iter().any(|neighbors| neighbors.len() > 2)
-        || caps.iter().any(|cap| run_bends[cap.run_index].len() != 1)
-        || run_bends.iter().enumerate().any(|(i, neighbors)| {
-            if i == caps[0].run_index || i == caps[1].run_index {
-                neighbors.len() != 1
-            } else {
-                neighbors.len() != 2
-            }
-        })
-    {
-        return None;
-    }
-    let (first_cap, last_cap) = if lex_point(caps[0].center_mm, caps[1].center_mm).is_le() {
-        (caps[0], caps[1])
-    } else {
-        (caps[1], caps[0])
-    };
-    let mut current = first_cap.run_index;
-    let mut previous_bend = None;
-    let mut start = first_cap.center_mm;
-    let mut segments = Vec::with_capacity(cylinders.len() + tori.len());
-    let mut first_tangent = None;
-    let mut seen = vec![false; cylinders.len()];
-    while !seen[current] {
-        seen[current] = true;
-        let run = &cylinders[current];
-        let next_bend = run_bends[current]
-            .iter()
-            .copied()
-            .find(|index| Some(*index) != previous_bend);
-        let end = next_bend.map_or(last_cap.center_mm, |index| {
-            project_to_line(tori[index].center_mm, run)
-        });
-        let motion = sub(end, start);
-        let tangent = normalize(motion, GEOM_TOL_MM)?;
-        first_tangent.get_or_insert(tangent);
-        prove_cylinder_between_points(run, start, end, radius, entities, index)?;
-        segments.push(RecoveredSweepSegment::Translation { vector_mm: motion });
-        let Some(bend_index) = next_bend else {
-            if current != last_cap.run_index || seen.iter().any(|flag| !flag) {
-                return None;
-            }
-            break;
-        };
-        let bend = &tori[bend_index];
-        let [first, second] = bend_runs[bend_index];
-        let following = if current == first {
-            second
-        } else if current == second {
-            first
-        } else {
-            return None;
-        };
-        if seen[following] {
-            return None;
-        }
-        let incoming_radial = normalize(sub(end, bend.center_mm), GEOM_TOL_MM)?;
-        let next_start = project_to_line(bend.center_mm, &cylinders[following]);
-        let outgoing_radial = normalize(sub(next_start, bend.center_mm), GEOM_TOL_MM)?;
-        let angle = dot(bend.axis, cross(incoming_radial, outgoing_radial))
-            .atan2(dot(incoming_radial, outgoing_radial));
-        if !angle.is_finite()
-            || angle.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-            || angle.abs()
-                >= std::f64::consts::PI - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-        {
-            return None;
-        }
-        let predicted_in = normalize(
-            mul(cross(bend.axis, incoming_radial), angle.signum()),
-            GEOM_TOL_MM,
-        )?;
-        if dot(predicted_in, tangent)
-            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-        {
-            return None;
-        }
-        let following_endpoint = run_bends[following]
-            .iter()
-            .copied()
-            .find(|&i| i != bend_index)
-            .map_or(last_cap.center_mm, |i| {
-                project_to_line(tori[i].center_mm, &cylinders[following])
-            });
-        let outgoing_tangent = normalize(sub(following_endpoint, next_start), GEOM_TOL_MM)?;
-        let predicted_out = normalize(
-            mul(cross(bend.axis, outgoing_radial), angle.signum()),
-            GEOM_TOL_MM,
-        )?;
-        if dot(predicted_out, outgoing_tangent)
-            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-        {
-            return None;
-        }
-        max_residual_mm = max_residual_mm
-            .max((distance(end, bend.center_mm) - bend.major_radius_mm).abs())
-            .max((distance(next_start, bend.center_mm) - bend.major_radius_mm).abs());
-        segments.push(RecoveredSweepSegment::Rotation {
-            axis_origin_mm: bend.center_mm,
-            axis_direction: bend.axis,
-            angle_rad: angle,
-        });
-        previous_bend = Some(bend_index);
-        current = following;
-        start = next_start;
-    }
-    if max_residual_mm > GEOM_TOL_MM {
-        return None;
-    }
-    let path_tangent = first_tangent?;
-    let section_normal = normalize(cross(path_tangent, [1.0, 0.0, 0.0]), GEOM_TOL_MM)
-        .or_else(|| normalize(cross(path_tangent, [0.0, 1.0, 0.0]), GEOM_TOL_MM))?;
-    let section_binormal = normalize(cross(path_tangent, section_normal), GEOM_TOL_MM)?;
-    Some(RecoveredRoundSweep {
-        solid_id,
-        source_face_ids: face_ids,
-        profile_radius_mm: radius,
-        path_start_mm: first_cap.center_mm,
-        profile_x_axis: section_normal,
-        profile_y_axis: section_binormal,
-        path_tangent,
-        segments,
-        closed: false,
-        max_residual_mm,
-    })
 }
 
 #[expect(
@@ -644,27 +222,19 @@ fn detect_one_revolved_round_tail(
                 }
                 let incoming = &cylinders[incoming_index];
                 let outgoing = &cylinders[outgoing_index];
-                if dot(incoming.direction, outgoing.direction).abs() > DIR_TOL {
-                    continue;
-                }
                 let interface_mm = project_to_line(bend.center_mm, incoming);
                 let bend_end_mm = project_to_line(bend.center_mm, outgoing);
-                let radial_in = normalize(sub(interface_mm, bend.center_mm), GEOM_TOL_MM)?;
-                let radial_out = normalize(sub(bend_end_mm, bend.center_mm), GEOM_TOL_MM)?;
-                let angle_rad =
-                    dot(bend.axis, cross(radial_in, radial_out)).atan2(dot(radial_in, radial_out));
-                if !angle_rad.is_finite()
-                    || angle_rad.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-                    || angle_rad.abs()
-                        >= std::f64::consts::PI
-                            - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-                {
+                let Some(span) = round_path::prove_bend_between(
+                    bend,
+                    interface_mm,
+                    bend_end_mm,
+                    entities,
+                    index,
+                ) else {
                     continue;
-                }
-                let sign = angle_rad.signum();
-                let path_tangent = normalize(mul(cross(bend.axis, radial_in), sign), GEOM_TOL_MM)?;
-                let bend_exit_tangent =
-                    normalize(mul(cross(bend.axis, radial_out), sign), GEOM_TOL_MM)?;
+                };
+                let path_tangent = span.tangent_in;
+                let bend_exit_tangent = span.tangent_out;
 
                 for sphere in &spheres {
                     if !near(sphere.radius_mm, radius)
@@ -716,7 +286,6 @@ fn detect_one_revolved_round_tail(
                     {
                         continue;
                     }
-                    prove_torus_trim(bend, incoming, outgoing, entities, index)?;
                     prove_cylinder_between_points(
                         outgoing,
                         bend_end_mm,
@@ -765,11 +334,7 @@ fn detect_one_revolved_round_tail(
                         profile_y_axis,
                         path_tangent,
                         segments: vec![
-                            RecoveredSweepSegment::Rotation {
-                                axis_origin_mm: bend.center_mm,
-                                axis_direction: bend.axis,
-                                angle_rad,
-                            },
+                            span.motion.clone(),
                             RecoveredSweepSegment::Translation {
                                 vector_mm: translation,
                             },
@@ -863,63 +428,6 @@ fn prove_hemispherical_end(
         .then_some(())
 }
 
-fn collect_closed_round_supports(
-    face_ids: &[u64],
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<ClosedRoundSupports> {
-    let mut cylinders = Vec::<CylinderRun>::new();
-    let mut tori = Vec::<TorusBend>::new();
-    let mut radius_samples = Vec::new();
-    let mut bend_radius_samples = Vec::new();
-
-    for &face_id in face_ids {
-        let surface_id = brep::face_surface(face_id, entities, index)?;
-        match brep::surface_support(surface_id, entities, index) {
-            SurfaceSupport::Cylinder(support) => {
-                let mut run = canonical_cylinder(support)?;
-                radius_samples.push(run.radius_mm);
-                if let Some(existing) = cylinders
-                    .iter_mut()
-                    .find(|existing| same_cylinder(existing, &run))
-                {
-                    existing.face_ids.push(face_id);
-                } else {
-                    run.face_ids.push(face_id);
-                    cylinders.push(run);
-                }
-            }
-            SurfaceSupport::Torus(support) => {
-                let mut bend = canonical_torus(support)?;
-                radius_samples.push(bend.minor_radius_mm);
-                bend_radius_samples.push(bend.major_radius_mm);
-                if let Some(existing) = tori.iter_mut().find(|existing| same_torus(existing, &bend))
-                {
-                    existing.face_ids.push(face_id);
-                } else {
-                    bend.face_ids.push(face_id);
-                    tori.push(bend);
-                }
-            }
-            _ => return None,
-        }
-    }
-
-    // STEP commonly splits one analytic support at a parameter seam, so the
-    // source face count is deliberately not prescribed here.
-    if cylinders.len() != 4 || tori.len() != 4 {
-        return None;
-    }
-    let profile_radius_mm = common_value(&radius_samples)?;
-    let corner_radius_mm = common_value(&bend_radius_samples)?;
-    (profile_radius_mm > 0.0 && corner_radius_mm > 0.0).then_some(ClosedRoundSupports {
-        cylinders,
-        tori,
-        profile_radius_mm,
-        corner_radius_mm,
-    })
-}
-
 fn prove_closed_manifold_source_topology(
     face_ids: &[u64],
     entities: &[EntityInstance],
@@ -971,75 +479,6 @@ fn prove_closed_manifold_source_topology(
         }
     }
     seen.into_iter().all(|value| value).then_some(())
-}
-
-fn prove_closed_source_topology(
-    face_ids: &[u64],
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<()> {
-    if face_ids.is_empty() {
-        return None;
-    }
-    let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
-    let mut face_neighbors = vec![HashSet::<usize>::new(); face_ids.len()];
-
-    for (face_index, &face_id) in face_ids.iter().enumerate() {
-        let loops = brep::face_loops(face_id, entities, index)?;
-        if loops.len() != 1 || !loops[0].outer || loops[0].edges.len() < 2 {
-            return None;
-        }
-        let edges = &loops[0].edges;
-        for (edge, next) in edges.iter().zip(edges.iter().cycle().skip(1)) {
-            if edge.end_vertex != next.start_vertex {
-                return None;
-            }
-            edge_faces.entry(edge.edge_id).or_default().push(face_index);
-        }
-    }
-
-    for attached in edge_faces.values() {
-        if attached.len() != 2 {
-            return None;
-        }
-        let a = attached[0];
-        let b = attached[1];
-        if a != b {
-            face_neighbors[a].insert(b);
-            face_neighbors[b].insert(a);
-        }
-    }
-
-    let mut seen = vec![false; face_ids.len()];
-    let mut queue = VecDeque::from([0_usize]);
-    seen[0] = true;
-    while let Some(face) = queue.pop_front() {
-        for &neighbor in &face_neighbors[face] {
-            if !seen[neighbor] {
-                seen[neighbor] = true;
-                queue.push_back(neighbor);
-            }
-        }
-    }
-    seen.into_iter().all(|value| value).then_some(())
-}
-
-fn prove_cylinder_trim(
-    run: &CylinderRun,
-    first_corner: &TorusBend,
-    second_corner: &TorusBend,
-    profile_radius_mm: f64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<()> {
-    prove_cylinder_between_points(
-        run,
-        project_to_line(first_corner.center_mm, run),
-        project_to_line(second_corner.center_mm, run),
-        profile_radius_mm,
-        entities,
-        index,
-    )
 }
 
 fn prove_cylinder_between_points(
@@ -1119,76 +558,6 @@ fn circle_is_cylinder_section(
             <= GEOM_TOL_MM
 }
 
-fn prove_torus_trim(
-    bend: &TorusBend,
-    first_run: &CylinderRun,
-    second_run: &CylinderRun,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<()> {
-    let radial_a = normalize(
-        sub(project_to_line(bend.center_mm, first_run), bend.center_mm),
-        GEOM_TOL_MM,
-    )?;
-    let radial_b = normalize(
-        sub(project_to_line(bend.center_mm, second_run), bend.center_mm),
-        GEOM_TOL_MM,
-    )?;
-    let bend_angle = unit_angle(radial_a, radial_b)?;
-    if bend_angle <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-        || bend_angle
-            >= std::f64::consts::PI - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-    {
-        return None;
-    }
-
-    let mut saw_first_end = false;
-    let mut saw_second_end = false;
-    let mut saw_major_trace = false;
-    for &face_id in &bend.face_ids {
-        for loop_ in brep::face_loops(face_id, entities, index)? {
-            for edge in loop_.edges {
-                for point in [edge.start_mm, edge.end_mm] {
-                    if !point_on_torus(point, bend) {
-                        return None;
-                    }
-                    let direction = torus_major_direction(point, bend)?;
-                    if !direction_on_minor_arc(radial_a, radial_b, direction, bend_angle) {
-                        return None;
-                    }
-                    saw_first_end |= 1.0 - dot(direction, radial_a) <= DIR_TOL;
-                    saw_second_end |= 1.0 - dot(direction, radial_b) <= DIR_TOL;
-                }
-
-                let CurveSupport::Circle(circle) = edge.support else {
-                    return None;
-                };
-                match classify_torus_boundary_circle(&circle, bend)? {
-                    TorusBoundaryCircle::CrossSection { radial_direction } => {
-                        if !direction_on_minor_arc(radial_a, radial_b, radial_direction, bend_angle)
-                        {
-                            return None;
-                        }
-                    }
-                    TorusBoundaryCircle::MajorTrace => {
-                        let sweep = directed_circle_sweep(&edge, &circle)?;
-                        if sweep <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_curve_parameter
-                            || sweep
-                                > bend_angle
-                                    + DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-                        {
-                            return None;
-                        }
-                        saw_major_trace = true;
-                    }
-                }
-            }
-        }
-    }
-
-    (saw_first_end && saw_second_end && saw_major_trace).then_some(())
-}
-
 #[derive(Debug, Clone, Copy)]
 enum TorusBoundaryCircle {
     CrossSection { radial_direction: [f64; 3] },
@@ -1240,46 +609,6 @@ fn torus_major_direction(point: [f64; 3], bend: &TorusBend) -> Option<[f64; 3]> 
     let delta = sub(point, bend.center_mm);
     let axial = dot(delta, bend.axis);
     normalize(sub(delta, mul(bend.axis, axial)), GEOM_TOL_MM)
-}
-
-fn unit_angle(a: [f64; 3], b: [f64; 3]) -> Option<f64> {
-    let cosine = dot(a, b).clamp(-1.0, 1.0);
-    let angle = cosine.acos();
-    angle.is_finite().then_some(angle)
-}
-
-fn direction_on_minor_arc(
-    start: [f64; 3],
-    end: [f64; 3],
-    point: [f64; 3],
-    total_angle: f64,
-) -> bool {
-    let Some(first) = unit_angle(start, point) else {
-        return false;
-    };
-    let Some(second) = unit_angle(point, end) else {
-        return false;
-    };
-    (first + second - total_angle).abs()
-        <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-}
-
-fn directed_circle_sweep(edge: &brep::OrientedEdgeUse, circle: &CircleSupport) -> Option<f64> {
-    let normal = normalize(circle.normal, GEOM_TOL_MM)?;
-    let x_axis = normalize(circle.x_direction, GEOM_TOL_MM)?;
-    let y_axis = normalize(cross(normal, x_axis), GEOM_TOL_MM)?;
-    let parameter = |point: [f64; 3]| {
-        let radial = sub(point, circle.center_mm);
-        dot(radial, y_axis).atan2(dot(radial, x_axis))
-    };
-    let start = parameter(edge.start_mm);
-    let end = parameter(edge.end_mm);
-    let sweep = if edge.parameter_forward {
-        (end - start).rem_euclid(std::f64::consts::TAU)
-    } else {
-        (start - end).rem_euclid(std::f64::consts::TAU)
-    };
-    sweep.is_finite().then_some(sweep)
 }
 
 fn canonical_cylinder(support: CylinderSupport) -> Option<CylinderRun> {
@@ -1346,155 +675,6 @@ fn lex_point(a: [f64; 3], b: [f64; 3]) -> std::cmp::Ordering {
     a[0].total_cmp(&b[0])
         .then(a[1].total_cmp(&b[1]))
         .then(a[2].total_cmp(&b[2]))
-}
-
-fn ordered_cycle(
-    start: usize,
-    next: usize,
-    corner_edges: &[Vec<(usize, usize)>],
-) -> Option<(Vec<usize>, Vec<usize>)> {
-    let first_edge = corner_edges[start]
-        .iter()
-        .find_map(|&(edge, other)| (other == next).then_some(edge))?;
-    let mut corners = vec![start, next];
-    let mut edges = vec![first_edge];
-    let mut previous = start;
-    let mut current = next;
-
-    while corners.len() < corner_edges.len() {
-        let &(edge, following) = corner_edges[current]
-            .iter()
-            .find(|&&(_, other)| other != previous)?;
-        if corners.contains(&following) {
-            return None;
-        }
-        edges.push(edge);
-        corners.push(following);
-        previous = current;
-        current = following;
-    }
-
-    let closing_edge = corner_edges[current]
-        .iter()
-        .find_map(|&(edge, other)| (other == start).then_some(edge))?;
-    edges.push(closing_edge);
-    Some((corners, edges))
-}
-
-struct ClosedRoundSweepBuilder<'a> {
-    solid_id: u64,
-    face_ids: &'a [u64],
-    profile_radius_mm: f64,
-    corner_radius_mm: f64,
-    plane_normal: [f64; 3],
-    tori: &'a [TorusBend],
-    cylinders: &'a [CylinderRun],
-    max_residual_mm: f64,
-}
-
-impl ClosedRoundSweepBuilder<'_> {
-    fn build(&self, corners: &[usize], edges: &[usize]) -> Option<RecoveredRoundSweep> {
-        if corners.len() != 4 || edges.len() != 4 {
-            return None;
-        }
-
-        let mut max_residual_mm = self.max_residual_mm;
-        let mut segments = Vec::with_capacity(8);
-        let mut start_mm = None;
-        let mut start_tangent = None;
-
-        for i in 0..4 {
-            let current_corner = &self.tori[corners[i]];
-            let next_corner = &self.tori[corners[(i + 1) % 4]];
-            let run = &self.cylinders[edges[i]];
-            let next_run = &self.cylinders[edges[(i + 1) % 4]];
-
-            let line_start = project_to_line(current_corner.center_mm, run);
-            let line_end = project_to_line(next_corner.center_mm, run);
-            let translation = sub(line_end, line_start);
-            let tangent = normalize(translation, GEOM_TOL_MM)?;
-            if start_mm.is_none() {
-                start_mm = Some(line_start);
-                start_tangent = Some(tangent);
-            }
-
-            let radial_in = sub(line_end, next_corner.center_mm);
-            let radial_out = sub(
-                project_to_line(next_corner.center_mm, next_run),
-                next_corner.center_mm,
-            );
-            let radial_in_length = norm(radial_in);
-            let radial_out_length = norm(radial_out);
-            max_residual_mm = max_residual_mm
-                .max((radial_in_length - self.corner_radius_mm).abs())
-                .max((radial_out_length - self.corner_radius_mm).abs());
-            if max_residual_mm > GEOM_TOL_MM {
-                return None;
-            }
-
-            let angle = dot(self.plane_normal, cross(radial_in, radial_out))
-                .atan2(dot(radial_in, radial_out));
-            if !angle.is_finite()
-                || angle.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-                || angle.abs()
-                    >= std::f64::consts::PI
-                        - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_angle_rad
-            {
-                return None;
-            }
-
-            let sign = angle.signum();
-            let expected_in =
-                normalize(mul(cross(self.plane_normal, radial_in), sign), GEOM_TOL_MM)?;
-            if dot(expected_in, tangent)
-                < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-            {
-                return None;
-            }
-            let next_line_start = project_to_line(next_corner.center_mm, next_run);
-            let following_corner = &self.tori[corners[(i + 2) % 4]];
-            let next_line_end = project_to_line(following_corner.center_mm, next_run);
-            let outgoing = normalize(sub(next_line_end, next_line_start), GEOM_TOL_MM)?;
-            let expected_out =
-                normalize(mul(cross(self.plane_normal, radial_out), sign), GEOM_TOL_MM)?;
-            if dot(expected_out, outgoing)
-                < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-            {
-                return None;
-            }
-
-            segments.push(RecoveredSweepSegment::Translation {
-                vector_mm: translation,
-            });
-            segments.push(RecoveredSweepSegment::Rotation {
-                axis_origin_mm: next_corner.center_mm,
-                axis_direction: self.plane_normal,
-                angle_rad: angle,
-            });
-        }
-
-        let path_tangent = start_tangent?;
-        let section_normal = self.plane_normal;
-        let section_binormal = normalize(cross(path_tangent, section_normal), GEOM_TOL_MM)?;
-        if dot(cross(section_normal, section_binormal), path_tangent)
-            < 1.0 - DEFAULT_STEP_RECOVERY_TOLERANCES.source_sweep_tangent_cosine
-        {
-            return None;
-        }
-
-        Some(RecoveredRoundSweep {
-            closed: true,
-            solid_id: self.solid_id,
-            source_face_ids: self.face_ids.to_vec(),
-            profile_radius_mm: self.profile_radius_mm,
-            path_start_mm: start_mm?,
-            profile_x_axis: section_normal,
-            profile_y_axis: section_binormal,
-            path_tangent,
-            segments,
-            max_residual_mm,
-        })
-    }
 }
 
 fn project_to_line(point: [f64; 3], line: &CylinderRun) -> [f64; 3] {
@@ -1610,17 +790,24 @@ mod tests {
                 face_ids: Vec::new(),
             },
         ];
-        let builder = ClosedRoundSweepBuilder {
-            solid_id: 7,
-            face_ids: &[10, 11],
-            profile_radius_mm: 0.05,
-            corner_radius_mm: 0.25,
-            plane_normal: [0.0, 0.0, 1.0],
-            tori: &tori,
-            cylinders: &cylinders,
-            max_residual_mm: 0.0,
-        };
-        let Some(sweep) = builder.build(&[0, 1, 2, 3], &[0, 1, 2, 3]) else {
+        let mut evidence = Vec::new();
+        for i in 0..tori.len() {
+            let next = (i + 1) % tori.len();
+            let start = project_to_line(tori[i].center_mm, &cylinders[i]);
+            let end = project_to_line(tori[next].center_mm, &cylinders[i]);
+            let exit = project_to_line(tori[next].center_mm, &cylinders[next]);
+            evidence.push(
+                round_path::line_evidence(start, end)
+                    .ok_or_else(|| anyhow::anyhow!("invalid straight segment"))?,
+            );
+            evidence.push(
+                round_path::bend_evidence(&tori[next], end, exit, std::f64::consts::FRAC_PI_2)
+                    .ok_or_else(|| anyhow::anyhow!("invalid bend"))?,
+            );
+        }
+        let Some(sweep) =
+            round_path::assemble(7, vec![10, 11], 0.05, [0.0, -0.25, 0.0], true, evidence)
+        else {
             anyhow::bail!("rounded rectangle was not recovered");
         };
         assert_eq!(sweep.segments.len(), 8);
@@ -1635,22 +822,6 @@ mod tests {
         };
         assert!((angle_rad - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12);
         assert!(sweep.max_residual_mm <= GEOM_TOL_MM);
-        Ok(())
-    }
-
-    #[test]
-    fn cycle_order_is_deterministic() -> anyhow::Result<()> {
-        let edges = vec![
-            vec![(0, 1), (3, 3)],
-            vec![(0, 0), (1, 2)],
-            vec![(1, 1), (2, 3)],
-            vec![(2, 2), (3, 0)],
-        ];
-        let Some((corners, runs)) = ordered_cycle(0, 1, &edges) else {
-            anyhow::bail!("cycle was not recovered");
-        };
-        assert_eq!(corners, vec![0, 1, 2, 3]);
-        assert_eq!(runs, vec![0, 1, 2, 3]);
         Ok(())
     }
 }

@@ -2645,7 +2645,7 @@ fn merged_source_ids(first: &[u64], second: &[u64]) -> Vec<u64> {
     ids
 }
 
-fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
+pub fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
     let start = circle_angle_3d(edge.start_mm, circle)?;
     let end = circle_angle_3d(edge.end_mm, circle)?;
     let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;

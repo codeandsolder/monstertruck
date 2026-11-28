@@ -1,4 +1,4 @@
-use super::{RecoveredSweepSegment, prove_closed_source_topology};
+use super::{RecoveredSweepSegment, prove_closed_manifold_source_topology};
 use crate::brep::{self, CurveSupport};
 use crate::formed_sheet::{
     self, SheetCylinderPair, SheetPatchId, SheetPlanePair, SheetReferenceCurve,
@@ -119,7 +119,7 @@ fn detect_one(
 
     let mut source_face_ids = brep::solid_face_ids(evidence.solid_id, entities, index)?;
     source_face_ids.sort_unstable();
-    prove_closed_source_topology(&source_face_ids, entities, index)?;
+    prove_closed_manifold_source_topology(&source_face_ids, entities, index)?;
 
     let reduced_skin = formed_sheet::recover_reference_skin_for_pairs(
         evidence.solid_id,
