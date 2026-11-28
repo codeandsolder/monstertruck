@@ -12,8 +12,8 @@
 mod app;
 use app::{App, AppResult};
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
-    WindowSceneDescriptor, wgpu,
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor, wgpu,
 };
 use monstertruck_meshing::prelude::*;
 use monstertruck_modeling::{Solid, builder};
@@ -26,7 +26,7 @@ const BACKGROUND: [f64; 4] = [45.0 / 255.0, 36.0 / 255.0, 42.0 / 255.0, 1.0];
 const BOXCOLOR: [f64; 4] = [208.0 / 255.0, 176.0 / 255.0, 107.0 / 255.0, 1.0];
 
 struct MyApp {
-    scene: WindowScene,
+    scene: SurfaceScene,
     instances: Vec<PolygonInstance>,
     matrices: Vec<Matrix4>,
 }
@@ -38,7 +38,7 @@ impl App for MyApp {
         let half_side = side_length / 2.0;
         let half_camera_dist = camera_dist / 2.0;
         let sample_count = 4;
-        let scene_desc = WindowSceneDescriptor {
+        let scene_desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 camera: Camera {
                     matrix: Matrix4::new_translation(&(camera_dist * Vector3::z())),
@@ -68,7 +68,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let vertex = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
         let edge = builder::extrude(&vertex, Vector3::x());
         let face = builder::extrude(&edge, Vector3::y());
@@ -116,7 +121,7 @@ impl App for MyApp {
             matrices,
         })
     }
-    fn render(&mut self) {
+    fn render(&mut self, size: (u32, u32)) {
         let time = self.scene.elapsed().as_secs_f64();
         for (index, shape) in self.instances.iter_mut().enumerate() {
             let pair_sign = if (index / 2) % 2 == 0 { 1.0 } else { -1.0 };
@@ -129,7 +134,7 @@ impl App for MyApp {
                 * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), time * PI / 2.0);
             self.scene.update_bind_group(shape);
         }
-        if let Err(error) = self.scene.render_frame() {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }

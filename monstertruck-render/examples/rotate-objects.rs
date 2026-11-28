@@ -10,8 +10,8 @@
 //! - Enter "L" on the keyboard to switch the point light source/uniform light source of the light.
 
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
-    WindowSceneDescriptor,
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor,
 };
 use monstertruck_meshing::prelude::*;
 use monstertruck_render::{CreatorCreator, Material, PolygonInstance, PolygonState};
@@ -34,7 +34,7 @@ const TEAPOT_BYTES: &[u8] = include_bytes!(concat!(
 ));
 
 struct MyRender {
-    scene: WindowScene,
+    scene: SurfaceScene,
     instances: Vec<PolygonInstance>,
     rotate_flag: bool,
     prev_cursor: Option<Vector2>,
@@ -138,7 +138,7 @@ impl MyRender {
 impl App for MyRender {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
-        let scene_desc = WindowSceneDescriptor {
+        let scene_desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 camera: Self::create_camera()?,
                 lights: vec![Light {
@@ -154,7 +154,12 @@ impl App for MyRender {
             },
         };
         let mut app = Self {
-            scene: WindowScene::from_window(window, &scene_desc).await?,
+            scene: SurfaceScene::from_target(
+                Arc::clone(&window).into(),
+                window.inner_size().into(),
+                &scene_desc,
+            )
+            .await?,
             instances: Vec::new(),
             rotate_flag: false,
             prev_cursor: None,
@@ -296,7 +301,7 @@ impl App for MyRender {
         Self::default_control_flow()
     }
 
-    fn render(&mut self) {
+    fn render(&mut self, size: (u32, u32)) {
         if let Some(path) = self.path.take() {
             match std::fs::File::open(path) {
                 Ok(file) => {
@@ -310,7 +315,7 @@ impl App for MyRender {
         if self.scene.number_of_objects() != 0 {
             self.update_objects();
         }
-        if let Err(error) = self.scene.render_frame() {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }

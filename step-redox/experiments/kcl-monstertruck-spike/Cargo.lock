@@ -1857,10 +1857,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -2511,9 +2513,9 @@ dependencies = [
 name = "monstertruck-io"
 version = "0.4.1"
 dependencies = [
- "chrono",
  "derive_more",
  "encoding_rs",
+ "jiff",
  "monstertruck-assembly",
  "monstertruck-core",
  "monstertruck-derive",

@@ -4,8 +4,8 @@
 mod app;
 use app::{App, AppResult, ControlFlow};
 use monstertruck_gpu::{
-    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, WindowScene,
-    WindowSceneDescriptor,
+    BackendBufferConfig, Camera, Light, LightType, ProjectionMethod, StudioConfig, SurfaceScene,
+    SurfaceSceneDescriptor,
 };
 use monstertruck_meshing::prelude::*;
 use monstertruck_render::{
@@ -20,7 +20,7 @@ use winit::{
 };
 
 struct MyApp {
-    scene: WindowScene,
+    scene: SurfaceScene,
     instance0: PolygonInstance,
     instance1: PolygonInstance,
     instance2: WireFrameInstance,
@@ -55,7 +55,7 @@ impl App for MyApp {
             near_clip: 0.1,
             far_clip: 40.0,
         };
-        let scene_desc = WindowSceneDescriptor {
+        let scene_desc = SurfaceSceneDescriptor {
             studio: StudioConfig {
                 camera,
                 lights: vec![Light {
@@ -70,7 +70,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene = WindowScene::from_window(window, &scene_desc).await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let sphere0 = sphere(Point3::new(0.0, 0.0, 0.7), 1.0, 50, 50)?;
         let sphere1 = sphere(Point3::new(0.0, 0.0, -0.7), 1.0, 50, 50)?;
         let intersect = sphere0.extract_interference(&sphere1);
@@ -227,8 +232,8 @@ impl App for MyApp {
         }
         Self::default_control_flow()
     }
-    fn render(&mut self) {
-        if let Err(error) = self.scene.render_frame() {
+    fn render(&mut self, size: (u32, u32)) {
+        if let Err(error) = self.scene.render_frame(size) {
             eprintln!("render failed: {error}");
         }
     }

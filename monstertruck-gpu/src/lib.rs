@@ -360,12 +360,6 @@ pub struct DeviceHandler {
     queue: Queue,
 }
 
-#[derive(Clone, Debug)]
-struct WindowHandler {
-    window: Arc<winit::window::Window>,
-    surface: Arc<Surface<'static>>,
-}
-
 /// The unique Id for `Rendered` struct.
 ///
 /// This structure is not used explicitly by users for modeling by `monstertruck-modeling` and `monstertruck-render`.
@@ -421,10 +415,9 @@ pub struct SceneDescriptor {
     pub render_texture: RenderTextureConfig,
 }
 
-/// Configures of [`WindowScene`](./struct.WindowScene.html).
-/// Compared to the structure `SceneDescriptor`, this excludes `render_texture`, which can be obtained from window.
+/// Configuration of a [`SurfaceScene`], whose render target extent is supplied by the caller.
 #[derive(Debug, Clone, Default)]
-pub struct WindowSceneDescriptor {
+pub struct SurfaceSceneDescriptor {
     /// Configures for studio i.e. camera, lights, and background.
     pub studio: StudioConfig,
     /// Configures buffer preparation, depth and MSAA.
@@ -447,13 +440,13 @@ pub struct Scene {
     clock: TimeInstant,
 }
 
-/// Utility for wrapper
+/// A scene presented to a WGPU surface, independent of the windowing toolkit.
 #[derive(Clone, Debug, Deref, DerefMut)]
-pub struct WindowScene {
+pub struct SurfaceScene {
     #[deref]
     #[deref_mut]
     scene: Scene,
-    window_handler: WindowHandler,
+    surface: Arc<Surface<'static>>,
 }
 
 /// Rendered objects in the scene.

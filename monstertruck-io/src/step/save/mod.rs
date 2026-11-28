@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
+use jiff::{Timestamp, tz::TimeZone};
+
 use monstertruck_core::{math::Matrix3, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
@@ -406,7 +408,10 @@ impl Default for StepHeaderDescriptor {
     fn default() -> Self {
         Self {
             file_name: String::default(),
-            time_stamp: chrono::Utc::now().naive_local().to_string(),
+            time_stamp: TimeZone::UTC
+                .to_datetime(Timestamp::now())
+                .strftime("%Y-%m-%d %H:%M:%S%.f")
+                .to_string(),
             authors: Vec::default(),
             organization: Vec::default(),
             organization_system: String::default(),
