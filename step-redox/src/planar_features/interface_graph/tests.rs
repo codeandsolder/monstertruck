@@ -54,16 +54,17 @@ fn proper_host_subset_preserves_nested_feature_ownership() {
 }
 
 #[test]
-fn multiple_complete_bounds_on_same_host_are_not_one_motif() {
+fn multiple_complete_bounds_on_same_host_are_not_one_motif() -> anyhow::Result<()> {
     let lookup = HashMap::from([
         (vec![1, 2], vec![(101, 201, "T".into())]),
         (vec![3, 4], vec![(102, 202, "F".into())]),
     ]);
     let result = matched_host_bounds(10, &HashSet::from([1, 2, 3, 4]), &lookup)
-        .expect("all exposed edges are two complete host bounds");
+        .ok_or_else(|| anyhow::anyhow!("all exposed edges are two complete host bounds"))?;
     assert_eq!(result.len(), 2);
     assert!(matched_host_bounds(10, &HashSet::from([1, 2, 3]), &lookup).is_none());
     assert!(matched_host_bounds(10, &HashSet::from([1, 2, 3, 4, 5]), &lookup).is_none());
+    Ok(())
 }
 
 #[test]
