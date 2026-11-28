@@ -4,8 +4,9 @@
 //! topology. Retain the original mesh and every original polygon identity.
 
 use super::{
-    EdgeIncidence, MeshRecoveryError, input_polygon_from_ids, partition_recovery_mesh,
-    signed_polygon_volume, source_edge_incidence, welded_source_polygons,
+    AnalyticRecoveryError, EdgeIncidence, MeshRecoveryError, NativeComponentReport,
+    NativeMeshRecovery, NativeRecoveryOptions, input_polygon_from_ids, partition_recovery_mesh,
+    recover_native_mesh, signed_polygon_volume, source_edge_incidence, welded_source_polygons,
 };
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::{Faces, PolygonMesh, StandardAttributes};
@@ -52,11 +53,67 @@ pub struct CollapsedApertureEvidence {
 #[derive(Debug)]
 pub struct CollapsedApertureCandidate {
     /// Candidate geometry with original unaffected polygon cycles retained.
-    pub mesh: PolygonMesh,
+    mesh: PolygonMesh,
     /// Candidate face-order provenance (including generated faces).
-    pub polygon_origins: Vec<AperturePolygonOrigin>,
+    polygon_origins: Vec<AperturePolygonOrigin>,
     /// Geometric support and local approximation allowance.
-    pub evidence: CollapsedApertureEvidence,
+    evidence: CollapsedApertureEvidence,
+}
+
+impl CollapsedApertureCandidate {
+    /// Candidate geometry, with the original input still owned by the caller.
+    #[must_use = "this is the source of the alternative recovery"]
+    pub const fn mesh(&self) -> &PolygonMesh { &self.mesh }
+
+    /// Candidate-face provenance in the candidate mesh's polygon order.
+    #[must_use = "use the mapping to compose component-local provenance"]
+    pub fn polygon_origins(&self) -> &[AperturePolygonOrigin] { &self.polygon_origins }
+
+    /// Local geometric proof and explicit approximation allowance.
+    #[must_use = "the allowance is required for subsequent recovery"]
+    pub const fn evidence(&self) -> &CollapsedApertureEvidence { &self.evidence }
+
+    fn remaining_options(
+        &self,
+        options: &NativeRecoveryOptions,
+    ) -> Result<NativeRecoveryOptions, AnalyticRecoveryError> {
+        let analytic = options.analytic_policy()?;
+        let original = analytic
+            .source_chord_budget
+            .ok_or(AnalyticRecoveryError::InvalidOptions)?;
+        let repair = self.evidence.deviation_upper_bound;
+        let remaining = (original - repair).next_down();
+        if remaining <= 0.0 {
+            return Err(AnalyticRecoveryError::InvalidOptions);
+        }
+        let mut policy = options.clone();
+        policy.analytic = analytic;
+        policy.analytic.source_chord_budget = Some(remaining);
+        if let Some(hybrid) = &mut policy.hybrid {
+            if hybrid.budget.vertex < repair {
+                return Err(AnalyticRecoveryError::InvalidOptions);
+            }
+            hybrid.budget.chord = remaining;
+            hybrid.budget.vertex = (hybrid.budget.vertex - repair).next_down().max(0.0);
+        }
+        Ok(policy)
+    }
+
+    /// Recover this explicit alternative while reserving the local repair
+    /// allowance from both subsequent chord and vertex budgets. Observer
+    /// polygon IDs refer to the candidate mesh; compose them with
+    /// `polygon_origins` for original-source provenance.
+    ///
+    /// # Errors
+    /// Missing, inconsistent or insufficient geometric budgets, or a
+    /// native recovery ingestion/accounting failure.
+    pub fn recover_native(
+        &self,
+        options: &NativeRecoveryOptions,
+        observe: impl FnMut(NativeComponentReport<'_>),
+    ) -> Result<NativeMeshRecovery, AnalyticRecoveryError> {
+        recover_native_mesh(&self.mesh, &self.remaining_options(options)?, observe)
+    }
 }
 
 #[derive(Clone, Copy)]

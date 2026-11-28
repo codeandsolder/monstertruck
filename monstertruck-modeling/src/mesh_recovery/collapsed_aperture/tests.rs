@@ -1,5 +1,5 @@
 use super::*;
-use crate::mesh_recovery::{NativeRecoveryOptions, recover_native_mesh};
+use crate::mesh_recovery::{AnalyticRecoveryOptions, NativeRecoveryOptions};
 
 fn collapsed_cube(reversed: bool) -> PolygonMesh {
     let points = [
@@ -103,8 +103,25 @@ fn collapsed_aperture_preserves_floor_and_reopens_contact() -> Result<(), Box<dy
         let parts = partition_recovery_mesh(&candidate.mesh)?;
         assert_eq!(parts.len(), 1);
         assert!(parts[0].independently_closed);
-        let recovery =
-            recover_native_mesh(&candidate.mesh, &NativeRecoveryOptions::default(), |_| {})?;
+        let options = NativeRecoveryOptions {
+            analytic: AnalyticRecoveryOptions {
+                source_chord_budget: Some(0.2),
+                ..Default::default()
+            },
+            hybrid: None,
+        };
+        let policy = candidate.remaining_options(&options)?;
+        let remaining = policy
+            .analytic
+            .source_chord_budget
+            .ok_or("remaining budget")?;
+        assert!(remaining + candidate.evidence.deviation_upper_bound <= 0.2);
+        assert!(
+            candidate
+                .remaining_options(&NativeRecoveryOptions::default())
+                .is_err()
+        );
+        let recovery = candidate.recover_native(&options, |_| {})?;
         assert_eq!(
             recovery
                 .shell

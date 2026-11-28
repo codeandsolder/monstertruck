@@ -165,9 +165,11 @@ pub(super) fn triangulate(points: &[[f64; 2]], loops: &[Vec<usize>]) -> Option<V
         .collect::<Vec<_>>();
     let count = constraints.len();
     let mut conflict = false;
-    let cdt = ConstrainedDelaunayTriangulation::try_bulk_load_cdt(vertices, constraints, |_| {
-        conflict = true
-    })
+    let cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::try_bulk_load_cdt(
+        vertices,
+        constraints,
+        |_| conflict = true,
+    )
     .ok()?;
     if conflict || cdt.num_constraints() != count || cdt.num_vertices() != ids.len() {
         return None;

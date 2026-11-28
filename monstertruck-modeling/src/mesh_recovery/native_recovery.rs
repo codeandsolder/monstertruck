@@ -69,7 +69,7 @@ pub struct NativeRecoveryOptions {
 }
 
 impl NativeRecoveryOptions {
-    fn analytic_policy(&self) -> Result<AnalyticRecoveryOptions, AnalyticRecoveryError> {
+    pub(super) fn analytic_policy(&self) -> Result<AnalyticRecoveryOptions, AnalyticRecoveryError> {
         let mut analytic = self.analytic.clone();
         if let Some(hybrid) = self.hybrid {
             let budget = hybrid.budget;
