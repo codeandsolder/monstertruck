@@ -66,7 +66,7 @@ fn unwrap_parameter_near(surface: &Surface, value: Point2, reference: Point2) ->
 }
 
 #[inline]
-const fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
+fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
     if orientation {
         internal
     } else {
@@ -77,7 +77,7 @@ const fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
 fn exact_plane_parameter(plane: &Plane, point: Point3) -> Option<Point2> {
     let parameter = plane.parameter(point)?;
     let scale = point
-        .to_vec()
+        .coords
         .norm()
         .max(plane.origin().position_vector().norm())
         .max(1.0);

@@ -271,7 +271,7 @@ impl Camera {
     /// let point = Point3::new(0.1, 0.15, 0.0);
     /// // the projection of the point to the screen
     /// let projed = point
-    ///     - camera.eye_direction() * camera.eye_direction().dot(&point - camera.position());
+    ///     - camera.eye_direction() * camera.eye_direction().dot(&(point - camera.position()));
     /// // project to the normalized view volume
     /// let Some(projection) = camera.projection(1.0) else { return };
     /// let uvz = projection.apply_point(point);
@@ -409,11 +409,11 @@ impl Camera {
     ///
     /// assert_near!(
     ///     camera.near_clip,
-    ///     camera.eye_direction().dot(&points[7] - camera.position()),
+    ///     camera.eye_direction().dot(&(points[7] - camera.position())),
     /// );
     /// assert_near!(
     ///     camera.far_clip,
-    ///     camera.eye_direction().dot(&points[0] - camera.position()),
+    ///     camera.eye_direction().dot(&(points[0] - camera.position())),
     /// );
     ///
     /// let projection = camera.projection(aspect);

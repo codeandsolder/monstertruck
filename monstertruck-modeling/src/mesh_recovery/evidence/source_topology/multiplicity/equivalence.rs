@@ -33,14 +33,14 @@ pub(super) fn polygon_key(polygon: &InputPolygon) -> Vec<usize> {
         .unwrap_or_default()
 }
 
-const fn coord3(p: Point3) -> Coord3D<f64> {
+fn coord3(p: Point3) -> Coord3D<f64> {
     Coord3D {
         x: p.x,
         y: p.y,
         z: p.z,
     }
 }
-const fn project(p: Point3, axis: usize) -> Coord<f64> {
+fn project(p: Point3, axis: usize) -> Coord<f64> {
     // Point3 fields are accessed via a cyclic projection without arithmetic.
     match axis {
         0 => Coord { x: p.y, y: p.z },

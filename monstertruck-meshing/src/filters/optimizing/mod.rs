@@ -183,7 +183,7 @@ impl OptimizingFilter for PolygonMesh {
         let diag = bnd_box.diagonal().map(|a| f64::max(a.abs(), 1.0));
         let normalized_positions = positions
             .iter()
-            .map(move |position| 2.0 * (position - center).zip(diag, |a, b| a / b))
+            .map(move |position| 2.0 * (position - center).component_div(&diag))
             .collect::<Vec<_>>();
         let pos_map = sub_put_together_same_attrs(&normalized_positions, tol);
         all_pos_mut(faces).for_each(|idx| *idx = pos_map[*idx]);
@@ -401,7 +401,9 @@ macro_rules! impl_cast_int {
     ($typename: ident, $n: expr) => {
         impl CastIntVector for $typename {
             type IntVector = [i64; $n];
-            fn cast_int(self) -> Option<[i64; $n]> { self.cast::<i64>().map(Into::into) }
+            fn cast_int(self) -> Option<[i64; $n]> {
+                crate::common::checked_grid_coordinates(self.into())
+            }
             fn round(self, tol: f64) -> Option<Self::IntVector> { (self / tol).cast_int() }
             fn zero() -> Self { Self::from([0.0; $n]) }
             fn has_nan(&self) -> bool {

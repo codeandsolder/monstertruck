@@ -1,7 +1,7 @@
 //! Immutable UV segment hierarchy shared by winding and sampling-clearance
 //! queries. Broad-phase rejection never changes the narrow-phase predicate.
 
-use super::{InnerProduct, Itertools, Point2, SurfacePoint};
+use super::{Itertools, Point2, SurfacePoint};
 use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 
 type UvBounds = Bounds<2>;

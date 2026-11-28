@@ -4,8 +4,8 @@
 
 use super::super::triangle_projection_interval;
 use super::{
-    AffinePoint, InnerProduct, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
-    hash, nonpositive_tolerance,
+    AffinePoint, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle, hash,
+    nonpositive_tolerance,
 };
 
 #[derive(Clone, Copy, Debug)]

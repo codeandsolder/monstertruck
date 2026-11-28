@@ -1,6 +1,6 @@
 use super::{
-    AffinePoint, InnerProduct, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
-    hash, nonpositive_tolerance,
+    AffinePoint, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle, hash,
+    nonpositive_tolerance,
 };
 use array_macro::array;
 

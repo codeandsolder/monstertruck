@@ -124,7 +124,7 @@ impl Axis1Placement {
     pub fn direction(&self) -> Vector3 {
         self.direction
             .as_ref()
-            .map_or_else(Vector3::unit_z, Vector3::from)
+            .map_or_else(Vector3::z, Vector3::from)
     }
 }
 
@@ -179,7 +179,7 @@ impl From<&Axis2Placement2d> for Matrix3 {
         let x = axis
             .ref_direction
             .as_ref()
-            .map_or_else(Vector2::unit_x, Vector2::from);
+            .map_or_else(Vector2::x, Vector2::from);
         let y = Vector2::new(-x.y, x.x);
         Self::from_columns(&[x.push(0.0), y.push(0.0), z.position_vector().push(1.0)])
     }
@@ -203,10 +203,7 @@ pub struct Axis2Placement3d {
 impl From<&Axis2Placement3d> for Matrix4 {
     fn from(axis: &Axis2Placement3d) -> Self {
         let w = Point3::from(&axis.location);
-        let z = axis
-            .axis
-            .as_ref()
-            .map_or_else(Vector3::unit_z, Vector3::from);
+        let z = axis.axis.as_ref().map_or_else(Vector3::z, Vector3::from);
         // Pick a fallback reference direction that is not parallel to `z`.
         let fallback = if z.near(&Vector3::x()) {
             Vector3::y()

@@ -1,7 +1,4 @@
-use super::{
-    Adjacency, Faces, InnerProduct, Matrix3, PolygonMesh, SquareLinearMap, Vector3, Vertex,
-    nonpositive_tolerance,
-};
+use super::{Adjacency, Faces, Matrix3, PolygonMesh, Vector3, Vertex, nonpositive_tolerance};
 
 /// triangulation, quadrangulation, give a structure
 pub trait StructuringFilter {

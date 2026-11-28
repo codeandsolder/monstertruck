@@ -10,8 +10,8 @@ use super::{
     ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
     Point1, Point2, Point3, RollingBallFilletContactCurve, RollingBallFilletSurface,
     SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
-    SquareLinearMap, SurfaceDerivatives, SurfaceParameter, SurfaceParameterRange, ToSameGeometry,
-    Tolerance, Vector2, Vector3, Vector4, Zero, nonpositive_tolerance,
+    SurfaceDerivatives, SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance,
+    Vector2, Vector3, Vector4, Zero, nonpositive_tolerance,
 };
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;

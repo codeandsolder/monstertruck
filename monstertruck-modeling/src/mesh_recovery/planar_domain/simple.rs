@@ -37,7 +37,7 @@ struct Piece {
     count: usize,
 }
 
-const fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
+fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
 
 fn turn(a: Vector2, b: Vector2, p: Vector2) -> f64 { orient2d(coord(a), coord(b), coord(p)) }
 

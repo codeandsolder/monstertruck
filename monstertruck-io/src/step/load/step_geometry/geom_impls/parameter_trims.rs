@@ -407,7 +407,7 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
 
     let normal = u.cross(&v);
     let scale = origin
-        .to_vec()
+        .coords
         .norm()
         .max(plane.origin().position_vector().norm())
         .max(basis_scale)

@@ -564,8 +564,8 @@ fn triangle_area(point0: Point3, point1: Point3, point2: Point3) -> f64 {
 }
 
 fn is_convex_quad(quad: [Point3; 4]) -> bool {
-    let diagonal0 = quad[1].to_vec() - quad[0].to_vec();
-    let diagonal1 = quad[2].to_vec() - quad[0].to_vec();
+    let diagonal0 = quad[1] - quad[0];
+    let diagonal1 = quad[2] - quad[0];
     let normal = diagonal0.cross(&diagonal1);
     if normal.so_small() {
         false
@@ -592,8 +592,8 @@ fn corner_turn(quad: [Point3; 4], index: usize, normal: Vector3) -> f64 {
     let previous = quad[(index + 3) % 4];
     let current = quad[index];
     let next = quad[(index + 1) % 4];
-    let edge0 = current.to_vec() - previous.to_vec();
-    let edge1 = next.to_vec() - current.to_vec();
+    let edge0 = current - previous;
+    let edge1 = next - current;
     edge0.cross(&edge1).dot(&normal)
 }
 
@@ -601,8 +601,8 @@ fn corner_angle(quad: [Point3; 4], index: usize) -> Option<f64> {
     let previous = quad[(index + 3) % 4];
     let current = quad[index];
     let next = quad[(index + 1) % 4];
-    let vector0 = previous.to_vec() - current.to_vec();
-    let vector1 = next.to_vec() - current.to_vec();
+    let vector0 = previous - current;
+    let vector1 = next - current;
     let length0 = vector0.norm();
     let length1 = vector1.norm();
     if length0.so_small() || length1.so_small() {

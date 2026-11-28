@@ -469,7 +469,7 @@ fn polyline_test() {
     assert!(
         polyline
             .derivative(t)
-            .dot(&pt - polyline.evaluate(t))
+            .dot(&(pt - polyline.evaluate(t)))
             .so_small()
     );
 

@@ -21,7 +21,7 @@ pub struct SourceSectorPair {
     pub positive_volume: bool,
 }
 
-const fn coord(point: Point3) -> Coord3D<f64> {
+fn coord(point: Point3) -> Coord3D<f64> {
     Coord3D {
         x: point.x,
         y: point.y,
@@ -40,7 +40,7 @@ struct Ray {
     transverse_normal: Vector3,
 }
 
-const fn scale(vector: Vector3) -> f64 { vector.x.abs().max(vector.y.abs()).max(vector.z.abs()) }
+fn scale(vector: Vector3) -> f64 { vector.x.abs().max(vector.y.abs()).max(vector.z.abs()) }
 
 impl Ray {
     fn from_use(

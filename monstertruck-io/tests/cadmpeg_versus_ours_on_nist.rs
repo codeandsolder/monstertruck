@@ -92,7 +92,7 @@ fn centred_volume(mesh: &PolygonMesh) -> f64 {
             high[axis] = high[axis].max(p[axis]);
         }
     }
-    let centre = low.midpoint(high).to_vec();
+    let centre = low.midpoint(high).coords;
     mesh.faces()
         .triangle_iter()
         .map(|[a, b, c]| {

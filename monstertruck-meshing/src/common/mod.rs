@@ -20,3 +20,23 @@ mod adjacency;
 mod face_normal;
 pub use adjacency::Adjacency;
 pub use face_normal::FaceNormal;
+
+/// Truncate coordinates to signed grid indices, rejecting nonfinite or overflowing values.
+#[cfg(any(feature = "filters", all(feature = "vtk", not(target_arch = "wasm32"))))]
+pub(crate) fn checked_grid_coordinates<const N: usize>(coordinates: [f64; N]) -> Option<[i64; N]> {
+    use num_traits::ToPrimitive as _;
+    let mut result = [0; N];
+    for (out, value) in result.iter_mut().zip(coordinates) {
+        *out = value.to_i64()?;
+    }
+    Some(result)
+}
+
+#[cfg(all(test, feature = "filters"))]
+#[test]
+fn grid_cast_rejects_nonfinite_and_overflow() {
+    assert_eq!(checked_grid_coordinates([1.9, -1.9]), Some([1, -1]));
+    assert_eq!(checked_grid_coordinates([f64::NAN]), None);
+    assert_eq!(checked_grid_coordinates([f64::INFINITY]), None);
+    assert_eq!(checked_grid_coordinates([2.0_f64.powi(63)]), None);
+}

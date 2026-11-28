@@ -4,10 +4,10 @@
 )]
 
 use super::{
-    AffinePoint, ContactCircle, CurveDerivatives, Debug, HashGen, InnerProduct, Matrix2, Matrix3,
-    MetricSpace, Mul, PI, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2,
-    Point3, RadiusFunction, RollingBallFilletSurface, SearchParameter, SurfaceDerivatives,
-    SurfaceParameter, Vector2, Vector3, Zero,
+    AffinePoint, ContactCircle, CurveDerivatives, Debug, HashGen, Matrix2, Matrix3, MetricSpace,
+    Mul, PI, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point3, RadiusFunction,
+    RollingBallFilletSurface, SearchParameter, SurfaceDerivatives, SurfaceParameter, Vector2,
+    Vector3, Zero,
 };
 use monstertruck_core::{Rotation3, Unit};
 const MUL: fn(f64, f64) -> f64 = f64::mul;

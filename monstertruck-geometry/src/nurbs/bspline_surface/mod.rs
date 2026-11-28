@@ -6,13 +6,12 @@
 use super::{
     AffinePoint, BasisWindow, Bound, Bounded, BoundedCurve, BoundedSurface, BoundingBox,
     BsplineCurve, BsplineSurface, Concat, ControlPoint, CurveCollector, Deserialize, Error,
-    GeometryTransform, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerProduct,
-    Invertible, KERNEL_EPSILON, KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve,
-    Origin, PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve,
-    ParametricSurface, ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter,
-    SearchParameter, SearchParameterHint2D, SquareLinearMap, SurfaceParameter,
-    SurfaceParameterRange, Tolerance, Transformed, Vector2, Vector3, Vector4, Zero, algo, compat,
-    gaussian_elimination, inv_or_zero,
+    GeometryTransform, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible,
+    KERNEL_EPSILON, KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, Origin,
+    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
+    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed,
+    Vector2, Vector3, Vector4, Zero, algo, compat, gaussian_elimination, inv_or_zero,
 };
 
 mod accessors;

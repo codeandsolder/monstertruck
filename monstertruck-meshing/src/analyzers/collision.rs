@@ -2,8 +2,8 @@
 use super::AffinePoint;
 use super::active_sweep::ActiveSweep;
 use super::{
-    BoundingBox, InnerProduct, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh,
-    StandardVertex, Vector3, hash, sweep_coordinate_key, triangle_projection_interval,
+    BoundingBox, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh, StandardVertex,
+    Vector3, hash, sweep_coordinate_key, triangle_projection_interval,
 };
 use array_macro::array;
 

@@ -12,10 +12,10 @@
 
 use super::super::charted::TrimChart;
 use super::{
-    AffinePoint, BoundedCurve, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
-    InnerProduct, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
-    Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint, Tolerance, algo, env,
-    mesh, native_boundary_slack, periodic_min_difference, projection_debug_enabled,
+    AffinePoint, BoundedCurve, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap, MetricSpace,
+    Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
+    PolylineCurve, PreMeshableSurface, SP, SurfacePoint, Tolerance, algo, env, mesh,
+    native_boundary_slack, periodic_min_difference, projection_debug_enabled,
     projection_debug_face, report_projection_failure, report_projection_outcome, resample_boundary,
     sampled_periodic_collapse, simplify_parameter_boundary,
 };

@@ -559,7 +559,7 @@ fn a_mirrored_body_keeps_every_face_outward() {
         for edge_use in face.boundaries.iter().flatten() {
             let edge = &shell.edges[edge_use.index];
             for vertex in [edge.vertices.0, edge.vertices.1] {
-                sum += shell.vertices[vertex].to_vec();
+                sum += shell.vertices[vertex].coords;
                 count += 1.0;
             }
         }

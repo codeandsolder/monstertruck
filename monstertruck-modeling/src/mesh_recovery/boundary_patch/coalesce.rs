@@ -104,7 +104,7 @@ impl Projection {
         })
     }
 
-    const fn project(&self, p: Point3) -> Coord<f64> {
+    fn project(&self, p: Point3) -> Coord<f64> {
         let coords = [p.x, p.y, p.z];
         let mut x = coords[(self.axis + 1) % 3];
         let mut y = coords[(self.axis + 2) % 3];

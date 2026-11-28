@@ -231,7 +231,7 @@ fn sample_curve(curve: &Curve3D, out: &mut Vec<Point3>) {
     }
 }
 
-const fn finite(v: Vector3) -> bool { v.x.is_finite() && v.y.is_finite() && v.z.is_finite() }
+fn finite(v: Vector3) -> bool { v.x.is_finite() && v.y.is_finite() && v.z.is_finite() }
 
 // --------------------------------------------------------- the measurement
 

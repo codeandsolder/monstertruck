@@ -1,6 +1,6 @@
 use crate::{
-    Deserialize, Faces, InnerProduct, KERNEL_EPSILON, Point3, PolygonMesh, Serialize,
-    StandardAttributes, StandardVertex, Vector3, array, errors, faces,
+    Deserialize, Faces, KERNEL_EPSILON, Point3, PolygonMesh, Serialize, StandardAttributes,
+    StandardVertex, Vector3, array, errors, faces,
 };
 use bytemuck::{Pod, Zeroable};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;

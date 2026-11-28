@@ -81,7 +81,7 @@ pub(in crate::transversal::classic) fn common_planar_support(
         return false;
     }
     let scale = origin0
-        .to_vec()
+        .coords
         .norm()
         .max(origin1.position_vector().norm())
         .max(1.0);
@@ -134,7 +134,7 @@ pub(in crate::transversal::classic) fn finite_common_planar_support(
     }
     let (origin0, origin1) = (plane0.origin(), plane1.origin());
     let scale = origin0
-        .to_vec()
+        .coords
         .norm()
         .max(origin1.position_vector().norm())
         .max(1.0);

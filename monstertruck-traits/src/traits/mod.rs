@@ -1,6 +1,6 @@
 use monstertruck_core::math::{
-    CurveDerivatives, GeometryTransform, InnerProduct, Matrix3, Matrix4, Point2, Point3,
-    SurfaceDerivatives, Vector2, Vector3, Zero,
+    CurveDerivatives, GeometryTransform, Matrix3, Matrix4, Point2, Point3, SurfaceDerivatives,
+    Vector2, Vector3, Zero,
 };
 use std::ops::Bound;
 

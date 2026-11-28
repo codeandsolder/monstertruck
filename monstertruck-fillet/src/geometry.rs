@@ -252,8 +252,8 @@ impl RelaySphere {
         }
         Some(Self {
             center,
-            contact0: (p0, (u0, v0).into()),
-            contact1: (p1, (u1, v1).into()),
+            contact0: (p0, Point2::new(u0, v0)),
+            contact1: (p1, Point2::new(u1, v1)),
             transit: center + radius * (p - center).normalize(),
         })
     }
@@ -442,8 +442,8 @@ pub fn asymmetric_chamfer_contacts(
                 }
                 Some(RelaySphere {
                     center: point,
-                    contact0: (contact0, parameter0.into()),
-                    contact1: (contact1, parameter1.into()),
+                    contact0: (contact0, Point2::new(parameter0.0, parameter0.1)),
+                    contact1: (contact1, Point2::new(parameter1.0, parameter1.1)),
                     transit: contact0.midpoint(contact1),
                 })
             })

@@ -1,6 +1,6 @@
 use super::{
-    Adjacency, FaceNormal, Faces, InnerProduct, MetricSpace, Point3, PolygonMesh,
-    StandardAttributes, Vector3, Vertex, nonpositive_tolerance,
+    Adjacency, FaceNormal, Faces, MetricSpace, Point3, PolygonMesh, StandardAttributes, Vector3,
+    Vertex, nonpositive_tolerance,
 };
 use std::f64::consts::PI;
 

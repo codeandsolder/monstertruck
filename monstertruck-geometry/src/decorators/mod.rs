@@ -218,7 +218,7 @@ pub struct Processor<E, T> {
 /// let pt = pt + Vector3::new(0.01, 0.06, -0.03);
 /// assert!(pcurve.search_parameter(pt, None, 100).is_none());
 /// let t = pcurve.search_nearest_parameter(pt, None, 100).unwrap();
-/// assert!(pcurve.derivative(t).dot(&pcurve.evaluate(t) - pt).so_small());
+/// assert!(pcurve.derivative(t).dot(&(pcurve.evaluate(t) - pt)).so_small());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct ParameterCurve<C, S> {

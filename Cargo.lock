@@ -1855,6 +1855,7 @@ dependencies = [
  "monstertruck-mesh",
  "monstertruck-modeling",
  "monstertruck-topology",
+ "num-traits",
  "proptest",
  "rand",
  "rayon",

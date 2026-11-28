@@ -1,6 +1,6 @@
 use super::{
-    FaceNormal, Faces, InnerProduct, Point3, PolygonMesh, PolygonMeshEditor, StandardAttributes,
-    Tolerance, Vector3, Vertex, Zero,
+    FaceNormal, Faces, Point3, PolygonMesh, PolygonMeshEditor, StandardAttributes, Tolerance,
+    Vector3, Vertex, Zero,
 };
 use rustc_hash::FxHashMap as HashMap;
 

@@ -10,12 +10,11 @@
 use super::intersection_trace;
 use super::{
     AffinePoint, BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug,
-    InnerProduct, IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix3, Matrix4,
-    NurbsCurve, ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve,
-    ParametricCurve3D, ParametricSurface3D, Plane, Point2, Point3, Processor,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SurfaceCurve,
-    SurfaceDerivatives, SurfaceParameter, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3,
-    Vector4, algo,
+    IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix3, Matrix4, NurbsCurve,
+    ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, SurfaceCurve, SurfaceDerivatives, SurfaceParameter, Tolerance,
+    Transformed, TrimmedCurve, Vector2, Vector3, Vector4, algo,
 };
 use monstertruck_core::GeometryTransform;
 use monstertruck_core::newton::{self, CalcOutput};

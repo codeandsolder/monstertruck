@@ -54,7 +54,7 @@ fn connect_edges<P>(vecs: impl IntoIterator<Item = Vec<P>>) -> Vec<P> {
 
 pub(super) type UvKey = (u64, u64);
 
-pub(super) const fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
+pub(super) fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
 
 pub(super) fn surface_point_with_cache(
     surface: &impl PreMeshableSurface,

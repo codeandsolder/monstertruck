@@ -85,7 +85,7 @@ impl PartialOrd for SpatialX {
 impl Ord for SpatialX {
     fn cmp(&self, other: &Self) -> Ordering { self.0.total_cmp(&other.0) }
 }
-const fn finite_point(point: Point3) -> bool {
+fn finite_point(point: Point3) -> bool {
     point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 

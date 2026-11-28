@@ -341,7 +341,7 @@ fn planar_intersection_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
         let tangent = delta / length;
         let cosine = tangent.dot(&direction);
         let scale = a
-            .to_vec()
+            .coords
             .norm()
             .max(b.position_vector().norm())
             .max(origin.position_vector().norm())

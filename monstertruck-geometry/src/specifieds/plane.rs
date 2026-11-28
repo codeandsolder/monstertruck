@@ -1,7 +1,7 @@
 use super::{
     AffinePoint, Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface,
-    GeometryTransform, Homogeneous, IncludeCurve, InnerProduct, Invertible, KnotVector, Line,
-    Matrix3, NurbsCurve, Origin, ParameterDivision2D, ParameterRange, ParametricSurface,
+    GeometryTransform, Homogeneous, IncludeCurve, Invertible, KnotVector, Line, Matrix3,
+    NurbsCurve, Origin, ParameterDivision2D, ParameterRange, ParametricSurface,
     ParametricSurface3D, Plane, Point3, SearchNearestParameter, SearchParameter,
     SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Transformed,
     Vector3, Vector4, Zero,

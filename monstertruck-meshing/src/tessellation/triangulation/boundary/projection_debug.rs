@@ -7,7 +7,7 @@
 //! source stays readable; the module path is unchanged. What it measures and
 //! why is the banner below.
 
-use super::{AffinePoint, InnerProduct, MetricSpace, Point3, PreMeshableSurface, algo, env};
+use super::{AffinePoint, MetricSpace, Point3, PreMeshableSurface, algo, env};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 // ---------------------------------------------------------------------------

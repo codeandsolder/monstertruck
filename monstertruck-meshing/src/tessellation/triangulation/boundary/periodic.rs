@@ -11,8 +11,8 @@
 //! is unchanged.
 
 use super::{
-    HashMap, InnerProduct, MetricSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
-    SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
+    HashMap, MetricSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SurfacePoint,
+    Tolerance, UvKey, connect_edges, polyline_on_surface,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 

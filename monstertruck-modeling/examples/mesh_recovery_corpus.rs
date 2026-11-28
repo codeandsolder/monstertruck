@@ -701,7 +701,7 @@ struct RegionExtent {
 }
 
 impl RegionExtent {
-    const fn include(&mut self, point: Point3) {
+    fn include(&mut self, point: Point3) {
         self.min.x = self.min.x.min(point.x);
         self.min.y = self.min.y.min(point.y);
         self.min.z = self.min.z.min(point.z);

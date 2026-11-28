@@ -1,4 +1,4 @@
-use super::{InnerProduct, Matrix3, Origin, Point3, PolygonMesh, SquareLinearMap, Vector3, hash};
+use super::{Matrix3, Origin, Point3, PolygonMesh, Vector3, hash};
 use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 use derive_more::{Deref, DerefMut};
 use std::borrow::Borrow;
