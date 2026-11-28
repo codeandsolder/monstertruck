@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   native:
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
       checkout-submodules: "true"
       rustflags: "-D warnings"
@@ -34,7 +34,7 @@ jobs:
       test-suites: |
         [{"name":"cpu","cargo":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"],"doctests":["--locked","-p","monstertruck-core","-p","monstertruck-traits","-p","monstertruck-geometry","-p","monstertruck-topology","-p","monstertruck-mesh","-p","monstertruck-meshing","-p","monstertruck-modeling","-p","monstertruck-solid","-p","monstertruck-healing","-p","monstertruck-fillet","-p","monstertruck-io","--features","derive","--features","polynomial"]}]
   wasm:
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
       checkout-submodules: "true"
       rust-targets: wasm32-unknown-unknown
@@ -44,7 +44,7 @@ jobs:
         cargo build --locked --manifest-path step-redox/web/step-redox-wasm/Cargo.toml --target=wasm32-unknown-unknown
   kcl-conformance:
     if: github.event_name == 'workflow_dispatch'
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
       checkout-submodules: "true"
       rustflags: "-D warnings"
@@ -54,7 +54,7 @@ jobs:
         cd target/kcl-conformance
         cargo run --locked --manifest-path ../../step-redox/experiments/kcl-monstertruck-spike/Cargo.toml --features kcl-conformance
   release-libs:
-    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/rust-sccache.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
       validation-tier: release
       checkout-submodules: "true"
@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+      - uses: codeandsolder/ci-workflows/.github/actions/resolve-rust-toolchain@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
         id: compiler
       - uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
@@ -75,14 +75,14 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just readme-check
   source-quality:
-    uses: codeandsolder/ci-workflows/.github/workflows/source-quality.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/source-quality.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
   workflow-policy:
-    uses: codeandsolder/ci-workflows/.github/workflows/workflow-concurrency.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/workflow-concurrency.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
   merge-gate:
     name: CI merge gate
     if: ${{ always() }}
     needs: [native, wasm, release-libs, readme, source-quality, workflow-policy]
-    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+    uses: codeandsolder/ci-workflows/.github/workflows/merge-gate.yml@1293f1c247f07a14a85859f908b4f6b7e2553922 # main
     with:
       needs-json: ${{ toJSON(needs) }}
       expected-results: |
