@@ -455,11 +455,17 @@ impl ContactLinearSectionEvidence {
         })
     }
 
-    fn cubic(self, start: f64, end: f64, tolerance: f64) -> Option<[Point3; 4]> {
-        let (a, da) = self.frame.evaluate(self.positive, start)?;
-        let (b, db) = self.frame.evaluate(self.positive, end)?;
+    fn cubic(
+        self,
+        start: f64,
+        end: f64,
+        anchors: [Option<Point3>; 2],
+        tolerance: f64,
+    ) -> Option<[Point3; 4]> {
+        let a = self.frame.evaluate(self.positive, start)?;
+        let b = self.frame.evaluate(self.positive, end)?;
         let step = end - start;
-        let controls = [a, a + da * (step / 3.0), b - db * (step / 3.0), b];
+        let controls = super::section_curve::anchored_hermite(a, b, step, anchors);
         if !self
             .frame
             .cubic_on_branch(controls, start, end, self.positive, tolerance)
@@ -493,8 +499,16 @@ impl ContactLinearSectionEvidence {
         // Certify the actual assembled B-spline, not just the individual
         // input cubics. Reserve error budget for the knot-span extraction
         // and for the global maximum proof's conditioning allowance.
-        let curve = super::section_curve::section_curve(start, end, |a, b| {
-            self.cubic(a, b, tolerance * 0.5)
+        let curve = super::section_curve::section_curve(start, end, [a, b], |a, b, anchors| {
+            // A reconciled endpoint may consume more than half of the
+            // incidence budget. The complete anchored spline must still
+            // pass the unchanged full-budget certificate below.
+            let budget = if anchors.iter().any(Option::is_some) {
+                tolerance
+            } else {
+                tolerance * 0.5
+            };
+            self.cubic(a, b, anchors, budget)
         })?;
         let Curve::BsplineCurve(spline) = &curve else {
             return None;
@@ -568,6 +582,44 @@ mod tests {
             radius_at_origin: radius,
             slope,
         }
+    }
+
+    #[test]
+    fn section_spline_uses_reconciled_topological_endpoints()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let carriers = [
+            carrier(origin, Vector3::unit_z(), 1.0, 0.0),
+            carrier(origin, Vector3::unit_x(), 2.0, 0.0),
+        ];
+        let points = [0.1_f64, 0.22, 0.38].map(|angle| {
+            let (y, x) = angle.sin_cos();
+            Point3::new(x, y, (4.0 - y * y).sqrt())
+        });
+        let tolerance = 1.0e-7;
+        let section =
+            supplied_section(&points, &[0, 1, 2], &carriers, tolerance).ok_or("missing branch")?;
+        let a = points[0] + Vector3::unit_z() * (tolerance * 0.6);
+        let b = points[1] - Vector3::unit_z() * (tolerance * 0.6);
+        for (a, b) in [(a, b), (b, a)] {
+            let step = section.angular_step(a, b).ok_or("step")?;
+            let Curve::BsplineCurve(curve) = section
+                .native_curve(a, b, step, tolerance)
+                .ok_or("anchored section")?
+            else {
+                return Err("expected spline".into());
+            };
+            assert_eq!(curve.control_points().first(), Some(&a));
+            assert_eq!(curve.control_points().last(), Some(&b));
+            for carrier in carriers {
+                assert!(
+                    Linear::new(carrier)
+                        .ok_or("carrier")?
+                        .contains(&curve, tolerance)
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

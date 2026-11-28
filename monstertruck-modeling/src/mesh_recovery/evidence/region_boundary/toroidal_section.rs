@@ -514,11 +514,17 @@ impl ContactToroidalSectionEvidence {
         })
     }
 
-    fn cubic(self, start: f64, end: f64, tolerance: f64) -> Option<[Point3; 4]> {
-        let (a, da) = self.evaluated(start)?;
-        let (b, db) = self.evaluated(end)?;
+    fn cubic(
+        self,
+        start: f64,
+        end: f64,
+        anchors: [Option<Point3>; 2],
+        tolerance: f64,
+    ) -> Option<[Point3; 4]> {
+        let a = self.evaluated(start)?;
+        let b = self.evaluated(end)?;
         let step = end - start;
-        let controls = [a, a + da * (step / 3.0), b - db * (step / 3.0), b];
+        let controls = super::section_curve::anchored_hermite(a, b, step, anchors);
         if !self
             .frame
             .chart_monotone(self.chart, self.positive, step > 0.0, controls)
@@ -556,8 +562,16 @@ impl ContactToroidalSectionEvidence {
         {
             return None;
         }
-        let curve = super::section_curve::section_curve(start, end, |a, b| {
-            self.cubic(a, b, tolerance * 0.5)
+        let curve = super::section_curve::section_curve(start, end, [a, b], |a, b, anchors| {
+            // A reconciled endpoint may consume more than half of the
+            // incidence budget. The complete anchored spline must still
+            // pass the unchanged full-budget certificate below.
+            let budget = if anchors.iter().any(Option::is_some) {
+                tolerance
+            } else {
+                tolerance * 0.5
+            };
+            self.cubic(a, b, anchors, budget)
         })?;
         let Curve::BsplineCurve(spline) = &curve else {
             return None;
@@ -665,6 +679,41 @@ mod tests {
                 for carrier in carriers {
                     assert!(carrier.signed_constraint(p).ok_or("constraint")?.1.abs() < 1.0e-8);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn section_spline_uses_reconciled_topological_endpoints()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let surfaces = carriers(Vector3::unit_x(), Point3::new(0.7, 0.0, 0.0));
+        let points = [-0.6_f64, -0.3, 0.0].map(|t| {
+            let rho = 0.5_f64.mul_add(t.cos(), 2.0);
+            Point3::new(0.7, rho.mul_add(rho, -0.49).sqrt(), 0.5 * t.sin())
+        });
+        let tolerance = 1.0e-7;
+        let section =
+            supplied_section(&points, &[0, 1, 2], &surfaces, tolerance).ok_or("missing section")?;
+        // A shared vertex satisfying all carriers within the incidence
+        // budget need not equal this branch's analytic projection.
+        let a = points[0] + Vector3::unit_x() * (tolerance * 0.6);
+        let b = points[1] - Vector3::unit_x() * (tolerance * 0.6);
+        for (a, b) in [(a, b), (b, a)] {
+            let step = section.angular_step(a, b).ok_or("step")?;
+            let Curve::BsplineCurve(curve) = section
+                .native_curve(a, b, step, tolerance)
+                .ok_or("anchored section")?
+            else {
+                return Err("expected spline".into());
+            };
+            assert_eq!(curve.control_points().first(), Some(&a));
+            assert_eq!(curve.control_points().last(), Some(&b));
+            for support in section.frame.analytic_supports() {
+                assert_eq!(
+                    certify_bspline_curve_on_support(&curve, support, tolerance),
+                    CurveIncidence::Proven
+                );
             }
         }
         Ok(())
