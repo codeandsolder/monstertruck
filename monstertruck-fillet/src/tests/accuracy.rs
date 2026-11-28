@@ -128,7 +128,7 @@ fn continuity_at_wire_joins() {
         // Find shared vertices (points within tolerance).
         let shared: Vec<_> = pts0
             .iter()
-            .filter(|p0| pts1.iter().any(|p1| (*p0 - *p1).magnitude() < tol))
+            .filter(|p0| pts1.iter().any(|p1| (*p0 - *p1).norm() < tol))
             .collect();
 
         assert!(
@@ -148,7 +148,7 @@ fn continuity_at_wire_joins() {
             let v = j as f64 / n as f64;
             let normal = s.normal(0.5, v);
             if let Some(prev) = prev_normal {
-                let dot: f64 = normal.dot(prev);
+                let dot: f64 = normal.dot(&prev);
                 assert!(
                     dot > 0.5,
                     "normal flip within fillet face: dot={dot:.4} at v={v:.2}"

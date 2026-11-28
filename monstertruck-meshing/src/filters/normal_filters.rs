@@ -1,6 +1,6 @@
 use super::{
-    FaceNormal, Faces, InnerSpace, Point3, PolygonMesh, PolygonMeshEditor, StandardAttributes,
-    Tolerance, Vector3, Vertex, Zero,
+    FaceNormal, Faces, Point3, PolygonMesh, PolygonMeshEditor, StandardAttributes, Tolerance,
+    Vector3, Vertex, Zero,
 };
 use rustc_hash::FxHashMap as HashMap;
 
@@ -32,7 +32,7 @@ pub trait NormalFilters {
     /// ).expect("valid example mesh");
     ///
     /// mesh.normalize_normals();
-    /// assert!(mesh.normals()[0].magnitude().near(&1.0));
+    /// assert!(mesh.normals()[0].norm().near(&1.0));
     /// assert_eq!(mesh.faces()[0][1].nor, None);
     /// ```
     fn normalize_normals(&mut self) -> &mut Self;
@@ -202,7 +202,7 @@ impl NormalFilters for PolygonMesh {
             vertex.nor = vertex.nor.filter(|&idx| {
                 normals
                     .get(idx)
-                    .is_some_and(|normal| normal.magnitude2().near(&1.0))
+                    .is_some_and(|normal| normal.norm_squared().near(&1.0))
             });
         });
         drop(mesh);
@@ -229,7 +229,7 @@ impl NormalFilters for PolygonMesh {
             else {
                 continue;
             };
-            if normal.dot(face_normal) < 0.0 {
+            if normal.dot(&face_normal) < 0.0 {
                 face.reverse();
             }
         }
@@ -253,7 +253,7 @@ impl NormalFilters for PolygonMesh {
             for vertex in face.iter_mut() {
                 vertex.nor = vertex.nor.and_then(|idx| {
                     let normal = normals.get(idx).copied()?;
-                    if normal.dot(face_normal) < 0.0 {
+                    if normal.dot(&face_normal) < 0.0 {
                         normals.push(-normal);
                         Some(normals.len() - 1)
                     } else {
@@ -376,7 +376,7 @@ fn add_to_vnmap(
                 .iter()
                 .fold(Vector3::zero(), |sum, x| sum + x.normal)
                 .normalize();
-            if face_normal.normal.dot(normal) > inf {
+            if face_normal.normal.dot(&normal) > inf {
                 vec.push(face_normal);
                 return;
             }
@@ -442,7 +442,7 @@ mod totality_tests {
         let mut mesh = PolygonMesh::new_unchecked(
             StandardAttributes {
                 positions: vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
-                normals: vec![Vector3::unit_z()],
+                normals: vec![Vector3::z()],
                 ..Default::default()
             },
             faces,

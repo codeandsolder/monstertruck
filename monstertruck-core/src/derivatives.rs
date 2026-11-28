@@ -1,5 +1,6 @@
-use crate::cgmath_extend_traits::{Homogeneous, scalar_from_u128};
-use cgmath::{AbsDiffEq, BaseFloat, EuclideanSpace, InnerSpace, Vector2, VectorSpace, Zero};
+use crate::differential::{Homogeneous, scalar_from_u128};
+use crate::math::{AbsDiffEq, AffinePoint, InnerProduct, KernelScalar, LinearVector, Zero};
+use nalgebra::Vector2;
 use std::fmt::Debug;
 
 /// Maximum order that guarantees differential calculations
@@ -81,7 +82,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::{cgmath64::*, assert_near2};
+    /// use monstertruck_core::{math::*, assert_near2};
     /// // calculate the derivation at t = 1.5
     /// let t = 1.5;
     ///
@@ -107,9 +108,9 @@ impl<V> CurveDerivatives<V> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn rational_derivatives(&self) -> CurveDerivatives<<V::Point as EuclideanSpace>::Diff>
+    pub fn rational_derivatives(&self) -> CurveDerivatives<<V::Point as AffinePoint>::Diff>
     where V: Homogeneous {
-        let mut evals = [<V::Point as EuclideanSpace>::Diff::zero(); MAX_DER_ORDER + 1];
+        let mut evals = [<V::Point as AffinePoint>::Diff::zero(); MAX_DER_ORDER + 1];
         for i in 0..=self.max_order {
             let mut c = 1;
             let sum = (1..i).fold(evals[0] * self[i].weight(), |sum, j| {
@@ -117,7 +118,7 @@ impl<V> CurveDerivatives<V> {
                 // SAFETY: `c` is a small binomial coefficient that fits in any numeric type.
                 sum + evals[j] * (self[i - j].weight() * scalar_from_u128(c as u128))
             });
-            evals[i] = (self[i].truncate() - sum) / self[0].weight();
+            evals[i] = (self[i].spatial() - sum) / self[0].weight();
         }
         CurveDerivatives {
             array: evals,
@@ -129,7 +130,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::{assert_near, cgmath64::*};
+    /// use monstertruck_core::{assert_near, math::*};
     ///
     /// let t = 0.3;
     ///
@@ -152,14 +153,14 @@ impl<V> CurveDerivatives<V> {
     /// ```
     pub fn absolute_derivatives(&self) -> CurveDerivatives<V::Scalar>
     where
-        V: InnerSpace,
-        V::Scalar: BaseFloat, {
+        V: InnerProduct,
+        V::Scalar: KernelScalar, {
         let mut evals = [V::Scalar::zero(); MAX_DER_ORDER + 1];
-        evals[0] = self[0].magnitude();
+        evals[0] = self[0].norm();
         (1..=self.max_order).for_each(|m| {
             let mut c = 1;
             let sum = (0..m).fold(V::Scalar::zero(), |mut sum, i| {
-                let x = self[i + 1].dot(self[m - 1 - i]);
+                let x = self[i + 1].dot(&self[m - 1 - i]);
                 let y = evals[i + 1] * evals[m - 1 - i];
                 // SAFETY: `c` is a small binomial coefficient that fits in any numeric type.
                 let c_float = scalar_from_u128(c as u128);
@@ -179,7 +180,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::{cgmath64::*, assert_near2};
+    /// use monstertruck_core::{math::*, assert_near2};
     ///
     /// let t = 1.5;
     ///
@@ -199,7 +200,7 @@ impl<V> CurveDerivatives<V> {
     /// ];
     /// let derivs1 = CurveDerivatives::try_from(raw_derivs1).map_err(anyhow::Error::msg)?;
     ///
-    /// // curve0(t).dot(curve1(t)) = cos(t)
+    /// // curve0(t).dot(&curve1(t)) = cos(t)
     /// let res = derivs0.combinatorial_derivative(&derivs1, Vector2::dot, 2);
     /// let ans = -f64::cos(t);
     ///
@@ -231,7 +232,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::{cgmath64::*, assert_near2};
+    /// use monstertruck_core::{math::*, assert_near2};
     ///
     /// let t = 1.5;
     ///
@@ -251,7 +252,7 @@ impl<V> CurveDerivatives<V> {
     /// ];
     /// let derivs1 = CurveDerivatives::try_from(raw_derivs1).map_err(anyhow::Error::msg)?;
     ///
-    /// // curve0(t).dot(curve1(t)) = cos(t)
+    /// // curve0(t).dot(&curve1(t)) = cos(t)
     /// let res = derivs0.combinatorial_derivatives(&derivs1, Vector2::dot);
     /// let raw_ans: [f64; 3] = [f64::cos(t), -f64::sin(t), -f64::cos(t)];
     /// let ans = CurveDerivatives::try_from(raw_ans).map_err(anyhow::Error::msg)?;
@@ -283,7 +284,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     /// let derivs0 = CurveDerivatives::try_from([0.0, 1.0, 2.0, 100.0]).map_err(anyhow::Error::msg)?;
     /// let derivs1 = CurveDerivatives::try_from([4.0, 5.0, 6.0]).map_err(anyhow::Error::msg)?;
     /// let res = derivs0.element_wise_derivatives(&derivs1, |x, y| x + y);
@@ -317,7 +318,7 @@ impl<V> CurveDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     /// let derivs = CurveDerivatives::try_from([0.0, 1.0, 2.0]).map_err(anyhow::Error::msg)?;
     /// let arr = derivs.to_array::<2>().ok_or_else(|| anyhow::anyhow!("not enough derivatives"))?;
     /// assert_eq!(arr, [0.0, 1.0]);
@@ -381,12 +382,12 @@ impl<V: Zero + Copy> TryFrom<&[V]> for CurveDerivatives<V> {
     }
 }
 
-impl<V: VectorSpace> std::ops::Mul<V::Scalar> for CurveDerivatives<V> {
+impl<V: LinearVector> std::ops::Mul<V::Scalar> for CurveDerivatives<V> {
     type Output = Self;
     fn mul(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
         for value in &mut array {
-            *value = *value * rhs;
+            *value *= rhs;
         }
         Self {
             array,
@@ -395,12 +396,12 @@ impl<V: VectorSpace> std::ops::Mul<V::Scalar> for CurveDerivatives<V> {
     }
 }
 
-impl<V: VectorSpace> std::ops::Div<V::Scalar> for CurveDerivatives<V> {
+impl<V: LinearVector> std::ops::Div<V::Scalar> for CurveDerivatives<V> {
     type Output = Self;
     fn div(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
         for value in &mut array {
-            *value = *value / rhs;
+            *value /= rhs;
         }
         Self {
             array,
@@ -577,7 +578,7 @@ impl<V> SurfaceDerivatives<V> {
     /// # Examples
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     /// // calculate the derivation at (u, v) = (1.0, 2.0).
     /// let (u, v) = (1.0, 2.0);
     /// // the curve: s(u, v) = (u^3 v^2, u^2 v^3, u v, u)
@@ -631,9 +632,9 @@ impl<V> SurfaceDerivatives<V> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn rational_derivatives(&self) -> SurfaceDerivatives<<V::Point as EuclideanSpace>::Diff>
+    pub fn rational_derivatives(&self) -> SurfaceDerivatives<<V::Point as AffinePoint>::Diff>
     where V: Homogeneous {
-        let zero = <V::Point as EuclideanSpace>::Diff::zero();
+        let zero = <V::Point as AffinePoint>::Diff::zero();
         let mut evals = [[zero; MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
         for m in 0..=self.max_order {
             for n in 0..=self.max_order - m {
@@ -646,13 +647,13 @@ impl<V> SurfaceDerivatives<V> {
                         // SAFETY: `c0` and `c1` are small binomial coefficients.
                         let (c0_s, c1_s) =
                             (scalar_from_u128(c0 as u128), scalar_from_u128(c1 as u128));
-                        sum = sum + evals[j] * (ders[n - j].weight() * c0_s * c1_s);
+                        sum += evals[j] * (ders[n - j].weight() * c0_s * c1_s);
                         c1 = c1 * (n - j) / (j + 1);
                     }
                     c0 = c0 * (m - i) / (i + 1);
                 }
                 let (eval_mn, der_mn) = (&mut evals[m].as_mut()[n], self[m][n]);
-                *eval_mn = (der_mn.truncate() - sum) / self[0][0].weight();
+                *eval_mn = (der_mn.spatial() - sum) / self[0][0].weight();
             }
         }
         SurfaceDerivatives {
@@ -668,7 +669,7 @@ impl<V> SurfaceDerivatives<V> {
     /// # Example
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     ///
     /// let t = 2.0;
     ///
@@ -681,7 +682,7 @@ impl<V> SurfaceDerivatives<V> {
     /// ];
     /// let cderivs = CurveDerivatives::try_from(raw_cderivs).map_err(anyhow::Error::msg)?;
     ///
-    /// let Vector2 { x: u, y: v } = cderivs[0];
+    /// let [u, v] = <[f64; 2]>::from(cderivs[0]);
     /// let raw_derivs: &[&[Vector1]] = &[
     ///     &[(u * u * u + v,).into(), (1.0,).into(), (0.0,).into()],
     ///     &[(3.0 * u * u,).into(), (0.0,).into()],
@@ -702,8 +703,8 @@ impl<V> SurfaceDerivatives<V> {
         order: usize,
     ) -> Option<V>
     where
-        V: VectorSpace,
-        V::Scalar: BaseFloat,
+        V: LinearVector,
+        V::Scalar: KernelScalar,
     {
         if order > self.max_order || order > curve_ders.max_order {
             return None;
@@ -717,7 +718,7 @@ impl<V> SurfaceDerivatives<V> {
             for idx in iter {
                 let idx = &idx[..len];
                 let mult = scalar_from_u128(multiplicity(idx));
-                sum = sum + tensor(self, curve_ders, idx) * mult;
+                sum += tensor(self, curve_ders, idx) * mult;
             }
         }
         Some(sum)
@@ -732,8 +733,8 @@ impl<V> SurfaceDerivatives<V> {
         order: usize,
     ) -> Option<V>
     where
-        V: VectorSpace,
-        V::Scalar: BaseFloat,
+        V: LinearVector,
+        V::Scalar: KernelScalar,
     {
         self.composite_derivative(curve_ders, order)
     }
@@ -742,7 +743,7 @@ impl<V> SurfaceDerivatives<V> {
     /// # Example
     /// ```
     /// # fn main() -> anyhow::Result<()> {
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     ///
     /// let t = 2.0;
     ///
@@ -755,7 +756,7 @@ impl<V> SurfaceDerivatives<V> {
     /// ];
     /// let cderivs = CurveDerivatives::try_from(raw_cderivs).map_err(anyhow::Error::msg)?;
     ///
-    /// let Vector2 { x: u, y: v } = cderivs[0];
+    /// let [u, v] = <[f64; 2]>::from(cderivs[0]);
     /// let raw_derivs: &[&[Vector1]] = &[
     ///     &[(u * u * u + v,).into(), (1.0,).into(), (0.0,).into()],
     ///     &[(3.0 * u * u,).into(), (0.0,).into()],
@@ -779,8 +780,8 @@ impl<V> SurfaceDerivatives<V> {
         curve_ders: &CurveDerivatives<Vector2<V::Scalar>>,
     ) -> CurveDerivatives<V>
     where
-        V: VectorSpace,
-        V::Scalar: BaseFloat,
+        V: LinearVector,
+        V::Scalar: KernelScalar,
     {
         let max_order = self.max_order.min(curve_ders.max_order);
         let mut res = CurveDerivatives::new(max_order);
@@ -803,10 +804,10 @@ impl<V> SurfaceDerivatives<V> {
     /// the same coordinate system as the surface itself.
     pub fn absolute_derivatives(&self) -> SurfaceDerivatives<V::Scalar>
     where
-        V: InnerSpace,
-        V::Scalar: BaseFloat, {
+        V: InnerProduct,
+        V::Scalar: KernelScalar, {
         let mut evals = [[V::Scalar::zero(); MAX_DER_ORDER + 1]; MAX_DER_ORDER + 1];
-        evals[0][0] = self[0][0].magnitude();
+        evals[0][0] = self[0][0].norm();
         for m in 0..=self.max_order {
             for n in 0..=self.max_order - m {
                 if m == 0 && n == 0 {
@@ -826,7 +827,7 @@ impl<V> SurfaceDerivatives<V> {
                         // SAFETY: `c0` and `c1` are small binomial coefficients;
                         // their product fits in `f64`.
                         let coefficient = scalar_from_u128((c0 * c1) as u128);
-                        ders_sum += self[i][j].dot(self[m - i][n - j]) * coefficient;
+                        ders_sum += self[i][j].dot(&self[m - i][n - j]) * coefficient;
                         if !((i == 0 && j == 0) || (i == m && j == n)) {
                             evals_sum += evals[i][j] * evals[m - i][n - j] * coefficient;
                         }
@@ -1011,11 +1012,11 @@ impl<V: Zero + Copy> TryFrom<&[&[V]]> for SurfaceDerivatives<V> {
     }
 }
 
-impl<V: VectorSpace> std::ops::Mul<V::Scalar> for SurfaceDerivatives<V> {
+impl<V: LinearVector> std::ops::Mul<V::Scalar> for SurfaceDerivatives<V> {
     type Output = Self;
     fn mul(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().flatten().for_each(|a| *a = *a * rhs);
+        array.iter_mut().flatten().for_each(|a| *a *= rhs);
         Self {
             array,
             max_order: self.max_order,
@@ -1023,11 +1024,11 @@ impl<V: VectorSpace> std::ops::Mul<V::Scalar> for SurfaceDerivatives<V> {
     }
 }
 
-impl<V: VectorSpace> std::ops::Div<V::Scalar> for SurfaceDerivatives<V> {
+impl<V: LinearVector> std::ops::Div<V::Scalar> for SurfaceDerivatives<V> {
     type Output = Self;
     fn div(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().flatten().for_each(|a| *a = *a / rhs);
+        array.iter_mut().flatten().for_each(|a| *a /= rhs);
         Self {
             array,
             max_order: self.max_order,
@@ -1083,7 +1084,7 @@ fn derivative_storage_bounds_are_total() {
 
 #[test]
 fn invalid_composite_order_is_explicit() {
-    use cgmath::Vector1;
+    use nalgebra::Vector1;
 
     let surface = SurfaceDerivatives::<Vector1<f64>>::new(0);
     let curve = CurveDerivatives::<Vector2<f64>>::new(0);
@@ -1180,8 +1181,8 @@ fn multiplicity(array: &[usize]) -> u128 {
 
 fn tensor<S, V, A>(sder: &A, cder: &[Vector2<S>], idx: &[usize]) -> V
 where
-    S: BaseFloat,
-    V: VectorSpace<Scalar = S>,
+    S: KernelScalar,
+    V: LinearVector<Scalar = S>,
     A: std::ops::Index<usize, Output = [V]>, {
     let n = 1_u128 << idx.len();
     (0..n).fold(V::zero(), |sum, mut i| {

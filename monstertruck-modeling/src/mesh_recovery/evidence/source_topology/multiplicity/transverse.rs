@@ -13,7 +13,7 @@ use std::{
 
 const MAX_SWEEP_COMPARISONS: usize = 1 << 21;
 
-const fn coord(p: Point3) -> Coord3D<f64> {
+fn coord(p: Point3) -> Coord3D<f64> {
     Coord3D {
         x: p.x,
         y: p.y,

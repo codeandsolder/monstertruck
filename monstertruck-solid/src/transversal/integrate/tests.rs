@@ -9,14 +9,14 @@ use monstertruck_modeling::*;
 #[test]
 fn adjacent_cubes_or() {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube: Solid = builder::extrude(&f, Vector3::z());
 
     let v = builder::vertex(Point3::new(0.5, 0.5, 1.0));
-    let w = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&w, Vector3::unit_y());
-    let cube2: Solid = builder::extrude(&f, Vector3::unit_z());
+    let w = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&w, Vector3::y());
+    let cube2: Solid = builder::extrude(&f, Vector3::z());
 
     let result = crate::or(&cube, &cube2, crate::GeometryPolicy::standard(0.05));
     assert!(
@@ -43,9 +43,9 @@ fn adjacent_cubes_or() {
 
 fn matrix_unit_cube() -> Solid {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    builder::extrude(&f, Vector3::unit_z())
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    builder::extrude(&f, Vector3::z())
 }
 
 #[test]
@@ -106,9 +106,9 @@ fn standard_budget_does_not_widen_classic_boolean_tolerance() {
 fn boolean_matrix_and_crossing_cubes() {
     let cube = matrix_unit_cube();
     let v = builder::vertex(Point3::new(0.5, 0.25, 0.25));
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube2: Solid = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube2: Solid = builder::extrude(&f, Vector3::z());
 
     let solid = crate::and(&cube, &cube2, crate::GeometryPolicy::standard(0.01))
         .expect("crossing box/box AND must succeed");
@@ -125,20 +125,20 @@ fn boolean_matrix_and_crossing_cubes() {
 #[test]
 fn punched_cube() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube: Solid = builder::extrude(&f, Vector3::z());
 
     let v = builder::vertex(Point3::new(0.5, 0.25, -0.5));
     let w = builder::revolve(
         &v,
         Point3::new(0.5, 0.5, 0.0),
-        Vector3::unit_z(),
+        Vector3::z(),
         builder::SweepAngle::Closed,
         4,
     )?;
     let f = builder::try_attach_plane([w])?;
-    let mut cylinder = builder::extrude(&f, Vector3::unit_z() * 2.0);
+    let mut cylinder = builder::extrude(&f, Vector3::z() * 2.0);
     cylinder.not();
     let and = crate::and(&cube, &cylinder, crate::GeometryPolicy::standard(0.05))?;
     assert_eq!(and.face_iter().count(), 10);
@@ -157,9 +157,9 @@ fn punched_cube() -> std::result::Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn cube_clip_high_z() {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube: Solid = builder::extrude(&f, Vector3::z());
 
     // Clip at z=0.8 with tolerance 0.05 — enough clearance from
     // the cube's top face at z=1.0.
@@ -184,9 +184,9 @@ fn cube_clip_high_z() {
 #[test]
 fn cube_clip_high_z_flip() {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube: Solid = builder::extrude(&f, Vector3::z());
 
     // Clip at z=0.8 from the top side.
     let clip_box: Solid = primitive::cuboid(BoundingBox::from_iter([

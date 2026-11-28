@@ -97,8 +97,9 @@ pub fn bound_nurbs_plane_deviation(
     if !target_gap.is_finite()
         || target_gap <= 0.0
         || ![origin.x, origin.y, origin.z].iter().all(|v| v.is_finite())
-        || !normal.magnitude2().is_finite()
-        || (normal.magnitude2() - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
+        || !normal.norm_squared().is_finite()
+        || (normal.norm_squared() - 1.0).abs()
+            > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
         || !valid(curve.non_rationalized())
     {
         return None;
@@ -194,9 +195,8 @@ mod tests {
             KnotVector::bezier_knot(2),
             vec![p(0.0, 0.0, 0.0), p(0.5, 0.0, 2.0), p(1.0, 0.0, 0.0)],
         );
-        let bound =
-            bound_bspline_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::unit_z(), 1.0e-10)
-                .expect("valid polynomial");
+        let bound = bound_bspline_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::z(), 1.0e-10)
+            .expect("valid polynomial");
         assert!(bound.lower <= 1.0 && bound.upper >= 1.0);
         assert!(bound.upper - bound.lower < 1.0e-9, "{bound:?}");
         assert!(bound.within(1.000001));
@@ -214,9 +214,8 @@ mod tests {
                 Vector4::new(1.5, 0.0, -0.25, 0.5),
             ],
         ));
-        let bound =
-            bound_nurbs_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::unit_z(), 1.0e-8)
-                .expect("valid rational spline");
+        let bound = bound_nurbs_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::z(), 1.0e-8)
+            .expect("valid rational spline");
         assert!(bound.lower > 0.05, "{bound:?}");
         assert!(bound.upper - bound.lower < 1.0e-6, "{bound:?}");
         assert!(bound.exceeds(0.01));
@@ -238,7 +237,7 @@ mod tests {
             vec![p(0.0, 0.0, 0.0), p(0.5, 0.0, 0.0), p(1.0, 0.0, 0.0)],
         ));
         let origin = p(0.0, 0.0, 0.0);
-        let normal = Vector3::unit_z();
+        let normal = Vector3::z();
         let bound =
             bound_nurbs_curves_separation_by_plane(&source, &target, origin, normal, 1.0e-10)
                 .expect("finite complete curves");
@@ -265,7 +264,7 @@ mod tests {
             &source,
             &target,
             p(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0e-10,
         )
         .expect("same plane");
@@ -279,16 +278,11 @@ mod tests {
             vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)],
         );
         assert!(
-            bound_bspline_plane_deviation(
-                &curve,
-                p(0.0, 0.0, 0.0),
-                Vector3::unit_z() * 2.0,
-                1.0e-8,
-            )
-            .is_none()
+            bound_bspline_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::z() * 2.0, 1.0e-8,)
+                .is_none()
         );
         assert!(
-            bound_bspline_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::unit_z(), f64::NAN,)
+            bound_bspline_plane_deviation(&curve, p(0.0, 0.0, 0.0), Vector3::z(), f64::NAN,)
                 .is_none()
         );
     }

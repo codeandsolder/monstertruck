@@ -32,7 +32,7 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)],
     );
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let angle = FRAC_PI_4;
     let curve = Line(
         Point3::new(angle.cos(), angle.sin(), 0.25),
@@ -52,7 +52,7 @@ fn revolution_surface_exact_boundary_recovers_internal_iso_angle_line() {
 #[test]
 fn revolution_line_profile_exact_boundary_extends_beyond_placeholder_range() {
     let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let angle = FRAC_PI_4;
     let curve = Line(surface.evaluate(-3.0, angle), surface.evaluate(4.0, angle));
 
@@ -72,7 +72,7 @@ fn revolution_surface_exact_boundary_recovers_iso_angle_nurbs_with_fixed_endpoin
         KnotVector::bezier_knot(1),
         vec![Point3::origin(), Point3::new(1.0, 0.0, 1.0)],
     );
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let angle = FRAC_PI_4;
     let curve = NurbsCurve::<Vector4>::from(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(1),

@@ -36,10 +36,10 @@
 /// let table = Table::from_data_section(&exchange.data[0]);
 /// // get `CartesianPoint` registered in #102
 /// let step_point = EntityTable::<CartesianPointHolder>::get_owned(&table, 102)?;
-/// // convert `CartesianPoint` in STEP to `Point3` in cgmath
-/// let cgmath_point = Point3::from(&step_point);
+/// // convert `CartesianPoint` in STEP to `Point3` in the native geometry kernel
+/// let native_point = Point3::from(&step_point);
 /// // check parse result
-/// assert_eq!(cgmath_point, Point3::new(0.0, 10.0, 0.0));
+/// assert_eq!(native_point, Point3::new(0.0, 10.0, 0.0));
 /// # Ok(())
 /// # }
 /// ```

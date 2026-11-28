@@ -3,23 +3,23 @@
 //! projected sampling otherwise.
 
 use super::{
-    BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D,
-    CurveTrimRef, ElementarySurface, Ellipse, EuclideanSpace, ExactParameterBoundary2D, Hyperbola,
-    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    AffinePoint, BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, Conic2D, Conic3D, Curve2D,
+    Curve3D, CurveTrimRef, ElementarySurface, Ellipse, ExactParameterBoundary2D, GeometryTransform,
+    Hyperbola, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
     NurbsCurve, Ordering, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
     ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface, Plane, Point2,
     Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SphericalSurface, SquareMatrix, StepConvertingError, StepParameterCurve,
+    SearchParameterHint2D, SphericalSurface, StepConvertingError, StepParameterCurve,
     StepRevolutionSurface, Surface, SurfaceCurve3D, SurfaceCurveTrimRef, SweepSurface, Tolerance,
-    ToroidalSurface, Transform, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3,
-    Vector4, uv_clamp,
+    ToroidalSurface, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4,
+    uv_clamp,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 #[cfg(test)]
 use crate::step::load::step_geometry::{Sphere, SurfaceCurveKind, SurfaceCurveRepresentation};
 #[cfg(test)]
-use monstertruck_geometry::prelude::{BsplineSurface, Rad, Torus};
+use monstertruck_geometry::prelude::{BsplineSurface, Torus};
 #[cfg(test)]
 use monstertruck_traits::Transformed;
 #[cfg(test)]
@@ -384,10 +384,10 @@ fn matrix4_is_affine(transform: &Matrix4) -> bool {
     // perspective term of 5e-7 is "near zero" at the kernel tolerance but is
     // still projective, and treating it as affine would turn an approximation
     // into proof-bearing trim geometry.
-    transform.x.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
-        && transform.y.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
-        && transform.z.w.abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
-        && (transform.w.w - 1.0).abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+    transform[(3, 0)].abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && transform[(3, 1)].abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && transform[(3, 2)].abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
+        && (transform[(3, 3)] - 1.0).abs() <= DEFAULT_NUMERICAL_TOLERANCES.structural
 }
 
 fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> bool {
@@ -395,21 +395,21 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
         return false;
     }
 
-    let origin = transform.transform_point(Point3::origin());
-    let x = transform.transform_point(Point3::new(1.0, 0.0, 0.0));
-    let y = transform.transform_point(Point3::new(0.0, 1.0, 0.0));
+    let origin = transform.apply_point(Point3::origin());
+    let x = transform.apply_point(Point3::new(1.0, 0.0, 0.0));
+    let y = transform.apply_point(Point3::new(0.0, 1.0, 0.0));
     let u = x - origin;
     let v = y - origin;
-    let basis_scale = u.magnitude().max(v.magnitude()).max(1.0);
-    if u.cross(v).magnitude() <= KERNEL_EPSILON * basis_scale * basis_scale {
+    let basis_scale = u.norm().max(v.norm()).max(1.0);
+    if u.cross(&v).norm() <= KERNEL_EPSILON * basis_scale * basis_scale {
         return false;
     }
 
-    let normal = u.cross(v);
+    let normal = u.cross(&v);
     let scale = origin
-        .to_vec()
-        .magnitude()
-        .max(plane.origin().to_vec().magnitude())
+        .coords
+        .norm()
+        .max(plane.origin().position_vector().norm())
         .max(basis_scale)
         .max(1.0);
     let Some(parameter) = plane.parameter(origin) else {
@@ -421,17 +421,17 @@ fn transformed_xy_support_matches_plane(transform: &Matrix4, plane: &Plane) -> b
 fn projected_conic_transform_on_plane(transform: &Matrix4, plane: &Plane) -> Option<Matrix3> {
     let project = |point| {
         plane
-            .parameter(transform.transform_point(point))
+            .parameter(transform.apply_point(point))
             .map(|parameter| Point2::new(parameter.x, parameter.y))
     };
     let origin = project(Point3::origin())?;
     let u_axis = project(Point3::new(1.0, 0.0, 0.0))? - origin;
     let v_axis = project(Point3::new(0.0, 1.0, 0.0))? - origin;
-    Some(Matrix3::from_cols(
+    Some(Matrix3::from_columns(&[
         Vector3::new(u_axis.x, u_axis.y, 0.0),
         Vector3::new(v_axis.x, v_axis.y, 0.0),
         Vector3::new(origin.x, origin.y, 1.0),
-    ))
+    ]))
 }
 
 // Numeric defense in depth after an analytic/exact construction. This must never
@@ -559,8 +559,8 @@ fn scaled_near(left: f64, right: f64, scale: f64) -> bool {
 
 #[inline]
 fn parallel_scaled(left: Vector3, right: Vector3) -> bool {
-    let scale = left.magnitude() * right.magnitude();
-    scale > KERNEL_EPSILON && left.cross(right).magnitude() <= KERNEL_EPSILON * scale.max(1.0)
+    let scale = left.norm() * right.norm();
+    scale > KERNEL_EPSILON && left.cross(&right).norm() <= KERNEL_EPSILON * scale.max(1.0)
 }
 
 fn ellipse_circle_frame_in_processor<S>(
@@ -570,24 +570,24 @@ fn ellipse_circle_frame_in_processor<S>(
     if !matrix4_is_affine(curve.transform()) || !matrix4_is_affine(surface.transform()) {
         return None;
     }
-    let inverse = surface.transform().invert()?;
-    let center = inverse.transform_point(curve.transform().transform_point(Point3::origin()));
-    let axis0 = inverse.transform_vector(curve.transform().transform_vector(Vector3::unit_x()));
-    let axis1 = inverse.transform_vector(curve.transform().transform_vector(Vector3::unit_y()));
-    let radius0 = axis0.magnitude();
-    let radius1 = axis1.magnitude();
+    let inverse = surface.transform().try_inverse()?;
+    let center = inverse.apply_point(curve.transform().apply_point(Point3::origin()));
+    let axis0 = inverse.apply_vector(curve.transform().apply_vector(Vector3::x()));
+    let axis1 = inverse.apply_vector(curve.transform().apply_vector(Vector3::y()));
+    let radius0 = axis0.norm();
+    let radius1 = axis1.norm();
     let scale = radius0.max(radius1).max(1.0);
     if !radius0.is_finite()
         || !radius1.is_finite()
         || radius0 <= KERNEL_EPSILON
         || radius1 <= KERNEL_EPSILON
         || !scaled_near(radius0, radius1, scale)
-        || axis0.dot(axis1).abs() > KERNEL_EPSILON * radius0 * radius1
+        || axis0.dot(&axis1).abs() > KERNEL_EPSILON * radius0 * radius1
     {
         return None;
     }
-    let cross = axis0.cross(axis1);
-    let cross_magnitude = cross.magnitude();
+    let cross = axis0.cross(&axis1);
+    let cross_magnitude = cross.norm();
     if cross_magnitude <= KERNEL_EPSILON * radius0 * radius1 {
         return None;
     }
@@ -596,8 +596,8 @@ fn ellipse_circle_frame_in_processor<S>(
         center,
         radius: f64::midpoint(radius0, radius1),
         normal: cross / cross_magnitude,
-        front: inverse.transform_point(curve.front()),
-        tangent: inverse.transform_vector(curve.derivative(t0)),
+        front: inverse.apply_point(curve.front()),
+        tangent: inverse.apply_vector(curve.derivative(t0)),
         range: (t0, t1),
     })
 }
@@ -612,8 +612,8 @@ fn circle_support_matches(
         .radius
         .abs()
         .max(radius.abs())
-        .max(frame.center.to_vec().magnitude())
-        .max(center.to_vec().magnitude())
+        .max(frame.center.position_vector().norm())
+        .max(center.position_vector().norm())
         .max(1.0);
     frame.center.distance(center) <= KERNEL_EPSILON * scale
         && scaled_near(frame.radius, radius.abs(), scale)
@@ -621,18 +621,18 @@ fn circle_support_matches(
 }
 
 fn unit_angular_rate(curve_tangent: Vector3, surface_tangent: Vector3) -> Option<f64> {
-    let curve_speed = curve_tangent.magnitude();
-    let surface_speed = surface_tangent.magnitude();
+    let curve_speed = curve_tangent.norm();
+    let surface_speed = surface_tangent.norm();
     let scale = curve_speed.max(surface_speed).max(1.0);
     if curve_speed <= KERNEL_EPSILON
         || surface_speed <= KERNEL_EPSILON
         || !scaled_near(curve_speed, surface_speed, scale)
-        || curve_tangent.cross(surface_tangent).magnitude()
+        || curve_tangent.cross(&surface_tangent).norm()
             > KERNEL_EPSILON * curve_speed * surface_speed
     {
         return None;
     }
-    Some(if curve_tangent.dot(surface_tangent) >= 0.0 {
+    Some(if curve_tangent.dot(&surface_tangent) >= 0.0 {
         1.0
     } else {
         -1.0
@@ -663,8 +663,8 @@ where
     let profile_point = entity.entity_curve().evaluate(profile_parameter);
     let axis = entity.axis();
     let offset = profile_point - entity.origin();
-    let center = entity.origin() + axis * offset.dot(axis);
-    let radius = (profile_point - center).magnitude();
+    let center = entity.origin() + axis * offset.dot(&axis);
+    let radius = (profile_point - center).norm();
     if !circle_support_matches(frame, center, radius, axis)
         || !entity.evaluate(profile_parameter, angle).near(&frame.front)
     {
@@ -698,30 +698,30 @@ fn bounded_tilted_ellipse_trim_on_cylinder(
     if !matrix4_is_affine(curve.transform()) || !matrix4_is_affine(revolution.transform()) {
         return None;
     }
-    let inv = revolution.transform().invert()?;
-    let center = inv.transform_point(curve.transform().transform_point(Point3::origin()));
-    let cosine = inv.transform_vector(curve.transform().transform_vector(Vector3::unit_x()));
-    let sine = inv.transform_vector(curve.transform().transform_vector(Vector3::unit_y()));
+    let inv = revolution.transform().try_inverse()?;
+    let center = inv.apply_point(curve.transform().apply_point(Point3::origin()));
+    let cosine = inv.apply_vector(curve.transform().apply_vector(Vector3::x()));
+    let sine = inv.apply_vector(curve.transform().apply_vector(Vector3::y()));
     let entity = revolution.entity();
     let generator = entity.entity_curve();
     let axis = entity.axis();
-    let axial_delta = (generator.1 - generator.0).dot(axis);
+    let axial_delta = (generator.1 - generator.0).dot(&axis);
     if axial_delta.abs() <= KERNEL_EPSILON || !parallel_scaled(generator.1 - generator.0, axis) {
         return None;
     }
-    let radial = |v: Vector3| v - axis * v.dot(axis);
+    let radial = |v: Vector3| v - axis * v.dot(&axis);
     let radial_cos = radial(cosine);
     let radial_sin = radial(sine);
-    let axial_cos = cosine.dot(axis) / axial_delta;
-    let axial_sin = sine.dot(axis) / axial_delta;
+    let axial_cos = cosine.dot(&axis) / axial_delta;
+    let axial_sin = sine.dot(&axis) / axial_delta;
     let center_radial = radial(center - entity.origin());
-    let source_radius = radial(generator.0 - entity.origin()).magnitude();
-    let ellipse_radius = radial_cos.magnitude();
+    let source_radius = radial(generator.0 - entity.origin()).norm();
+    let ellipse_radius = radial_cos.norm();
     let scale = source_radius.max(1.0);
-    if center_radial.magnitude() > KERNEL_EPSILON * scale
+    if center_radial.norm() > KERNEL_EPSILON * scale
         || !scaled_near(ellipse_radius, source_radius, scale)
-        || !scaled_near(radial_sin.magnitude(), source_radius, scale)
-        || radial_cos.dot(radial_sin).abs() > KERNEL_EPSILON * scale * scale
+        || !scaled_near(radial_sin.norm(), source_radius, scale)
+        || radial_cos.dot(&radial_sin).abs() > KERNEL_EPSILON * scale * scale
     {
         return None;
     }
@@ -730,11 +730,11 @@ fn bounded_tilted_ellipse_trim_on_cylinder(
     if !t0.is_finite() || !t1.is_finite() || span <= 0.0 {
         return None;
     }
-    let first = inv.transform_point(curve.evaluate(t0));
+    let first = inv.apply_point(curve.evaluate(t0));
     let (u0, v0) = entity.search_parameter(first, SearchParameterHint2D::None, 30)?;
-    let radial_tangent = radial(inv.transform_vector(curve.derivative(t0)));
+    let radial_tangent = radial(inv.apply_vector(curve.derivative(t0)));
     let rate = unit_angular_rate(radial_tangent, entity.derivative_v(u0, v0))?;
-    let axial_center = (center - generator.0).dot(axis) / axial_delta;
+    let axial_center = (center - generator.0).dot(&axis) / axial_delta;
     let uv = |t: f64| {
         let u = axial_sin.mul_add(t.sin(), axial_cos.mul_add(t.cos(), axial_center));
         let v = rate.mul_add(t - t0, v0);
@@ -783,7 +783,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
     let frame = ellipse_circle_frame_in_processor(curve, processor)?;
     let sphere = &processor.entity().0;
     let (u, v) = sphere.search_parameter(frame.front, SearchParameterHint2D::None, 30)?;
-    let z = Vector3::unit_z();
+    let z = Vector3::z();
     let parallel_center = sphere.center() + z * (sphere.radius() * u.cos());
     let parallel_radius = (sphere.radius() * u.sin()).abs();
     if parallel_radius > KERNEL_EPSILON
@@ -803,7 +803,7 @@ fn exact_ellipse_parameter_curve_on_sphere(
     }
 
     let radial = Vector3::new(v.cos(), v.sin(), 0.0);
-    let meridian_normal = radial.cross(z);
+    let meridian_normal = radial.cross(&z);
     if !circle_support_matches(frame, sphere.center(), sphere.radius(), meridian_normal) {
         return None;
     }
@@ -828,7 +828,7 @@ fn exact_ellipse_parameter_curve_on_torus(
     let frame = ellipse_circle_frame_in_processor(curve, processor)?;
     let torus = processor.entity();
     let (u, v) = torus.search_parameter(frame.front, SearchParameterHint2D::None, 30)?;
-    let z = Vector3::unit_z();
+    let z = Vector3::z();
 
     let major_radius = torus.small_radius().mul_add(v.cos(), torus.large_radius());
     let major_center = torus.center() + z * (torus.small_radius() * v.sin());
@@ -850,7 +850,7 @@ fn exact_ellipse_parameter_curve_on_torus(
 
     let radial = Vector3::new(u.cos(), u.sin(), 0.0);
     let minor_center = torus.center() + radial * torus.large_radius();
-    let minor_normal = radial.cross(z);
+    let minor_normal = radial.cross(&z);
     if !circle_support_matches(frame, minor_center, torus.small_radius(), minor_normal) {
         return None;
     }
@@ -1178,12 +1178,12 @@ impl<'a> TryFrom<CurveTrimRef<'a>> for StepParameterCurve {
 #[test]
 fn near_affine_projective_conic_is_not_promoted_to_exact() {
     let perspective = 0.5 * KERNEL_EPSILON;
-    let transform = Matrix4::from_cols(
+    let transform = Matrix4::from_columns(&[
         Vector4::new(1.0, 0.0, 0.0, perspective),
         Vector4::new(0.0, 1.0, 0.0, 0.0),
         Vector4::new(0.0, 0.0, 1.0, 0.0),
         Vector4::new(0.0, 0.0, 0.0, 1.0),
-    );
+    ]);
     let ellipse = Processor::with_transform(
         TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)),
         transform,
@@ -1196,12 +1196,12 @@ fn near_affine_projective_conic_is_not_promoted_to_exact() {
 #[test]
 fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() {
     let slope = 0.9 * KERNEL_EPSILON;
-    let transform = Matrix4::from_cols(
+    let transform = Matrix4::from_columns(&[
         Vector4::new(1.0, 0.0, slope, 0.0),
         Vector4::new(0.0, 1.0, slope, 0.0),
         Vector4::new(0.0, 0.0, 1.0, 0.0),
         Vector4::new(0.0, 0.0, 0.0, 1.0),
-    );
+    ]);
     let ellipse = Processor::with_transform(
         TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)),
         transform,
@@ -1234,8 +1234,8 @@ fn tilted_planar_conic_is_not_exact_even_when_old_five_samples_are_near_plane() 
 #[test]
 fn exact_planar_conic_projection_retains_kind_and_parameters() {
     let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
-    let transform = Matrix4::from_translation(Vector3::new(2.0, -3.0, 0.0))
-        * Matrix4::from_nonuniform_scale(2.0, 3.0, 1.0);
+    let transform = Matrix4::new_translation(&Vector3::new(2.0, -3.0, 0.0))
+        * Matrix4::new_nonuniform_scaling(&Vector3::new(2.0, 3.0, 1.0));
 
     for inverted in [false, true] {
         let curves = [
@@ -1286,14 +1286,14 @@ fn exact_planar_conic_projection_retains_kind_and_parameters() {
 #[test]
 fn isoparametric_circle_on_cylinder_has_analytic_exact_trim() {
     let radius = 2.0;
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let point = Point3::new(radius, 0.0, 0.0);
     let surface = Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
         RevolutionSurface::by_revolution(Line(point, point + axis), Point3::origin(), axis),
     )));
     let curve = Curve3D::Conic(Conic3D::Ellipse(
         Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
-            .transformed(Matrix4::from_scale(radius)),
+            .transformed(Matrix4::new_scaling(radius)),
     ));
 
     let trim = curve
@@ -1315,8 +1315,9 @@ fn tilted_great_circle_on_sphere_is_not_claimed_as_exact_uv_line() {
     ));
     let surface = Surface::Elementary(ElementarySurface::Sphere(sphere));
     let curve = Curve3D::Conic(Conic3D::Ellipse(
-        Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
-            .transformed(Matrix4::from_angle_y(Rad(std::f64::consts::FRAC_PI_4))),
+        Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU))).transformed(
+            Matrix4::from_axis_angle(&Vector3::y_axis(), std::f64::consts::FRAC_PI_4),
+        ),
     ));
 
     assert!(curve.exact_parameter_boundary_2d(&surface).is_none());
@@ -1468,9 +1469,9 @@ fn off_plane_bspline_is_not_claimed_as_exact_planar_trim() {
 #[test]
 fn surface_curve_leader_rebuilds_trim_on_equivalent_cylinder() {
     let center = Point3::origin();
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let radius = 2.0;
-    let p = center + radius * Vector3::unit_x();
+    let p = center + radius * Vector3::x();
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Line(p, p + axis),
         center,
@@ -1504,9 +1505,9 @@ fn surface_curve_leader_rebuilds_trim_on_equivalent_cylinder() {
 #[test]
 fn exact_line_trim_is_rebuilt_on_cylindrical_surface() {
     let center = Point3::origin();
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let radius = 2.0;
-    let p = center + radius * Vector3::unit_x();
+    let p = center + radius * Vector3::x();
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Line(p, p + axis),
         center,
@@ -1537,9 +1538,9 @@ fn exact_line_trim_is_rebuilt_on_cylindrical_surface() {
 #[test]
 fn sampled_parameter_boundary_preserves_unbounded_cylinder_axis_parameter() {
     let center = Point3::new(0.0, 0.0, 68.0);
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let radius = 0.3;
-    let p = center + radius * Vector3::unit_x();
+    let p = center + radius * Vector3::x();
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Line(p, p + axis),
         center,
@@ -1648,7 +1649,7 @@ fn a_knot_bounded_surface_still_snaps_a_sample_that_overshoots_its_knots() {
 #[test]
 fn no_placeholder_axis_carries_a_period() {
     let center = Point3::new(0.0, 0.0, 0.0);
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let profile = Point3::new(0.3, 0.0, 0.0);
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Line(profile, profile + axis),
@@ -1657,7 +1658,7 @@ fn no_placeholder_axis_carries_a_period() {
     ));
     cylinder.invert();
     let cone = Processor::new(RevolutionSurface::by_revolution(
-        Line(profile, profile + axis + Vector3::unit_x()),
+        Line(profile, profile + axis + Vector3::x()),
         center,
         axis,
     ));
@@ -1690,8 +1691,9 @@ fn no_placeholder_axis_carries_a_period() {
 #[test]
 fn raw_conic_boundary_without_pcurve_uses_sampled_projection_at_safe_tolerance() {
     let curve = Curve3D::Conic(Conic3D::Ellipse(
-        Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU)))
-            .transformed(Matrix4::from_nonuniform_scale(100.0, 100.0, 100.0)),
+        Processor::new(TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, TAU))).transformed(
+            Matrix4::new_nonuniform_scaling(&Vector3::new(100.0, 100.0, 100.0)),
+        ),
     ));
     let surface = Surface::Elementary(ElementarySurface::Plane(Plane::xy()));
 
@@ -1759,7 +1761,7 @@ fn surface_curve_line_without_pcurve_converts_to_exact_pcurve() {
 
 #[test]
 fn surface_curve_line_without_pcurve_on_cylinder_is_exact_generator() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let profile = Line(point, point + axis);
@@ -1786,7 +1788,7 @@ fn surface_curve_line_without_pcurve_on_cylinder_is_exact_generator() {
 
 #[test]
 fn raw_line_without_pcurve_on_cylinder_is_exact_generator() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let profile = Line(point, point + axis);
@@ -1807,7 +1809,7 @@ fn raw_line_without_pcurve_on_cylinder_is_exact_generator() {
 
 #[test]
 fn cone_apex_generator_is_exact_in_both_edge_directions() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::origin();
     let profile = Line(center, Point3::new(1.0, 0.0, 1.0));
     let surface = Surface::Elementary(ElementarySurface::ConicalSurface(Processor::new(

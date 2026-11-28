@@ -36,7 +36,7 @@ impl PlaneConeHyperbola {
     fn transverse(self) -> Vector3 {
         self.analytic
             .cone_axis()
-            .cross(self.analytic.plane_normal())
+            .cross(&self.analytic.plane_normal())
     }
 
     pub(super) fn fitted_to_source(

@@ -12,7 +12,7 @@ use super::{
     HashMap, InputPolygon, MeshRecoveryError, PlanarPatch, RecoveredPlanarMesh, edge_incidence,
     edge_key, positions_and_polygons, positive_source_volume, recover_planar_mesh, seams,
 };
-use crate::{Face, InnerSpace, KERNEL_EPSILON, Point3, Shell, Solid, Vector3, Wire};
+use crate::{Face, KERNEL_EPSILON, Point3, Shell, Solid, Vector3, Wire};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{HashSet, VecDeque};
@@ -152,25 +152,25 @@ impl HoleWall<'_> {
         let mut center = Vector3::new(0.0, 0.0, 0.0);
         for (i, &index) in polygon.vertices.iter().enumerate() {
             let delta = self.positions[index] - self.centers[0];
-            let axial = delta.dot(self.axis);
+            let axial = delta.dot(&self.axis);
             if axial < -self.options.max_radial_residual
                 || axial > self.height + self.options.max_radial_residual
             {
                 return None;
             }
             let radial = delta - self.axis * axial;
-            let radius = radial.magnitude();
+            let radius = radial.norm();
             max_radial = max_radial.max((radius - self.radius).abs());
             if max_radial > self.options.max_radial_residual {
                 return None;
             }
             let other = self.positions[polygon.vertices[(i + 1) % polygon.vertices.len()]]
                 - self.centers[0];
-            let next = other - self.axis * other.dot(self.axis);
+            let next = other - self.axis * other.dot(&self.axis);
             let angle = self
                 .axis
-                .dot(radial.cross(next))
-                .atan2(radial.dot(next))
+                .dot(&radial.cross(&next))
+                .atan2(radial.dot(&next))
                 .abs();
             if !angle.is_finite() || angle >= std::f64::consts::FRAC_PI_2 {
                 return None;
@@ -179,8 +179,8 @@ impl HoleWall<'_> {
             center += delta;
         }
         let centroid = center / crate::usize_to_f64(polygon.vertices.len());
-        let radial = centroid - self.axis * centroid.dot(self.axis);
-        if polygon.normal.dot(radial) >= 0.0 {
+        let radial = centroid - self.axis * centroid.dot(&self.axis);
+        if polygon.normal.dot(&radial) >= 0.0 {
             return None;
         }
         Some((max_radial, max_step))
@@ -232,7 +232,7 @@ impl HoleWall<'_> {
         }
         let sagitta = self.radius * (1.0 - (max_step * 0.5).cos());
         let radial_error = max_radial + sagitta;
-        let cap_offset = (self.centers[1] - self.centers[0] - self.axis * self.height).magnitude();
+        let cap_offset = (self.centers[1] - self.centers[0] - self.axis * self.height).norm();
         let deviation = radial_error + cap_offset;
         if deviation > self.options.max_surface_deviation {
             return Ok(None);
@@ -263,7 +263,7 @@ fn caps_and_axis(mesh: &RecoveredPlanarMesh, options: CylinderRecoveryOptions) -
     let first = &mesh.patches[*a];
     let second = &mesh.patches[*b];
     let axis = -first.normal;
-    if second.normal.dot(axis) < 1.0 - options.planar.angular_tolerance_radians {
+    if second.normal.dot(&axis) < 1.0 - options.planar.angular_tolerance_radians {
         return None;
     }
     let positions = &mesh.canonical_positions;
@@ -272,10 +272,10 @@ fn caps_and_axis(mesh: &RecoveredPlanarMesh, options: CylinderRecoveryOptions) -
     let (center_a, radius_a) = fit_circle(positions, loop_a, axis)?;
     let (center_b, radius_b) = fit_circle(positions, loop_b, axis)?;
     let difference = center_b - center_a;
-    let height = difference.dot(axis);
+    let height = difference.dot(&axis);
     if !height.is_finite()
         || height <= 0.0
-        || (difference - axis * height).magnitude() > options.max_radial_residual
+        || (difference - axis * height).norm() > options.max_radial_residual
     {
         return None;
     }
@@ -287,8 +287,8 @@ fn caps_and_axis(mesh: &RecoveredPlanarMesh, options: CylinderRecoveryOptions) -
             .iter()
             .map(|&v| {
                 let delta = positions[v] - center;
-                let radial = delta - axis * delta.dot(axis);
-                (radial.magnitude() - radius).abs()
+                let radial = delta - axis * delta.dot(&axis);
+                (radial.norm() - radius).abs()
             })
             .fold(0.0_f64, f64::max);
         if !residual.is_finite() || residual > options.max_radial_residual {
@@ -323,7 +323,7 @@ fn reconstruct_shell(
         else {
             return Ok(None);
         };
-        let axial = (point - centers[0]).dot(axis);
+        let axial = (point - centers[0]).dot(&axis);
         let idx = if axial.abs() <= KERNEL_EPSILON {
             0
         } else if (axial - height).abs() <= KERNEL_EPSILON {
@@ -426,8 +426,8 @@ pub fn recover_cylindrical_through_hole(
         return Ok(None);
     };
     let radial = positions[planar.patches[caps[0]].boundary_loops[1][0]] - centers[0];
-    let radial = radial - axis * radial.dot(axis);
-    if radial.magnitude() <= KERNEL_EPSILON {
+    let radial = radial - axis * radial.dot(&axis);
+    if radial.norm() <= KERNEL_EPSILON {
         return Ok(None);
     }
     let side = build_cylinder_side(centers[0], axis, radial.normalize(), radius, height, false)?;

@@ -34,7 +34,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monstertruck_core::cgmath64::{Point2, Vector2};
+    use monstertruck_core::math::{Point2, Vector2};
     use std::{cell::Cell, rc::Rc};
 
     #[derive(Clone)]

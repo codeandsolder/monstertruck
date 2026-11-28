@@ -7,11 +7,11 @@
 //! triangulator consumes. What stays here is the vocabulary all four share.
 
 use super::{
-    BoundedCurve, Cdt, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D,
-    FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
-    Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
-    PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, algo, env, mesh,
-    resample_boundary, simplify_parameter_boundary,
+    AffinePoint, BoundedCurve, Cdt, ExactParameterBoundary2D, ExactTrimBoundary2D,
+    FixedVertexHandle, HashMap, IsoparametricCurveOptions, Itertools, MetricSpace, Origin,
+    ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2, Point3, PolylineCurve,
+    PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, algo, env, mesh, resample_boundary,
+    simplify_parameter_boundary,
 };
 
 mod index;
@@ -54,7 +54,7 @@ fn connect_edges<P>(vecs: impl IntoIterator<Item = Vec<P>>) -> Vec<P> {
 
 pub(super) type UvKey = (u64, u64);
 
-pub(super) const fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
+pub(super) fn uv_key(uv: Point2) -> UvKey { (uv.x.to_bits(), uv.y.to_bits()) }
 
 pub(super) fn surface_point_with_cache(
     surface: &impl PreMeshableSurface,

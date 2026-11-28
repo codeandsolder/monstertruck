@@ -7,7 +7,7 @@ fn approx_fillet_between_two_spheres() {
     let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -10.0), 20.0);
     let edge_circle = Processor::with_transform(
         UnitCircle::<Point3>::new(),
-        Matrix4::from_scale(10.0 * f64::sqrt(3.0)),
+        Matrix4::new_scaling(10.0 * f64::sqrt(3.0)),
     );
 
     #[derive(Clone, Copy, Debug)]

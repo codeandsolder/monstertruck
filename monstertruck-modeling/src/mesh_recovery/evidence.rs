@@ -8,7 +8,7 @@ use super::{
     EdgeIncidence, InputPolygon, MeshRecoveryError, PlanarRecoveryOptions, input_polygon_from_ids,
     seams, segment_patches, signed_plane_distance, source_edge_incidence, welded_source_polygons,
 };
-use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use std::collections::{HashMap, HashSet};
 
@@ -181,7 +181,7 @@ impl ParallelBundle {
     pub fn transverse_separation(&self, first: usize, second: usize) -> Option<f64> {
         let a = self.placements.get(first)?.transverse_offset;
         let b = self.placements.get(second)?.transverse_offset;
-        Some((a - b).magnitude())
+        Some((a - b).norm())
     }
 }
 
@@ -491,25 +491,24 @@ impl MeshEvidence {
         let axis = a.seed_direction;
         let second_axis = b.seed_direction;
         let interface_axis_residual_radians = axis
-            .cross(second_axis)
-            .magnitude()
-            .atan2(axis.dot(second_axis).abs());
+            .cross(&second_axis)
+            .norm()
+            .atan2(axis.dot(&second_axis).abs());
         let [left, middle, right] = [
             self.planar_supports.get(neighbor_a)?.normal,
             self.planar_supports.get(center)?.normal,
             self.planar_supports.get(neighbor_b)?.normal,
         ];
-        let normal_angle = |first: Vector3, second: Vector3| {
-            first.cross(second).magnitude().atan2(first.dot(second))
-        };
+        let normal_angle =
+            |first: Vector3, second: Vector3| first.cross(&second).norm().atan2(first.dot(&second));
         let turn_radians = [normal_angle(left, middle), normal_angle(middle, right)];
-        let signed_first = axis.dot(left.cross(middle));
-        let signed_second = axis.dot(middle.cross(right));
+        let signed_first = axis.dot(&left.cross(&middle));
+        let signed_second = axis.dot(&middle.cross(&right));
         let first_difference = middle - left;
         let second_difference = right - middle;
-        let normal_cross = first_difference.cross(second_difference);
-        let normal_strength = normal_cross.magnitude();
-        let normal_difference_scale = first_difference.magnitude() * second_difference.magnitude();
+        let normal_cross = first_difference.cross(&second_difference);
+        let normal_strength = normal_cross.norm();
+        let normal_difference_scale = first_difference.norm() * second_difference.norm();
         let normal_space_axis_strength = if normal_difference_scale > 0.0 {
             (normal_strength / normal_difference_scale).min(1.0)
         } else {
@@ -525,9 +524,9 @@ impl MeshEvidence {
                 .iter()
                 .map(|&direction| {
                     candidate
-                        .cross(direction)
-                        .magnitude()
-                        .atan2(candidate.dot(direction).abs())
+                        .cross(&direction)
+                        .norm()
+                        .atan2(candidate.dot(&direction).abs())
                 })
                 .fold(0.0_f64, f64::max)
         });
@@ -544,10 +543,10 @@ impl MeshEvidence {
             coherent_rotation: signed_first * signed_second > 0.0,
             max_normal_axis_dot: [left, middle, right]
                 .into_iter()
-                .map(|normal| axis.dot(normal).abs())
+                .map(|normal| axis.dot(&normal).abs())
                 .fold(0.0_f64, f64::max),
-            transverse_interface_separation: ((second_origin - reference_origin).cross(axis))
-                .magnitude(),
+            transverse_interface_separation: ((second_origin - reference_origin).cross(&axis))
+                .norm(),
             max_interface_seed_line_offset: a.max_seed_line_offset.max(b.max_seed_line_offset),
             max_interface_segment_spread_radians: a
                 .max_seed_direction_spread_radians
@@ -575,15 +574,15 @@ impl MeshEvidence {
         ];
         let u = (a1 - a0).normalize();
         let v = (b1 - b0).normalize();
-        let cross = u.cross(v);
-        let sine = cross.magnitude();
-        let angle = sine.atan2(u.dot(v).abs());
+        let cross = u.cross(&v);
+        let sine = cross.norm();
+        let angle = sine.atan2(u.dot(&v).abs());
         let delta = b0 - a0;
-        let reference_distance = delta.cross(u).magnitude();
+        let reference_distance = delta.cross(&u).norm();
         let supporting_distance = if sine == 0.0 {
             reference_distance
         } else {
-            delta.dot(cross).abs() / sine
+            delta.dot(&cross).abs() / sine
         };
         let coord = |p: Point3| robust::Coord3D {
             x: p.x,
@@ -627,7 +626,7 @@ fn select_edges(
             [(left, l_forward), (right, r_forward)] => {
                 let a = polygons[*left].normal;
                 let b = polygons[*right].normal;
-                let angle = a.cross(b).magnitude().atan2(a.dot(b));
+                let angle = a.cross(&b).norm().atan2(a.dot(&b));
                 if l_forward == r_forward {
                     winding_conflicts += 1;
                     (Some(FeatureEdgeKind::WindingConflict), Some(angle))
@@ -698,7 +697,7 @@ fn straight_continuations(positions: &[Point3], edges: &[FeatureEdge]) -> Vec<[O
                     continue;
                 }
                 let opposite_second = positions[opposite_vertex(second, vertex)];
-                if toward_first.dot(opposite_second - positions[vertex]) > 0.0 {
+                if toward_first.dot(&(opposite_second - positions[vertex])) > 0.0 {
                     continue;
                 }
                 if seams::on_segment(opposite_first, opposite_second, positions[vertex]).is_some() {
@@ -821,7 +820,7 @@ fn parallel_bundles(
         .map(|(id, chain)| {
             let delta =
                 positions[chain.vertices[chain.vertices.len() - 1]] - positions[chain.vertices[0]];
-            (id, delta.magnitude2(), canonical_unit(delta))
+            (id, delta.norm_squared(), canonical_unit(delta))
         })
         .collect::<Vec<_>>();
     candidates.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -852,11 +851,11 @@ fn parallel_bundles(
         let closest = possible
             .into_iter()
             .filter_map(|id| {
-                let dot = bundles[id].direction.dot(direction);
+                let dot = bundles[id].direction.dot(&direction);
                 let angle = bundles[id]
                     .direction
-                    .cross(direction)
-                    .magnitude()
+                    .cross(&direction)
+                    .norm()
                     .atan2(dot.abs());
                 (angle <= options.max_parallel_angle_radians).then_some((id, angle))
             })
@@ -879,18 +878,18 @@ fn parallel_bundles(
         };
         let group = &mut bundles[index];
         let delta = start - group.origin;
-        let offset = delta - group.direction * delta.dot(group.direction);
-        let begin = delta.dot(group.direction);
-        let finish = (end - group.origin).dot(group.direction);
+        let offset = delta - group.direction * delta.dot(&group.direction);
+        let begin = delta.dot(&group.direction);
+        let finish = (end - group.origin).dot(&group.direction);
         let angular = group
             .direction
-            .cross(direction)
-            .magnitude()
-            .atan2(group.direction.dot(direction).abs());
+            .cross(&direction)
+            .norm()
+            .atan2(group.direction.dot(&direction).abs());
         group.placements.push(ParallelPlacement {
             chain_index,
             transverse_offset: offset,
-            transverse_distance: offset.magnitude(),
+            transverse_distance: offset.norm(),
             longitudinal_interval: [begin.min(finish), begin.max(finish)],
             angular_residual_radians: angular,
         });
@@ -953,7 +952,7 @@ fn measure_planar_support(
         for vertex in face.vertices.windows(2).skip(1) {
             let first = positions[vertex[0]] - reference;
             let second = positions[vertex[1]] - reference;
-            signed_twice_area += first.cross(second).dot(face.normal);
+            signed_twice_area += first.cross(&second).dot(&face.normal);
         }
         area = signed_twice_area.abs().mul_add(0.5, area);
         max_vertex_plane_residual = face
@@ -963,9 +962,9 @@ fn measure_planar_support(
             .fold(max_vertex_plane_residual, f64::max);
         let angular = face
             .normal
-            .cross(seed.normal)
-            .magnitude()
-            .atan2(face.normal.dot(seed.normal));
+            .cross(&seed.normal)
+            .norm()
+            .atan2(face.normal.dot(&seed.normal));
         max_normal_angle_radians = max_normal_angle_radians.max(angular);
     }
     PlanarSupport {

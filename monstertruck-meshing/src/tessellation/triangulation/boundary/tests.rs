@@ -106,7 +106,7 @@ fn closed_exact_trim_orientation_is_not_endpoint_aligned() {
 #[test]
 fn aligned_exact_projects_periodic_edge_samples_before_resampling() {
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let half_span = FRAC_PI_2 / 3.0;
     let boundary = Some(vec![
         Point2::new(0.0, TAU - half_span),
@@ -144,7 +144,7 @@ fn full_period_cone_loop_closes_to_singular_side() {
     let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
         profile,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     ));
     surface.invert();
     let ring = PolyBoundaryPiece(
@@ -175,7 +175,7 @@ fn full_period_ring_pair_uses_shared_periodic_seam() {
     let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
         profile,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     ));
     surface.invert();
     let ring = |v: f64, samples: &[f64]| {

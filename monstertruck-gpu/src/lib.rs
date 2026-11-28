@@ -4,7 +4,7 @@
 //!
 //! ```
 //! use std::f64::consts::TAU;
-//! use monstertruck_core::cgmath64::*;
+//! use monstertruck_core::math::*;
 //! use monstertruck_gpu::*;
 //!
 //! let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");
@@ -12,11 +12,11 @@
 //!     studio: StudioConfig {
 //!         camera: Camera {
 //!             matrix: Matrix4::look_at_rh(
-//!                 Point3::new(1.0, 1.0, 1.0),
-//!                 Point3::origin(),
-//!                 Vector3::unit_y(),
-//!             ).invert().unwrap(),
-//!             method: ProjectionMethod::perspective(Rad(TAU / 8.0)),
+//!                 &Point3::new(1.0, 1.0, 1.0),
+//!                 &Point3::origin(),
+//!                 &Vector3::y(),
+//!             ).try_inverse().unwrap(),
+//!             method: ProjectionMethod::perspective(TAU / 8.0),
 //!             near_clip: 0.1,
 //!             far_clip: 100.0,
 //!         },
@@ -41,10 +41,7 @@ use bytemuck::{Pod, Zeroable};
 use derive_more::{Deref, DerefMut};
 use monstertruck_core::{
     bounding_box::BoundingBox,
-    cgmath64::{
-        Angle, EuclideanSpace, InnerSpace, Matrix3, Matrix4, Point2, Point3, Rad, SquareMatrix,
-        Transform, Vector3, ortho, perspective,
-    },
+    math::{GeometryTransform, Homogeneous, Matrix3, Matrix4, Point2, Point3, Vector3},
 };
 use std::sync::Arc;
 pub use wgpu;
@@ -88,10 +85,10 @@ pub(crate) const fn narrow_f64_to_f32(value: f64) -> f32 { value as f32 }
 #[must_use = "The converted f32 matrix must be supplied to the GPU; the original is unchanged."]
 pub fn matrix4_to_raw_f32(matrix: Matrix4) -> [[f32; 4]; 4] {
     [
-        matrix.x.map(narrow_f64_to_f32).into(),
-        matrix.y.map(narrow_f64_to_f32).into(),
-        matrix.z.map(narrow_f64_to_f32).into(),
-        matrix.w.map(narrow_f64_to_f32).into(),
+        matrix.column(0).into_owned().map(narrow_f64_to_f32).into(),
+        matrix.column(1).into_owned().map(narrow_f64_to_f32).into(),
+        matrix.column(2).into_owned().map(narrow_f64_to_f32).into(),
+        matrix.column(3).into_owned().map(narrow_f64_to_f32).into(),
     ]
 }
 
@@ -244,12 +241,12 @@ pub struct RenderObject {
 }
 
 /// setting of camera
-#[derive(Clone, Copy, Debug, PartialEq, derive_more::From)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ProjectionMethod {
     /// perspective projection
     Perspective {
         /// field of view
-        fov: Rad<f64>,
+        fov: f64,
     },
     /// parallel projection
     Parallel {
@@ -265,18 +262,18 @@ pub enum ProjectionMethod {
 /// ## Perspective camera
 /// ```
 /// use std::f64::consts::PI;
-/// use monstertruck_core::{cgmath64::*, tolerance::Tolerance};
+/// use monstertruck_core::{math::*, tolerance::Tolerance};
 /// use monstertruck_gpu::*;
 /// let matrix = Matrix4::look_at_rh(
-///     Point3::new(1.0, 1.0, 1.0),
-///     Point3::origin(),
-///     Vector3::new(0.0, 1.0, 0.0),
+///     &Point3::new(1.0, 1.0, 1.0),
+///     &Point3::origin(),
+///     &Vector3::new(0.0, 1.0, 0.0),
 /// );
 /// let camera = Camera {
-///     // depends on the difference of the style with cgmath,
+///     // depends on the camera-to-world convention of this API,
 ///     // the matrix must be inverted
-///     matrix: matrix.invert().unwrap(),
-///     method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+///     matrix: matrix.try_inverse().unwrap(),
+///     method: ProjectionMethod::perspective(PI / 4.0),
 ///     near_clip: 0.1,
 ///     far_clip: 1.0,
 /// };
@@ -284,17 +281,17 @@ pub enum ProjectionMethod {
 /// ```
 /// ## Parallel camera
 /// ```
-/// use monstertruck_core::{cgmath64::*, tolerance::Tolerance};
+/// use monstertruck_core::{math::*, tolerance::Tolerance};
 /// use monstertruck_gpu::*;
 /// let matrix = Matrix4::look_at_rh(
-///     Point3::new(1.0, 1.0, 1.0),
-///     Point3::origin(),
-///     Vector3::new(0.0, 1.0, 0.0),
+///     &Point3::new(1.0, 1.0, 1.0),
+///     &Point3::origin(),
+///     &Vector3::new(0.0, 1.0, 0.0),
 /// );
 /// let camera = Camera {
-///     // depends on the difference of the style with cgmath,
+///     // depends on the camera-to-world convention of this API,
 ///     // the matrix must be inverted
-///     matrix: matrix.invert().unwrap(),
+///     matrix: matrix.try_inverse().unwrap(),
 ///     method: ProjectionMethod::parallel(1.0),
 ///     near_clip: 0.1,
 ///     far_clip: 1.0,

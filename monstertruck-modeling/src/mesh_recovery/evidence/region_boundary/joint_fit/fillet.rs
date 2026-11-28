@@ -6,7 +6,7 @@ use super::{
     JointFitCandidate, JointFitRejection, Neighborhood, SurfaceCarrier, SurfaceRegionPartition,
     satisfies,
 };
-use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 
 #[derive(Clone, Copy)]
 struct Torus {
@@ -49,10 +49,10 @@ impl Torus {
     fn change_bound(self, candidate: Self, extent: f64) -> f64 {
         let angle = self
             .axis
-            .cross(candidate.axis)
-            .magnitude()
-            .atan2(self.axis.dot(candidate.axis));
-        angle.mul_add(extent, (self.center - candidate.center).magnitude())
+            .cross(&candidate.axis)
+            .norm()
+            .atan2(self.axis.dot(&candidate.axis));
+        angle.mul_add(extent, (self.center - candidate.center).norm())
             + (self.major - candidate.major).abs()
             + (self.minor - candidate.minor).abs()
     }
@@ -93,7 +93,7 @@ impl Revolution {
     }
     fn radius_at(self, p: Point3) -> f64 {
         self.slope
-            .mul_add((p - self.origin).dot(self.axis), self.radius)
+            .mul_add((p - self.origin).dot(&self.axis), self.radius)
     }
 }
 
@@ -106,8 +106,8 @@ struct Circle {
 impl Circle {
     fn project(self, point: Point3) -> Option<Point3> {
         let d = point - self.center;
-        let radial = d - self.axis * d.dot(self.axis);
-        let length = radial.magnitude();
+        let radial = d - self.axis * d.dot(&self.axis);
+        let length = radial.norm();
         (length > 0.0 && self.radius > 0.0).then(|| self.center + radial * (self.radius / length))
     }
 }
@@ -120,24 +120,24 @@ fn anchored_torus(
     angular: f64,
 ) -> Option<Torus> {
     let (origin, mut axis) = plane;
-    if original.axis.dot(axis) < 0.0 {
+    if original.axis.dot(&axis) < 0.0 {
         axis = -axis;
     }
-    if original.axis.cross(axis).magnitude() > angular
-        || coaxial.axis.cross(axis).magnitude() > angular
-        || tube.axis.dot(axis).abs() > angular
+    if original.axis.cross(&axis).norm() > angular
+        || coaxial.axis.cross(&axis).norm() > angular
+        || tube.axis.dot(&axis).abs() > angular
     {
         return None;
     }
-    let side = (original.center - origin).dot(axis).signum();
-    let alignment = coaxial.axis.dot(axis);
+    let side = (original.center - origin).dot(&axis).signum();
+    let alignment = coaxial.axis.dot(&axis);
     let at_plane =
-        coaxial.origin - coaxial.axis * ((coaxial.origin - origin).dot(axis) / alignment);
+        coaxial.origin - coaxial.axis * ((coaxial.origin - origin).dot(&axis) / alignment);
     let shift = coaxial.axis * (side / alignment);
     // The transverse section radius is affine in the meridian center,
     // and that center is affine in the unknown minor radius. Solve the
     // resulting scalar equation instead of iterating a cone/circle fit.
-    let denominator = (-tube.slope).mul_add(shift.dot(tube.axis), 1.0);
+    let denominator = (-tube.slope).mul_add(shift.dot(&tube.axis), 1.0);
     if denominator.abs() <= f64::EPSILON {
         return None;
     }
@@ -165,10 +165,10 @@ fn contact_circle(
     tolerance: f64,
 ) -> Option<Circle> {
     if let SurfaceCarrier::Plane { origin, normal } = other {
-        if normal.cross(torus.axis).magnitude() > angular {
+        if normal.cross(&torus.axis).norm() > angular {
             return None;
         }
-        let z = (origin - torus.center).dot(torus.axis);
+        let z = (origin - torus.center).dot(&torus.axis);
         if (z.abs() - torus.minor).abs() > tolerance {
             return None;
         }
@@ -180,14 +180,14 @@ fn contact_circle(
     }
     let line = Revolution::from_carrier(other)?;
     let relative = torus.center - line.origin;
-    let nearest = line.origin + line.axis * relative.dot(line.axis);
-    if line.axis.cross(torus.axis).magnitude() <= angular {
+    let nearest = line.origin + line.axis * relative.dot(&line.axis);
+    if line.axis.cross(&torus.axis).norm() <= angular {
         let radius = line.radius_at(torus.center);
-        let slope = line.slope * line.axis.dot(torus.axis);
+        let slope = line.slope * line.axis.dot(&torus.axis);
         let distance = torus.major - radius;
         let scale = 1.0_f64.hypot(slope);
         if (distance.abs() / scale - torus.minor).abs() > tolerance
-            || (nearest - torus.center).magnitude() > tolerance
+            || (nearest - torus.center).norm() > tolerance
         {
             return None;
         }
@@ -198,24 +198,24 @@ fn contact_circle(
             radius: torus.major - distance / scale.powi(2),
         });
     }
-    if line.axis.dot(torus.axis).abs() > angular {
+    if line.axis.dot(&torus.axis).abs() > angular {
         return None;
     }
     let radial = nearest - torus.center;
-    let radial = radial - torus.axis * radial.dot(torus.axis);
-    if (radial.magnitude() - torus.major).abs() > tolerance
+    let radial = radial - torus.axis * radial.dot(&torus.axis);
+    if (radial.norm() - torus.major).abs() > tolerance
         || (line.radius_at(nearest) - torus.minor).abs() > tolerance
-        || (nearest - torus.center).dot(torus.axis).abs() > tolerance
+        || (nearest - torus.center).dot(&torus.axis).abs() > tolerance
     {
         return None;
     }
-    if radial.magnitude() <= f64::EPSILON {
+    if radial.norm() <= f64::EPSILON {
         return None;
     }
     let direction = radial.normalize();
     let circle = Circle {
         center: torus.center + direction * torus.major,
-        axis: torus.axis.cross(direction),
+        axis: torus.axis.cross(&direction),
         radius: torus.minor,
     };
     // The source-facing radial branch and the complete native trim are
@@ -294,12 +294,12 @@ fn nearest_junction(
 ) -> Option<Point3> {
     let tolerance = KERNEL_EPSILON * 0.01;
     let admissible = |point: Point3| {
-        (point - source).magnitude() <= allowance
+        (point - source).norm() <= allowance
             && satisfies(point, local, tolerance)
             && circles.iter().all(|circle| {
                 circle
                     .project(point)
-                    .is_some_and(|p| (p - point).magnitude() <= tolerance)
+                    .is_some_and(|p| (p - point).norm() <= tolerance)
             })
     };
     circles
@@ -308,8 +308,8 @@ fn nearest_junction(
         .filter(|&p| admissible(p))
         .min_by(|&a, &b| {
             (a - source)
-                .magnitude2()
-                .total_cmp(&(b - source).magnitude2())
+                .norm_squared()
+                .total_cmp(&(b - source).norm_squared())
         })
         .or_else(|| {
             super::fixed_sample_position(source, prior, None, local, allowance, angular)
@@ -375,7 +375,7 @@ fn candidate_positions(
             angular,
         )
         .ok_or(rejection)?;
-        maximum = maximum.max((point - source).magnitude());
+        maximum = maximum.max((point - source).norm());
         positions[sample.id] = point;
     }
     if !super::preserves_polygon_orientation(
@@ -405,7 +405,7 @@ pub(super) fn fit(
     let extent = neighborhood
         .samples
         .iter()
-        .map(|s| (neighborhood.evidence.positions[s.id] - original.center).magnitude())
+        .map(|s| (neighborhood.evidence.positions[s.id] - original.center).norm())
         .fold(0.0_f64, f64::max);
     let budget = neighborhood
         .samples
@@ -455,29 +455,29 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let original = Torus {
             center: Point3::new(0.0, 0.0, -0.000_000_08),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             major: 0.600_000_1,
             minor: 0.050_000_12,
         };
         let coaxial = Revolution {
             origin: Point3::new(0.0, 0.0, 1.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 0.55,
             slope: 0.0,
         };
         let tube = Revolution {
             origin: Point3::new(0.6, 0.0, 0.0),
-            axis: Vector3::unit_y(),
+            axis: Vector3::y(),
             radius: 0.05,
             slope: 0.0,
         };
         let plane = SurfaceCarrier::Plane {
             origin: Point3::new(0.0, 0.0, 0.05),
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         };
         let torus = anchored_torus(
             original,
-            (Point3::new(0.0, 0.0, 0.05), Vector3::unit_z()),
+            (Point3::new(0.0, 0.0, 0.05), Vector3::z()),
             coaxial,
             tube,
             1e-8,
@@ -586,13 +586,13 @@ mod tests {
             Point3::new(p.x * 1.1, p.y * 1.1, p.z)
         });
         append_strip(&mut positions, &mut faces, &mut labels, &top, 2, |p| {
-            p - Vector3::unit_z() * 0.1
+            p - Vector3::z() * 0.1
         });
         append_strip(&mut positions, &mut faces, &mut labels, &left, 3, |p| {
-            p - Vector3::unit_y() * 0.1
+            p - Vector3::y() * 0.1
         });
         append_strip(&mut positions, &mut faces, &mut labels, &right, 4, |p| {
-            p - Vector3::unit_x() * 0.1
+            p - Vector3::x() * 0.1
         });
         let mesh = PolygonMesh::new(
             StandardAttributes {
@@ -637,18 +637,18 @@ mod tests {
         let carriers = [
             Torus {
                 center: Point3::new(0.0, 0.0, -0.000_000_08),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 major: 0.600_000_1,
                 minor: 0.050_000_12,
             }
             .carrier(),
             SurfaceCarrier::Plane {
                 origin: Point3::new(0.0, 0.0, 0.05),
-                normal: Vector3::unit_z(),
+                normal: Vector3::z(),
             },
-            cylinder(Point3::new(0.0, 0.0, 0.0), Vector3::unit_z(), 0.55),
-            cylinder(Point3::new(0.6, 0.0, 0.0), Vector3::unit_y(), 0.05),
-            cylinder(Point3::new(0.0, 0.6, 0.0), Vector3::unit_x(), 0.05),
+            cylinder(Point3::new(0.0, 0.0, 0.0), Vector3::z(), 0.55),
+            cylinder(Point3::new(0.6, 0.0, 0.0), Vector3::y(), 0.05),
+            cylinder(Point3::new(0.0, 0.6, 0.0), Vector3::x(), 0.05),
         ];
         let partition = index.repartition_connected(&labels, |id| carriers.get(id).copied())?;
         let torus = partition.region_by_polygon[0];
@@ -668,7 +668,7 @@ mod tests {
         for sample in &neighborhood.samples {
             let source = evidence.positions[sample.id];
             let p = candidate.positions[sample.id];
-            assert!((p - source).magnitude() <= sample.allowance);
+            assert!((p - source).norm() <= sample.allowance);
             if sample.boundary {
                 let local = sample
                     .regions

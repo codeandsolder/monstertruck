@@ -6,7 +6,7 @@ use super::super::MeshRecoveryError;
 use super::join::line_distance;
 use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
-use crate::{InnerSpace, Vector3};
+use crate::Vector3;
 use rustc_hash::FxHashSet as HashSet;
 
 /// Hypothesis budgets, never implicit original CAD primitive classifications.
@@ -287,8 +287,8 @@ impl<'a> CurvatureGrowthIndex<'a> {
         let local = self.fits.get(id)?.as_ref()?;
         let seed = self.tracks[state.hypothesis.seed_track_index].seed_axis;
         let incoming = self.tracks[id].seed_axis;
-        let dot = seed.dot(incoming);
-        let seed_angle = seed.cross(incoming).magnitude().atan2(dot.abs());
+        let dot = seed.dot(&incoming);
+        let seed_angle = seed.cross(&incoming).norm().atan2(dot.abs());
         if !seed_angle.is_finite() || seed_angle > self.options.max_seed_axis_angle_radians {
             return None;
         }

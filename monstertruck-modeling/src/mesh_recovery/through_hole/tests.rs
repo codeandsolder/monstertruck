@@ -95,8 +95,8 @@ fn thirty_two_sided_source_hole_becomes_shared_circular_analytic_trim() {
             let surface = face.oriented_surface();
             let point = surface.evaluate(0.4, 0.5);
             let delta = point - recovered.cap_centers[0];
-            let radial = delta - recovered.axis * delta.dot(recovered.axis);
-            assert!(surface.normal(0.4, 0.5).dot(radial) < 0.0);
+            let radial = delta - recovered.axis * delta.dot(&recovered.axis);
+            assert!(surface.normal(0.4, 0.5).dot(&radial) < 0.0);
         }
     }
     // Each annular end cap retains exactly one hole bounded by two native
@@ -188,7 +188,7 @@ fn inclined_source_axis_preserves_analytic_through_hole_and_winding() {
         .expect("arbitrary source orientations must recover");
     assert!((recovered.radius - 1.3).abs() < 1.0e-8);
     assert!((recovered.height - 2.5).abs() < 1.0e-8);
-    assert!(recovered.axis.dot(Vector3::unit_y()) > 0.9999);
+    assert!(recovered.axis.dot(&Vector3::y()) > 0.9999);
     assert!(recovered.solid.is_geometric_consistent());
 }
 

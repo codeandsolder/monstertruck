@@ -4,7 +4,7 @@
 //! `algo::surface`'s division-budget tests, which drain a process-global work
 //! meter and already fail in a parallel run of the lib suite on their own.
 
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::math::*;
 use monstertruck_traits::algo::surface::{
     apex_parameter, girdle_axis_and_value, girdle_band_range,
 };

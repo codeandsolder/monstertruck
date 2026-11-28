@@ -12,7 +12,7 @@ use crate::{
     step_io::format_real,
 };
 use anyhow::{Result, anyhow, bail};
-use monstertruck_geometry::prelude::{InnerSpace, Point3};
+use monstertruck_geometry::prelude::{InnerProduct, Point3};
 use monstertruck_io::step::save::StepDisplay;
 use serde::Serialize;
 use step_p21::ast::EntityInstance;
@@ -162,8 +162,8 @@ fn verify_source_vertices(
         .analytic
         .evaluate(candidate.trim.end_parameter)
         .ok_or_else(|| anyhow!("healed curve lacks a valid ending point"))?;
-    let start_residual_mm = (new_start - start).magnitude();
-    let end_residual_mm = (new_end - end).magnitude();
+    let start_residual_mm = (new_start - start).norm();
+    let end_residual_mm = (new_end - end).norm();
     if !start_residual_mm.is_finite()
         || !end_residual_mm.is_finite()
         || start_residual_mm > endpoint_tolerance_mm
@@ -402,8 +402,8 @@ ENDSEC;\nEND-ISO-10303-21;\n"
             };
             let first = curve.evaluate(start_t);
             let last = curve.evaluate(end_t);
-            assert!((first - source_start).magnitude() < 1.0e-8);
-            assert!((last - source_end).magnitude() < 1.0e-8);
+            assert!((first - source_start).norm() < 1.0e-8);
+            assert!((last - source_end).norm() < 1.0e-8);
         }
         Ok(())
     }

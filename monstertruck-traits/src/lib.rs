@@ -4,7 +4,7 @@
 //!
 //! ```
 //! use monstertruck_traits::*;
-//! use monstertruck_core::cgmath64::*;
+//! use monstertruck_core::math::*;
 //!
 //! // `range_tuple` comes from `BoundedCurve`, so the bound needs both traits.
 //! fn arc_length<C: ParametricCurve<Point = Point3> + BoundedCurve>(
@@ -17,7 +17,7 @@
 //!         .map(|i| {
 //!             let a = curve.evaluate(t0 + dt * i as f64);
 //!             let b = curve.evaluate(t0 + dt * (i + 1) as f64);
-//!             (b - a).magnitude()
+//!             (b - a).norm()
 //!         })
 //!         .sum()
 //! }
@@ -89,7 +89,7 @@ pub use traits::*;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use monstertruck_core::cgmath64::{
+    pub use monstertruck_core::math::{
         CurveDerivatives, Matrix3, Matrix4, Point2, Point3, SurfaceDerivatives, Vector3,
     };
 }
@@ -114,7 +114,7 @@ pub mod polynomial;
 #[cfg(all(test, feature = "derive"))]
 mod derive_regression_tests {
     use super::{Transformed, TransformedM3};
-    use monstertruck_core::cgmath64::{Matrix3, Point2, Vector2};
+    use monstertruck_core::math::{Matrix3, Point2, Vector2};
 
     #[derive(Clone, TransformedM3)]
     struct WrappedPoint(Point2);
@@ -122,7 +122,7 @@ mod derive_regression_tests {
     #[test]
     fn transformed_newtype_mutates_in_place() {
         let mut point = WrappedPoint(Point2::new(1.0, 2.0));
-        point.transform_by(Matrix3::from_translation(Vector2::new(3.0, 4.0)));
+        point.transform_by(Matrix3::new_translation(&Vector2::new(3.0, 4.0)));
         assert_eq!(point.0, Point2::new(4.0, 6.0));
     }
 }

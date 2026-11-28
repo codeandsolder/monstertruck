@@ -1,7 +1,8 @@
-use cgmath::*;
 use monstertruck_core::hash::*;
+use monstertruck_core::{KernelScalar, Zero};
+use nalgebra::*;
 
-fn scalar_from_usize<S: BaseFloat>(mut value: usize) -> S {
+fn scalar_from_usize<S: KernelScalar>(mut value: usize) -> S {
     let mut result = S::zero();
     let mut place = S::one();
     while value != 0 {
@@ -14,7 +15,7 @@ fn scalar_from_usize<S: BaseFloat>(mut value: usize) -> S {
     result
 }
 
-fn scalar_ratio<S: BaseFloat>(numerator: usize, denominator: usize) -> S {
+fn scalar_ratio<S: KernelScalar>(numerator: usize, denominator: usize) -> S {
     scalar_from_usize::<S>(numerator) / scalar_from_usize::<S>(denominator)
 }
 
@@ -22,7 +23,7 @@ fn scalar_ratio<S: BaseFloat>(numerator: usize, denominator: usize) -> S {
 fn hash11_test() {
     fn exec_test<S>()
     where
-        S: BaseFloat + HashGen<S>,
+        S: KernelScalar + HashGen<S>,
         [S; 1]: HashGen<S>,
         [S; 2]: HashGen<S>,
         [S; 3]: HashGen<S>,
@@ -41,11 +42,13 @@ fn hash11_test() {
             sum + x * x
         }) / scalar_from_usize::<S>(N);
         assert!(
-            S::abs(mean - scalar_ratio::<S>(1, 2)) < scalar_ratio::<S>(1, 40),
+            <S as nalgebra::ComplexField>::abs(mean - scalar_ratio::<S>(1, 2))
+                < scalar_ratio::<S>(1, 40),
             "mean: {mean:?}"
         );
         assert!(
-            S::abs(var - scalar_ratio::<S>(1, 12)) < scalar_ratio::<S>(1, 240),
+            <S as nalgebra::ComplexField>::abs(var - scalar_ratio::<S>(1, 12))
+                < scalar_ratio::<S>(1, 240),
             "var: {var:?}"
         );
     }
@@ -60,7 +63,7 @@ macro_rules! define_hashx1_test {
         fn $func() {
             fn exec_test<S>()
             where
-                S: BaseFloat + HashGen<S>,
+                S: KernelScalar + HashGen<S>,
                 [S; 1]: HashGen<S>,
                 [S; 2]: HashGen<S>,
                 [S; 3]: HashGen<S>,
@@ -78,16 +81,15 @@ macro_rules! define_hashx1_test {
                 let var = (0..N).fold(<$vec>::zero(), |sum, i| {
                     let x = <$vec>::from(HashGen::$hash(scalar_from_usize::<S>(i)))
                         - unit * scalar_ratio::<S>(1, 2);
-                    sum + x.mul_element_wise(x)
+                    sum + x.component_mul(&x)
                 }) / scalar_from_usize::<S>(N);
                 assert!(
-                    (mean - unit * scalar_ratio::<S>(1, 2)).magnitude() < scalar_ratio::<S>(1, 40),
+                    (mean - unit * scalar_ratio::<S>(1, 2)).norm() < scalar_ratio::<S>(1, 40),
                     "mean: {:?}",
                     mean,
                 );
                 assert!(
-                    (var - unit / scalar_from_usize::<S>(12)).magnitude()
-                        < scalar_ratio::<S>(1, 240),
+                    (var - unit / scalar_from_usize::<S>(12)).norm() < scalar_ratio::<S>(1, 240),
                     "var: {:?}",
                     var,
                 );
@@ -121,7 +123,7 @@ define_hashx1_test!(
 fn hash12_test() {
     fn exec_test<S>()
     where
-        S: BaseFloat + HashGen<S>,
+        S: KernelScalar + HashGen<S>,
         [S; 1]: HashGen<S>,
         [S; 2]: HashGen<S>,
         [S; 3]: HashGen<S>,
@@ -142,11 +144,13 @@ fn hash12_test() {
             sum + x * x
         }) / scalar_from_usize::<S>(N * N);
         assert!(
-            S::abs(mean - scalar_ratio::<S>(1, 2)) < scalar_ratio::<S>(1, 40),
+            <S as nalgebra::ComplexField>::abs(mean - scalar_ratio::<S>(1, 2))
+                < scalar_ratio::<S>(1, 40),
             "mean: {mean:?}"
         );
         assert!(
-            S::abs(var - scalar_ratio::<S>(1, 12)) < scalar_ratio::<S>(1, 240),
+            <S as nalgebra::ComplexField>::abs(var - scalar_ratio::<S>(1, 12))
+                < scalar_ratio::<S>(1, 240),
             "var: {var:?}"
         );
     }
@@ -161,7 +165,7 @@ macro_rules! define_hashx2_test {
         fn $func() {
             fn exec_test<S>()
             where
-                S: BaseFloat + HashGen<S>,
+                S: KernelScalar + HashGen<S>,
                 [S; 1]: HashGen<S>,
                 [S; 2]: HashGen<S>,
                 [S; 3]: HashGen<S>,
@@ -180,16 +184,15 @@ macro_rules! define_hashx2_test {
                 let var = (0..(N * N)).fold(<$vec>::zero(), |sum, i| {
                     let v = [scalar_from_usize::<S>(i / N), scalar_from_usize::<S>(i % N)];
                     let x = <$vec>::from(HashGen::$hash(v)) - unit * scalar_ratio::<S>(1, 2);
-                    sum + x.mul_element_wise(x)
+                    sum + x.component_mul(&x)
                 }) / scalar_from_usize::<S>(N * N);
                 assert!(
-                    (mean - unit * scalar_ratio::<S>(1, 2)).magnitude() < scalar_ratio::<S>(1, 40),
+                    (mean - unit * scalar_ratio::<S>(1, 2)).norm() < scalar_ratio::<S>(1, 40),
                     "mean: {:?}",
                     mean,
                 );
                 assert!(
-                    (var - unit / scalar_from_usize::<S>(12)).magnitude()
-                        < scalar_ratio::<S>(1, 240),
+                    (var - unit / scalar_from_usize::<S>(12)).norm() < scalar_ratio::<S>(1, 240),
                     "var: {:?}",
                     var,
                 );
@@ -223,7 +226,7 @@ define_hashx2_test!(
 fn hash13_test() {
     fn exec_test<S>()
     where
-        S: BaseFloat + HashGen<S>,
+        S: KernelScalar + HashGen<S>,
         [S; 1]: HashGen<S>,
         [S; 2]: HashGen<S>,
         [S; 3]: HashGen<S>,
@@ -252,11 +255,13 @@ fn hash13_test() {
             sum + x * x
         }) / scalar_from_usize::<S>(N * N * N);
         assert!(
-            S::abs(mean - scalar_ratio::<S>(1, 2)) < scalar_ratio::<S>(1, 40),
+            <S as nalgebra::ComplexField>::abs(mean - scalar_ratio::<S>(1, 2))
+                < scalar_ratio::<S>(1, 40),
             "mean: {mean:?}"
         );
         assert!(
-            S::abs(var - scalar_ratio::<S>(1, 12)) < scalar_ratio::<S>(1, 240),
+            <S as nalgebra::ComplexField>::abs(var - scalar_ratio::<S>(1, 12))
+                < scalar_ratio::<S>(1, 240),
             "var: {var:?}"
         );
     }
@@ -271,7 +276,7 @@ macro_rules! define_hashx3_test {
         fn $func() {
             fn exec_test<S>()
             where
-                S: BaseFloat + HashGen<S>,
+                S: KernelScalar + HashGen<S>,
                 [S; 1]: HashGen<S>,
                 [S; 2]: HashGen<S>,
                 [S; 3]: HashGen<S>,
@@ -298,15 +303,15 @@ macro_rules! define_hashx3_test {
                         scalar_from_usize::<S>(i % N),
                     ];
                     let x = <$vec>::from(HashGen::$hash(v)) - unit * scalar_ratio::<S>(1, 2);
-                    sum + x.mul_element_wise(x)
+                    sum + x.component_mul(&x)
                 }) / scalar_from_usize::<S>(N * N * N);
                 assert!(
-                    (mean - unit * scalar_ratio::<S>(1, 2)).magnitude() < scalar_ratio::<S>(1, 40),
+                    (mean - unit * scalar_ratio::<S>(1, 2)).norm() < scalar_ratio::<S>(1, 40),
                     "mean: {:?}",
                     mean,
                 );
                 assert!(
-                    (var - unit * scalar_ratio::<S>(1, 12)).magnitude() < scalar_ratio::<S>(1, 240),
+                    (var - unit * scalar_ratio::<S>(1, 12)).norm() < scalar_ratio::<S>(1, 240),
                     "var: {:?}",
                     var,
                 );
@@ -341,7 +346,7 @@ define_hashx3_test!(
 fn hash14_test() {
     fn exec_test<S>()
     where
-        S: BaseFloat + HashGen<S>,
+        S: KernelScalar + HashGen<S>,
         [S; 1]: HashGen<S>,
         [S; 2]: HashGen<S>,
         [S; 3]: HashGen<S>,
@@ -372,11 +377,13 @@ fn hash14_test() {
             sum + x * x
         }) / scalar_from_usize::<S>(N * N * N * N);
         assert!(
-            S::abs(mean - scalar_ratio::<S>(1, 2)) < scalar_ratio::<S>(1, 40),
+            <S as nalgebra::ComplexField>::abs(mean - scalar_ratio::<S>(1, 2))
+                < scalar_ratio::<S>(1, 40),
             "mean: {mean:?}"
         );
         assert!(
-            S::abs(var - scalar_ratio::<S>(1, 12)) < scalar_ratio::<S>(1, 240),
+            <S as nalgebra::ComplexField>::abs(var - scalar_ratio::<S>(1, 12))
+                < scalar_ratio::<S>(1, 240),
             "var: {var:?}"
         );
     }
@@ -391,7 +398,7 @@ macro_rules! define_hashx4_test {
         fn $func() {
             fn exec_test<S>()
             where
-                S: BaseFloat + HashGen<S>,
+                S: KernelScalar + HashGen<S>,
                 [S; 1]: HashGen<S>,
                 [S; 2]: HashGen<S>,
                 [S; 3]: HashGen<S>,
@@ -420,15 +427,15 @@ macro_rules! define_hashx4_test {
                         scalar_from_usize::<S>(i % N),
                     ];
                     let x = <$vec>::from(HashGen::$hash(v)) - unit * scalar_ratio::<S>(1, 2);
-                    sum + x.mul_element_wise(x)
+                    sum + x.component_mul(&x)
                 }) / scalar_from_usize::<S>(N * N * N * N);
                 assert!(
-                    (mean - unit * scalar_ratio::<S>(1, 2)).magnitude() < scalar_ratio::<S>(1, 40),
+                    (mean - unit * scalar_ratio::<S>(1, 2)).norm() < scalar_ratio::<S>(1, 40),
                     "mean: {:?}",
                     mean
                 );
                 assert!(
-                    (var - unit * scalar_ratio::<S>(1, 12)).magnitude() < scalar_ratio::<S>(1, 240),
+                    (var - unit * scalar_ratio::<S>(1, 12)).norm() < scalar_ratio::<S>(1, 240),
                     "var: {:?}",
                     var
                 );

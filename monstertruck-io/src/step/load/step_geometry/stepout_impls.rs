@@ -1,7 +1,7 @@
 use super::{
-    ConicalSurface, Curve3D, ElementarySurface, InnerSpace, Matrix4, Point3, Processor, Sphere,
-    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind, SurfaceCurveRepresentation,
-    Transform, Transformed, Vector3, save,
+    ConicalSurface, Curve3D, ElementarySurface, GeometryTransform, Matrix4, Point3, Processor,
+    Sphere, SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveKind,
+    SurfaceCurveRepresentation, Transformed, Vector3, save,
 };
 use crate::step::load::{GeometricCurveSet, GeometricSetSelect};
 use crate::step::save::{
@@ -108,60 +108,66 @@ fn source_cone_step_frame(processor: &ConicalSurface) -> Option<StepConeFrame> {
     // components nor the homogeneous divisor: both affect actual positions.
     // Non-unit homogeneous weights are allowed because they describe the same
     // affine map after dividing the linear vectors by w as well as points.
-    if [transform.x, transform.y, transform.z, transform.w]
-        .into_iter()
-        .flat_map(|column| [column.x, column.y, column.z, column.w])
-        .any(|value| !value.is_finite())
-        || transform.x.w != 0.0
-        || transform.y.w != 0.0
-        || transform.z.w != 0.0
-        || transform.w.w == 0.0
+    if [
+        transform.column(0).into_owned(),
+        transform.column(1).into_owned(),
+        transform.column(2).into_owned(),
+        transform.column(3).into_owned(),
+    ]
+    .into_iter()
+    .flat_map(|column| [column.x, column.y, column.z, column.w])
+    .any(|value| !value.is_finite())
+        || transform[(3, 0)] != 0.0
+        || transform[(3, 1)] != 0.0
+        || transform[(3, 2)] != 0.0
+        || transform[(3, 3)] == 0.0
     {
         return None;
     }
-    let homogeneous_weight = transform.w.w;
+    let homogeneous_weight = transform[(3, 3)];
     let line = revo.entity_curve();
     let raw_axis = revo.axis();
-    let axis_len = raw_axis.magnitude();
+    let axis_len = raw_axis.norm();
     if !axis_len.is_finite() || axis_len <= 0.0 {
         return None;
     }
     let local_axis = raw_axis / axis_len;
     let offset = line.0 - revo.origin();
-    let local_foot = revo.origin() + local_axis * offset.dot(local_axis);
+    let local_foot = revo.origin() + local_axis * offset.dot(&local_axis);
     let radial = line.0 - local_foot;
-    let local_radius = radial.magnitude();
+    let local_radius = radial.norm();
     if !local_radius.is_finite() || local_radius <= 0.0 {
         return None;
     }
     let local_reference = radial / local_radius;
-    let local_tangent = local_axis.cross(local_reference);
+    let local_tangent = local_axis.cross(&local_reference);
     let derivative = line.1 - line.0;
-    let radial_slope = derivative.dot(local_reference);
-    let axial_slope = derivative.dot(local_axis);
-    let tangential_slope = derivative.dot(local_tangent);
+    let radial_slope = derivative.dot(&local_reference);
+    let axial_slope = derivative.dot(&local_axis);
+    let tangential_slope = derivative.dot(&local_tangent);
     let eps = 1.0e-11;
     if !axial_slope.is_finite()
-        || axial_slope.abs() <= eps * derivative.magnitude()
-        || tangential_slope.abs() > eps * derivative.magnitude()
+        || axial_slope.abs() <= eps * derivative.norm()
+        || tangential_slope.abs() > eps * derivative.norm()
     {
         // An oblique generator represents a different revolution surface.
         return None;
     }
 
-    let world_reference = transform.transform_vector(local_reference) / homogeneous_weight;
-    let world_tangent = transform.transform_vector(local_tangent) / homogeneous_weight;
-    let world_axis = transform.transform_vector(local_axis) / homogeneous_weight;
-    let rscale = world_reference.magnitude();
-    let tscale = world_tangent.magnitude();
-    let zscale = world_axis.magnitude();
+    let world_reference = transform.apply_vector(local_reference) / homogeneous_weight;
+    let world_tangent = transform.apply_vector(local_tangent) / homogeneous_weight;
+    let world_axis = transform.apply_vector(local_axis) / homogeneous_weight;
+    let rscale = world_reference.norm();
+    let tscale = world_tangent.norm();
+    let zscale = world_axis.norm();
     if [rscale, tscale, zscale]
         .into_iter()
         .any(|value| !value.is_finite() || value <= 0.0)
     {
         return None;
     }
-    let orthogonal = |a: Vector3, na: f64, b: Vector3, nb: f64| (a.dot(b) / (na * nb)).abs() <= eps;
+    let orthogonal =
+        |a: Vector3, na: f64, b: Vector3, nb: f64| (a.dot(&b) / (na * nb)).abs() <= eps;
     if (rscale - tscale).abs() > eps * rscale.max(tscale)
         || !orthogonal(world_reference, rscale, world_tangent, tscale)
         || !orthogonal(world_reference, rscale, world_axis, zscale)
@@ -171,7 +177,7 @@ fn source_cone_step_frame(processor: &ConicalSurface) -> Option<StepConeFrame> {
         return None;
     }
 
-    let location = transform.transform_point(local_foot);
+    let location = transform.apply_point(local_foot);
     let radius = local_radius * rscale;
     let semi_angle = (radial_slope * rscale / (axial_slope * zscale)).atan();
     if !radius.is_finite()
@@ -206,16 +212,16 @@ impl save::StepFormat for ElementarySurface {
 
                 let revo = processor.entity();
                 let trans = processor.transform();
-                let o = trans.transform_point(revo.origin());
-                let p = trans.transform_point(revo.entity_curve().0);
-                let axis = trans.transform_vector(revo.axis());
+                let o = trans.apply_point(revo.origin());
+                let p = trans.apply_point(revo.entity_curve().0);
+                let axis = trans.apply_vector(revo.axis());
 
                 let location = StepDisplay::new(o, location_idx);
                 let direction_axis = VectorAsDirection(axis);
                 let axis = StepDisplay::new(direction_axis, axis_idx);
                 let raw_ref_direction = VectorAsDirection((p - o).normalize());
                 let ref_direction = StepDisplay::new(raw_ref_direction, ref_direction_idx);
-                let radius = (p - o).magnitude();
+                let radius = (p - o).norm();
 
                 f.write_fmt(format_args!(
                     "#{idx} = CYLINDRICAL_SURFACE('', #{position_idx}, {radius});
@@ -329,7 +335,7 @@ mod cone_serialization_tests {
         let local = RevolutionSurface::by_revolution(
             Line(p, p + direction),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
         );
         Processor::with_transform(local, transform)
     }
@@ -378,12 +384,12 @@ ENDSEC;\nEND-ISO-10303-21;\n"
         let original = cone(
             Point3::new(0.3302, 0.0, 0.0),
             Vector3::new(0.6, 0.0, 1.0),
-            Matrix4::from_scale(1.0),
+            Matrix4::new_scaling(1.0),
         );
         let converted = cone(
             Point3::new(0.3302, 0.0, 0.0),
             Vector3::new(0.6, 0.0, 1.0),
-            Matrix4::from_scale(0.1),
+            Matrix4::new_scaling(0.1),
         );
         let orig = source_cone_step_frame(&original).expect("circular source cone");
         let scaled = source_cone_step_frame(&converted).expect("scaled circular source cone");
@@ -404,7 +410,7 @@ ENDSEC;\nEND-ISO-10303-21;\n"
         let transformed = cone(
             Point3::new(0.0, 0.3302, 0.4),
             Vector3::new(0.0, 0.6, 1.0),
-            Matrix4::from_nonuniform_scale(0.1, 0.1, 0.2),
+            Matrix4::new_nonuniform_scaling(&Vector3::new(0.1, 0.1, 0.2)),
         );
         let frame = source_cone_step_frame(&transformed).expect("circular cone with axial stretch");
         assert!((frame.radius - 0.03302).abs() < 1.0e-14);
@@ -416,10 +422,10 @@ ENDSEC;\nEND-ISO-10303-21;\n"
     fn cone_export_accepts_equivalent_nonunit_homogeneous_weight() {
         let point = Point3::new(0.3302, 0.0, 0.4);
         let generator = Vector3::new(0.6, 0.0, 1.0);
-        let mut transform = Matrix4::from_scale(0.1);
-        transform.w.x = 1.3;
-        transform.w.y = -0.4;
-        transform.w.z = 2.0;
+        let mut transform = Matrix4::new_scaling(0.1);
+        transform[(0, 3)] = 1.3;
+        transform[(1, 3)] = -0.4;
+        transform[(2, 3)] = 2.0;
         let affine = cone(point, generator, transform);
         let expected = source_cone_step_frame(&affine).expect("affine cone");
         for homogeneous_scale in [2.0, -3.0] {
@@ -427,11 +433,10 @@ ENDSEC;\nEND-ISO-10303-21;\n"
             let scaled = source_cone_step_frame(&equivalent).expect("same affine cone");
             assert!((scaled.radius - expected.radius).abs() < 1.0e-14);
             assert!((scaled.semi_angle - expected.semi_angle).abs() < 1.0e-14);
-            assert!((scaled.location - expected.location).magnitude() < 1.0e-14);
-            assert!((scaled.axis.normalize() - expected.axis.normalize()).magnitude() < 1.0e-14);
+            assert!((scaled.location - expected.location).norm() < 1.0e-14);
+            assert!((scaled.axis.normalize() - expected.axis.normalize()).norm() < 1.0e-14);
             assert!(
-                (scaled.reference.normalize() - expected.reference.normalize()).magnitude()
-                    < 1.0e-14
+                (scaled.reference.normalize() - expected.reference.normalize()).norm() < 1.0e-14
             );
         }
     }
@@ -440,16 +445,16 @@ ENDSEC;\nEND-ISO-10303-21;\n"
     fn exact_cone_export_rejects_projective_and_nonfinite_matrices() {
         let point = Point3::new(0.3302, 0.0, 0.4);
         let generator = Vector3::new(0.6, 0.0, 1.0);
-        let mut projective = Matrix4::from_scale(1.0);
-        projective.x.w = 1.0e-14;
+        let mut projective = Matrix4::new_scaling(1.0);
+        projective[(3, 0)] = 1.0e-14;
         assert!(source_cone_step_frame(&cone(point, generator, projective)).is_none());
 
-        let mut nonfinite_translation = Matrix4::from_scale(1.0);
-        nonfinite_translation.w.x = f64::INFINITY;
+        let mut nonfinite_translation = Matrix4::new_scaling(1.0);
+        nonfinite_translation[(0, 3)] = f64::INFINITY;
         assert!(source_cone_step_frame(&cone(point, generator, nonfinite_translation)).is_none());
 
-        let mut zero_weight = Matrix4::from_scale(1.0);
-        zero_weight.w.w = 0.0;
+        let mut zero_weight = Matrix4::new_scaling(1.0);
+        zero_weight[(3, 3)] = 0.0;
         assert!(source_cone_step_frame(&cone(point, generator, zero_weight)).is_none());
     }
 
@@ -458,14 +463,14 @@ ENDSEC;\nEND-ISO-10303-21;\n"
         let uneven = cone(
             Point3::new(0.3302, 0.0, 0.0),
             Vector3::new(0.6, 0.0, 1.0),
-            Matrix4::from_nonuniform_scale(0.1, 0.2, 0.1),
+            Matrix4::new_nonuniform_scaling(&Vector3::new(0.1, 0.2, 0.1)),
         );
         assert!(source_cone_step_frame(&uneven).is_none());
 
         let skew = cone(
             Point3::new(0.3302, 0.0, 0.0),
             Vector3::new(0.6, 0.1, 1.0),
-            Matrix4::from_scale(0.1),
+            Matrix4::new_scaling(0.1),
         );
         assert!(source_cone_step_frame(&skew).is_none());
     }

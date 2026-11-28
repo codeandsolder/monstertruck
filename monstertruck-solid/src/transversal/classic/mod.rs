@@ -263,7 +263,7 @@ where
             .search_parameter(point, None, 100)
             .or_else(|| surface.search_nearest_parameter(point, None, 100))?;
         let normal = surface.normal(u, v);
-        let length = normal.magnitude();
+        let length = normal.norm();
         if !length.is_finite() || length <= f64::EPSILON {
             return None;
         }
@@ -1032,9 +1032,9 @@ mod structural_classification_tests {
 
     fn unit_cube() -> Solid<Point3, Curve, Surface> {
         let vertex = builder::vertex(Point3::origin());
-        let edge = builder::extrude(&vertex, Vector3::unit_x());
-        let face = builder::extrude(&edge, Vector3::unit_y());
-        builder::extrude(&face, Vector3::unit_z())
+        let edge = builder::extrude(&vertex, Vector3::x());
+        let face = builder::extrude(&edge, Vector3::y());
+        builder::extrude(&face, Vector3::z())
     }
 
     #[test]

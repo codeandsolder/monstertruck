@@ -7,6 +7,7 @@ use super::*;
 use crate::{
     BoundedCurve, KERNEL_EPSILON, MetricSpace, ParametricCurve, Tolerance, prop_assert_near,
 };
+use monstertruck_core::math::Unit;
 use proptest::*;
 
 fn pole_to_normal(pole: [f64; 2]) -> Vector3 {
@@ -72,7 +73,7 @@ fn multiple_boundary(points: [Point3; 4], radius_ratios: [f64; 4]) -> Vec<Vec<Po
 
 proptest! {
     #[test]
-    fn test_circum_center(
+    fn test_circumcenter(
         p0 in array::uniform3(-10.0f64..10.0),
         p1 in array::uniform3(-10.0f64..10.0),
         p2 in array::uniform3(-10.0f64..10.0),
@@ -80,7 +81,7 @@ proptest! {
         let p0 = Point3::from(p0);
         let p1 = Point3::from(p1);
         let p2 = Point3::from(p2);
-        let c = circum_center(p0, p1, p2);
+        let c = circumcenter(p0, p1, p2);
 
         // The point `c` exists at the same distance from the three points.
         let d0 = c.distance2(p0);
@@ -109,8 +110,8 @@ proptest! {
         // Check by the circular angle theorem.
         let (t0, t1) = curve.range_tuple();
         let p3 = curve.evaluate((1.0 - t) * t0 + t * t1);
-        let angle2 = (p2 - p1).angle(p2 - p0);
-        let angle3 = (p3 - p1).angle(p3 - p0);
+        let angle2 = monstertruck_core::angle_between(p2 - p1, p2 - p0);
+        let angle3 = monstertruck_core::angle_between(p3 - p1, p3 - p0);
         prop_assert_near!(angle2, angle3);
     }
 
@@ -136,7 +137,7 @@ proptest! {
         // *angle* directly (scale-invariant); this mirrors the constructor's
         // own `CircularArcTangentParallelToChord` degeneracy and keeps the
         // radius bounded so the reconstruction below stays well-conditioned.
-        let sin_angle = tangent.normalize().cross(chord.normalize()).magnitude();
+        let sin_angle = tangent.normalize().cross(&chord.normalize()).norm();
         prop_assume!(sin_angle > 1.0e-3);
 
         let curve = try_circle_arc_by_start_tangent(p0, p1, tangent)
@@ -157,7 +158,7 @@ proptest! {
         // lands the sample right on top of an endpoint, so `t` must never
         // feed the reconstruction basis; it only picks the point under test.
         let mid = curve.evaluate(0.5 * (t0 + t1));
-        let origin = circum_center(p0, p1, mid);
+        let origin = circumcenter(p0, p1, mid);
         let radius = origin.distance(p0);
         let p2 = curve.evaluate((1.0 - t) * t0 + t * t1);
         // `p2` lies on that circle to within a radius-relative tolerance:
@@ -178,15 +179,15 @@ proptest! {
     ) {
         let origin = Point3::from(origin);
         let axis = pole_to_normal(axis_pole);
-        let angle = Rad(angle);
+        let angle = angle;
         let pt0 = Point3::from(pt0);
         let curve = circle_arc(pt0, origin, axis, angle);
 
         // front point and back point
-        let trans = Matrix4::from_translation(origin.to_vec())
-            * Matrix4::from_axis_angle(axis, angle)
-            * Matrix4::from_translation(-origin.to_vec());
-        let pt1 = trans.transform_point(pt0);
+        let trans = Matrix4::new_translation(&origin.position_vector())
+            * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), angle)
+            * Matrix4::new_translation(&-origin.position_vector());
+        let pt1 = trans.apply_point(pt0);
         prop_assert_near!(curve.front(), pt0);
         prop_assert_near!(curve.back(), pt1);
 
@@ -195,19 +196,19 @@ proptest! {
         let pt2 = curve.evaluate((1.0 - t) * t0 + t * t1);
         let vec0 = pt0 - origin;
         let vec2 = pt2 - origin;
-        prop_assert_near!(vec0.dot(axis), vec2.dot(axis));
+        prop_assert_near!(vec0.dot(&axis), vec2.dot(&axis));
 
         // Any point on the curve lies in the circle arc from `p0` to `p1`.
         // Check by the circular angle theorem.
-        let angle0 = (pt2 - pt1).angle(pt2 - pt0);
-        prop_assert_near!(angle0 * 2.0, Rad(2.0 * PI) - angle);
+        let angle0 = monstertruck_core::angle_between(pt2 - pt1, pt2 - pt0);
+        prop_assert_near!(angle0 * 2.0, (2.0 * PI) - angle);
     }
 
     #[test]
     fn test_take_one_axis_by_normal(normal in array::uniform3(-100.0f64..100.0)) {
         let normal = Vector3::from(normal);
         let axis = take_one_axis_by_normal(normal);
-        prop_assert!(normal.so_small() || (!axis.so_small() && axis.dot(normal).so_small()));
+        prop_assert!(normal.so_small() || (!axis.so_small() && axis.dot(&normal).so_small()));
     }
 
     #[test]
@@ -219,15 +220,10 @@ proptest! {
         let axis = pole_to_normal(axis_pole);
         let origin = Point3::from(origin);
         let diag = take_one_axis_by_normal(axis);
-        let trsf = Matrix4::from_cols(
-            diag.extend(0.0),
-            axis.cross(diag).extend(0.0),
-            axis.extend(0.0),
-            origin.to_homogeneous(),
-        );
+        let trsf = Matrix4::from_columns(&[diag.push(0.0), axis.cross(&diag).push(0.0), axis.push(0.0), origin.to_homogeneous()]);
         let boundary: Vec<_> = complex_boundary(angles)
             .into_iter()
-            .map(|p| trsf.transform_point(p))
+            .map(|p| trsf.apply_point(p))
             .collect();
         let plane = attach_plane(vec![boundary]).unwrap();
         prop_assert_near!(plane.normal(), axis);
@@ -243,12 +239,7 @@ proptest! {
         let axis = pole_to_normal(axis_pole);
         let origin = Point3::from(origin);
         let diag = take_one_axis_by_normal(axis);
-        let trsf = Matrix4::from_cols(
-            diag.extend(0.0),
-            axis.cross(diag).extend(0.0),
-            axis.extend(0.0),
-            origin.to_homogeneous(),
-        );
+        let trsf = Matrix4::from_columns(&[diag.push(0.0), axis.cross(&diag).push(0.0), axis.push(0.0), origin.to_homogeneous()]);
         let points = [
             Point3::new(points[0], points[1], 0.0),
             Point3::new(points[2] - 10.0, points[3], 0.0),
@@ -259,7 +250,7 @@ proptest! {
         multiple_boundary
             .iter_mut()
             .flatten()
-            .for_each(|p| *p = trsf.transform_point(*p));
+            .for_each(|p| *p = trsf.apply_point(*p));
         let plane = attach_plane(multiple_boundary).unwrap();
         prop_assert_near!(plane.normal(), axis);
     }

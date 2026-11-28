@@ -2,7 +2,7 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use newton::Jacobian;
 
 use super::{
-    CalcOutput, EuclideanSpace, HashGen, InnerSpace, KERNEL_EPSILON, Matrix2, Matrix3, MetricSpace,
+    AffinePoint, CalcOutput, HashGen, InnerProduct, KERNEL_EPSILON, Matrix2, Matrix3, MetricSpace,
     ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3,
     SurfaceParameterRange, Tolerance, Vector2, Vector3, newton, scalar_from_usize,
 };
@@ -274,7 +274,7 @@ where
 }
 
 /// Vectors whose points returned by the surface that can be the target of [`search_nearest_parameter`].
-pub trait SearchNearestParameterVector: InnerSpace<Scalar = f64> + Tolerance {
+pub trait SearchNearestParameterVector: InnerProduct<Scalar = f64> + Tolerance {
     #[doc(hidden)]
     type Point;
     #[doc(hidden)]
@@ -291,49 +291,39 @@ pub trait SearchNearestParameterVector: InnerSpace<Scalar = f64> + Tolerance {
 impl SearchNearestParameterVector for Vector2 {
     type Point = Point2;
     type Matrix = Matrix2;
-    fn subs<S>(
-        surface: &S,
-        point: Point2,
-        Vector2 { x: u, y: v }: Self,
-    ) -> CalcOutput<Self, Matrix2>
-    where
-        S: ParametricSurface<Point = Point2, Vector = Self>,
-    {
+    fn subs<S>(surface: &S, point: Point2, param: Self) -> CalcOutput<Self, Matrix2>
+    where S: ParametricSurface<Point = Point2, Vector = Self> {
+        let (u, v) = (param.x, param.y);
         let (sample, du, dv) = surface.evaluate_with_first_derivatives(u, v);
         CalcOutput {
             value: sample - point,
-            derivation: Matrix2::from_cols(du, dv),
+            derivation: Matrix2::from_columns(&[du, dv]),
         }
     }
-    fn into_param(self) -> (f64, f64) { self.into() }
-    fn from_param(param: (f64, f64)) -> Self { param.into() }
+    fn into_param(self) -> (f64, f64) { (self.x, self.y) }
+    fn from_param((u, v): (f64, f64)) -> Self { Self::new(u, v) }
 }
 
 impl SearchNearestParameterVector for Vector3 {
     type Point = Point3;
     type Matrix = Matrix3;
-    fn subs<S>(
-        surface: &S,
-        point: Self::Point,
-        Vector3 { x: u, y: v, z: w }: Self,
-    ) -> CalcOutput<Self, Self::Matrix>
-    where
-        S: ParametricSurface<Point = Self::Point, Vector = Self>,
-    {
+    fn subs<S>(surface: &S, point: Self::Point, param: Self) -> CalcOutput<Self, Self::Matrix>
+    where S: ParametricSurface<Point = Self::Point, Vector = Self> {
+        let (u, v, w) = (param.x, param.y, param.z);
         let (sample, uder, vder, uuder, uvder, vvder) =
             surface.evaluate_with_second_derivatives(u, v);
         let diff = sample - point;
-        let uv_cross = uder.cross(vder);
+        let uv_cross = uder.cross(&vder);
         CalcOutput {
             value: diff + uv_cross * w,
-            derivation: Matrix3::from_cols(
-                uder + (uuder.cross(vder) + uder.cross(uvder)) * w,
-                vder + (uvder.cross(vder) + uder.cross(vvder)) * w,
+            derivation: Matrix3::from_columns(&[
+                uder + (uuder.cross(&vder) + uder.cross(&uvder)) * w,
+                vder + (uvder.cross(&vder) + uder.cross(&vvder)) * w,
                 uv_cross,
-            ),
+            ]),
         }
     }
-    fn into_param(self) -> (f64, f64) { self.truncate().into() }
+    fn into_param(self) -> (f64, f64) { (self.x, self.y) }
     fn from_param((u, v): (f64, f64)) -> Self { Self::new(u, v, 0.0) }
 }
 
@@ -346,7 +336,7 @@ pub fn search_nearest_parameter<P, S>(
     trials: usize,
 ) -> Option<(f64, f64)>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64>,
     P::Diff: SearchNearestParameterVector<Point = P>,
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
@@ -361,7 +351,7 @@ where
 }
 
 /// Vectors whose points returned by the surface that can be the target of [`search_parameter`].
-pub trait SearchParameterVector: InnerSpace<Scalar = f64> + Tolerance {
+pub trait SearchParameterVector: InnerProduct<Scalar = f64> + Tolerance {
     #[doc(hidden)]
     type Point;
     #[doc(hidden)]
@@ -371,40 +361,33 @@ pub trait SearchParameterVector: InnerSpace<Scalar = f64> + Tolerance {
 
 impl SearchParameterVector for Vector2 {
     type Point = Point2;
-    fn subs<S>(
-        surface: &S,
-        point: Point2,
-        Vector2 { x: u, y: v }: Vector2,
-    ) -> CalcOutput<Vector2, Matrix2>
-    where
-        S: ParametricSurface<Point = Point2, Vector = Self>,
-    {
+    fn subs<S>(surface: &S, point: Point2, param: Vector2) -> CalcOutput<Vector2, Matrix2>
+    where S: ParametricSurface<Point = Point2, Vector = Self> {
+        let (u, v) = (param.x, param.y);
         CalcOutput {
             value: surface.evaluate(u, v) - point,
-            derivation: Matrix2::from_cols(surface.derivative_u(u, v), surface.derivative_v(u, v)),
+            derivation: Matrix2::from_columns(&[
+                surface.derivative_u(u, v),
+                surface.derivative_v(u, v),
+            ]),
         }
     }
 }
 
 impl SearchParameterVector for Vector3 {
     type Point = Point3;
-    fn subs<S>(
-        surface: &S,
-        point: Self::Point,
-        Vector2 { x: u, y: v }: Vector2,
-    ) -> CalcOutput<Vector2, Matrix2>
-    where
-        S: ParametricSurface<Point = Self::Point, Vector = Self>,
-    {
+    fn subs<S>(surface: &S, point: Self::Point, param: Vector2) -> CalcOutput<Vector2, Matrix2>
+    where S: ParametricSurface<Point = Self::Point, Vector = Self> {
+        let (u, v) = (param.x, param.y);
         let (sample, uder, vder) = surface.evaluate_with_first_derivatives(u, v);
         let diff = sample - point;
         CalcOutput {
-            value: Vector2::new(uder.dot(diff), vder.dot(diff)),
+            value: Vector2::new(uder.dot(&diff), vder.dot(&diff)),
             derivation: Matrix2::new(
-                uder.dot(uder),
-                uder.dot(vder),
-                uder.dot(vder),
-                vder.dot(vder),
+                uder.dot(&uder),
+                uder.dot(&vder),
+                uder.dot(&vder),
+                vder.dot(&vder),
             ),
         }
     }
@@ -419,18 +402,19 @@ pub fn search_parameter<P, S>(
     trials: usize,
 ) -> Option<(f64, f64)>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P>,
     S: ParametricSurface<Point = P, Vector = P::Diff>,
 {
     let function = move |param: Vector2| SearchParameterVector::subs(surface, point, param);
     let res = newton::solve(
         function,
-        hint.into(),
+        Vector2::new(hint.0, hint.1),
         trials,
         DEFAULT_NUMERICAL_TOLERANCES.newton_surface_parameter_step,
     );
-    res.ok().and_then(|Vector2 { x: u, y: v }| {
+    res.ok().and_then(|param| {
+        let (u, v) = (param.x, param.y);
         if surface.evaluate(u, v).near(&point) {
             Some((u, v))
         } else {
@@ -451,22 +435,26 @@ where
     C: ParametricCurve3D,
     S: ParametricSurface3D,
 {
-    let function = move |Vector3 { x, y, z }| CalcOutput {
-        value: surface.evaluate(x, y) - curve.evaluate(z),
-        derivation: Matrix3::from_cols(
-            surface.derivative_u(x, y),
-            surface.derivative_v(x, y),
-            -curve.derivative(z),
-        ),
+    let function = move |param: Vector3| {
+        let (x, y, z) = (param.x, param.y, param.z);
+        CalcOutput {
+            value: surface.evaluate(x, y) - curve.evaluate(z),
+            derivation: Matrix3::from_columns(&[
+                surface.derivative_u(x, y),
+                surface.derivative_v(x, y),
+                -curve.derivative(z),
+            ]),
+        }
     };
     let hint = Vector3::new(hint0.0, hint0.1, hint1);
-    let Vector3 { x, y, z } = newton::solve(
+    let param = newton::solve(
         function,
         hint,
         trials,
         DEFAULT_NUMERICAL_TOLERANCES.newton_surface_curve_parameter_step,
     )
     .ok()?;
+    let (x, y, z) = (param.x, param.y, param.z);
     if surface.evaluate(x, y).near(&curve.evaluate(z)) {
         Some(((x, y), z))
     } else {
@@ -487,7 +475,7 @@ pub fn parameter_division<S>(
 ) -> (Vec<f64>, Vec<f64>)
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     parameter_division_with_budget(surface, (urange, vrange), tol, MAX_PARAMETER_DIVISION_CELLS)
         .division
@@ -529,7 +517,7 @@ pub fn parameter_division_with_budget<S>(
 ) -> BudgetedDivision
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     refine_parameter_grid(
         surface,
@@ -553,7 +541,7 @@ pub fn parameter_division_from_grid_with_budget<S>(
 ) -> BudgetedDivision
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     nonpositive_tolerance!(tol);
     assert!([&udiv, &vdiv].into_iter().all(|axis| axis.len() >= 2
@@ -570,7 +558,7 @@ fn refine_parameter_grid<S>(
 ) -> BudgetedDivision
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     nonpositive_tolerance!(tol);
     let mut budget = CellBudget {
@@ -619,7 +607,7 @@ pub fn try_parameter_division<S>(
 ) -> Result<(Vec<f64>, Vec<f64>), DivisionTruncated>
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     let budgeted = parameter_division_with_budget(
         surface,
@@ -646,7 +634,7 @@ fn sub_parameter_division<S>(
     budget: &mut CellBudget,
 ) where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    S::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     if remaining_trials == 0 {
         // Reaching the DEPTH cap is a truncation too: the caller is handed a
@@ -708,11 +696,11 @@ fn sub_parameter_division<S>(
             let pt01 = surface.evaluate(u[0], v[1]);
             let pt10 = surface.evaluate(u[1], v[0]);
             let pt11 = surface.evaluate(u[1], v[1]);
-            let pt = S::Point::from_vec(
-                pt00.to_vec() * (1.0 - p) * (1.0 - q)
-                    + pt01.to_vec() * (1.0 - p) * q
-                    + pt10.to_vec() * p * (1.0 - q)
-                    + pt11.to_vec() * p * q,
+            let pt = S::Point::from_coordinates(
+                pt00.position_vector() * (1.0 - p) * (1.0 - q)
+                    + pt01.position_vector() * (1.0 - p) * q
+                    + pt10.position_vector() * p * (1.0 - q)
+                    + pt11.position_vector() * p * q,
             );
             if p0.distance2(pt) > tol * tol {
                 let delu = pt00.midpoint(pt01).distance(p0) + pt10.midpoint(pt11).distance(p0);

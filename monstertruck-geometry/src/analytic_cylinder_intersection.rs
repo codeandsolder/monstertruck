@@ -34,7 +34,7 @@ impl CylinderCarrier {
     /// Only a numerically unit direction is accepted.
     #[must_use = "inspect whether the original carrier has a valid frame"]
     pub fn new(origin: Point3, axis: Vector3, radius: f64) -> Option<Self> {
-        let length = axis.magnitude();
+        let length = axis.norm();
         if !finite_point(origin)
             || !length.is_finite()
             || (length - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
@@ -66,7 +66,7 @@ impl CylinderCarrier {
     #[must_use = "the measured carrier deviation is returned"]
     pub fn distance(self, point: Point3) -> f64 {
         let delta = point - self.origin;
-        (delta.cross(self.axis).magnitude() - self.radius).abs()
+        (delta.cross(&self.axis).norm() - self.radius).abs()
     }
 }
 
@@ -152,25 +152,25 @@ impl CylinderIntersectionArc {
         {
             return None;
         }
-        let cross = primary.axis.cross(secondary.axis);
-        let axis_sine = cross.magnitude();
+        let cross = primary.axis.cross(&secondary.axis);
+        let axis_sine = cross.norm();
         if !axis_sine.is_finite() || axis_sine <= f64::EPSILON.sqrt() {
             return None;
         }
         let normal = cross / axis_sine;
-        let axial_projection = secondary.axis.cross(normal).normalize();
+        let axial_projection = secondary.axis.cross(&normal).normalize();
         let offset = start - primary.origin;
-        let radial = offset - primary.axis * offset.dot(primary.axis);
-        let length = radial.magnitude();
+        let radial = offset - primary.axis * offset.dot(&primary.axis);
+        let length = radial.norm();
         if !length.is_finite() || length <= 0.0 {
             return None;
         }
         let radial_x = radial / length;
-        let radial_y = primary.axis.cross(radial_x).normalize();
+        let radial_y = primary.axis.cross(&radial_x).normalize();
         // Moving the primary origin along its own axis does not change the
         // carrier and avoids cancellation when the source chart is remote.
         let primary = CylinderCarrier {
-            origin: primary.origin + primary.axis * offset.dot(primary.axis),
+            origin: primary.origin + primary.axis * offset.dot(&primary.axis),
             ..primary
         };
         let relative = primary.origin - secondary.origin;
@@ -183,16 +183,16 @@ impl CylinderIntersectionArc {
             secondary.origin.z.abs(),
             primary.radius,
             secondary.radius,
-            relative.magnitude(),
+            relative.norm(),
             1.0,
         ]
         .into_iter()
         .fold(1.0_f64, f64::max);
         let radial_margin = 512.0 * f64::EPSILON * scale;
         let max_distance = max_abs_trig(
-            relative.dot(normal),
-            primary.radius * radial_x.dot(normal),
-            primary.radius * radial_y.dot(normal),
+            relative.dot(&normal),
+            primary.radius * radial_x.dot(&normal),
+            primary.radius * radial_y.dot(&normal),
             sweep,
         ) + radial_margin;
         let gap = secondary.radius - max_distance;
@@ -223,7 +223,7 @@ impl CylinderIntersectionArc {
             min_root,
             arithmetic_margin,
         };
-        ((result.evaluate(0.0)? - start).magnitude() <= endpoint_tolerance).then_some(result)
+        ((result.evaluate(0.0)? - start).norm() <= endpoint_tolerance).then_some(result)
     }
 
     /// Directed angular sweep of the bounded arc, in radians.
@@ -255,9 +255,9 @@ impl CylinderIntersectionArc {
         let second = -radial;
         let generator = self.primary.origin + radial;
         let offset = generator - self.secondary.origin;
-        let distance = offset.dot(self.normal);
-        let distance_first = first.dot(self.normal);
-        let distance_second = second.dot(self.normal);
+        let distance = offset.dot(&self.normal);
+        let distance_first = first.dot(&self.normal);
+        let distance_second = second.dot(&self.normal);
         let radius = self.secondary.radius;
         let root = ((radius - distance.abs()) * (radius + distance.abs())).sqrt();
         if !root.is_finite() || root <= 0.0 {
@@ -269,11 +269,11 @@ impl CylinderIntersectionArc {
         let axial = |root: f64, projection: f64| {
             self.branch.sign().mul_add(root, -projection) / self.axis_sine
         };
-        let point = generator + self.primary.axis * axial(root, offset.dot(self.axial_projection));
+        let point = generator + self.primary.axis * axial(root, offset.dot(&self.axial_projection));
         let derivative =
-            first + self.primary.axis * axial(root_first, first.dot(self.axial_projection));
+            first + self.primary.axis * axial(root_first, first.dot(&self.axial_projection));
         let second_derivative =
-            second + self.primary.axis * axial(root_second, second.dot(self.axial_projection));
+            second + self.primary.axis * axial(root_second, second.dot(&self.axial_projection));
         let finite = |v: Vector3| [v.x, v.y, v.z].iter().all(|x| x.is_finite());
         (finite_point(point) && finite(derivative) && finite(second_derivative)).then_some((
             point,
@@ -289,7 +289,7 @@ impl CylinderIntersectionArc {
     /// Verify an independently authored terminal vertex without changing it.
     #[must_use = "inspect the directed endpoint residual"]
     pub fn end_residual(self, end: Point3, tolerance: f64) -> Option<f64> {
-        let residual = (self.evaluate(self.sweep)? - end).magnitude();
+        let residual = (self.evaluate(self.sweep)? - end).norm();
         (residual.is_finite() && tolerance.is_finite() && tolerance >= 0.0 && residual <= tolerance)
             .then_some(residual)
     }
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn skew_cylinder_intersection_satisfies_both_carriers_and_derivatives() {
-        let primary = carrier(Point3::new(2., -1., 3.), Vector3::unit_z(), 0.4);
+        let primary = carrier(Point3::new(2., -1., 3.), Vector3::z(), 0.4);
         let secondary = carrier(
             Point3::new(2., -1., 3.),
             Vector3::new(1., 0., 1.).normalize(),
@@ -330,16 +330,16 @@ mod tests {
             let h = 1e-5;
             let (left, left_first, _) = arc.jet(angle - h).expect("left");
             let (right, right_first, _) = arc.jet(angle + h).expect("right");
-            assert!(((right - left) / (2. * h) - first).magnitude() < 1e-8);
-            assert!(((right_first - left_first) / (2. * h) - second).magnitude() < 1e-8);
+            assert!(((right - left) / (2. * h) - first).norm() < 1e-8);
+            assert!(((right_first - left_first) / (2. * h) - second).norm() < 1e-8);
         }
         assert!(arc.end_residual(start, 1e-9).is_some());
     }
 
     #[test]
     fn interior_discriminant_extremum_cannot_be_hidden_by_valid_endpoints() {
-        let primary = carrier(Point3::origin(), Vector3::unit_z(), 1.);
-        let secondary = carrier(Point3::origin(), Vector3::unit_x(), 0.5);
+        let primary = carrier(Point3::origin(), Vector3::z(), 1.);
+        let secondary = carrier(Point3::origin(), Vector3::x(), 0.5);
         let start = Point3::new(1., 0., 0.5);
         assert!(
             CylinderIntersectionArc::new(
@@ -378,10 +378,10 @@ mod tests {
 
     #[test]
     fn parallel_axes_and_tangent_roots_are_refused() {
-        let primary = carrier(Point3::origin(), Vector3::unit_z(), 1.);
+        let primary = carrier(Point3::origin(), Vector3::z(), 1.);
         let start = Point3::new(1., 0., 0.);
-        let parallel = carrier(Point3::origin(), Vector3::unit_z(), 1.);
-        let tangent = carrier(Point3::origin(), Vector3::unit_x(), 1.);
+        let parallel = carrier(Point3::origin(), Vector3::z(), 1.);
+        let tangent = carrier(Point3::origin(), Vector3::x(), 1.);
         assert!(
             CylinderIntersectionArc::new(
                 primary,

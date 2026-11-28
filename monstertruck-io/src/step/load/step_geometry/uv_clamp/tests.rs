@@ -19,8 +19,8 @@ fn the_placeholder_axes_are_the_plane_and_a_loaded_cylinders_profile() {
     // Exactly the shape `From<&CylindricalSurface>` builds: a revolution of
     // a UNIT-direction line, then inverted.
     let center = Point3::new(0.0, 0.0, 68.0);
-    let axis = Vector3::unit_z();
-    let p = center + 0.3 * Vector3::unit_x();
+    let axis = Vector3::z();
+    let p = center + 0.3 * Vector3::x();
     let mut cylinder: CylindricalSurface = Processor::new(RevolutionSurface::by_revolution(
         Line(p, p + axis),
         center,

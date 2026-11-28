@@ -12,13 +12,13 @@ categories = ["graphics"]
 
 [features]
 analyzers = []
-filters = []
+filters = ["dep:num-traits"]
 tessellation = ["spade", "robust", "filters"]
 # Legacy-VTK mesh I/O, off by default: it is only needed to write `.vtu`.
 # `vtkio` no longer drags `lz4_flex` (RUSTSEC-2026-0041) -- the workspace
 # dependency drops its compression feature, so the advisory is absent from the
 # lockfile whether this feature is on or off.
-vtk = ["vtkio"]
+vtk = ["vtkio", "dep:num-traits"]
 default = ["analyzers", "filters", "tessellation"]
 
 [dependencies]
@@ -27,6 +27,7 @@ default = ["analyzers", "filters", "tessellation"]
 # panics).
 web-time = { workspace = true }
 array-macro = { workspace = true }
+num-traits = { workspace = true, optional = true }
 derive_more = { workspace = true, features = ["deref", "deref_mut"] }
 itertools = { workspace = true }
 # Structured, digest-safe face-drop diagnostics (tessellation). `log` is a

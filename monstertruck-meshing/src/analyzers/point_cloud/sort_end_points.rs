@@ -1,6 +1,6 @@
 use super::{
-    EuclideanSpace, InnerSpace, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
-    hash, nonpositive_tolerance,
+    AffinePoint, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle, hash,
+    nonpositive_tolerance,
 };
 use array_macro::array;
 
@@ -48,14 +48,11 @@ where
     let mut res: Vec<EndPoint> = iter0
         .into_iter()
         .enumerate()
-        .filter(|(_, tri)| !(tri[1] - tri[0]).cross(tri[2] - tri[0]).so_small())
+        .filter(|(_, tri)| !(tri[1] - tri[0]).cross(&(tri[2] - tri[0])).so_small())
         .flat_map(|(i, tri)| EndPoint::from_seg(triangle_projection_interval(tri, unit, tol), i))
-        .chain(
-            iter1
-                .into_iter()
-                .enumerate()
-                .map(|(i, point)| EndPoint::new(point.to_vec().dot(unit), EndPointType::Middle, i)),
-        )
+        .chain(iter1.into_iter().enumerate().map(|(i, point)| {
+            EndPoint::new(point.position_vector().dot(&unit), EndPointType::Middle, i)
+        }))
         .collect();
     res.sort_unstable_by(|a, b| {
         compare_sweep_coordinate(a.entity, b.entity)

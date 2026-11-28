@@ -12,7 +12,7 @@ mod tests;
 
 use super::{BandContext, Ring, signed_delta};
 use crate::mesh_recovery::SurfaceCarrier;
-use crate::{Edge, InnerSpace, ParametricCurve, Point3, Vector3};
+use crate::{Edge, ParametricCurve, Point3, Vector3};
 use controls::{Control, Controls};
 use interval::{Interval, angle};
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
@@ -338,8 +338,8 @@ pub(super) fn prove(
         let point =
             curve.evaluate(piece.controls.parameter[0].midpoint(piece.controls.parameter[1]));
         let clearance = 4.0 * context.options.intersection_tolerance;
-        if (point - rim[piece.edge].front().point()).magnitude() <= clearance
-            || (point - rim[piece.edge].back().point()).magnitude() <= clearance
+        if (point - rim[piece.edge].front().point()).norm() <= clearance
+            || (point - rim[piece.edge].back().point()).norm() <= clearance
         {
             continue;
         }

@@ -66,7 +66,7 @@ fn unwrap_parameter_near(surface: &Surface, value: Point2, reference: Point2) ->
 }
 
 #[inline]
-const fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
+fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
     if orientation {
         internal
     } else {
@@ -77,9 +77,9 @@ const fn processor_parameter(orientation: bool, internal: Point2) -> Point2 {
 fn exact_plane_parameter(plane: &Plane, point: Point3) -> Option<Point2> {
     let parameter = plane.parameter(point)?;
     let scale = point
-        .to_vec()
-        .magnitude()
-        .max(plane.origin().to_vec().magnitude())
+        .coords
+        .norm()
+        .max(plane.origin().position_vector().norm())
         .max(1.0);
     (parameter.z.abs() <= KERNEL_EPSILON * scale).then_some(Point2::new(parameter.x, parameter.y))
 }
@@ -89,33 +89,33 @@ fn exact_linear_revolution_parameter(
     point: Point3,
 ) -> Option<Point2> {
     similarity_scale(*surface.transform())?;
-    let inverse = surface.transform().invert()?;
-    let local = inverse.transform_point(point);
+    let inverse = surface.transform().try_inverse()?;
+    let local = inverse.apply_point(point);
     let revolution = surface.entity();
     let origin = revolution.origin();
     let axis = revolution.axis();
     let Line(profile0, profile1) = *revolution.entity_curve();
     let direction = profile1 - profile0;
-    let axial_step = direction.dot(axis);
+    let axial_step = direction.dot(&axis);
     let scale = direction
-        .magnitude()
-        .max((profile0 - origin).magnitude())
-        .max((local - origin).magnitude())
+        .norm()
+        .max((profile0 - origin).norm())
+        .max((local - origin).norm())
         .max(1.0);
     if axial_step.abs() <= KERNEL_EPSILON * scale {
         return None;
     }
 
-    let axial0 = (profile0 - origin).dot(axis);
-    let axial = (local - origin).dot(axis);
+    let axial0 = (profile0 - origin).dot(&axis);
+    let axial = (local - origin).dot(&axis);
     let u = (axial - axial0) / axial_step;
     let profile = profile0 + direction * u;
     let profile_delta = profile - origin;
     let point_delta = local - origin;
-    let profile_radial = profile_delta - axis * profile_delta.dot(axis);
-    let point_radial = point_delta - axis * point_delta.dot(axis);
-    let profile_radius = profile_radial.magnitude();
-    let point_radius = point_radial.magnitude();
+    let profile_radial = profile_delta - axis * profile_delta.dot(&axis);
+    let point_radial = point_delta - axis * point_delta.dot(&axis);
+    let profile_radius = profile_radial.norm();
+    let point_radius = point_radial.norm();
     let radial_scale = profile_radius.max(point_radius).max(scale);
     if profile_radius <= KERNEL_EPSILON * radial_scale
         || point_radius <= KERNEL_EPSILON * radial_scale
@@ -124,8 +124,8 @@ fn exact_linear_revolution_parameter(
         return None;
     }
     let angle = axis
-        .dot(profile_radial.cross(point_radial))
-        .atan2(profile_radial.dot(point_radial))
+        .dot(&profile_radial.cross(&point_radial))
+        .atan2(profile_radial.dot(&point_radial))
         .rem_euclid(std::f64::consts::TAU);
     let external = processor_parameter(surface.orientation(), Point2::new(u, angle));
     surface
@@ -145,8 +145,8 @@ fn torus_sine_with_roundoff(sine: f64) -> Option<f64> {
 
 fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> Option<Point2> {
     similarity_scale(*surface.transform())?;
-    let inverse = surface.transform().invert()?;
-    let local = inverse.transform_point(point);
+    let inverse = surface.transform().try_inverse()?;
+    let local = inverse.apply_point(point);
     let torus = surface.entity();
     let relative = local - torus.center();
     let rho = relative.x.hypot(relative.y);
@@ -157,7 +157,7 @@ fn exact_torus_parameter(surface: &Processor<Torus, Matrix4>, point: Point3) -> 
     let scale = torus
         .large_radius()
         .max(radius)
-        .max(relative.magnitude())
+        .max(relative.norm())
         .max(1.0);
     let alpha = torus_sine_with_roundoff(relative.z / radius)?.asin();
     let azimuth = relative.y.atan2(relative.x);
@@ -213,12 +213,9 @@ fn safe_revolution_basis(
     let radial_magnitude = |u: f64| {
         let point = profile0 + direction * u;
         let delta = point - origin;
-        (delta - axis * delta.dot(axis)).magnitude()
+        (delta - axis * delta.dot(&axis)).norm()
     };
-    let scale = direction
-        .magnitude()
-        .max((profile0 - origin).magnitude())
-        .max(1.0);
+    let scale = direction.norm().max((profile0 - origin).norm()).max(1.0);
     let mut safe = [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0].into_iter().filter(|u| {
         radial_magnitude(*u)
             > DEFAULT_NUMERICAL_TOLERANCES.same_domain_direction_floor_factor
@@ -236,17 +233,17 @@ fn safe_revolution_basis(
 }
 
 fn affine_map_from_correspondences(source: [Point2; 3], target: [Point2; 3]) -> Option<Matrix3> {
-    let source = Matrix3::from_cols(
+    let source = Matrix3::from_columns(&[
         Vector3::new(source[0].x, source[0].y, 1.0),
         Vector3::new(source[1].x, source[1].y, 1.0),
         Vector3::new(source[2].x, source[2].y, 1.0),
-    );
-    let target = Matrix3::from_cols(
+    ]);
+    let target = Matrix3::from_columns(&[
         Vector3::new(target[0].x, target[0].y, 1.0),
         Vector3::new(target[1].x, target[1].y, 1.0),
         Vector3::new(target[2].x, target[2].y, 1.0),
-    );
-    Some(target * source.invert()?)
+    ]);
+    Some(target * source.try_inverse()?)
 }
 
 /// Returns the affine map from `source` UV coordinates into `target` UV
@@ -318,7 +315,7 @@ pub fn affine_same_domain_parameter_map(source: &Surface, target: &Surface) -> O
         Point2::new(1.83, -0.29),
         Point2::new(2.31, 2.17),
     ] {
-        let mapped = map.transform_point(uv);
+        let mapped = map.apply_point(uv);
         if !source
             .evaluate(uv.x, uv.y)
             .near(&target.evaluate(mapped.x, mapped.y))
@@ -402,18 +399,18 @@ mod tests {
             (Some((0.0, 1.0)), Some((0.0, 1.0)))
         );
         assert_eq!(plane.parameter_bounds_are_intrinsic(), (false, false));
-        let cylinder = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
+        let cylinder = cylinder(Point3::origin(), Vector3::z(), 2.0);
         assert_eq!(cylinder.parameter_bounds_are_intrinsic(), (false, true));
     }
 
     #[test]
     fn sheared_elementary_surfaces_are_not_analytic_same_domain_supports() {
-        let shear = Matrix4::from_cols(
+        let shear = Matrix4::from_columns(&[
             Vector4::new(1.0, 0.0, 0.0, 0.0),
             Vector4::new(0.5, 3.0_f64.sqrt() * 0.5, 0.0, 0.0),
             Vector4::new(0.0, 0.0, 1.0, 0.0),
             Vector4::new(0.0, 0.0, 0.0, 1.0),
-        );
+        ]);
         let sphere = surface(ElementarySurface::Sphere(Processor::with_transform(
             crate::step::load::step_geometry::Sphere(monstertruck_geometry::prelude::Sphere::new(
                 Point3::origin(),
@@ -426,7 +423,7 @@ mod tests {
         let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
         let cylinder = surface(ElementarySurface::CylindricalSurface(
             Processor::with_transform(
-                RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z()),
+                RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z()),
                 shear,
             ),
         ));
@@ -466,10 +463,10 @@ mod tests {
     }
 
     fn cylinder(origin: Point3, axis: Vector3, radius: f64) -> Surface {
-        let radial = if axis.cross(Vector3::unit_x()).magnitude() > 0.5 {
-            axis.cross(Vector3::unit_x()).normalize() * radius
+        let radial = if axis.cross(&Vector3::x()).norm() > 0.5 {
+            axis.cross(&Vector3::x()).normalize() * radius
         } else {
-            axis.cross(Vector3::unit_y()).normalize() * radius
+            axis.cross(&Vector3::y()).normalize() * radius
         };
         let profile = Line(origin + radial, origin + radial + axis.normalize());
         surface(ElementarySurface::CylindricalSurface(Processor::new(
@@ -479,10 +476,10 @@ mod tests {
 
     fn cone(origin: Point3, axis: Vector3, radius: f64, slope: f64) -> Surface {
         let axis = axis.normalize();
-        let radial = if axis.cross(Vector3::unit_x()).magnitude() > 0.5 {
-            axis.cross(Vector3::unit_x()).normalize()
+        let radial = if axis.cross(&Vector3::x()).norm() > 0.5 {
+            axis.cross(&Vector3::x()).normalize()
         } else {
-            axis.cross(Vector3::unit_y()).normalize()
+            axis.cross(&Vector3::y()).normalize()
         };
         let profile = Line(
             origin + radial * radius,
@@ -495,16 +492,16 @@ mod tests {
 
     #[test]
     fn cylinders_ignore_axis_origin_and_angular_zero() {
-        let a = cylinder(Point3::origin(), Vector3::unit_z(), 2.0);
-        let b = cylinder(Point3::new(0.0, 0.0, 17.0), -Vector3::unit_z(), 2.0);
+        let a = cylinder(Point3::origin(), Vector3::z(), 2.0);
+        let b = cylinder(Point3::new(0.0, 0.0, 17.0), -Vector3::z(), 2.0);
         assert!(same_surface_domain(&a, &b, 1.0e-9, 1.0e-9).is_some());
-        let wrong = cylinder(Point3::new(0.01, 0.0, 0.0), Vector3::unit_z(), 2.0);
+        let wrong = cylinder(Point3::new(0.01, 0.0, 0.0), Vector3::z(), 2.0);
         assert_eq!(same_surface_domain(&a, &wrong, 1.0e-6, 1.0e-9), None);
     }
 
     #[test]
     fn cylinder_profile_direction_controls_global_orientation_exactly() {
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let forward_profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
         let reverse_profile = forward_profile.inverse();
         let source = surface(ElementarySurface::CylindricalSurface(Processor::new(
@@ -554,7 +551,7 @@ mod tests {
         let source = surface(ElementarySurface::Sphere(Processor::new(raw)));
         let target = surface(ElementarySurface::Sphere(Processor::with_transform(
             raw,
-            Matrix4::from_axis_angle(Vector3::unit_z(), Rad(std::f64::consts::PI)),
+            Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::z()), std::f64::consts::PI),
         )));
         assert_eq!(
             same_surface_domain(&source, &target, 1.0e-9, 1.0e-9),
@@ -564,10 +561,10 @@ mod tests {
 
     #[test]
     fn cone_support_is_apex_axis_and_opening_angle() {
-        let a = cone(Point3::new(0.0, 0.0, 5.0), Vector3::unit_z(), 2.0, 0.5);
-        let b = cone(Point3::new(0.0, 0.0, 9.0), Vector3::unit_z(), 4.0, 0.5);
+        let a = cone(Point3::new(0.0, 0.0, 5.0), Vector3::z(), 2.0, 0.5);
+        let b = cone(Point3::new(0.0, 0.0, 9.0), Vector3::z(), 4.0, 0.5);
         assert!(same_surface_domain(&a, &b, 1.0e-8, 1.0e-9).is_some());
-        let wrong = cone(Point3::new(0.0, 0.0, 5.0), Vector3::unit_z(), 2.0, 0.6);
+        let wrong = cone(Point3::new(0.0, 0.0, 5.0), Vector3::z(), 2.0, 0.6);
         assert_eq!(same_surface_domain(&a, &wrong, 1.0e-8, 1.0e-6), None);
     }
 
@@ -597,7 +594,7 @@ mod tests {
         )));
         let map = affine_same_domain_parameter_map(&source, &target).unwrap();
         for uv in [Point2::new(0.2, 0.7), Point2::new(-1.3, 2.1)] {
-            let mapped = map.transform_point(uv);
+            let mapped = map.apply_point(uv);
             assert!(
                 source
                     .evaluate(uv.x, uv.y)
@@ -608,7 +605,7 @@ mod tests {
 
     #[test]
     fn affine_parameter_map_transports_shifted_cylinder_chart() {
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let source_profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
         let target_profile = Line(Point3::new(0.0, 2.0, 0.0), Point3::new(0.0, 2.0, 1.0));
         let mut source_cylinder = Processor::new(RevolutionSurface::by_revolution(
@@ -627,7 +624,7 @@ mod tests {
         let target = surface(ElementarySurface::CylindricalSurface(target_cylinder));
         let map = affine_same_domain_parameter_map(&source, &target).unwrap();
         for uv in [Point2::new(0.2, -3.0), Point2::new(5.9, 7.0)] {
-            let mapped = map.transform_point(uv);
+            let mapped = map.apply_point(uv);
             assert!(
                 source
                     .evaluate(uv.x, uv.y)
@@ -638,7 +635,7 @@ mod tests {
 
     #[test]
     fn affine_parameter_map_handles_processor_uv_axis_swap() {
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let source_profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
         let target_profile = Line(Point3::new(0.0, 2.0, 0.0), Point3::new(0.0, 2.0, 1.0));
         let source = surface(ElementarySurface::CylindricalSurface(Processor::new(
@@ -657,7 +654,7 @@ mod tests {
             Point2::new(7.0, 5.9),
             Point2::new(0.5, -0.7),
         ] {
-            let mapped = map.transform_point(uv);
+            let mapped = map.apply_point(uv);
             assert!(
                 source
                     .evaluate(uv.x, uv.y)
@@ -669,11 +666,11 @@ mod tests {
 
     #[test]
     fn affine_parameter_map_transports_shifted_cone_chart() {
-        let source = cone(Point3::new(0.0, 0.0, 5.0), Vector3::unit_z(), 2.0, 0.5);
-        let target = cone(Point3::new(0.0, 0.0, 9.0), Vector3::unit_z(), 4.0, 0.5);
+        let source = cone(Point3::new(0.0, 0.0, 5.0), Vector3::z(), 2.0, 0.5);
+        let target = cone(Point3::new(0.0, 0.0, 9.0), Vector3::z(), 4.0, 0.5);
         let map = affine_same_domain_parameter_map(&source, &target).unwrap();
         for uv in [Point2::new(-1.3, 0.2), Point2::new(0.7, 2.4)] {
-            let mapped = map.transform_point(uv);
+            let mapped = map.apply_point(uv);
             assert!(
                 source
                     .evaluate(uv.x, uv.y)
@@ -689,12 +686,12 @@ mod tests {
         let target = surface(ElementarySurface::ToroidalSurface(
             Processor::with_transform(
                 torus,
-                Matrix4::from_axis_angle(Vector3::unit_z(), Rad(0.73)),
+                Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::z()), 0.73),
             ),
         ));
         let map = affine_same_domain_parameter_map(&source, &target).unwrap();
         for uv in [Point2::new(0.2, 0.4), Point2::new(5.8, 4.9)] {
-            let mapped = map.transform_point(uv);
+            let mapped = map.apply_point(uv);
             assert!(
                 source
                     .evaluate(uv.x, uv.y)
@@ -710,7 +707,7 @@ mod tests {
         let target = surface(ElementarySurface::ToroidalSurface(
             Processor::with_transform(
                 torus,
-                Matrix4::from_axis_angle(Vector3::unit_z(), Rad(0.61)),
+                Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::z()), 0.61),
             ),
         ));
         assert!(same_surface_domain(&source, &target, 1.0e-9, 1.0e-9).is_none());
@@ -734,12 +731,12 @@ mod tests {
             monstertruck_geometry::prelude::Sphere::new(Point3::origin(), 4.0),
         );
         let source = surface(ElementarySurface::Sphere(Processor::new(raw)));
-        let reflection = Matrix4::from_cols(
+        let reflection = Matrix4::from_columns(&[
             Vector4::new(-1.0, 0.0, 0.0, 0.0),
             Vector4::new(0.0, 1.0, 0.0, 0.0),
             Vector4::new(0.0, 0.0, 1.0, 0.0),
             Vector4::new(0.0, 0.0, 0.0, 1.0),
-        );
+        ]);
         let reflected = surface(ElementarySurface::Sphere(Processor::with_transform(
             raw, reflection,
         )));

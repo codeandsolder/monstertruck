@@ -81,7 +81,7 @@ fn sampled_cylindrical_stl_roundtrips_as_analytic_step_cylinders() {
     use monstertruck_modeling::mesh_recovery::{
         CylinderRecoveryOptions, recover_cylindrical_solid,
     };
-    use monstertruck_modeling::{InnerSpace, ParametricSurface, Vector3};
+    use monstertruck_modeling::{ParametricSurface, Vector3};
     let sides = 32;
     let rings = (0..2)
         .flat_map(|level| {
@@ -145,7 +145,7 @@ fn sampled_cylindrical_stl_roundtrips_as_analytic_step_cylinders() {
                     for angle in [0.0, 1.0, 2.0] {
                         let p = cylinder.evaluate(axial, angle);
                         let radial = Vector3::new(p.x, p.y, 0.0);
-                        assert!((radial.magnitude() - 2.0).abs() < 1.0e-5);
+                        assert!((radial.norm() - 2.0).abs() < 1.0e-5);
                     }
                 }
             }
@@ -262,7 +262,7 @@ fn shared_periodic_trim_graph_roundtrips_as_analytic_step_solid()
             &supports,
             SurfaceCarrier::LinearRevolution {
                 origin: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radius_at_origin: 2.0,
                 slope: 0.0,
             },

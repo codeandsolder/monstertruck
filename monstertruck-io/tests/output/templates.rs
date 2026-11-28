@@ -50,7 +50,7 @@ fn default_solid_template() {
     use std::io::{BufRead, BufReader};
     let json = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../resources/shape/cube.json"
+        "/../fixtures/shape/cube.json"
     ));
     let csolid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
     let header: StepHeaderDescriptor = Default::default();

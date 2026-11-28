@@ -4,13 +4,13 @@
 )]
 
 use super::{
-    BoundedCurve, BoundedSurface, CurveParameter, Cut, Decomposition, Deref, DerefMut,
-    EuclideanSpace, IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, Mul, One,
-    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, SearchParameterHint2D, SquareMatrix, SurfaceParameter,
-    SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed, Vector3, VectorSpace,
-    algo,
+    AffinePoint, BoundedCurve, BoundedSurface, CurveParameter, Cut, Deref, DerefMut,
+    GeometryTransform, IncludeCurve, InnerProduct, Invertible, LinearVector, Matrix3, Matrix4,
+    MetricSpace, Mul, One, ParameterDivision1D, ParameterDivision2D, ParameterRange,
+    ParametricSurface, ParametricSurface3D, Point2, Point3, Processor, SearchNearestParameter,
+    SearchParameter, SearchParameterHint1D, SearchParameterHint2D, SquareLinearMap,
+    SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance, Transformed, Vector3,
+    affine_qr, algo,
 };
 use algo::surface::SearchNearestParameterVector;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
@@ -19,16 +19,16 @@ use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 const fn undefined_vector3() -> Vector3 { Vector3::new(f64::NAN, f64::NAN, f64::NAN) }
 
 fn matrix3_scale_bound(a: Matrix3) -> f64 {
-    if let Some((_, k, _)) = a.iwasawa_decomposition() {
-        return f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]))
+    if let Some((_, k)) = affine_qr(a) {
+        return f64::abs(k[(0, 0)])
+            .max(f64::abs(k[(1, 1)]))
+            .max(f64::abs(k[(2, 2)]))
             .max(f64::EPSILON);
     }
-    let linear_norm = a[1][1]
+    let linear_norm = a[(1, 1)]
         .mul_add(
-            a[1][1],
-            a[1][0].mul_add(a[1][0], a[0][0].mul_add(a[0][0], a[0][1].powi(2))),
+            a[(1, 1)],
+            a[(0, 1)].mul_add(a[(0, 1)], a[(0, 0)].mul_add(a[(0, 0)], a[(1, 0)].powi(2))),
         )
         .sqrt();
     if linear_norm.is_finite() {
@@ -39,22 +39,22 @@ fn matrix3_scale_bound(a: Matrix3) -> f64 {
 }
 
 fn matrix4_scale_bound(a: Matrix4) -> f64 {
-    if let Some((_, k, _)) = a.iwasawa_decomposition() {
-        let homogeneous = f64::abs(k[3][3]);
+    if let Some((_, k)) = affine_qr(a) {
+        let homogeneous = f64::abs(k[(3, 3)]);
         if homogeneous > f64::EPSILON {
-            return f64::abs(k[0][0])
-                .max(f64::abs(k[1][1]))
-                .max(f64::abs(k[2][2]))
+            return f64::abs(k[(0, 0)])
+                .max(f64::abs(k[(1, 1)]))
+                .max(f64::abs(k[(2, 2)]))
                 / homogeneous;
         }
     }
     let mut sum = 0.0;
     for column in 0..3 {
         for row in 0..3 {
-            sum = a[column][row].mul_add(a[column][row], sum);
+            sum = a[(row, column)].mul_add(a[(row, column)], sum);
         }
     }
-    let homogeneous = f64::abs(a[3][3]);
+    let homogeneous = f64::abs(a[(3, 3)]);
     let linear_norm = sum.sqrt();
     if linear_norm.is_finite() && homogeneous > f64::EPSILON {
         (linear_norm / homogeneous).max(f64::EPSILON)
@@ -156,36 +156,35 @@ impl<C: BoundedCurve, T> Processor<C, T> {
 impl<C, T> ParametricCurveTrait for Processor<C, T>
 where
     C: BoundedCurve,
-    C::Point: EuclideanSpace<Diff = C::Vector>,
-    C::Vector: VectorSpace<Scalar = f64>,
-    T: Transform<C::Point> + Clone,
+    C::Point: AffinePoint<Diff = C::Vector>,
+    C::Vector: LinearVector<Scalar = f64>,
+    T: GeometryTransform<C::Point>,
 {
     type Point = C::Point;
     type Vector = C::Vector;
     #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         if n == 0 {
-            self.evaluate(t).to_vec()
+            self.evaluate(t).position_vector()
         } else {
             let t = self.curve_parameter(t);
-            self.transform
-                .transform_vector(self.entity.derivative_n(n, t))
+            self.transform.apply_vector(self.entity.derivative_n(n, t))
         }
     }
     #[inline]
     fn evaluate(&self, t: f64) -> C::Point {
         let t = self.curve_parameter(t);
-        self.transform.transform_point(self.entity.evaluate(t))
+        self.transform.apply_point(self.entity.evaluate(t))
     }
     #[inline]
     fn derivative(&self, t: f64) -> Self::Vector {
         let t = self.curve_parameter(t);
-        self.transform.transform_vector(self.entity.derivative(t)) * self.sign()
+        self.transform.apply_vector(self.entity.derivative(t)) * self.sign()
     }
     #[inline]
     fn derivative_2(&self, t: f64) -> Self::Vector {
         let t = self.curve_parameter(t);
-        self.transform.transform_vector(self.entity.derivative_2(t))
+        self.transform.apply_vector(self.entity.derivative_2(t))
     }
     #[inline]
     fn parameter_range(&self) -> ParameterRange { self.entity.parameter_range() }
@@ -196,9 +195,9 @@ where
 impl<C, T> BoundedCurve for Processor<C, T>
 where
     C: BoundedCurve,
-    C::Point: EuclideanSpace<Diff = C::Vector>,
-    C::Vector: VectorSpace<Scalar = f64>,
-    T: Transform<C::Point> + Clone,
+    C::Point: AffinePoint<Diff = C::Vector>,
+    C::Vector: LinearVector<Scalar = f64>,
+    T: GeometryTransform<C::Point>,
 {
     fn range_tuple(&self) -> (f64, f64) { self.entity.range_tuple() }
 }
@@ -206,9 +205,9 @@ where
 impl<C, T> Cut for Processor<C, T>
 where
     C: BoundedCurve + Cut,
-    C::Point: EuclideanSpace<Diff = C::Vector>,
-    C::Vector: VectorSpace<Scalar = f64>,
-    T: Transform<C::Point> + Clone,
+    C::Point: AffinePoint<Diff = C::Vector>,
+    C::Vector: LinearVector<Scalar = f64>,
+    T: GeometryTransform<C::Point>,
 {
     fn cut(&mut self, t: f64) -> Self {
         let t = self.curve_parameter(t);
@@ -218,7 +217,7 @@ where
         }
         Self {
             entity,
-            transform: self.transform.clone(),
+            transform: self.transform,
             orientation: self.orientation,
         }
     }
@@ -227,79 +226,69 @@ where
 impl<S, T> ParametricSurface for Processor<S, T>
 where
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64, Diff = S::Vector>,
-    T: Transform<S::Point> + SquareMatrix<Scalar = f64> + Clone,
+    S::Point: AffinePoint<Scalar = f64, Diff = S::Vector>,
+    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64>,
 {
     type Point = S::Point;
     type Vector = S::Vector;
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         if (m, n) == (0, 0) {
-            self.evaluate(u, v).to_vec()
+            self.evaluate(u, v).position_vector()
         } else if self.orientation {
             self.transform
-                .transform_vector(self.entity.derivative_mn(m, n, u, v))
+                .apply_vector(self.entity.derivative_mn(m, n, u, v))
         } else {
             self.transform
-                .transform_vector(self.entity.derivative_mn(n, m, v, u))
+                .apply_vector(self.entity.derivative_mn(n, m, v, u))
         }
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Self::Point {
         if self.orientation {
-            self.transform.transform_point(self.entity.evaluate(u, v))
+            self.transform.apply_point(self.entity.evaluate(u, v))
         } else {
-            self.transform.transform_point(self.entity.evaluate(v, u))
+            self.transform.apply_point(self.entity.evaluate(v, u))
         }
     }
     #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Self::Vector {
         if self.orientation {
-            self.transform
-                .transform_vector(self.entity.derivative_u(u, v))
+            self.transform.apply_vector(self.entity.derivative_u(u, v))
         } else {
-            self.transform
-                .transform_vector(self.entity.derivative_v(v, u))
+            self.transform.apply_vector(self.entity.derivative_v(v, u))
         }
     }
     #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Self::Vector {
         if self.orientation {
-            self.transform
-                .transform_vector(self.entity.derivative_v(u, v))
+            self.transform.apply_vector(self.entity.derivative_v(u, v))
         } else {
-            self.transform
-                .transform_vector(self.entity.derivative_u(v, u))
+            self.transform.apply_vector(self.entity.derivative_u(v, u))
         }
     }
     #[inline]
     fn derivative_uu(&self, u: f64, v: f64) -> Self::Vector {
         if self.orientation {
-            self.transform
-                .transform_vector(self.entity.derivative_uu(u, v))
+            self.transform.apply_vector(self.entity.derivative_uu(u, v))
         } else {
-            self.transform
-                .transform_vector(self.entity.derivative_vv(v, u))
+            self.transform.apply_vector(self.entity.derivative_vv(v, u))
         }
     }
     #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Self::Vector {
         if self.orientation {
-            self.transform
-                .transform_vector(self.entity.derivative_uv(u, v))
+            self.transform.apply_vector(self.entity.derivative_uv(u, v))
         } else {
-            self.transform
-                .transform_vector(self.entity.derivative_uv(v, u))
+            self.transform.apply_vector(self.entity.derivative_uv(v, u))
         }
     }
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Self::Vector {
         if self.orientation {
-            self.transform
-                .transform_vector(self.entity.derivative_vv(u, v))
+            self.transform.apply_vector(self.entity.derivative_vv(u, v))
         } else {
-            self.transform
-                .transform_vector(self.entity.derivative_uu(v, u))
+            self.transform.apply_vector(self.entity.derivative_uu(v, u))
         }
     }
     #[inline]
@@ -337,7 +326,7 @@ where
 impl<S, T> ParametricSurface3D for Processor<S, T>
 where
     S: ParametricSurface3D,
-    T: Transform<Point3> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     fn closed_chart_periods(&self) -> (Option<f64>, Option<f64>) {
         let (u, v) = self.entity.closed_chart_periods();
@@ -352,7 +341,7 @@ where
         } else {
             -self.entity.normal(v, u)
         };
-        let Some(n) = transtrans.inverse_transform_vector(n) else {
+        let Some(n) = transtrans.apply_inverse_vector(n) else {
             return undefined_vector3();
         };
         let determinant = self.transform.determinant();
@@ -366,7 +355,7 @@ where
 impl<S, T> BoundedSurface for Processor<S, T>
 where
     S: BoundedSurface<Point = Point3, Vector = Vector3>,
-    T: Transform<S::Point> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<S::Point> + SquareLinearMap<Scalar = f64>,
 {
     fn range_tuple(&self) -> SurfaceParameterRange {
         let (u_range, v_range) = self.entity.range_tuple();
@@ -385,7 +374,7 @@ use monstertruck_traits::v2;
 impl<S, T> v2::ParametricSurface for Processor<S, T>
 where
     S: ParametricSurface<Point = Point3, Vector = Vector3>,
-    T: Transform<Point3> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     type Scalar = f64;
     type Point = Point3;
@@ -422,7 +411,7 @@ where
 impl<S, T> v2::BoundedSurface for Processor<S, T>
 where
     S: BoundedSurface<Point = Point3, Vector = Vector3>,
-    T: Transform<Point3> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     #[inline]
     fn range_tuple(&self) -> ((f64, f64), (f64, f64)) { BoundedSurface::range_tuple(self) }
@@ -431,7 +420,7 @@ where
 impl<S, T> v2::ParametricSurface3D for Processor<S, T>
 where
     S: ParametricSurface3D,
-    T: Transform<Point3> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<Point3> + SquareLinearMap<Scalar = f64>,
 {
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 { ParametricSurface3D::normal(self, u, v) }
@@ -440,8 +429,8 @@ where
 impl<E, T> v2::SearchParameter<v2::CurveParameter<f64>> for Processor<E, T>
 where
     E: SearchParameter<CurveParameter> + BoundedCurve,
-    <E as SearchParameter<CurveParameter>>::Point: EuclideanSpace,
-    T: Transform<<E as SearchParameter<CurveParameter>>::Point>,
+    <E as SearchParameter<CurveParameter>>::Point: AffinePoint,
+    T: GeometryTransform<<E as SearchParameter<CurveParameter>>::Point>,
 {
     type Point = <E as SearchParameter<CurveParameter>>::Point;
     #[inline]
@@ -458,9 +447,9 @@ where
 impl<P, E, T> v2::SearchNearestParameter<v2::CurveParameter<f64>> for Processor<E, T>
 where
     E: BoundedCurve<Point = P> + SearchNearestParameter<CurveParameter, Point = P>,
-    P: EuclideanSpace<Scalar = f64, Diff = E::Vector>,
-    E::Vector: InnerSpace<Scalar = f64> + Tolerance,
-    T: Transform<P> + Clone,
+    P: AffinePoint<Scalar = f64, Diff = E::Vector>,
+    E::Vector: InnerProduct<Scalar = f64> + Tolerance,
+    T: GeometryTransform<P>,
 {
     type Point = P;
     #[inline]
@@ -477,8 +466,8 @@ where
 impl<E, T> v2::SearchParameter<v2::SurfaceParameter<f64>> for Processor<E, T>
 where
     E: SearchParameter<SurfaceParameter>,
-    E::Point: EuclideanSpace,
-    T: Transform<E::Point>,
+    E::Point: AffinePoint,
+    T: GeometryTransform<E::Point>,
 {
     type Point = E::Point;
     #[inline]
@@ -495,9 +484,9 @@ where
 impl<P, E, T> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for Processor<E, T>
 where
     E: ParametricSurface<Point = P> + SearchNearestParameter<SurfaceParameter, Point = P>,
-    P: EuclideanSpace<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
     E::Vector: SearchNearestParameterVector<Point = P>,
-    T: Transform<P> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64>,
 {
     type Point = P;
     #[inline]
@@ -542,12 +531,12 @@ where
 impl<E, T, C> IncludeCurve<C> for Processor<E, T>
 where
     C: ParametricCurveTrait + Transformed<T> + Clone,
-    C::Point: EuclideanSpace,
+    C::Point: AffinePoint,
     E: IncludeCurve<C>,
-    T: Transform<C::Point>,
+    T: GeometryTransform<C::Point>,
 {
     fn include(&self, curve: &C) -> bool {
-        let Some(inv) = self.transform.inverse_transform() else {
+        let Some(inv) = self.transform.inverse_map() else {
             return false;
         };
         let curve = curve.clone().transformed(inv);
@@ -571,13 +560,13 @@ where C: ParameterDivision1D<Point = Point2> + BoundedCurve<Point = Point2>
         } else {
             (self.curve_parameter(range.1), self.curve_parameter(range.0))
         };
-        let (_, k, _) = a.iwasawa_decomposition()?;
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]));
+        let (_, k) = affine_qr(a)?;
+        let n = f64::abs(k[(0, 0)])
+            .max(f64::abs(k[(1, 1)]))
+            .max(f64::abs(k[(2, 2)]));
         let (mut params, mut points) = self.entity.try_parameter_division(range, tol / n)?;
         for pt in &mut points {
-            *pt = a.transform_point(*pt);
+            *pt = a.apply_point(*pt);
         }
         if !self.orientation {
             for t in &mut params {
@@ -599,7 +588,7 @@ where C: ParameterDivision1D<Point = Point2> + BoundedCurve<Point = Point2>
         let n = matrix3_scale_bound(a);
         let (mut params, mut points) = self.entity.parameter_division(range, tol / n);
         for pt in &mut points {
-            *pt = a.transform_point(*pt);
+            *pt = a.apply_point(*pt);
         }
         if !self.orientation {
             for t in &mut params {
@@ -628,14 +617,14 @@ where C: ParameterDivision1D<Point = Point3> + BoundedCurve<Point = Point3>
         } else {
             (self.curve_parameter(range.1), self.curve_parameter(range.0))
         };
-        let (_, k, _) = a.iwasawa_decomposition()?;
-        let n = f64::abs(k[0][0])
-            .max(f64::abs(k[1][1]))
-            .max(f64::abs(k[2][2]))
-            / f64::abs(k[3][3]);
+        let (_, k) = affine_qr(a)?;
+        let n = f64::abs(k[(0, 0)])
+            .max(f64::abs(k[(1, 1)]))
+            .max(f64::abs(k[(2, 2)]))
+            / f64::abs(k[(3, 3)]);
         let (mut params, mut points) = self.entity.try_parameter_division(range, tol / n)?;
         for pt in &mut points {
-            *pt = a.transform_point(*pt);
+            *pt = a.apply_point(*pt);
         }
         if !self.orientation {
             for t in &mut params {
@@ -657,7 +646,7 @@ where C: ParameterDivision1D<Point = Point3> + BoundedCurve<Point = Point3>
         let n = matrix4_scale_bound(a);
         let (mut params, mut points) = self.entity.parameter_division(range, tol / n);
         for pt in &mut points {
-            *pt = a.transform_point(*pt);
+            *pt = a.apply_point(*pt);
         }
         if !self.orientation {
             for t in &mut params {
@@ -717,8 +706,8 @@ impl<S: ParameterDivision2D> ParameterDivision2D for Processor<S, Matrix4> {
 impl<E, T> SearchParameter<CurveParameter> for Processor<E, T>
 where
     E: SearchParameter<CurveParameter> + BoundedCurve,
-    <E as SearchParameter<CurveParameter>>::Point: EuclideanSpace,
-    T: Transform<<E as SearchParameter<CurveParameter>>::Point>,
+    <E as SearchParameter<CurveParameter>>::Point: AffinePoint,
+    T: GeometryTransform<<E as SearchParameter<CurveParameter>>::Point>,
 {
     type Point = <E as SearchParameter<CurveParameter>>::Point;
     fn search_parameter<H: Into<SearchParameterHint1D>>(
@@ -727,10 +716,10 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        let inv = self.transform.inverse_transform()?;
+        let inv = self.transform.inverse_map()?;
         let t = self
             .entity
-            .search_parameter(inv.transform_point(point), hint, trials)?;
+            .search_parameter(inv.apply_point(point), hint, trials)?;
         Some(self.curve_parameter(t))
     }
 }
@@ -755,8 +744,8 @@ const fn processor_surface_hint(
 impl<E, T> SearchParameter<SurfaceParameter> for Processor<E, T>
 where
     E: SearchParameter<SurfaceParameter>,
-    E::Point: EuclideanSpace,
-    T: Transform<E::Point>,
+    E::Point: AffinePoint,
+    T: GeometryTransform<E::Point>,
 {
     type Point = E::Point;
     fn search_parameter<H: Into<SearchParameterHint2D>>(
@@ -766,11 +755,11 @@ where
         trials: usize,
     ) -> Option<(f64, f64)> {
         // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform()?;
+        let inv = self.transform.inverse_map()?;
         let hint = processor_surface_hint(hint.into(), self.orientation);
         let (u, v) = self
             .entity
-            .search_parameter(inv.transform_point(point), hint, trials)?;
+            .search_parameter(inv.apply_point(point), hint, trials)?;
         if self.orientation {
             Some((u, v))
         } else {
@@ -782,9 +771,9 @@ where
 impl<P, E, T> SearchNearestParameter<CurveParameter> for Processor<E, T>
 where
     E: BoundedCurve<Point = P> + SearchNearestParameter<CurveParameter, Point = P>,
-    P: EuclideanSpace<Scalar = f64, Diff = E::Vector>,
-    E::Vector: InnerSpace<Scalar = f64> + Tolerance,
-    T: Transform<P> + Clone,
+    P: AffinePoint<Scalar = f64, Diff = E::Vector>,
+    E::Vector: InnerProduct<Scalar = f64> + Tolerance,
+    T: GeometryTransform<P>,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -793,10 +782,10 @@ where
         hint: H,
         trials: usize,
     ) -> Option<f64> {
-        let inv = self.transform.inverse_transform()?;
-        let hint =
-            self.entity
-                .search_nearest_parameter(inv.transform_point(point), hint, trials)?;
+        let inv = self.transform.inverse_map()?;
+        let hint = self
+            .entity
+            .search_nearest_parameter(inv.apply_point(point), hint, trials)?;
         let hint = self.curve_parameter(hint);
         algo::curve::search_nearest_parameter(self, point, hint, trials)
     }
@@ -805,9 +794,9 @@ where
 impl<P, E, T> SearchNearestParameter<SurfaceParameter> for Processor<E, T>
 where
     E: ParametricSurface<Point = P> + SearchNearestParameter<SurfaceParameter, Point = P>,
-    P: EuclideanSpace<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64, Diff = E::Vector> + MetricSpace<Metric = f64> + Tolerance,
     E::Vector: SearchNearestParameterVector<Point = P>,
-    T: Transform<P> + SquareMatrix<Scalar = f64> + Clone,
+    T: GeometryTransform<P> + SquareLinearMap<Scalar = f64>,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint2D>>(
@@ -817,11 +806,11 @@ where
         trials: usize,
     ) -> Option<(f64, f64)> {
         // SAFETY: the transform is guaranteed invertible by the `Processor` contract.
-        let inv = self.transform.inverse_transform()?;
+        let inv = self.transform.inverse_map()?;
         let hint = processor_surface_hint(hint.into(), self.orientation);
-        let hint =
-            self.entity
-                .search_nearest_parameter(inv.transform_point(point), hint, trials)?;
+        let hint = self
+            .entity
+            .search_nearest_parameter(inv.apply_point(point), hint, trials)?;
         let hint = if self.orientation {
             hint
         } else {

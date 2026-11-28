@@ -1,8 +1,8 @@
 use super::{
-    BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedFace,
-    CompressedShell, CompressedShellTessellation, CompressedTrimmedFace, CompressedTrimmedShell,
-    ConstrainedDelaunayTriangulation, CurveParameter, Edge, EuclideanSpace,
-    ExactParameterBoundary2D, Face, Faces, InnerFaceIterator, InnerSpace, Invertible,
+    AffinePoint, BoundedCurve, CdtEdge, CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse,
+    CompressedFace, CompressedShell, CompressedShellTessellation, CompressedTrimmedFace,
+    CompressedTrimmedShell, ConstrainedDelaunayTriangulation, CurveParameter, Edge,
+    ExactParameterBoundary2D, Face, Faces, InnerFaceIterator, Invertible,
     IsoparametricCurveOptions, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MeshableSurface, MetricSpace,
     Origin, Parallelizable, ParameterBoundary2D, ParameterDivision1D, ParametricCurve2D,
     ParametricCurve3D, ParametricSurface3D, Point3, PolygonMesh, PolylineCurve, PolylineableCurve,
@@ -1517,10 +1517,7 @@ fn shell_create_polygon<S: PreMeshableSurface>(
 fn par_bench() {
     use monstertruck_modeling::*;
     use std::time::Instant;
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../resources/shape/bottle.json"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/shape/bottle.json");
     let json = std::fs::read_to_string(path).expect("bottle.json resource missing");
     let solid: Solid = serde_json::from_str(&json).unwrap();
     let shell = solid.into_boundaries().pop().unwrap();

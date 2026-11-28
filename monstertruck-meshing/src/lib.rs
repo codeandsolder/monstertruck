@@ -9,8 +9,8 @@
 //! // Build a cube and tessellate it
 //! let v = builder::vertex(Point3::origin());
 //! let cube: Solid = builder::extrude(
-//!     &builder::extrude(&builder::extrude(&v, Vector3::unit_x()), Vector3::unit_y()),
-//!     Vector3::unit_z(),
+//!     &builder::extrude(&builder::extrude(&v, Vector3::x()), Vector3::y()),
+//!     Vector3::z(),
 //! );
 //!
 //! let mesh = cube.triangulation(0.01).to_polygon();
@@ -37,6 +37,9 @@ use monstertruck_mesh::KERNEL_EPSILON;
 use monstertruck_mesh::Origin;
 #[cfg(feature = "analyzers")]
 use monstertruck_mesh::PolylineCurve;
+use monstertruck_mesh::{
+    AffinePoint, Faces, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
+};
 #[cfg(feature = "tessellation")]
 use monstertruck_mesh::{
     BoundedCurve, CurveParameter, ExactParameterBoundary2D, Invertible, ParameterBoundary2D,
@@ -44,12 +47,9 @@ use monstertruck_mesh::{
     ParametricSurface3D, Point2, SearchNearestParameter, SearchParameter, SurfaceParameter, algo,
 };
 #[cfg(any(feature = "analyzers", feature = "filters"))]
-use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace, SquareMatrix};
+use monstertruck_mesh::{BoundingBox, Matrix3, MetricSpace};
 #[cfg(feature = "filters")]
-use monstertruck_mesh::{ElementWise, Tolerance, Vector2, polygon_mesh};
-use monstertruck_mesh::{
-    EuclideanSpace, Faces, InnerSpace, Point3, PolygonMesh, StandardVertex as Vertex, Vector3, Zero,
-};
+use monstertruck_mesh::{ComponentWise, Tolerance, Vector2, polygon_mesh};
 #[cfg(feature = "analyzers")]
 use monstertruck_mesh::{KERNEL_EPSILON, KERNEL_EPSILON_SQUARED, Vector4, hash};
 #[cfg(any(feature = "analyzers", feature = "filters", feature = "tessellation"))]

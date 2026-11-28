@@ -3,9 +3,7 @@
 //! This is a deliberately named conic regime. Oblique planes and planes
 //! containing the cone axis are not misclassified as hyperbolas.
 
-use crate::prelude::{
-    InnerSpace, Matrix4, Point3, Processor, TrimmedCurve, UnitHyperbola, Vector3, Vector4,
-};
+use crate::prelude::{Matrix4, Point3, Processor, TrimmedCurve, UnitHyperbola, Vector3, Vector4};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// Positive-radius cone/plane intersection, with a unique real branch.
@@ -41,8 +39,8 @@ fn valid_point(point: Point3) -> bool {
 }
 
 fn unit(vector: Vector3) -> bool {
-    vector.magnitude2().is_finite()
-        && (vector.magnitude2() - 1.0).abs()
+    vector.norm_squared().is_finite()
+        && (vector.norm_squared() - 1.0).abs()
             <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
 }
 
@@ -72,7 +70,7 @@ impl AxisParallelPlaneConeHyperbola {
         {
             return None;
         }
-        let misalignment = plane_normal.dot(cone_axis);
+        let misalignment = plane_normal.dot(&cone_axis);
         if !misalignment.is_finite()
             || misalignment.abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
         {
@@ -81,9 +79,9 @@ impl AxisParallelPlaneConeHyperbola {
         // Project away small source-axis direction noise; retain its amount
         // so that users can account for non-exact input plane parallelism.
         let axis = cone_axis.normalize();
-        let normal = (plane_normal - axis * plane_normal.dot(axis)).normalize();
-        let transverse = axis.cross(normal).normalize();
-        let offset = (plane_origin - cone_origin).dot(normal);
+        let normal = (plane_normal - axis * plane_normal.dot(&axis)).normalize();
+        let transverse = axis.cross(&normal).normalize();
+        let offset = (plane_origin - cone_origin).dot(&normal);
         let scale = [
             plane_origin.x.abs(),
             plane_origin.y.abs(),
@@ -142,10 +140,10 @@ impl AxisParallelPlaneConeHyperbola {
         if !valid_point(point) || !tolerance.is_finite() || tolerance < 0.0 {
             return None;
         }
-        let projected = (point - self.origin).dot(self.transverse);
+        let projected = (point - self.origin).dot(&self.transverse);
         let parameter = (projected / self.offset.abs()).asinh();
         let actual = self.evaluate(parameter)?;
-        let residual = (actual - point).magnitude();
+        let residual = (actual - point).norm();
         (residual.is_finite() && residual <= tolerance).then_some((parameter, residual))
     }
 
@@ -160,8 +158,8 @@ impl AxisParallelPlaneConeHyperbola {
     ) -> Option<OrientedHyperbolaTrim> {
         let (start_parameter, start_residual) = self.parameter_at_vertex(start, tolerance)?;
         let (end_parameter, end_residual) = self.parameter_at_vertex(end, tolerance)?;
-        if !(start - end).magnitude().is_finite()
-            || (start - end).magnitude() <= tolerance
+        if !(start - end).norm().is_finite()
+            || (start - end).norm() <= tolerance
             || start_parameter.total_cmp(&end_parameter).is_eq()
         {
             return None;
@@ -187,13 +185,13 @@ impl AxisParallelPlaneConeHyperbola {
         let imaginary = self.offset.abs();
         let center =
             self.origin + self.plane_normal * self.offset - self.axis * (self.radius / self.slope);
-        let normal = self.axis.cross(self.transverse);
-        let transform = Matrix4::from_cols(
-            (self.axis * real).extend(0.0),
-            (self.transverse * imaginary).extend(0.0),
-            (normal * real.min(imaginary)).extend(0.0),
+        let normal = self.axis.cross(&self.transverse);
+        let transform = Matrix4::from_columns(&[
+            (self.axis * real).push(0.0),
+            (self.transverse * imaginary).push(0.0),
+            (normal * real.min(imaginary)).push(0.0),
             Vector4::new(center.x, center.y, center.z, 1.0),
-        );
+        ]);
         Processor::with_transform(
             TrimmedCurve::new(
                 UnitHyperbola::<Point3>::new(),
@@ -233,9 +231,9 @@ impl AxisParallelPlaneConeHyperbola {
         let imaginary = self.offset.abs();
         let center =
             self.origin + self.plane_normal * self.offset - self.axis * (self.radius / self.slope);
-        let constant = (center - original_plane_origin).dot(original_plane_normal);
-        let cosh_coefficient = real * self.axis.dot(original_plane_normal);
-        let sinh_coefficient = imaginary * self.transverse.dot(original_plane_normal);
+        let constant = (center - original_plane_origin).dot(&original_plane_normal);
+        let cosh_coefficient = real * self.axis.dot(&original_plane_normal);
+        let sinh_coefficient = imaginary * self.transverse.dot(&original_plane_normal);
         let algebraic_upper = sinh_coefficient.abs().mul_add(
             largest_sinh,
             cosh_coefficient.abs().mul_add(largest_cosh, constant.abs()),
@@ -285,7 +283,7 @@ mod tests {
             Point3::new(0.0, -0.3, 2.0),
             Vector3::new(0.0, -1.0, 0.0),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             0.5,
             1.5,
         )
@@ -314,8 +312,8 @@ mod tests {
         let trim = hyperbola.oriented_trim(start, end, 1.0e-12).unwrap();
         assert!(!trim.forward());
         let output = hyperbola.modeling_curve(trim);
-        assert!((output.evaluate(trim.start_parameter) - start).magnitude() < 1.0e-12);
-        assert!((output.evaluate(trim.end_parameter) - end).magnitude() < 1.0e-12);
+        assert!((output.evaluate(trim.start_parameter) - start).norm() < 1.0e-12);
+        assert!((output.evaluate(trim.end_parameter) - end).norm() < 1.0e-12);
         assert!(
             hyperbola
                 .parameter_at_vertex(end + Vector3::new(0.01, 0.0, 0.0), 1.0e-8)
@@ -342,7 +340,7 @@ mod tests {
         for sample in 0..=4096 {
             let t = -1.3 + 3.1 * f64::from(sample) / 4096.0;
             let point = curve.evaluate(t).unwrap();
-            let deviation = (point - source_origin).dot(source_normal).abs();
+            let deviation = (point - source_origin).dot(&source_normal).abs();
             assert!(
                 deviation <= upper,
                 "t={t}, deviation={deviation}, upper={upper}"
@@ -353,22 +351,11 @@ mod tests {
     #[test]
     fn other_plane_cone_intersection_regimes_are_rejected() {
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         assert!(
             AxisParallelPlaneConeHyperbola::from_carriers(
                 origin,
-                Vector3::unit_y(),
-                origin,
-                axis,
-                0.5,
-                1.0,
-            )
-            .is_none()
-        );
-        assert!(
-            AxisParallelPlaneConeHyperbola::from_carriers(
-                Point3::new(0.0, 1.0, 0.0),
-                axis,
+                Vector3::y(),
                 origin,
                 axis,
                 0.5,
@@ -379,7 +366,18 @@ mod tests {
         assert!(
             AxisParallelPlaneConeHyperbola::from_carriers(
                 Point3::new(0.0, 1.0, 0.0),
-                Vector3::unit_y(),
+                axis,
+                origin,
+                axis,
+                0.5,
+                1.0,
+            )
+            .is_none()
+        );
+        assert!(
+            AxisParallelPlaneConeHyperbola::from_carriers(
+                Point3::new(0.0, 1.0, 0.0),
+                Vector3::y(),
                 origin,
                 axis,
                 0.5,

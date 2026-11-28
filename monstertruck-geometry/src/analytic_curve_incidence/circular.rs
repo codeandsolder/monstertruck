@@ -28,7 +28,7 @@ impl CircularArcFrame {
         start: Point3,
         tolerance: f64,
     ) -> Option<Self> {
-        let length = normal.magnitude();
+        let length = normal.norm();
         if !length.is_finite()
             || length <= 0.0
             || !radius.is_finite()
@@ -40,9 +40,9 @@ impl CircularArcFrame {
         }
         let normal = normal / length;
         let offset = start - center;
-        let axial = offset.dot(normal);
+        let axial = offset.dot(&normal);
         let radial = offset - normal * axial;
-        let length = radial.magnitude();
+        let length = radial.norm();
         if !length.is_finite()
             || length <= 0.0
             || axial.abs() > tolerance
@@ -55,7 +55,7 @@ impl CircularArcFrame {
             center,
             normal,
             x,
-            y: normal.cross(x),
+            y: normal.cross(&x),
             radius,
             tolerance,
         })
@@ -77,7 +77,7 @@ impl CircularArcFrame {
             (-self.center.y).mul_add(point[3], point[1]),
             (-self.center.z).mul_add(point[3], point[2]),
         );
-        let ray = [offset.dot(self.x), offset.dot(self.y)];
+        let ray = [offset.dot(&self.x), offset.dot(&self.y)];
         let length = ray[0].hypot(ray[1]);
         (length.is_finite() && length > 0.0).then(|| ray.map(|v| v / length))
     }

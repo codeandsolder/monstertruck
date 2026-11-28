@@ -34,13 +34,13 @@
 
 use cadmpeg_ir::geometry::nurbs::NurbsCurve as IrNurbsCurve;
 use cadmpeg_ir::geometry::{CurveGeometry, SolvedCurveGeometry};
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use monstertruck_geometry::prelude::{
     BoundedCurve, BsplineCurve, Concat, Cut, Invertible, KnotVector, NurbsCurve,
     ParameterTransform, Processor, Tolerance, TrimmedCurve, UnitCircle,
 };
 use monstertruck_modeling::{
-    Curve, Line, MetricSpace, Point3, SquareMatrix, Transform as _, Transformed, Vector4,
+    Curve, GeometryTransform as _, Line, MetricSpace, Point3, SquareLinearMap, Transformed, Vector4,
 };
 
 use super::surface::{built, homogeneous};
@@ -171,12 +171,12 @@ fn solved_curve(
             // converted, or a line with no stated interval would be built from
             // points that are not on it. An affine map is invertible or it is not
             // a placement.
-            let inverse = matrix.invert().ok_or_else(|| {
+            let inverse = matrix.try_inverse().ok_or_else(|| {
                 context.malformed("a transformed curve carries a singular placement".to_owned())
             })?;
             let pulled = (
-                inverse.transform_point(endpoints.0),
-                inverse.transform_point(endpoints.1),
+                inverse.apply_point(endpoints.0),
+                inverse.apply_point(endpoints.1),
             );
             let mut curve = solved_curve(placed.basis(), interval, pulled, context)?;
             curve.transform_by(matrix);

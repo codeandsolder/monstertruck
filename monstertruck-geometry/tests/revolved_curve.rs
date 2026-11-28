@@ -6,7 +6,7 @@ fn revolve_test() {
     let pt0 = Point3::new(0.0, 2.0, 1.0);
     let pt1 = Point3::new(1.0, 0.0, 0.0);
     let curve = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pt0, pt1]);
-    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::y());
     const N: usize = 100;
     for i in 0..=N {
         for j in 0..=N {
@@ -45,8 +45,8 @@ fn revolve_test() {
             );
             assert_near!(res_vvder, ans_vvder);
             let normal = surface.normal(u, v);
-            assert!(normal.dot(res_uder).so_small());
-            assert!(normal.dot(res_vder).so_small());
+            assert!(normal.dot(&res_uder).so_small());
+            assert!(normal.dot(&res_vder).so_small());
         }
     }
 }
@@ -57,7 +57,7 @@ fn search_parameter() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
     let pt = Point3::new(-0.5, 1.0, 0.5);
     let (u, v) = (surface.search_parameter(pt, Some((0.4, 1.2)), 100)).unwrap();
     assert_near!(surface.evaluate(u, v), pt);
@@ -69,7 +69,7 @@ fn search_parameter_honors_angular_hint_across_seam() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::z());
     let expected = (0.5, 0.05);
     let point = surface.evaluate(expected.0, expected.1);
     let hinted_angle = 2.0f64.mul_add(PI, expected.1);
@@ -88,7 +88,7 @@ fn search_nearest_parameter_honors_angular_hint_across_seam() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(1.0, 0.0, -1.0), Point3::new(1.0, 0.0, 1.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::z());
     let expected = (0.5, 2.0f64.mul_add(PI, -0.05));
     let point =
         surface.evaluate(expected.0, expected.1) + 0.01 * surface.normal(expected.0, expected.1);
@@ -115,7 +115,7 @@ fn search_parameter_with_fixed_points() {
             Point3::new(0.0, -1.0, 0.0),
         ],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
 
     let (u, v) =
         (surface.search_parameter(Point3::new(0.0, 1.0, 0.0), Some((0.5, 0.3)), 10)).unwrap();
@@ -132,7 +132,7 @@ fn search_nearest_parameter() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 2.0, 1.0), Point3::new(1.0, 0.0, 0.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
     let pt = surface.evaluate(0.4, 1.2) + 0.1 * surface.normal(0.4, 1.2);
     let (u, v) = (surface.search_nearest_parameter(pt, Some((0.4, 1.2)), 100)).unwrap();
     assert_near!(Vector2::new(u, v), Vector2::new(0.4, 1.2));
@@ -148,7 +148,7 @@ fn search_nearest_parameter_with_fixed_points() {
             Point3::new(0.0, -1.0, 0.0),
         ],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
 
     let (u, v) =
         (surface.search_nearest_parameter(Point3::new(0.0, 2.0, 0.0), Some((0.5, 0.3)), 10))
@@ -167,7 +167,7 @@ fn search_parameter_near_back_fixed_axis_endpoint() -> anyhow::Result<()> {
         KnotVector::bezier_knot(1),
         vec![Point3::new(2.0, 0.0, 2.0), Point3::new(0.0, 0.0, 2.0)],
     )?;
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::z());
     let expected = (0.999_95, FRAC_PI_2);
     let point = surface.evaluate(expected.0, expected.1);
 
@@ -195,7 +195,7 @@ fn search_parameter_near_front_fixed_axis_endpoint() -> anyhow::Result<()> {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 2.0), Point3::new(2.0, 0.0, 2.0)],
     )?;
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::z());
     let expected = (0.000_05, FRAC_PI_2);
     let point = surface.evaluate(expected.0, expected.1);
 
@@ -230,7 +230,7 @@ fn search_parameter_from_axis_endpoint_with_zero_radial_speed() -> anyhow::Resul
             Point3::new(1.0, 0.0, 3.0),
         ],
     )?;
-    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::z());
     let expected = (0.001, FRAC_PI_2);
     let point = surface.evaluate(expected.0, expected.1);
 
@@ -252,7 +252,7 @@ fn include_curve_normal() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
     let parabola = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
@@ -270,7 +270,7 @@ fn include_curve_abnormal0() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 2.0, 2.0)],
     );
-    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::y());
     let parabola = BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![
@@ -295,7 +295,7 @@ fn include_curve_abnormal1() {
     ));
     let pt0 = curve.evaluate(0.2);
     let pt1 = curve.evaluate(0.6);
-    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::unit_y());
+    let surface = RevolutionSurface::by_revolution(curve, Point3::origin(), Vector3::y());
     let line = BsplineCurve::new_unchecked(KnotVector::bezier_knot(1), vec![pt0, pt1]);
     assert!(!surface.include(&line));
 }
@@ -313,20 +313,17 @@ fn include_curve_owned_and_borrowed_rationality_matrix() {
 
     let check = |candidate: BsplineCurve<Point3>, expected| {
         let candidate_nurbs = NurbsCurve::from(candidate.clone());
-        let owned_bspline = RevolutionSurface::by_revolution(
-            generator.clone(),
-            Point3::origin(),
-            Vector3::unit_y(),
-        );
+        let owned_bspline =
+            RevolutionSurface::by_revolution(generator.clone(), Point3::origin(), Vector3::y());
         let borrowed_bspline =
-            RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::unit_y());
+            RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::y());
         let owned_nurbs = RevolutionSurface::by_revolution(
             generator_nurbs.clone(),
             Point3::origin(),
-            Vector3::unit_y(),
+            Vector3::y(),
         );
         let borrowed_nurbs =
-            RevolutionSurface::by_revolution(&generator_nurbs, Point3::origin(), Vector3::unit_y());
+            RevolutionSurface::by_revolution(&generator_nurbs, Point3::origin(), Vector3::y());
         let results = [
             owned_bspline.include(&candidate),
             borrowed_bspline.include(&candidate),
@@ -390,10 +387,8 @@ fn include_curve_genuinely_weighted_revolution_and_candidate() {
         knots,
         vec![Point3::new(0.0, 0.5, 0.5), Point3::new(0.0, 1.5, 1.5)],
     );
-    let owned =
-        RevolutionSurface::by_revolution(generator.clone(), Point3::origin(), Vector3::unit_y());
-    let borrowed =
-        RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::unit_y());
+    let owned = RevolutionSurface::by_revolution(generator.clone(), Point3::origin(), Vector3::y());
+    let borrowed = RevolutionSurface::by_revolution(&generator, Point3::origin(), Vector3::y());
     for inside in [owned.include(&generator), borrowed.include(&generator)] {
         assert!(inside, "weighted generator must lie on its own revolution");
     }

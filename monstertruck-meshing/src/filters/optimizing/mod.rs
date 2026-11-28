@@ -1,5 +1,5 @@
 use super::{
-    BoundingBox, ElementWise, Faces, MetricSpace, Point3, PolygonMesh, PolygonMeshEditor,
+    BoundingBox, ComponentWise, Faces, MetricSpace, Point3, PolygonMesh, PolygonMeshEditor,
     StandardAttributes, Vector2, Vector3, Vertex,
 };
 use rustc_hash::FxHashMap as HashMap;
@@ -183,7 +183,7 @@ impl OptimizingFilter for PolygonMesh {
         let diag = bnd_box.diagonal().map(|a| f64::max(a.abs(), 1.0));
         let normalized_positions = positions
             .iter()
-            .map(move |position| 2.0 * (position - center).zip(diag, |a, b| a / b))
+            .map(move |position| 2.0 * (position - center).component_div(&diag))
             .collect::<Vec<_>>();
         let pos_map = sub_put_together_same_attrs(&normalized_positions, tol);
         all_pos_mut(faces).for_each(|idx| *idx = pos_map[*idx]);
@@ -325,7 +325,7 @@ fn centralize<T: SameAttr>(
     components.for_each(|component| {
         let center = component
             .iter()
-            .fold(T::zero(), |sum, j| sum.add_element_wise(attrs[*j]))
+            .fold(T::zero(), |sum, j| sum.component_sum(attrs[*j]))
             / crate::count_as_f64(component.len());
         let Some((&first, rest)) = component.split_first() else {
             return;
@@ -389,7 +389,7 @@ fn split_into_nondegenerate(poly: Vec<Vertex>) -> Vec<Vec<Vertex>> {
 }
 
 trait CastIntVector:
-    Sized + ElementWise<Self> + Mul<f64, Output = Self> + Div<f64, Output = Self> {
+    Sized + ComponentWise<Self> + Mul<f64, Output = Self> + Div<f64, Output = Self> {
     type IntVector: IntVector;
     fn cast_int(self) -> Option<Self::IntVector>;
     fn round(self, tol: f64) -> Option<Self::IntVector>;
@@ -401,7 +401,9 @@ macro_rules! impl_cast_int {
     ($typename: ident, $n: expr) => {
         impl CastIntVector for $typename {
             type IntVector = [i64; $n];
-            fn cast_int(self) -> Option<[i64; $n]> { self.cast::<i64>().map(Into::into) }
+            fn cast_int(self) -> Option<[i64; $n]> {
+                crate::common::checked_grid_coordinates(self.into())
+            }
             fn round(self, tol: f64) -> Option<Self::IntVector> { (self / tol).cast_int() }
             fn zero() -> Self { Self::from([0.0; $n]) }
             fn has_nan(&self) -> bool {

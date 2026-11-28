@@ -6,7 +6,7 @@
 //! [`Wire`](crate::Wire)s suitable for planar face construction.
 
 use crate::{Curve, Result, builder, errors::Error};
-use monstertruck_core::{cgmath64::*, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::{math::*, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 
 type Edge = monstertruck_topology::Edge<Point3, Curve>;
 type Wire = monstertruck_topology::Wire<Point3, Curve>;

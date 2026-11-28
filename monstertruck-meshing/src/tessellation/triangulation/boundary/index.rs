@@ -1,7 +1,7 @@
 //! Immutable UV segment hierarchy shared by winding and sampling-clearance
 //! queries. Broad-phase rejection never changes the narrow-phase predicate.
 
-use super::{InnerSpace, Itertools, Point2, SurfacePoint};
+use super::{Itertools, Point2, SurfacePoint};
 use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 
 type UvBounds = Bounds<2>;
@@ -86,13 +86,13 @@ impl Segment {
         let start = scaled(self.front);
         let end = scaled(self.back);
         let segment = end - start;
-        let squared = segment.magnitude2();
+        let squared = segment.norm_squared();
         let fraction = if squared > 0.0 {
-            (-start.dot(segment) / squared).clamp(0.0, 1.0)
+            (-start.dot(&segment) / squared).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (start + segment * fraction).magnitude2() > 1.0
+        (start + segment * fraction).norm_squared() > 1.0
     }
 }
 

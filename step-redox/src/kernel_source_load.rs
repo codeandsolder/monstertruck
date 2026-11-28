@@ -318,16 +318,16 @@ mod monstertruck_adapter {
     use monstertruck_io::step::load::convert::StepCompressedTrimmedSolid;
     use monstertruck_io::step::load::step_geometry::{
         BsplineSurface, Conic3D, Curve3D, DEFAULT_NUMERICAL_TOLERANCES, ElementarySurface,
-        ExactParameterBoundary2D, KERNEL_EPSILON, Line, Matrix4, Point3, Processor, Surface,
-        SweepSurface, Transform, TrimmedCurve, TryIntoHomogeneousBsplineSurface, UnitCircle,
-        Vector3, Vector4,
+        ExactParameterBoundary2D, GeometryTransform, KERNEL_EPSILON, Line, Matrix4, Point3,
+        Processor, Surface, SweepSurface, TrimmedCurve, TryIntoHomogeneousBsplineSurface,
+        UnitCircle, Vector3, Vector4,
     };
     use monstertruck_io::step::load::{
         EntityLoadReport, LossCategory, LossReason, LossTally, ResolvedStepDocument,
         ShellLoadReport, StepSolidImport, StepTopologyProvenance,
     };
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
-    use monstertruck_modeling::InnerSpace;
+    use monstertruck_modeling::InnerProduct;
     use monstertruck_topology::StableId;
     use monstertruck_topology::compress::StableIdEntity;
     use monstertruck_topology::compressed_surgery::{
@@ -494,9 +494,9 @@ mod monstertruck_adapter {
     /// A deterministic radial frame for axisymmetric support geometry.
     fn native_radial_direction(axis: Vector3) -> [f64; 3] {
         let candidate = if axis.x.abs() < 0.8 {
-            Vector3::unit_x()
+            Vector3::x()
         } else {
-            Vector3::unit_y()
+            Vector3::y()
         };
         let radial = candidate
             - axis
@@ -567,44 +567,25 @@ mod monstertruck_adapter {
         circle: &Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>,
     ) -> Option<CircleSupport> {
         let transform = *circle.transform();
-        if ![
-            transform.x.x,
-            transform.x.y,
-            transform.x.z,
-            transform.x.w,
-            transform.y.x,
-            transform.y.y,
-            transform.y.z,
-            transform.y.w,
-            transform.z.x,
-            transform.z.y,
-            transform.z.z,
-            transform.z.w,
-            transform.w.x,
-            transform.w.y,
-            transform.w.z,
-            transform.w.w,
-        ]
-        .into_iter()
-        .all(f64::is_finite)
-            || transform.x.w.abs() > 1.0e-12
-            || transform.y.w.abs() > 1.0e-12
-            || (transform.w.w - 1.0).abs() > 1.0e-12
+        if !transform.iter().all(|coefficient| coefficient.is_finite())
+            || transform[(3, 0)].abs() > 1.0e-12
+            || transform[(3, 1)].abs() > 1.0e-12
+            || (transform[(3, 3)] - 1.0).abs() > 1.0e-12
         {
             return None;
         }
-        let x = transform.x.truncate();
-        let y = transform.y.truncate();
-        let radius_mm = x.magnitude();
+        let x = transform.column(0).into_owned().spatial();
+        let y = transform.column(1).into_owned().spatial();
+        let radius_mm = x.norm();
         let tolerance = 1.0e-10 * radius_mm.max(1.0);
         if radius_mm <= KERNEL_EPSILON
-            || (y.magnitude() - radius_mm).abs() > tolerance
-            || x.dot(y).abs() > tolerance * radius_mm
+            || (y.norm() - radius_mm).abs() > tolerance
+            || x.dot(&y).abs() > tolerance * radius_mm
         {
             return None;
         }
-        let normal = x.cross(y).normalize() * if circle.orientation() { 1.0 } else { -1.0 };
-        let center = transform.transform_point(Point3::new(0.0, 0.0, 0.0));
+        let normal = x.cross(&y).normalize() * if circle.orientation() { 1.0 } else { -1.0 };
+        let center = transform.apply_point(Point3::new(0.0, 0.0, 0.0));
         let radial = x / radius_mm;
         Some(CircleSupport {
             center_mm: [center.x, center.y, center.z],
@@ -641,7 +622,7 @@ mod monstertruck_adapter {
         {
             return None;
         }
-        let euclidean = point.truncate() / point.w;
+        let euclidean = point.spatial() / point.w;
         Some(Point3::new(euclidean.x, euclidean.y, euclidean.z))
     }
 
@@ -654,14 +635,14 @@ mod monstertruck_adapter {
         let origin = native_net_point(*first.first()?)?;
         let u = rows.iter().skip(1).find_map(|row| {
             let delta = native_net_point(*row.first()?)? - origin;
-            (delta.magnitude() > KERNEL_EPSILON).then_some(delta)
+            (delta.norm() > KERNEL_EPSILON).then_some(delta)
         })?;
         let v = first.iter().skip(1).find_map(|pole| {
             let delta = native_net_point(*pole)? - origin;
-            (delta.magnitude() > KERNEL_EPSILON).then_some(delta)
+            (delta.norm() > KERNEL_EPSILON).then_some(delta)
         })?;
-        let cross = u.cross(v);
-        let length = cross.magnitude();
+        let cross = u.cross(&v);
+        let length = cross.norm();
         if !length.is_finite() || length <= KERNEL_EPSILON {
             return None;
         }
@@ -669,7 +650,7 @@ mod monstertruck_adapter {
         let mut max_residual_mm = 0.0_f64;
         for pole in rows.iter().flatten() {
             let point = native_net_point(*pole)?;
-            let residual = (point - origin).dot(normal).abs();
+            let residual = (point - origin).dot(&normal).abs();
             if !residual.is_finite() || residual > 1.0e-7 {
                 return None;
             }
@@ -742,12 +723,12 @@ mod monstertruck_adapter {
             let p0 = native_net_point(first)?;
             let p1 = native_net_point(last)?;
             let delta = p1 - p0;
-            let length = delta.magnitude();
+            let length = delta.norm();
             if !length.is_finite() || length <= 1.0e-7 {
                 return None;
             }
             if let Some(expected) = sweep {
-                let residual = (delta - expected).magnitude();
+                let residual = (delta - expected).norm();
                 if residual > 1.0e-7 {
                     return None;
                 }
@@ -783,8 +764,8 @@ mod monstertruck_adapter {
             return None;
         };
         if let Curve3D::Line(Line(start, end)) = sweep.entity_curve() {
-            let normal = (*end - *start).cross(sweep.extruding_vector());
-            let magnitude = normal.magnitude();
+            let normal = (*end - *start).cross(&sweep.extruding_vector());
+            let magnitude = normal.norm();
             if magnitude.is_finite() && magnitude > KERNEL_EPSILON {
                 let normal = normal / magnitude;
                 return Some(SurfaceSupport::Plane(PlaneSupport {
@@ -802,7 +783,7 @@ mod monstertruck_adapter {
             let normal = Vector3::new(circle.normal[0], circle.normal[1], circle.normal[2]);
             if norm.is_finite()
                 && norm > KERNEL_EPSILON
-                && (normal.dot(vector / norm).abs() - 1.0).abs() <= 1.0e-10
+                && (normal.dot(&(vector / norm)).abs() - 1.0).abs() <= 1.0e-10
             {
                 let axis = vector / norm;
                 return Some(SurfaceSupport::Cylinder(CylinderSupport {
@@ -864,7 +845,7 @@ mod monstertruck_adapter {
                 })
             }
             Some(AnalyticSupport::Sphere { center, radius }) => {
-                let axis = Vector3::unit_z();
+                let axis = Vector3::z();
                 SurfaceSupport::Sphere(SphereSupport {
                     center_mm: [center.x, center.y, center.z],
                     axis: [axis.x, axis.y, axis.z],
@@ -1465,12 +1446,12 @@ mod monstertruck_adapter {
                     cosine_mm[2].mul_add(sine_mm[0], -cosine_mm[0] * sine_mm[2]),
                     cosine_mm[0].mul_add(sine_mm[1], -cosine_mm[1] * sine_mm[0]),
                 ];
-                let transform = Matrix4::from_cols(
+                let transform = Matrix4::from_columns(&[
                     Vector4::new(cosine_mm[0], cosine_mm[1], cosine_mm[2], 0.0),
                     Vector4::new(sine_mm[0], sine_mm[1], sine_mm[2], 0.0),
                     Vector4::new(normal[0], normal[1], normal[2], 0.0),
                     Vector4::new(center_mm[0], center_mm[1], center_mm[2], 1.0),
-                );
+                ]);
                 Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
                     TrimmedCurve::new(
                         UnitCircle::<Point3>::new(),
@@ -1488,13 +1469,13 @@ mod monstertruck_adapter {
             } => {
                 let real = Vector3::from(cosh_axis_mm);
                 let imaginary = Vector3::from(sinh_axis_mm);
-                let normal = real.cross(imaginary);
-                let transform = Matrix4::from_cols(
-                    real.extend(0.0),
-                    imaginary.extend(0.0),
-                    normal.extend(0.0),
+                let normal = real.cross(&imaginary);
+                let transform = Matrix4::from_columns(&[
+                    real.push(0.0),
+                    imaginary.push(0.0),
+                    normal.push(0.0),
                     Vector4::new(center_mm[0], center_mm[1], center_mm[2], 1.0),
-                );
+                ]);
                 Curve3D::Conic(Conic3D::Hyperbola(Processor::with_transform(
                     TrimmedCurve::new(
                         UnitHyperbola::<Point3>::new(),
@@ -1516,7 +1497,7 @@ mod monstertruck_adapter {
                     normal[2].mul_add(x_direction[0], -normal[0] * x_direction[2]),
                     normal[0].mul_add(x_direction[1], -normal[1] * x_direction[0]),
                 ];
-                let transform = Matrix4::from_cols(
+                let transform = Matrix4::from_columns(&[
                     Vector4::new(
                         x_direction[0] * radius_mm,
                         x_direction[1] * radius_mm,
@@ -1531,7 +1512,7 @@ mod monstertruck_adapter {
                     ),
                     Vector4::new(normal[0], normal[1], normal[2], 0.0),
                     Vector4::new(center_mm[0], center_mm[1], center_mm[2], 1.0),
-                );
+                ]);
                 Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
                     TrimmedCurve::new(
                         UnitCircle::<Point3>::new(),
@@ -1665,7 +1646,7 @@ mod monstertruck_adapter {
                     0.25_f64.mul_add(parameter.sinh(), 2.0),
                     0.5_f64.mul_add(parameter.cosh(), 3.0),
                 );
-                assert!((curve.evaluate(parameter) - expected).magnitude() <= 1.0e-13);
+                assert!((curve.evaluate(parameter) - expected).norm() <= 1.0e-13);
             }
             Ok(())
         }
@@ -1727,12 +1708,12 @@ mod monstertruck_adapter {
             use monstertruck_io::step::load::step_geometry::{
                 KnotVector, NurbsSurface, StepExtrusionSurface,
             };
-            let cylinder_transform = Matrix4::from_cols(
+            let cylinder_transform = Matrix4::from_columns(&[
                 Vector4::new(3.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 1.0, 0.0),
                 Vector4::new(1.0, -2.0, 0.0, 1.0),
-            );
+            ]);
             let circle = Curve3D::Conic(Conic3D::Ellipse(Processor::with_transform(
                 TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, std::f64::consts::TAU)),
                 cylinder_transform,

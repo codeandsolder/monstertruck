@@ -4,9 +4,9 @@
 )]
 
 use super::{
-    CurveParameter, EuclideanSpace, HashGen, KERNEL_EPSILON, MetricSpace, Origin,
-    ParameterDivision1D, ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, UnitHyperbola, Vector2, Vector3, algo, solver,
+    AffinePoint, CurveParameter, HashGen, KERNEL_EPSILON, MetricSpace, Origin, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, UnitHyperbola, Vector2, Vector3, algo, monic_quartic_roots,
 };
 
 impl<P> UnitHyperbola<P> {
@@ -27,7 +27,7 @@ impl ParametricCurve for UnitHyperbola<Point2> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Self::Point { Point2::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Self::Point { Point2::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     #[inline]
@@ -45,7 +45,7 @@ impl ParametricCurve for UnitHyperbola<Point3> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Self::Point { Point3::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Self::Point { Point3::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     #[inline]
@@ -124,7 +124,7 @@ impl_v2_hyperbola_search!(Point3);
 impl<P> ParameterDivision1D for UnitHyperbola<P>
 where
     Self: ParametricCurve<Point = P>,
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     type Point = P;
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<P>) {
@@ -144,14 +144,15 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point2> {
         let b = p.x.mul_add(-p.x, p.y * p.y) / 4.0 + 1.0;
         let c = -p.y;
         let d = p.y * p.y / 4.0;
-        let y = solver::solve_quartic(a, b, c, d)
+        // The polynomial is expressed in y = sinh(t), not the curve parameter t.
+        monic_quartic_roots([a, b, c, d])?
             .into_iter()
-            .filter_map(|z| if z.im.so_small() { Some(z.re) } else { None })
+            .filter(|z| z.im.so_small())
+            .map(|z| z.re.asinh())
             .min_by(|s, t| {
                 p.distance2(self.evaluate(*s))
                     .total_cmp(&p.distance2(self.evaluate(*t)))
-            })?;
-        Some(f64::asinh(y))
+            })
     }
 }
 
@@ -207,5 +208,22 @@ impl SearchParameter<CurveParameter> for UnitHyperbola<Point3> {
             return None;
         }
         UnitHyperbola::<Point2>::new().search_parameter(Point2::new(p.x, p.y), None, 0)
+    }
+}
+
+#[cfg(test)]
+mod nearest_parameter_regression {
+    use super::*;
+
+    #[test]
+    fn scores_stationary_candidates_in_the_curve_parameter() {
+        let curve = UnitHyperbola::<Point2>::new();
+        for t in [-3.0, -1.0, 0.0, 1.0, 3.0] {
+            let point = curve.evaluate(t);
+            let nearest = SearchNearestParameter::<CurveParameter>::search_nearest_parameter(
+                &curve, point, None, 0,
+            );
+            assert!(nearest.is_some_and(|parameter| (parameter - t).abs() <= KERNEL_EPSILON));
+        }
     }
 }

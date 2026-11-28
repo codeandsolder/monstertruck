@@ -10,8 +10,8 @@
 //! // Two unit cubes overlapping in a 0.5 cube at one corner.
 //! let v = builder::vertex(Point3::origin());
 //! let cube_a: Solid = builder::extrude(
-//!     &builder::extrude(&builder::extrude(&v, Vector3::unit_x()), Vector3::unit_y()),
-//!     Vector3::unit_z(),
+//!     &builder::extrude(&builder::extrude(&v, Vector3::x()), Vector3::y()),
+//!     Vector3::z(),
 //! );
 //! let cube_b = builder::translated(&cube_a, Vector3::new(0.5, 0.5, 0.5));
 //!

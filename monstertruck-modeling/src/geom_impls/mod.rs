@@ -1,10 +1,11 @@
 use crate::errors::Error;
 use crate::{
-    BoundingBox, Connector, EuclideanSpace, ExtrusionSurface, GeometricMapping, InnerSpace, Line,
-    Matrix3, Matrix4, Origin, Plane, Point3, Processor, Rad, RevolutionSurface, SquareMatrix,
-    ToSameGeometry, Transform, Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
+    AffinePoint, BoundingBox, Connector, ExtrusionSurface, GeometricMapping, GeometryTransform,
+    Line, Matrix3, Matrix4, Origin, Plane, Point3, Processor, RevolutionSurface, ToSameGeometry,
+    Transformed, TrimmedCurve, UnitCircle, Vector3, Zero,
 };
 use itertools::Itertools;
+use monstertruck_core::circumcenter;
 use std::f64::consts::PI;
 
 pub fn circle_arc_by_three_points(
@@ -18,25 +19,25 @@ pub fn circle_arc_by_three_points(
     }
 
     let (vec0, vec1) = (point0 - transit, point1 - transit);
-    let axis_raw = vec1.cross(vec0);
-    let lengths_squared = vec0.magnitude2() * vec1.magnitude2();
+    let axis_raw = vec1.cross(&vec0);
+    let lengths_squared = vec0.norm_squared() * vec1.norm_squared();
     // Absolute cross-product thresholds scale as radius^4 and reject
     // perfectly valid small circles. Bound the dimensionless sin^2 of
     // the angle between the defining chords instead.
     if !lengths_squared.is_finite()
         || lengths_squared <= 0.0
-        || !axis_raw.magnitude2().is_finite()
-        || axis_raw.magnitude2() <= f64::EPSILON * lengths_squared
+        || !axis_raw.norm_squared().is_finite()
+        || axis_raw.norm_squared() <= f64::EPSILON * lengths_squared
     {
         return Err(Error::DegenerateCircularArcPoints);
     }
-    let origin = circum_center(point0, point1, transit);
+    let origin = circumcenter(point0, point1, transit);
     if !finite(origin) {
         return Err(Error::DegenerateCircularArcPoints);
     }
     let axis = axis_raw.normalize();
-    let angle = Rad(PI) - vec0.angle(vec1);
-    if !angle.0.is_finite() {
+    let angle = PI - monstertruck_core::angle_between(vec0, vec1);
+    if !angle.is_finite() {
         return Err(Error::DegenerateCircularArcPoints);
     }
     Ok(circle_arc(point0, origin, axis, angle * 2.0))
@@ -58,53 +59,41 @@ pub fn try_circle_arc_by_start_tangent(
     tangent: Vector3,
 ) -> std::result::Result<Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>, Error> {
     let chord = point1 - point0;
-    if tangent.magnitude2().so_small() {
+    if tangent.norm_squared().so_small() {
         return Err(Error::DegenerateCircularArcTangent);
     }
     let tangent = tangent.normalize();
-    let axis_raw = tangent.cross(chord);
-    if axis_raw.magnitude2().so_small() {
+    let axis_raw = tangent.cross(&chord);
+    if axis_raw.norm_squared().so_small() {
         return Err(Error::CircularArcTangentParallelToChord);
     }
     let axis = axis_raw.normalize();
-    let to_origin = axis.cross(tangent);
-    let radius = chord.dot(chord) / (2.0 * chord.dot(to_origin));
+    let to_origin = axis.cross(&tangent);
+    let radius = chord.dot(&chord) / (2.0 * chord.dot(&to_origin));
     let origin = point0 + radius * to_origin;
     let (vec0, vec1) = (point0 - origin, point1 - origin);
-    let mut angle = f64::atan2(axis.dot(vec0.cross(vec1)), vec0.dot(vec1));
+    let mut angle = f64::atan2(axis.dot(&vec0.cross(&vec1)), vec0.dot(&vec1));
     if angle <= 0.0 {
         angle = 2.0f64.mul_add(PI, angle);
     }
-    Ok(circle_arc(point0, origin, axis, Rad(angle)))
-}
-
-fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
-    let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
-    let (a2, ab, b2) = (vec0.dot(vec0), vec0.dot(vec1), vec1.dot(vec1));
-    let det = ab.mul_add(-ab, a2 * b2);
-    // Solving the 2×2 Gram system for the circumcenter coefficients gives
-    // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
-    // the symmetry explicit and avoids the easy-to-misread product grouping.
-    let u = (a2 - ab) * b2;
-    let v = (b2 - ab) * a2;
-    pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
+    Ok(circle_arc(point0, origin, axis, angle))
 }
 
 pub fn circle_arc(
     point: Point3,
     origin: Point3,
     axis: Vector3,
-    angle: Rad<f64>,
+    angle: f64,
 ) -> Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
-    let origin = origin + (axis.dot(point - origin)) * axis;
+    let origin = origin + (axis.dot(&(point - origin))) * axis;
     let diag = point - origin;
-    let axis_trsf = Matrix4::from_cols(
-        diag.extend(0.0),
-        axis.cross(diag).extend(0.0),
-        axis.extend(0.0),
+    let axis_trsf = Matrix4::from_columns(&[
+        diag.push(0.0),
+        axis.cross(&diag).push(0.0),
+        axis.push(0.0),
         origin.to_homogeneous(),
-    );
-    let unit_arc = TrimmedCurve::new(UnitCircle::new(), (0.0, angle.0));
+    ]);
+    let unit_arc = TrimmedCurve::new(UnitCircle::new(), (0.0, angle));
     Processor::with_transform(unit_arc, axis_trsf)
 }
 
@@ -133,13 +122,13 @@ pub fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
     let center = pts
         .iter()
         .flatten()
-        .fold(Point3::origin(), |sum, pt| sum + pt.to_vec())
+        .fold(Point3::origin(), |sum, pt| sum + pt.position_vector())
         / crate::usize_to_f64(point_count);
     let normal = pts
         .iter()
         .flat_map(|vec| vec.iter().circular_tuple_windows())
         .fold(Vector3::zero(), |sum, (p0, p1)| {
-            sum + (p0 - center).cross(p1 - center)
+            sum + (p0 - center).cross(&(p1 - center))
         });
     let n = if normal.so_small() {
         return None;
@@ -147,11 +136,11 @@ pub fn attach_plane(mut pts: Vec<Vec<Point3>>) -> Option<Plane> {
         normal.normalize()
     };
     let a = take_one_axis_by_normal(n);
-    let mat: Matrix4 = Matrix3::from_cols(a, n.cross(a), n).into();
-    let inverse = mat.invert()?;
+    let mat: Matrix4 = Matrix3::from_columns(&[a, n.cross(&a), n]).to_homogeneous();
+    let inverse = mat.try_inverse()?;
     pts.iter_mut()
         .flatten()
-        .for_each(|pt| *pt = inverse.transform_point(*pt));
+        .for_each(|pt| *pt = inverse.apply_point(*pt));
     let bnd_box: BoundingBox<Point3> = pts.iter().flatten().collect();
     let diag = bnd_box.diagonal();
     if !diag[2].so_small() {
@@ -222,7 +211,7 @@ where
 pub struct ArcConnector {
     pub origin: Point3,
     pub axis: Vector3,
-    pub angle: Rad<f64>,
+    pub angle: f64,
 }
 
 impl<C> Connector<Point3, C> for ArcConnector

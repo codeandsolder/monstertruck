@@ -4,11 +4,12 @@
 )]
 
 use super::{
-    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, EuclideanSpace,
-    HomotopySurface, KnotVector, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, Tolerance, VectorSpace, Zero, algo, control_point, range_common_part,
+    AffinePoint, Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface,
+    HomotopySurface, KnotVector, LinearVector, MetricSpace, PRESEARCH_DIVISION,
+    ParameterDivision1D, ParameterDivision2D, ParameterRange, ParametricCurve3D, ParametricSurface,
+    ParametricSurface3D, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, Tolerance, Zero, algo, control_point,
+    range_common_part,
 };
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use control_point::ControlPoint;
@@ -36,8 +37,8 @@ impl<C0, C1> ParametricSurface for HomotopySurface<C0, C1>
 where
     C0: ParametricCurveTrait,
     C1: ParametricCurveTrait<Point = C0::Point, Vector = C0::Vector>,
-    C0::Point: EuclideanSpace<Scalar = f64, Diff = C0::Vector>,
-    C0::Vector: VectorSpace<Scalar = f64>,
+    C0::Point: AffinePoint<Scalar = f64, Diff = C0::Vector>,
+    C0::Vector: LinearVector<Scalar = f64>,
 {
     type Point = C0::Point;
     type Vector = C0::Vector;
@@ -137,7 +138,7 @@ impl<C0, C1> SearchNearestParameter<SurfaceParameter> for HomotopySurface<C0, C1
 where
     C0: BoundedCurve,
     C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
-    C0::Point: EuclideanSpace<Scalar = f64, Diff = C0::Vector> + MetricSpace<Metric = f64>,
+    C0::Point: AffinePoint<Scalar = f64, Diff = C0::Vector> + MetricSpace<Metric = f64>,
     C0::Vector: SearchNearestParameterVector<Point = C0::Point>,
 {
     type Point = C0::Point;
@@ -164,8 +165,7 @@ impl<C0, C1> SearchParameter<SurfaceParameter> for HomotopySurface<C0, C1>
 where
     C0: BoundedCurve,
     C1: BoundedCurve<Point = C0::Point, Vector = C0::Vector>,
-    C0::Point:
-        EuclideanSpace<Scalar = f64, Diff = C0::Vector> + MetricSpace<Metric = f64> + Tolerance,
+    C0::Point: AffinePoint<Scalar = f64, Diff = C0::Vector> + MetricSpace<Metric = f64> + Tolerance,
     C0::Vector: SearchParameterVector<Point = C0::Point>,
 {
     type Point = C0::Point;

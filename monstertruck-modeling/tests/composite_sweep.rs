@@ -2,10 +2,10 @@ use monstertruck_modeling::*;
 
 fn rectangular_face() -> anyhow::Result<Face> {
     let vertices = builder::vertices([
-        (1.75, -0.25, 4.0),
-        (2.25, -0.25, 4.0),
-        (2.25, 0.25, 4.0),
-        (1.75, 0.25, 4.0),
+        Point3::new(1.75, -0.25, 4.0),
+        Point3::new(2.25, -0.25, 4.0),
+        Point3::new(2.25, 0.25, 4.0),
+        Point3::new(1.75, 0.25, 4.0),
     ]);
     let wire: Wire = vec![
         builder::line(&vertices[0], &vertices[1]),
@@ -26,8 +26,8 @@ fn exact_line_arc_line_face_sweep_is_closed_and_consistent() -> anyhow::Result<(
             builder::CompositeSweepSegment::Translation(Vector3::new(0.0, 0.0, -4.0)),
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(std::f64::consts::FRAC_PI_2),
+                axis: Vector3::y(),
+                angle: (std::f64::consts::FRAC_PI_2),
                 division: 1,
             },
             builder::CompositeSweepSegment::Translation(Vector3::new(-4.0, 0.0, 0.0)),
@@ -71,26 +71,26 @@ fn exact_closed_composite_sweep_has_no_duplicate_caps() -> anyhow::Result<()> {
         [
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
         ],
@@ -118,9 +118,7 @@ fn closed_composite_sweep_rejects_an_open_path() -> anyhow::Result<()> {
     let face = rectangular_face()?;
     let result = builder::composite_closed_sweep(
         &face,
-        [builder::CompositeSweepSegment::Translation(
-            Vector3::unit_z(),
-        )],
+        [builder::CompositeSweepSegment::Translation(Vector3::z())],
     );
     assert_eq!(result.unwrap_err(), errors::Error::CompositeSweepNotClosed);
     Ok(())
@@ -135,26 +133,26 @@ fn closed_composite_sweep_normalizes_final_subdivision_before_closure() -> anyho
         [
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 1,
             },
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
-                axis: Vector3::unit_y(),
-                angle: Rad(quarter),
+                axis: Vector3::y(),
+                angle: quarter,
                 division: 3,
             },
         ],
@@ -174,11 +172,11 @@ fn composite_sweep_rejects_invalid_rotation_before_building_any_segment() -> any
     let result = builder::composite_sweep(
         &face,
         [
-            builder::CompositeSweepSegment::Translation(Vector3::unit_z()),
+            builder::CompositeSweepSegment::Translation(Vector3::z()),
             builder::CompositeSweepSegment::Rotation {
                 origin: Point3::origin(),
                 axis: Vector3::zero(),
-                angle: Rad(0.5),
+                angle: 0.5,
                 division: 4,
             },
         ],

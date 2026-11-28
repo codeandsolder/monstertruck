@@ -4,13 +4,13 @@ use super::presearch_grid::{
     SPATIAL_INDEX_MIN_QUERIES,
 };
 use super::{
-    Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface, ControlPoint,
-    Error, EuclideanSpace, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace,
-    Invertible, KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve, NurbsSurface,
-    PRESEARCH_DIVISION, ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface,
-    ParametricSurface3D, Point2, Point3, Result, SearchNearestParameter, SearchParameter,
-    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed,
-    Vector3, Vector4, Zero, algo, multi_rational_derivative, rational_derivative,
+    AffinePoint, Bounded, BoundedCurve, BoundedSurface, BoundingBox, BsplineCurve, BsplineSurface,
+    ControlPoint, Error, HashGen, Homogeneous, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible,
+    KERNEL_EPSILON_SQUARED, KnotVector, MetricSpace, NurbsCurve, NurbsSurface, PRESEARCH_DIVISION,
+    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D,
+    Point2, Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, Tolerance, Transformed, Vector3, Vector4, Zero, algo,
+    multi_rational_derivative, rational_derivative,
 };
 use super::{curve_inclusion, presearch_trace};
 #[cfg(test)]
@@ -555,10 +555,10 @@ where V::Point: MetricSpace<Metric = f64> + Bounded<Scalar = f64> + Copy + 'stat
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static>
     SearchNearestParameter<SurfaceParameter> for NurbsSurface<V>
 where
-    Self: ParametricSurface<Point = V::Point, Vector = <V::Point as EuclideanSpace>::Diff>,
+    Self: ParametricSurface<Point = V::Point, Vector = <V::Point as AffinePoint>::Diff>,
     V::Point:
-        EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Bounded<Scalar = f64> + 'static,
-    <V::Point as EuclideanSpace>::Diff: SearchNearestParameterVector<Point = V::Point>,
+        AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Bounded<Scalar = f64> + 'static,
+    <V::Point as AffinePoint>::Diff: SearchNearestParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
     /// Searches the parameter `(u, v)` which minimize `|self(u, v) - point|` by Newton's method
@@ -628,7 +628,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
     for NurbsSurface<V>
 {
     type Point = V::Point;
-    type Vector = <V::Point as EuclideanSpace>::Diff;
+    type Vector = <V::Point as AffinePoint>::Diff;
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         if m < 7 && n < 7 {
@@ -652,11 +652,11 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         rational_derivative(&[self.0.evaluate(u, v), self.0.derivative_u(u, v)])
     }
     #[inline]
-    fn derivative_v(&self, u: f64, v: f64) -> <V::Point as EuclideanSpace>::Diff {
+    fn derivative_v(&self, u: f64, v: f64) -> <V::Point as AffinePoint>::Diff {
         rational_derivative(&[self.0.evaluate(u, v), self.0.derivative_v(u, v)])
     }
     #[inline]
-    fn derivative_uu(&self, u: f64, v: f64) -> <V::Point as EuclideanSpace>::Diff {
+    fn derivative_uu(&self, u: f64, v: f64) -> <V::Point as AffinePoint>::Diff {
         rational_derivative(&[
             self.0.evaluate(u, v),
             self.0.derivative_u(u, v),
@@ -664,7 +664,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         ])
     }
     #[inline]
-    fn derivative_uv(&self, u: f64, v: f64) -> <V::Point as EuclideanSpace>::Diff {
+    fn derivative_uv(&self, u: f64, v: f64) -> <V::Point as AffinePoint>::Diff {
         multi_rational_derivative(&[
             [self.0.evaluate(u, v), self.0.derivative_v(u, v)],
             [self.0.derivative_u(u, v), self.0.derivative_uv(u, v)],
@@ -672,7 +672,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricSurfa
         .unwrap_or_else(|_| Self::Vector::zero() * f64::NAN)
     }
     #[inline]
-    fn derivative_vv(&self, u: f64, v: f64) -> <V::Point as EuclideanSpace>::Diff {
+    fn derivative_vv(&self, u: f64, v: f64) -> <V::Point as AffinePoint>::Diff {
         rational_derivative(&[
             self.0.evaluate(u, v),
             self.0.derivative_v(u, v),
@@ -744,8 +744,8 @@ impl ParametricSurface3D for NurbsSurface<Vector4> {
         let pt = self.0.evaluate(u, v);
         let ud = self.0.derivative_u(u, v);
         let vd = self.0.derivative_v(u, v);
-        let n = rational_derivative(&[pt, ud]).cross(rational_derivative(&[pt, vd]));
-        if n.magnitude2() > KERNEL_EPSILON_SQUARED {
+        let n = rational_derivative(&[pt, ud]).cross(&rational_derivative(&[pt, vd]));
+        if n.norm_squared() > KERNEL_EPSILON_SQUARED {
             return n.normalize();
         }
         // Degenerate point (e.g. pole of a revolution surface).
@@ -768,8 +768,8 @@ impl ParametricSurface3D for NurbsSurface<Vector4> {
             let pt2 = self.0.evaluate(u2, v2);
             let ud2 = self.0.derivative_u(u2, v2);
             let vd2 = self.0.derivative_v(u2, v2);
-            let n2 = rational_derivative(&[pt2, ud2]).cross(rational_derivative(&[pt2, vd2]));
-            if n2.magnitude2() > KERNEL_EPSILON_SQUARED {
+            let n2 = rational_derivative(&[pt2, ud2]).cross(&rational_derivative(&[pt2, vd2]));
+            if n2.norm_squared() > KERNEL_EPSILON_SQUARED {
                 sum += n2.normalize();
                 count += 1;
             }
@@ -777,7 +777,7 @@ impl ParametricSurface3D for NurbsSurface<Vector4> {
         if count > 0 {
             (sum / f64::from(count)).normalize()
         } else {
-            Vector3::unit_z()
+            Vector3::z()
         }
     }
 }
@@ -825,7 +825,7 @@ where V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64,
 {
     type Scalar = f64;
     type Point = V::Point;
-    type Vector = <V::Point as EuclideanSpace>::Diff;
+    type Vector = <V::Point as AffinePoint>::Diff;
 
     #[inline]
     fn evaluate(&self, u: Self::Scalar, v: Self::Scalar) -> Self::Point {
@@ -876,10 +876,10 @@ where
         + Clone
         + PartialEq
         + 'static,
-    Self: ParametricSurface<Point = V::Point, Vector = <V::Point as EuclideanSpace>::Diff>,
+    Self: ParametricSurface<Point = V::Point, Vector = <V::Point as AffinePoint>::Diff>,
     V::Point:
-        EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Bounded<Scalar = f64> + 'static,
-    <V::Point as EuclideanSpace>::Diff: SearchNearestParameterVector<Point = V::Point>,
+        AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Bounded<Scalar = f64> + 'static,
+    <V::Point as AffinePoint>::Diff: SearchNearestParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
     #[inline]
@@ -901,12 +901,12 @@ where
         + Clone
         + PartialEq
         + 'static,
-    V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
+    V::Point: ControlPoint<f64, Diff = <V::Point as AffinePoint>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + Tolerance
         + 'static,
-    <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
+    <V::Point as AffinePoint>::Diff: SearchParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
     #[inline]
@@ -931,12 +931,12 @@ fn include_nurbs_curve<V, C>(
 ) -> bool
 where
     V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static,
-    V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
+    V::Point: ControlPoint<f64, Diff = <V::Point as AffinePoint>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + Tolerance
         + 'static,
-    <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
+    <V::Point as AffinePoint>::Diff: SearchParameterVector<Point = V::Point>,
     C: ParametricCurve<Point = V::Point>,
 {
     curve_inclusion::includes_curve(
@@ -1020,12 +1020,12 @@ where M: Copy + std::ops::Mul<V, Output = V>
 impl<V> SearchParameter<SurfaceParameter> for NurbsSurface<V>
 where
     V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V> + Clone + PartialEq + 'static,
-    V::Point: ControlPoint<f64, Diff = <V::Point as EuclideanSpace>::Diff>
+    V::Point: ControlPoint<f64, Diff = <V::Point as AffinePoint>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + Tolerance
         + 'static,
-    <V::Point as EuclideanSpace>::Diff: SearchParameterVector<Point = V::Point>,
+    <V::Point as AffinePoint>::Diff: SearchParameterVector<Point = V::Point>,
 {
     type Point = V::Point;
     /// Search the parameter `(u, v)` such that `self.evaluate(u, v).rational_projection()` is near `pt`.

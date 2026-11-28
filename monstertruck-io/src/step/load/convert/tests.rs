@@ -278,7 +278,7 @@ fn stable_id_assigner_reuses_source_identity_only_for_named_sources() -> anyhow:
 }
 
 fn cylinder_surface() -> Surface {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::origin();
     let point = Point3::new(1.0, 0.0, 0.0);
     let line = Line(point, point + axis);

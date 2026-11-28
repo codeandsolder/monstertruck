@@ -50,9 +50,9 @@ impl CircleEvidence {
             if !h.w.is_finite() || h.w <= 0.0 {
                 return None;
             }
-            let relative = Vector3::new(h.x, h.y, h.z) - origin.to_vec() * h.w;
-            x[i] = cx.mul_add(-h.w, relative.dot(basis_u));
-            y[i] = cy.mul_add(-h.w, relative.dot(basis_v));
+            let relative = Vector3::new(h.x, h.y, h.z) - origin.position_vector() * h.w;
+            x[i] = cx.mul_add(-h.w, relative.dot(&basis_u));
+            y[i] = cy.mul_add(-h.w, relative.dot(&basis_v));
             w[i] = h.w;
         }
         let power = |c: [f64; 3]| {
@@ -142,10 +142,10 @@ fn certify_axial_tensor(
             return None;
         }
         weight_error = weight_error.max(relative);
-        displacement_error = displacement_error.max((finish - start - sweep).magnitude());
+        displacement_error = displacement_error.max((finish - start - sweep).norm());
         hull_radius = hull_radius
-            .max((start - origin).magnitude())
-            .max((start + sweep - origin).magnitude());
+            .max((start - origin).norm())
+            .max((start + sweep - origin).norm());
     }
     // Relative weight errors change any normalized positive control average
     // by at most δ/(1-δ) times the ideal control-hull diameter.
@@ -177,19 +177,19 @@ pub fn certified_circular_cylinder(
     let origin = project_positive_homogeneous_point(net[0][0])?;
     let end = project_positive_homogeneous_point(net[0][1])?;
     let sweep = end - origin;
-    if sweep.magnitude() <= spatial_eps {
+    if sweep.norm() <= spatial_eps {
         return None;
     }
     let axis = sweep.normalize();
     certify_axial_tensor(net, origin, sweep, spatial_eps, weight_eps)?;
 
     let reference = if axis.x.abs() < policy.boolean_cylinder_reference_axis_component_limit {
-        Vector3::unit_x()
+        Vector3::x()
     } else {
-        Vector3::unit_y()
+        Vector3::y()
     };
-    let basis_u = axis.cross(reference).normalize();
-    let basis_v = axis.cross(basis_u).normalize();
+    let basis_u = axis.cross(&reference).normalize();
+    let basis_v = axis.cross(&basis_u).normalize();
     let profile = normalized_profile(surface)?;
     let knots = profile.knot_vector().clone();
     let lo = *knots.first()?;
@@ -197,7 +197,7 @@ pub fn certified_circular_cylinder(
     let xy = |h: Vector4| -> Option<(f64, f64)> {
         let p = project_positive_homogeneous_point(h)?;
         let delta = p - origin;
-        Some((delta.dot(basis_u), delta.dot(basis_v)))
+        Some((delta.dot(&basis_u), delta.dot(&basis_v)))
     };
     // Endpoints of a *closed* circular B-spline coincide. Fitting a center
     // from (front, middle, back) is then singular, even though every rational
@@ -262,7 +262,10 @@ pub fn certified_circular_cylinder(
     }
     evidence.certify_span(&remaining)?;
     let center = origin + basis_u * cx + basis_v * cy;
-    let axial = (origin.to_vec().dot(axis), end.to_vec().dot(axis));
+    let axial = (
+        origin.position_vector().dot(&axis),
+        end.position_vector().dot(&axis),
+    );
     Some((center, axis, radius2.sqrt(), axial))
 }
 
@@ -324,10 +327,10 @@ pub fn certified_circular_cylinder_chart(
     // nonplanar spline is not the circular sweep being reparameterized.
     certify_circular_arc_coverage(&NurbsCurve::new(profile), frame)?;
     let offset = start - origin;
-    let radial = offset - axis * offset.dot(axis);
+    let radial = offset - axis * offset.dot(&axis);
     let front = project_positive_homogeneous_point(net.control_points()[0][0])?;
     let back = project_positive_homogeneous_point(net.control_points()[0][1])?;
-    let axial_length = (back - front).magnitude();
+    let axial_length = (back - front).norm();
     (axial_length.is_finite() && axial_length > 0.0).then(|| CircularCylinderChart {
         origin,
         axis,
@@ -389,7 +392,7 @@ mod tests {
         let source = RevolutionSurface::by_revolution(
             Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 3.0)),
             Point3::origin(),
-            Vector3::unit_z(),
+            Vector3::z(),
         );
         let net = source
             .try_into_homogeneous_bspline_surface()

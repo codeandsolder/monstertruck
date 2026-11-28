@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    BsplineSurface, EuclideanSpace, Invertible, KnotVector, Line, MetricSpace, NurbsSurface, Plane,
-    Processor, RevolutionSurface, Vector3, Vector4,
+    BsplineSurface, Invertible, KnotVector, Line, MetricSpace, NurbsSurface, Plane, Processor,
+    RevolutionSurface, Vector3, Vector4,
 };
 use std::f64::consts::TAU;
 
@@ -460,9 +460,9 @@ fn a_knot_bounded_surface_keeps_its_domain_and_its_rejection() {
 /// reported `[0, 1]` is one arbitrary metre of an unbounded surface.
 #[test]
 fn a_loaded_cylinders_axial_axis_is_not_a_bound_but_its_angular_axis_is() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::origin();
-    let start = center + Vector3::unit_x() * 3.0;
+    let start = center + Vector3::x() * 3.0;
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Curve::Line(Line(start, start + axis)),
         center,

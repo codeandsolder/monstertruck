@@ -1,18 +1,14 @@
 use crate::{
-    Angle, BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device, EuclideanSpace,
-    InnerSpace, Matrix3, Matrix4, Point2, Point3, ProjectionMethod, Rad, Ray, SquareMatrix,
-    Transform, Vector3, matrix4_to_raw_f32, ortho, perspective,
+    BoundingBox, BufferHandler, BufferUsages, Camera, CameraInfo, Device, GeometryTransform,
+    Homogeneous, Matrix3, Matrix4, Point2, Point3, ProjectionMethod, Ray, Vector3,
+    matrix4_to_raw_f32,
 };
 
-// Since cgmath assumes a normalized view volume in OpenGL,
+// Since the projection uses the OpenGL normalized view volume,
 // this conversion is necessary to handle it with wgpu.
 // cf https://sotrh.github.io/learn-wgpu/beginner/tutorial6-uniforms/#a-perspective-camera
-#[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: Matrix4 = Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
 );
 
 impl Ray {
@@ -30,7 +26,7 @@ impl ProjectionMethod {
     /// Returns `ProjectionMethod::Perspective { fov }`.
     #[inline]
     #[must_use = "Ignoring this result discards `ProjectionMethod::Perspective { fov }`."]
-    pub const fn perspective(fov: Rad<f64>) -> Self { Self::Perspective { fov } }
+    pub const fn perspective(fov: f64) -> Self { Self::Perspective { fov } }
     /// Returns `ProjectionMethod::Parallel { screen_size }`.
     #[inline]
     #[must_use = "Ignoring this result discards `ProjectionMethod::Parallel { screen_size }`."]
@@ -44,14 +40,14 @@ impl Camera {
     /// # Examples
     /// ```
     /// use monstertruck_gpu::*;
-    /// use monstertruck_core::cgmath64::*;
+    /// use monstertruck_core::math::*;
     /// let mut camera = Camera::default();
-    /// camera.matrix = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0));
+    /// camera.matrix = Matrix4::new_translation(&Vector3::new(1.0, 2.0, 3.0));
     /// assert_eq!(camera.position(), Point3::new(1.0, 2.0, 3.0));
     /// ```
     #[inline]
     #[must_use = "Ignoring this result discards the position of camera, the forth column of the camera matrix."]
-    pub fn position(&self) -> Point3 { Point3::from_vec(self.matrix[3].truncate()) }
+    pub fn position(&self) -> Point3 { Point3::from(self.matrix.column(3).into_owned().spatial()) }
 
     /// Returns the eye direction of camera.
     /// the inverse of the z-axis of the camera matrix.
@@ -60,34 +56,34 @@ impl Camera {
     /// ```
     /// use std::f64::consts::PI;
     /// use monstertruck_gpu::*;
-    /// use monstertruck_core::{cgmath64::*, tolerance::Tolerance};
+    /// use monstertruck_core::{math::*, tolerance::Tolerance};
     /// let mut camera = Camera::default();
     /// camera.matrix = Matrix4::from_axis_angle(
-    ///     Vector3::new(1.0, 1.0, 1.0).normalize(),
-    ///     Rad(2.0 * PI / 3.0),
+    ///     &Unit::new_unchecked(Vector3::new(1.0, 1.0, 1.0).normalize()),
+    ///     (2.0 * PI / 3.0),
     /// );
-    /// assert!(camera.eye_direction().near(&-Vector3::unit_x()));
+    /// assert!(camera.eye_direction().near(&-Vector3::x()));
     /// ```
     #[inline]
     #[must_use = "Ignoring this result discards the eye direction of camera."]
-    pub fn eye_direction(&self) -> Vector3 { -self.matrix[2].truncate() }
+    pub fn eye_direction(&self) -> Vector3 { -self.matrix.column(2).into_owned().spatial() }
 
     /// Returns the direction of the head vector, the y-axis of the camera matrix.
     /// # Examples
     /// ```
     /// use std::f64::consts::PI;
     /// use monstertruck_gpu::*;
-    /// use monstertruck_core::{cgmath64::*, tolerance::Tolerance};
+    /// use monstertruck_core::{math::*, tolerance::Tolerance};
     /// let mut camera = Camera::default();
     /// camera.matrix = Matrix4::from_axis_angle(
-    ///     Vector3::new(1.0, 1.0, 1.0).normalize(),
-    ///     Rad(2.0 * PI / 3.0),
+    ///     &Unit::new_unchecked(Vector3::new(1.0, 1.0, 1.0).normalize()),
+    ///     (2.0 * PI / 3.0),
     /// );
-    /// assert!(camera.head_direction().near(&Vector3::unit_z()));
+    /// assert!(camera.head_direction().near(&Vector3::z()));
     /// ```
     #[inline]
     #[must_use = "Ignoring this result discards the direction of the head vector, the y-axis of the camera matrix."]
-    pub fn head_direction(&self) -> Vector3 { self.matrix[1].truncate() }
+    pub fn head_direction(&self) -> Vector3 { self.matrix.column(1).into_owned().spatial() }
 
     /// Returns the projection matrix into the normalized view volume.
     /// # Arguments
@@ -96,19 +92,19 @@ impl Camera {
     /// ```
     /// // perspective camera
     /// use std::f64::consts::PI;
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::*};
     /// use monstertruck_gpu::*;
     ///
     /// let fov = PI / 4.0;
     /// let aspect = 1.2;
     /// let matrix = Matrix4::look_at_rh(
-    ///     Point3::new(1.0, 1.0, 1.0),
-    ///     Point3::origin(),
-    ///     Vector3::new(0.0, 1.0, 0.0),
+    ///     &Point3::new(1.0, 1.0, 1.0),
+    ///     &Point3::origin(),
+    ///     &Vector3::new(0.0, 1.0, 0.0),
     /// );
     /// let camera = Camera {
-    ///     matrix: matrix.invert().unwrap(),
-    ///     method: ProjectionMethod::perspective(Rad(fov)),
+    ///     matrix: matrix.try_inverse().unwrap(),
+    ///     method: ProjectionMethod::perspective(fov),
     ///     near_clip: 0.1,
     ///     far_clip: 10.0,
     /// };
@@ -119,32 +115,32 @@ impl Camera {
     /// let far = 1.0 / (fov / 2.0).tan();
     /// let dir = camera.eye_direction();
     /// let y_axis = camera.head_direction();
-    /// let x_axis = dir.cross(y_axis);
-    /// let proj_length = dir.dot(vec);
+    /// let x_axis = dir.cross(&y_axis);
+    /// let proj_length = dir.dot(&vec);
     /// let h = (vec - proj_length * dir) * far / proj_length;
-    /// let u = h.dot(x_axis) / aspect;
-    /// let v = h.dot(y_axis);
+    /// let u = h.dot(&x_axis) / aspect;
+    /// let v = h.dot(&y_axis);
     ///
     /// // check the answer
     /// let Some(projection) = camera.projection(aspect) else { return };
-    /// let uv = projection.transform_point(pt);
+    /// let uv = projection.apply_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
     /// ```
     /// // parallel camera
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::*};
     /// use monstertruck_gpu::*;
     ///
     /// let size = 3.0;
     /// let aspect = 1.2;
     /// let matrix = Matrix4::look_at_rh(
-    ///     Point3::new(1.0, 1.0, 1.0),
-    ///     Point3::origin(),
-    ///     Vector3::new(0.0, 1.0, 0.0),
+    ///     &Point3::new(1.0, 1.0, 1.0),
+    ///     &Point3::origin(),
+    ///     &Vector3::new(0.0, 1.0, 0.0),
     /// );
     /// let camera = Camera {
-    ///     matrix: matrix.invert().unwrap(),
+    ///     matrix: matrix.try_inverse().unwrap(),
     ///     method: ProjectionMethod::parallel(size),
     ///     near_clip: 0.1,
     ///     far_clip: 10.0,
@@ -155,14 +151,14 @@ impl Camera {
     /// let vec = pt - camera.position();
     /// let dir = camera.eye_direction();
     /// let y_axis = camera.head_direction();
-    /// let x_axis = dir.cross(y_axis);
-    /// let h = vec - vec.dot(dir) * dir;
-    /// let u = h.dot(x_axis) / (size / 2.0) / aspect;
-    /// let v = h.dot(y_axis) / (size / 2.0);
+    /// let x_axis = dir.cross(&y_axis);
+    /// let h = vec - vec.dot(&dir) * dir;
+    /// let u = h.dot(&x_axis) / (size / 2.0) / aspect;
+    /// let v = h.dot(&y_axis) / (size / 2.0);
     ///
     /// // check the answer
     /// let Some(projection) = camera.projection(aspect) else { return };
-    /// let uv = projection.transform_point(pt);
+    /// let uv = projection.apply_point(pt);
     /// assert_near!(u, uv[0]);
     /// assert_near!(v, uv[1]);
     /// ```
@@ -172,15 +168,17 @@ impl Camera {
     pub fn projection(&self, aspect: f64) -> Option<Matrix4> {
         let (near, far) = (self.near_clip, self.far_clip);
         let normal_projection = match self.method {
-            ProjectionMethod::Perspective { fov } => perspective(fov, aspect, near, far),
+            ProjectionMethod::Perspective { fov } => {
+                Matrix4::new_perspective(aspect, fov, near, far)
+            }
             ProjectionMethod::Parallel { screen_size } => {
                 let y = screen_size / 2.0;
                 let x = y * aspect;
-                ortho(-x, x, -y, y, near, far)
+                Matrix4::new_orthographic(-x, x, -y, y, near, far)
             }
         };
         self.matrix
-            .invert()
+            .try_inverse()
             .map(|inverse| OPENGL_TO_WGPU_MATRIX * normal_projection * inverse)
     }
 
@@ -220,20 +218,20 @@ impl Camera {
     /// ```
     /// // Perspective case
     /// use std::f64::consts::PI;
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::Tolerance};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::Tolerance};
     /// use monstertruck_gpu::*;
     ///
     ///
     /// let matrix = Matrix4::look_at_rh(
-    ///     Point3::new(1.0, 1.0, 1.0),
-    ///     Point3::origin(),
-    ///     Vector3::new(0.0, 1.0, 0.0),
+    ///     &Point3::new(1.0, 1.0, 1.0),
+    ///     &Point3::origin(),
+    ///     &Vector3::new(0.0, 1.0, 0.0),
     /// );
     /// let camera = Camera {
-    ///     // depends on the difference of the style with cgmath,
+    ///     // depends on the camera-to-world convention of this API,
     ///     // the matrix must be inverted
-    ///     matrix: matrix.invert().unwrap(),
-    ///     method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+    ///     matrix: matrix.try_inverse().unwrap(),
+    ///     method: ProjectionMethod::perspective(PI / 4.0),
     ///     near_clip: 0.1,
     ///     far_clip: 1.0,
     /// };
@@ -242,7 +240,7 @@ impl Camera {
     /// let point = Point3::new(0.1, 0.15, 0.0);
     /// // project to the normalized view volume
     /// let Some(projection) = camera.projection(1.0) else { return };
-    /// let uvz = projection.transform_point(point);
+    /// let uvz = projection.apply_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
@@ -254,16 +252,16 @@ impl Camera {
     /// ```
     /// ```
     /// // Parallel case
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::*};
     /// use monstertruck_gpu::*;
     ///
     /// let matrix = Matrix4::look_at_rh(
-    ///     Point3::new(1.0, 1.0, 1.0),
-    ///     Point3::origin(),
-    ///     Vector3::new(0.0, 1.0, 0.0),
+    ///     &Point3::new(1.0, 1.0, 1.0),
+    ///     &Point3::origin(),
+    ///     &Vector3::new(0.0, 1.0, 0.0),
     /// );
     /// let camera = Camera {
-    ///     matrix: matrix.invert().unwrap(),
+    ///     matrix: matrix.try_inverse().unwrap(),
     ///     method: ProjectionMethod::parallel(3.0),
     ///     near_clip: 0.1,
     ///     far_clip: 10.0,
@@ -273,10 +271,10 @@ impl Camera {
     /// let point = Point3::new(0.1, 0.15, 0.0);
     /// // the projection of the point to the screen
     /// let projed = point
-    ///     - camera.eye_direction() * camera.eye_direction().dot(point - camera.position());
+    ///     - camera.eye_direction() * camera.eye_direction().dot(&(point - camera.position()));
     /// // project to the normalized view volume
     /// let Some(projection) = camera.projection(1.0) else { return };
-    /// let uvz = projection.transform_point(point);
+    /// let uvz = projection.apply_point(point);
     /// // coordinate on the screen
     /// let uv = Point2::new(uvz.x, uvz.y);
     ///
@@ -290,9 +288,9 @@ impl Camera {
     pub fn ray(&self, coord: Point2) -> Option<Ray> {
         match self.method {
             ProjectionMethod::Perspective { .. } => {
-                let mat = self.projection(1.0)?.invert()?;
-                let x = mat.transform_point(Point3::new(coord.x, coord.y, 0.5));
-                let y = mat.transform_point(Point3::new(coord.x, coord.y, 1.0));
+                let mat = self.projection(1.0)?.try_inverse()?;
+                let x = mat.apply_point(Point3::new(coord.x, coord.y, 0.5));
+                let y = mat.apply_point(Point3::new(coord.x, coord.y, 1.0));
                 Some(Ray {
                     origin: self.position(),
                     direction: (y - x).normalize(),
@@ -300,8 +298,8 @@ impl Camera {
             }
             ProjectionMethod::Parallel { screen_size } => {
                 let a = screen_size / 2.0;
-                let axis_x = self.matrix[0].truncate() * a;
-                let axis_y = self.matrix[1].truncate() * a;
+                let axis_x = self.matrix.column(0).into_owned().spatial() * a;
+                let axis_y = self.matrix.column(1).into_owned().spatial() * a;
                 Some(Ray {
                     origin: self.position() + coord.x * axis_x + coord.y * axis_y,
                     direction: self.eye_direction(),
@@ -313,7 +311,7 @@ impl Camera {
     /// Creates a parallel projection camera that fits the point cloud perfectly into the view volume.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::*};
     /// use monstertruck_gpu::*;
     ///
     /// let points: &[Point3] = &[
@@ -326,11 +324,11 @@ impl Camera {
     ///     (1.0, 1.0, 0.0).into(),
     ///     (1.0, 1.0, 1.0).into(),
     /// ];
-    /// let direction = Matrix3::from_cols(
+    /// let direction = Matrix3::from_columns(&[
     ///     Vector3::new(1.0, 0.0, -1.0).normalize(),
     ///     Vector3::new(-1.0, 2.0, -1.0).normalize(),
     ///     Vector3::new(1.0, 1.0, 1.0).normalize(),
-    /// );
+    /// ]);
     /// let aspect = 16.0 / 9.0;
     /// let near_clip = 0.1;
     ///
@@ -349,7 +347,7 @@ impl Camera {
     ///
     /// let projection = camera.projection(aspect);
     /// let bbox = points.iter().map(|p| {
-    ///     let n = projection.transform_point(*p);
+    ///     let n = projection.apply_point(*p);
     ///     assert!(-1.0 <= n.x && n.x <= 1.0);
     ///     assert!(-1.0 <= n.y && n.y <= 1.0);
     ///     assert!(0.0 <= n.z && n.z <= 1.0);
@@ -362,16 +360,16 @@ impl Camera {
         near_clip: f64,
         points: &[Point3],
     ) -> Option<Self> {
-        let inv_dir = direction.invert()?;
+        let inv_dir = direction.try_inverse()?;
         let bbox = points
             .iter()
-            .map(|p| inv_dir.transform_point(*p))
+            .map(|p| inv_dir.apply_point(*p))
             .collect::<BoundingBox<_>>();
         let (center, diag) = (bbox.center(), bbox.diagonal());
         let screen_size = f64::max(diag.x / aspect, diag.y);
         let position = Vector3::new(center.x, center.y, center.z + diag.z / 2.0 + near_clip);
         Some(Self {
-            matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
+            matrix: direction.to_homogeneous() * Matrix4::new_translation(&position),
             method: ProjectionMethod::Parallel { screen_size },
             near_clip,
             far_clip: near_clip + diag.z,
@@ -381,7 +379,7 @@ impl Camera {
     /// Creates a perspective projection camera that fits the point cloud perfectly into the view volume.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+    /// use monstertruck_core::{assert_near, math::*, tolerance::*};
     /// use monstertruck_gpu::*;
     ///
     /// let points: &[Point3] = &[
@@ -394,13 +392,13 @@ impl Camera {
     ///     (1.0, 1.0, 0.0).into(),
     ///     (1.0, 1.0, 1.0).into(),
     /// ];
-    /// let direction = Matrix3::from_cols(
+    /// let direction = Matrix3::from_columns(&[
     ///     Vector3::new(1.0, 0.0, -1.0).normalize(),
     ///     Vector3::new(-1.0, 2.0, -1.0).normalize(),
     ///     Vector3::new(1.0, 1.0, 1.0).normalize(),
-    /// );
+    /// ]);
     /// let aspect = 16.0 / 9.0;
-    /// let fov = Rad(std::f64::consts::PI / 4.0);
+    /// let fov = (std::f64::consts::PI / 4.0);
     ///
     /// let camera = Camera::perspective_view_fitting(
     ///     direction,
@@ -411,16 +409,16 @@ impl Camera {
     ///
     /// assert_near!(
     ///     camera.near_clip,
-    ///     camera.eye_direction().dot(points[7] - camera.position()),
+    ///     camera.eye_direction().dot(&(points[7] - camera.position())),
     /// );
     /// assert_near!(
     ///     camera.far_clip,
-    ///     camera.eye_direction().dot(points[0] - camera.position()),
+    ///     camera.eye_direction().dot(&(points[0] - camera.position())),
     /// );
     ///
     /// let projection = camera.projection(aspect);
     /// let bbox = points.iter().map(|p| {
-    ///     let n = projection.transform_point(*p);
+    ///     let n = projection.apply_point(*p);
     ///     assert!(-1.0 <= n.x && n.x <= 1.0);
     ///     assert!(-1.0 <= n.y && n.y <= 1.0);
     ///     assert!(0.0 <= n.z && n.z <= 1.0);
@@ -432,10 +430,10 @@ impl Camera {
     pub fn perspective_view_fitting(
         direction: Matrix3,
         aspect: f64,
-        fov: Rad<f64>,
+        fov: f64,
         points: &[Point3],
     ) -> Option<Self> {
-        let inv_dir = direction.invert()?;
+        let inv_dir = direction.try_inverse()?;
         let tan = (fov / 2.0).tan();
 
         let mut x_min = f64::INFINITY;
@@ -446,7 +444,7 @@ impl Camera {
         let mut z_max = f64::NEG_INFINITY;
 
         for p in points {
-            let p = inv_dir.transform_point(*p);
+            let p = inv_dir.apply_point(*p);
             x_min = f64::min(x_min, (tan * p.z).mul_add(-aspect, p.x));
             x_max = f64::max(x_max, (tan * p.z).mul_add(aspect, p.x));
             y_min = f64::min(y_min, tan.mul_add(-p.z, p.y));
@@ -463,7 +461,7 @@ impl Camera {
             z_x.max(z_y),
         );
         Some(Self {
-            matrix: Matrix4::from(direction) * Matrix4::from_translation(position),
+            matrix: direction.to_homogeneous() * Matrix4::new_translation(&position),
             method: ProjectionMethod::Perspective { fov },
             near_clip: position.z - z_max,
             far_clip: position.z - z_min,
@@ -476,7 +474,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             matrix: Matrix4::identity(),
-            method: ProjectionMethod::perspective(Rad(std::f64::consts::PI / 4.0)),
+            method: ProjectionMethod::perspective(std::f64::consts::PI / 4.0),
             near_clip: 0.1,
             far_clip: 10.0,
         }

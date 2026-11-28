@@ -7,7 +7,7 @@
 //! offset points.
 
 use super::{
-    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, InnerSpace, KnotVector, Origin,
+    BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, KnotVector, Origin,
     ParametricCurve, ParametricSurface, Point2, Point3, Vector2, Vector3, errors,
 };
 use errors::Error;
@@ -68,7 +68,7 @@ pub fn curve_offset_2d(
             let tangent = curve.derivative(t);
 
             // Normal: rotate tangent 90 degrees CCW in 2D.
-            let normal_len = tangent.magnitude();
+            let normal_len = tangent.norm();
             let normal = if normal_len.so_small() {
                 Vector2::new(0.0, 0.0)
             } else {
@@ -110,7 +110,7 @@ pub fn curve_offset_2d(
 ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
 /// );
 /// // Offset upward (in z) by 1.0 using z-axis as the reference normal.
-/// let offset = offset::curve_offset_3d(&line, 1.0, Vector3::unit_z(), 20).unwrap();
+/// let offset = offset::curve_offset_3d(&line, 1.0, Vector3::z(), 20).unwrap();
 /// let mid = offset.evaluate(0.5);
 /// // The tangent is along x, so the perpendicular component of z is z itself.
 /// assert!((mid.z - 1.0).abs() < 0.05, "mid.z = {}", mid.z);
@@ -138,23 +138,23 @@ pub fn curve_offset_3d(
             let t = f64::mul_add(t_end - t_start, u, t_start);
             let pt = curve.evaluate(t);
             let tangent = curve.derivative(t);
-            let tangent_len = tangent.magnitude();
+            let tangent_len = tangent.norm();
 
             // Compute offset direction: component of `normal` perpendicular to tangent.
             let offset_dir = if tangent_len.so_small() {
                 normal.normalize()
             } else {
                 let t_hat = tangent / tangent_len;
-                let perp = normal - t_hat * normal.dot(t_hat);
-                let perp_len = perp.magnitude();
+                let perp = normal - t_hat * normal.dot(&t_hat);
+                let perp_len = perp.norm();
                 if perp_len.so_small() {
                     // Normal is parallel to tangent -- use cross product fallback.
                     let alt = if t_hat.x.abs() < 0.9 {
-                        Vector3::unit_x()
+                        Vector3::x()
                     } else {
-                        Vector3::unit_y()
+                        Vector3::y()
                     };
-                    t_hat.cross(alt).normalize()
+                    t_hat.cross(&alt).normalize()
                 } else {
                     perp / perp_len
                 }
@@ -246,12 +246,12 @@ pub fn surface_offset(
                     let pt = surface.evaluate(u, v);
                     let du = surface.derivative_u(u, v);
                     let dv = surface.derivative_v(u, v);
-                    let cross = du.cross(dv);
-                    let cross_len = cross.magnitude();
+                    let cross = du.cross(&dv);
+                    let cross_len = cross.norm();
 
                     let normal = if cross_len.so_small() {
                         // Degenerate point -- use z fallback.
-                        Vector3::unit_z()
+                        Vector3::z()
                     } else {
                         cross / cross_len
                     };

@@ -8,7 +8,7 @@ use super::{
     super::{EdgeIncidence, InputPolygon},
     canonical_unit,
 };
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::VecDeque;
 
@@ -94,14 +94,13 @@ fn source_interface_component(
         for &vertex in &contact.edge {
             *vertex_degree.entry(vertex).or_default() += 1;
             let offset = positions[vertex] - seed_origin;
-            max_seed_line_offset =
-                max_seed_line_offset.max(offset.cross(seed_direction).magnitude());
+            max_seed_line_offset = max_seed_line_offset.max(offset.cross(&seed_direction).norm());
         }
         let direction = (positions[contact.edge[1]] - positions[contact.edge[0]]).normalize();
         let spread = seed_direction
-            .cross(direction)
-            .magnitude()
-            .atan2(seed_direction.dot(direction).abs());
+            .cross(&direction)
+            .norm()
+            .atan2(seed_direction.dot(&direction).abs());
         max_seed_direction_spread_radians = max_seed_direction_spread_radians.max(spread);
     }
     let endpoint_count = vertex_degree
@@ -162,13 +161,13 @@ pub(super) fn build_support_interfaces(
         let direction = positions[edge[1]] - positions[edge[0]];
         let turn = polygons[*a]
             .normal
-            .cross(polygons[*b].normal)
-            .magnitude()
-            .atan2(polygons[*a].normal.dot(polygons[*b].normal));
+            .cross(&polygons[*b].normal)
+            .norm()
+            .atan2(polygons[*a].normal.dot(&polygons[*b].normal));
         pair_contacts.entry(pair).or_default().push(SourceContact {
             edge,
             polygons: polygons_ordered,
-            length: direction.magnitude(),
+            length: direction.norm(),
             turn,
         });
     }
@@ -236,7 +235,7 @@ mod tests {
         SourceContact {
             edge,
             polygons: [0, 1],
-            length: (points[a] - points[b]).magnitude(),
+            length: (points[a] - points[b]).norm(),
             turn: 0.125,
         }
     }

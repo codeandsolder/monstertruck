@@ -7,9 +7,9 @@ use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::iter;
 
 use super::{
-    Cdt, CdtEdge, EuclideanSpace, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, InnerSpace,
-    Instant, KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2,
-    Point3, PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
+    AffinePoint, Cdt, CdtEdge, Faces, FixedVertexHandle, HashMap, InnerFaceIterator, Instant,
+    KERNEL_EPSILON, MIN_ALLOWED_VALUE, MetricSpace, Origin, ParametricSurface3D, Point2, Point3,
+    PolygonMesh, PreMeshableSurface, SPoint2, StandardAttributes, StandardVertex,
     StructuringFilter, TessellationPrimitiveMode, TessellationPrimitiveOptions, Triangulation,
     Vector2, Vector3, VertexIterator, array, boundary, log_mesh_trace,
 };
@@ -68,7 +68,7 @@ fn surface_is_nearly_planar(surface: &impl PreMeshableSurface, boundary: &PolyBo
         [(u0, v0), (u1, v0), (u0, v1), (u1, v1), center]
             .into_iter()
             .all(|(u, v)| {
-                normal.dot(surface.normal(u, v)) > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.angular
+                normal.dot(&surface.normal(u, v)) > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.angular
             })
     } else {
         false
@@ -464,8 +464,9 @@ fn force_all_triangles_to_quads(
         let point01 = point0.midpoint(point1);
         let point12 = point1.midpoint(point2);
         let point20 = point2.midpoint(point0);
-        let center_point =
-            Point3::from_vec((point0.to_vec() + point1.to_vec() + point2.to_vec()) / 3.0);
+        let center_point = Point3::from(
+            (point0.position_vector() + point1.position_vector() + point2.position_vector()) / 3.0,
+        );
         let split_quads = [
             [point0, point01, center_point, point20],
             [point1, point12, center_point, point01],
@@ -557,15 +558,15 @@ fn quad_area(quad: [Point3; 4]) -> f64 {
 }
 
 fn triangle_area(point0: Point3, point1: Point3, point2: Point3) -> f64 {
-    let vector0 = point1.to_vec() - point0.to_vec();
-    let vector1 = point2.to_vec() - point0.to_vec();
-    vector0.cross(vector1).magnitude() * 0.5
+    let vector0 = point1.position_vector() - point0.position_vector();
+    let vector1 = point2.position_vector() - point0.position_vector();
+    vector0.cross(&vector1).norm() * 0.5
 }
 
 fn is_convex_quad(quad: [Point3; 4]) -> bool {
-    let diagonal0 = quad[1].to_vec() - quad[0].to_vec();
-    let diagonal1 = quad[2].to_vec() - quad[0].to_vec();
-    let normal = diagonal0.cross(diagonal1);
+    let diagonal0 = quad[1] - quad[0];
+    let diagonal1 = quad[2] - quad[0];
+    let normal = diagonal0.cross(&diagonal1);
     if normal.so_small() {
         false
     } else {
@@ -591,23 +592,23 @@ fn corner_turn(quad: [Point3; 4], index: usize, normal: Vector3) -> f64 {
     let previous = quad[(index + 3) % 4];
     let current = quad[index];
     let next = quad[(index + 1) % 4];
-    let edge0 = current.to_vec() - previous.to_vec();
-    let edge1 = next.to_vec() - current.to_vec();
-    edge0.cross(edge1).dot(normal)
+    let edge0 = current - previous;
+    let edge1 = next - current;
+    edge0.cross(&edge1).dot(&normal)
 }
 
 fn corner_angle(quad: [Point3; 4], index: usize) -> Option<f64> {
     let previous = quad[(index + 3) % 4];
     let current = quad[index];
     let next = quad[(index + 1) % 4];
-    let vector0 = previous.to_vec() - current.to_vec();
-    let vector1 = next.to_vec() - current.to_vec();
-    let length0 = vector0.magnitude();
-    let length1 = vector1.magnitude();
+    let vector0 = previous - current;
+    let vector1 = next - current;
+    let length0 = vector0.norm();
+    let length1 = vector1.norm();
     if length0.so_small() || length1.so_small() {
         None
     } else {
-        let cosine = (vector0.dot(vector1) / (length0 * length1)).clamp(-1.0, 1.0);
+        let cosine = (vector0.dot(&vector1) / (length0 * length1)).clamp(-1.0, 1.0);
         Some(cosine.acos())
     }
 }
@@ -666,7 +667,9 @@ fn create_centroid_vertex(
     let point0 = mesh.positions()[vertex0.pos];
     let point1 = mesh.positions()[vertex1.pos];
     let point2 = mesh.positions()[vertex2.pos];
-    let position = Point3::from_vec((point0.to_vec() + point1.to_vec() + point2.to_vec()) / 3.0);
+    let position = Point3::from(
+        (point0.position_vector() + point1.position_vector() + point2.position_vector()) / 3.0,
+    );
     let position_index = mesh.positions().len();
     mesh.push_position(position);
 
@@ -711,14 +714,14 @@ fn create_centroid_vertex(
 }
 
 fn blend_normals(normal0: Vector3, normal1: Vector3, normal_blend_angle: f64) -> Vector3 {
-    let cosine = normal0.dot(normal1);
+    let cosine = normal0.dot(&normal1);
     let min_cosine = f64::cos(normal_blend_angle);
     let blended = if cosine < min_cosine {
         normal0
     } else {
         normal0 + normal1
     };
-    let magnitude = blended.magnitude();
+    let magnitude = blended.norm();
     if magnitude.so_small() {
         normal0
     } else {

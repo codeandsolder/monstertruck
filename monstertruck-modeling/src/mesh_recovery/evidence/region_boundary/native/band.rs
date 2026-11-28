@@ -12,9 +12,7 @@ use super::{
     NativeChartObstacle, NativeTrimError, NativeTrimOptions, chart_point, native_circle_edge,
     periodic_coordinate,
 };
-use crate::{
-    Edge, Face, IncludeCurve, InnerSpace, Point3, Surface, Vector3, Vertex, Wire, builder,
-};
+use crate::{Edge, Face, IncludeCurve, Point3, Surface, Vector3, Vertex, Wire, builder};
 use std::collections::BTreeMap;
 use std::f64::consts::{PI, TAU};
 
@@ -450,7 +448,7 @@ impl BandContext<'_> {
                                 .source_polygon_vertices(polygon)
                                 .is_some_and(|ids| {
                                     ids.iter().any(|&id| {
-                                        (self.positions[id] - tip).magnitude()
+                                        (self.positions[id] - tip).norm()
                                             <= self.options.max_vertex_displacement
                                     })
                                 })
@@ -559,9 +557,9 @@ impl BandContext<'_> {
                     return false;
                 };
                 let tol = self.options.intersection_tolerance;
-                (circle.center - expected.center).magnitude() <= tol
+                (circle.center - expected.center).norm() <= tol
                     && (circle.radius - expected.radius).abs() <= tol
-                    && circle.normal.cross(expected.normal).magnitude() * expected.radius <= tol
+                    && circle.normal.cross(&expected.normal).norm() * expected.radius <= tol
             });
             if valid {
                 return Some(Ring {
@@ -607,7 +605,7 @@ impl BandContext<'_> {
                                             radial_center,
                                             ..
                                         } if radial_center.abs() <= crate::KERNEL_EPSILON => Some(
-                                            (point - axial_center).dot(axis).signum() * PI * 0.5,
+                                            (point - axial_center).dot(&axis).signum() * PI * 0.5,
                                         ),
                                         SurfaceCarrier::LinearRevolution {
                                             origin,
@@ -617,7 +615,7 @@ impl BandContext<'_> {
                                         } if slope != 0.0 => {
                                             let apex = -radius_at_origin / slope;
                                             let tip = origin + axis * apex;
-                                            ((point - tip).magnitude()
+                                            ((point - tip).norm()
                                                 <= self.options.max_vertex_displacement)
                                                 .then_some(apex)
                                         }
@@ -682,7 +680,7 @@ impl BandContext<'_> {
             }
             edges
         } else {
-            let length = (back.point() - front.point()).magnitude();
+            let length = (back.point() - front.point()).norm();
             if !length.is_finite() || length <= 0.0 {
                 return None;
             }
@@ -770,7 +768,7 @@ fn parameter_circle(carrier: SurfaceCarrier, varying: usize, fixed: f64) -> Opti
                 let radial = u * cos + v * sin;
                 Some(Circle {
                     center: axial_center + radial * radial_center,
-                    normal: radial.cross(axis),
+                    normal: radial.cross(&axis),
                     radius: profile_radius,
                 })
             }
@@ -811,7 +809,7 @@ fn cut_ring(
         let edges = trims.get(&reference.trim)?;
         for edge in edges {
             for vertex in [edge.front(), edge.back()] {
-                if (vertex.point() - point).magnitude() <= tolerance {
+                if (vertex.point() - point).norm() <= tolerance {
                     return Some(vertex.clone());
                 }
             }

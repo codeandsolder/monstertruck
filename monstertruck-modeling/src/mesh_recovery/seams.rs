@@ -6,7 +6,7 @@
 //! adjacent patches; this guarantees both sides of a seam receive the same cut.
 
 use super::{EdgeIncidence, EdgeKey, InputPolygon, MeshRecoveryError, PlanarPatch, edge_key};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
@@ -103,11 +103,11 @@ pub(super) fn on_segment(a: Point3, b: Point3, p: Point3) -> Option<f64> {
         return None;
     }
     let delta = b - a;
-    let length_squared = delta.magnitude2();
+    let length_squared = delta.norm_squared();
     if length_squared <= 0.0 || !length_squared.is_finite() {
         return None;
     }
-    let along = (p - a).dot(delta) / length_squared;
+    let along = (p - a).dot(&delta) / length_squared;
     (0.0..1.0).contains(&along).then_some(along)
 }
 

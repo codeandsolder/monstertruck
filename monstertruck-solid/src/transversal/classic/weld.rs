@@ -10,7 +10,7 @@ use super::{
     ShapeOpsCurve, ShapeOpsSurface, Shell, SnapCurveEndpoints, Vector4, Vertex, VertexId, Wire,
     conversion, faces_classification,
 };
-use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::{math::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use std::{cmp::Ordering, collections::BTreeMap};
 
 fn certified_homogeneous_curve_box(curve: &NurbsCurve<Vector4>) -> Option<BoundingBox<Point3>> {
@@ -85,7 +85,7 @@ impl PartialOrd for SpatialX {
 impl Ord for SpatialX {
     fn cmp(&self, other: &Self) -> Ordering { self.0.total_cmp(&other.0) }
 }
-const fn finite_point(point: Point3) -> bool {
+fn finite_point(point: Point3) -> bool {
     point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
@@ -599,7 +599,7 @@ fn weld_coincident_topology<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 #[cfg(test)]
 mod weld_tests {
     use super::*;
-    use monstertruck_core::cgmath64::EuclideanSpace;
+
     use monstertruck_core::tolerance::{KERNEL_EPSILON, Tolerance};
     use monstertruck_geometry::prelude::{BsplineCurve, KnotVector, Line, Plane};
     use monstertruck_modeling::{Curve, Surface};

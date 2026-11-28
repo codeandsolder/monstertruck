@@ -345,11 +345,11 @@ fn test_tnurcc_split_edge() {
     // Control points needed
     let origin = Arc::new(RwLock::new(TnurccControlPoint::new(
         0,
-        Point3::from((0.0, 0.0, 0.0)),
+        Point3::from([0.0, 0.0, 0.0]),
     )));
     let dest = Arc::new(RwLock::new(TnurccControlPoint::new(
         1,
-        Point3::from((0.0, 5.0, 0.0)),
+        Point3::from([0.0, 5.0, 0.0]),
     )));
 
     // Edge to be split
@@ -374,7 +374,7 @@ fn test_tnurcc_split_edge() {
     dest.write().incoming_edge = Some(Arc::clone(&edge));
 
     // Split the edge
-    let middle = (TnurccEdge::split_edge(&edge, 24, Point3::from((0.0, 1.0, 0.0)), 56, 0.25))
+    let middle = (TnurccEdge::split_edge(&edge, 24, Point3::from([0.0, 1.0, 0.0]), 56, 0.25))
         .expect("Splitting is designed to succeed");
 
     // Get the new edge, other_left and other_right should be the same
@@ -449,19 +449,19 @@ fn test_tnurcc_split_edge_connected_edges() {
     // Control points to be used in the test. tl and tr are top left and top right respectively
     let origin = Arc::new(RwLock::new(TnurccControlPoint::new(
         0,
-        Point3::from((0.0, 0.0, 0.0)),
+        Point3::from([0.0, 0.0, 0.0]),
     )));
     let dest = Arc::new(RwLock::new(TnurccControlPoint::new(
         1,
-        Point3::from((0.0, 5.0, 0.0)),
+        Point3::from([0.0, 5.0, 0.0]),
     )));
     let tl = Arc::new(RwLock::new(TnurccControlPoint::new(
         1,
-        Point3::from((-1.0, 5.0, 0.0)),
+        Point3::from([-1.0, 5.0, 0.0]),
     )));
     let tr = Arc::new(RwLock::new(TnurccControlPoint::new(
         1,
-        Point3::from((1.0, 5.0, 0.0)),
+        Point3::from([1.0, 5.0, 0.0]),
     )));
 
     // Edges to be used. left_edge and right_edge are the edges which will not be split,
@@ -495,7 +495,7 @@ fn test_tnurcc_split_edge_connected_edges() {
         .expect("Connection should be topologically consistent");
 
     // Split the edge (parameters are the same from the previous test, but will not be checked)
-    let _middle = TnurccEdge::split_edge(&edge, 24, Point3::from((0.0, 1.0, 0.0)), 56, 0.25);
+    let _middle = TnurccEdge::split_edge(&edge, 24, Point3::from([0.0, 1.0, 0.0]), 56, 0.25);
 
     // Get the new edge
     let new_edge = (edge.read().connection(TnurccConnection::LeftAcw))

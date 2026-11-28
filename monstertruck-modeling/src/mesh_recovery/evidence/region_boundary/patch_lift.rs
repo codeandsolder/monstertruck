@@ -6,7 +6,7 @@ use super::{
     reconcile::{ReconciliationOptions, reconcile_point},
 };
 use crate::{
-    Curve, Edge, InnerSpace, Vertex, builder,
+    Curve, Edge, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge,
         approximate_boundary_patch,
@@ -322,8 +322,8 @@ pub(super) fn lift_native_source_edge(
     options: RegionPatchOptions,
 ) -> Option<(Edge, f64)> {
     let movement = (front.point() - source[0])
-        .magnitude()
-        .max((back.point() - source[1]).magnitude());
+        .norm()
+        .max((back.point() - source[1]).norm());
     if !movement.is_finite() || movement > options.budget.vertex || front == back {
         return None;
     }
@@ -339,7 +339,7 @@ pub(super) fn lift_native_source_edge(
             lifted.chord_deviation_upper_bound,
         )
     } else {
-        let length = (back.point() - front.point()).magnitude();
+        let length = (back.point() - front.point()).norm();
         if !length.is_finite() || length <= 0.0 {
             return None;
         }
@@ -402,7 +402,7 @@ pub(super) mod tests {
         supports.dedup();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.0,
             profile_radius: 1.0,
         };
@@ -457,7 +457,7 @@ pub(super) mod tests {
             for i in 0..=32 {
                 let t = f64::from(i) / 32.0;
                 let point = curve.evaluate(t.mul_add(end - start, start));
-                assert!(((point - Point3::new(0.0, 0.0, 0.0)).magnitude() - 1.0).abs() < 1.0e-9);
+                assert!(((point - Point3::new(0.0, 0.0, 0.0)).norm() - 1.0).abs() < 1.0e-9);
             }
         }
         assert!(

@@ -15,7 +15,7 @@ use monstertruck_io::step::save::*;
 use monstertruck_modeling::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-macro_rules! dir ( () => { concat!(env!("CARGO_MANIFEST_DIR"), "/../resources/shape/") });
+macro_rules! dir ( () => { concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/shape/") });
 
 const SOLID_JSONS: &[&str] = &[
     concat!(dir!(), "bottle.json"),

@@ -5,12 +5,12 @@
 //! parent module because [`topology`](super::topology) reads its fields.
 
 use super::{
-    Axis2Placement, Axis2PlacementHolder, BsplineCurve, CartesianPoint, CartesianPointHolder,
-    Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, EuclideanSpace, Holder, Homogeneous,
+    AffinePoint, Axis2Placement, Axis2PlacementHolder, BsplineCurve, CartesianPoint,
+    CartesianPointHolder, Conic2D, Conic3D, Curve2D, Curve3D, Deserialize, Holder, Homogeneous,
     KnotVector, Logical, Matrix3, Matrix4, NurbsCurve, PI, Pcurve, PcurveHolder, Point2, Point3,
     PolylineCurve, Result, Serialize, StepConvertingError, SurfaceCurve, SurfaceCurveHolder, Table,
-    Transformed, UnitCircle, UnitHyperbola, UnitParabola, Vector, VectorHolder, geom,
-    quasi_uniform_knots, step_geometry, uniform_knots,
+    Transformed, UnitCircle, UnitHyperbola, UnitParabola, Vector, Vector2, Vector3, VectorHolder,
+    geom, quasi_uniform_knots, step_geometry, uniform_knots,
 };
 
 /// `curve`
@@ -72,7 +72,7 @@ pub struct Line {
 }
 impl<'a, P> From<&'a Line> for geom::Line<P>
 where
-    P: EuclideanSpace + From<&'a CartesianPoint>,
+    P: AffinePoint + From<&'a CartesianPoint>,
     P::Diff: From<&'a Vector>,
 {
     fn from(line: &'a Line) -> Self {
@@ -403,7 +403,7 @@ pub struct Circle {
 impl TryFrom<&Circle> for step_geometry::Ellipse<Point2, Matrix3> {
     type Error = StepConvertingError;
     fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
-        let transform = Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius);
+        let transform = Matrix3::try_from(&circle.position)? * Matrix3::new_scaling(circle.radius);
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -414,7 +414,7 @@ impl TryFrom<&Circle> for step_geometry::Ellipse<Point2, Matrix3> {
 impl TryFrom<&Circle> for step_geometry::Ellipse<Point3, Matrix4> {
     type Error = StepConvertingError;
     fn try_from(circle: &Circle) -> Result<Self, Self::Error> {
-        let transform = Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius);
+        let transform = Matrix4::try_from(&circle.position)? * Matrix4::new_scaling(circle.radius);
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -439,8 +439,8 @@ impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point2, Matrix3> {
     type Error = StepConvertingError;
     fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
-        let transform =
-            Matrix3::try_from(&ellipse.position)? * Matrix3::from_nonuniform_scale(r0, r1);
+        let transform = Matrix3::try_from(&ellipse.position)?
+            * Matrix3::new_nonuniform_scaling(&Vector2::new(r0, r1));
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -453,7 +453,7 @@ impl TryFrom<&Ellipse> for step_geometry::Ellipse<Point3, Matrix4> {
     fn try_from(ellipse: &Ellipse) -> Result<Self, Self::Error> {
         let (r0, r1) = (ellipse.semi_axis_1, ellipse.semi_axis_2);
         let transform = Matrix4::try_from(&ellipse.position)?
-            * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
+            * Matrix4::new_nonuniform_scaling(&Vector3::new(r0, r1, f64::min(r0, r1)));
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI)))
                 .transformed(transform),
@@ -478,8 +478,8 @@ impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point2, Matrix3> {
     type Error = StepConvertingError;
     fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
         let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
-        let transform =
-            Matrix3::try_from(&hyperbola.position)? * Matrix3::from_nonuniform_scale(r0, r1);
+        let transform = Matrix3::try_from(&hyperbola.position)?
+            * Matrix3::new_nonuniform_scaling(&Vector2::new(r0, r1));
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
                 .transformed(transform),
@@ -492,7 +492,7 @@ impl TryFrom<&Hyperbola> for step_geometry::Hyperbola<Point3, Matrix4> {
     fn try_from(hyperbola: &Hyperbola) -> Result<Self, Self::Error> {
         let (r0, r1) = (hyperbola.semi_axis, hyperbola.semi_imag_axis);
         let transform = Matrix4::try_from(&hyperbola.position)?
-            * Matrix4::from_nonuniform_scale(r0, r1, f64::min(r0, r1));
+            * Matrix4::new_nonuniform_scaling(&Vector3::new(r0, r1, f64::min(r0, r1)));
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0)))
                 .transformed(transform),
@@ -516,7 +516,7 @@ impl TryFrom<&Parabola> for step_geometry::Parabola<Point2, Matrix3> {
     type Error = StepConvertingError;
     fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
         let transform =
-            Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist);
+            Matrix3::try_from(&parabola.position)? * Matrix3::new_scaling(parabola.focal_dist);
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
                 .transformed(transform),
@@ -528,7 +528,7 @@ impl TryFrom<&Parabola> for step_geometry::Parabola<Point3, Matrix4> {
     type Error = StepConvertingError;
     fn try_from(parabola: &Parabola) -> Result<Self, Self::Error> {
         let transform =
-            Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist);
+            Matrix4::try_from(&parabola.position)? * Matrix4::new_scaling(parabola.focal_dist);
         Ok(
             Self::new(geom::TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0)))
                 .transformed(transform),

@@ -13,7 +13,7 @@ use crate::*;
 use monstertruck_core::{
     ContentHasher, DeterministicContentHash,
     bounding_box::{Bounded, BoundingBox},
-    cgmath64::Point3,
+    math::Point3,
 };
 use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
@@ -918,9 +918,9 @@ where
     ///
     /// ```no_run
     /// # use monstertruck_topology::compress::CompressedTrimmedShell;
-    /// # fn demo<C, S, T>(shell: &CompressedTrimmedShell<monstertruck_core::cgmath64::Point3, C, S, T>)
-    /// # where C: monstertruck_traits::ParametricCurve<Point = monstertruck_core::cgmath64::Point3>,
-    /// #       S: monstertruck_traits::ParametricSurface<Point = monstertruck_core::cgmath64::Point3> {
+    /// # fn demo<C, S, T>(shell: &CompressedTrimmedShell<monstertruck_core::math::Point3, C, S, T>)
+    /// # where C: monstertruck_traits::ParametricCurve<Point = monstertruck_core::math::Point3>,
+    /// #       S: monstertruck_traits::ParametricSurface<Point = monstertruck_core::math::Point3> {
     /// let tolerance = shell.relative_tolerance(1.0e-3);
     /// # let _ = tolerance;
     /// # }

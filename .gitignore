@@ -21,6 +21,8 @@ node_modules/
 *.vtu
 *.obj
 *.json
+# Native geometry fixtures are maintained and regenerated in this directory.
+!/fixtures/shape/*.json
 *.png
 *.jpg
 *.stl

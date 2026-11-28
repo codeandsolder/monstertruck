@@ -8,7 +8,7 @@ use super::{
     InputPolygon, MeshRecoveryError, PlanarPatch, PlanarRecoveryOptions, positions_and_polygons,
     positive_source_volume, recover_planar_mesh,
 };
-use crate::{Face, InnerSpace, Point3, Shell, Solid, Vector3, builder};
+use crate::{Face, Point3, Shell, Solid, Vector3, builder};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::HashSet;
@@ -77,9 +77,9 @@ pub(super) fn ring_max_step(
     for i in 0..ids.len() {
         let a = positions[ids[i]] - center;
         let b = positions[ids[(i + 1) % ids.len()]] - center;
-        let ra = a - axis * a.dot(axis);
-        let rb = b - axis * b.dot(axis);
-        let step = axis.dot(ra.cross(rb)).atan2(ra.dot(rb));
+        let ra = a - axis * a.dot(&axis);
+        let rb = b - axis * b.dot(&axis);
+        let step = axis.dot(&ra.cross(&rb)).atan2(ra.dot(&rb));
         if !step.is_finite() || step == 0.0 || step.abs() >= FRAC_PI_2 {
             return None;
         }
@@ -153,7 +153,7 @@ struct CylindricalSource<'a> {
 impl CylindricalSource<'_> {
     fn radial_distance(&self, position: Point3) -> f64 {
         let delta = position - self.centers[0];
-        (delta - self.axis * delta.dot(self.axis)).magnitude()
+        (delta - self.axis * delta.dot(&self.axis)).norm()
     }
 
     /// Validate source facet geometry and provide original face provenance,
@@ -184,8 +184,8 @@ impl CylindricalSource<'_> {
             for &face_id in &cap.source_face_indices {
                 for &vertex in &polygons[face_id].vertices {
                     let delta = self.positions[vertex] - center;
-                    let axial = delta.dot(self.axis).abs();
-                    let transverse = (delta - self.axis * delta.dot(self.axis)).magnitude();
+                    let axial = delta.dot(&self.axis).abs();
+                    let transverse = (delta - self.axis * delta.dot(&self.axis)).norm();
                     let overhang = (transverse - self.radius).max(0.0);
                     if axial > self.options.planar.distance_tolerance
                         || overhang > self.options.max_radial_residual
@@ -210,7 +210,7 @@ impl CylindricalSource<'_> {
             // must lie between caps and within the same common radial fit.
             for &v in &polygon.vertices {
                 let delta = self.positions[v] - self.centers[0];
-                let axial = delta.dot(self.axis);
+                let axial = delta.dot(&self.axis);
                 if axial < -self.options.max_radial_residual
                     || axial > self.height + self.options.max_radial_residual
                 {
@@ -228,17 +228,17 @@ impl CylindricalSource<'_> {
                 .map(|&v| self.positions[v] - self.centers[0])
                 .fold(Vector3::new(0.0, 0.0, 0.0), |a, p| a + p)
                 / crate::usize_to_f64(polygon.vertices.len());
-            let outward = centroid - self.axis * centroid.dot(self.axis);
-            if polygon.normal.dot(outward) <= 0.0 {
+            let outward = centroid - self.axis * centroid.dot(&self.axis);
+            if polygon.normal.dot(&outward) <= 0.0 {
                 return None;
             }
             for i in 0..polygon.vertices.len() {
                 let a = self.positions[polygon.vertices[i]] - self.centers[0];
                 let b = self.positions[polygon.vertices[(i + 1) % polygon.vertices.len()]]
                     - self.centers[0];
-                let ra = a - self.axis * a.dot(self.axis);
-                let rb = b - self.axis * b.dot(self.axis);
-                let angle = self.axis.dot(ra.cross(rb)).atan2(ra.dot(rb)).abs();
+                let ra = a - self.axis * a.dot(&self.axis);
+                let rb = b - self.axis * b.dot(&self.axis);
+                let angle = self.axis.dot(&ra.cross(&rb)).atan2(ra.dot(&rb)).abs();
                 if !angle.is_finite() || angle >= FRAC_PI_2 {
                     return None;
                 }
@@ -255,7 +255,7 @@ impl CylindricalSource<'_> {
         let centers_delta = self.centers[1] - self.centers[0];
         let lateral_deviation = max_residual + sagitta;
         let cap_deviation =
-            cap_deviation + sagitta + (centers_delta - self.axis * self.height).magnitude();
+            cap_deviation + sagitta + (centers_delta - self.axis * self.height).norm();
         Some((lateral, max_residual, lateral_deviation.max(cap_deviation)))
     }
 }
@@ -305,7 +305,7 @@ pub fn recover_cylindrical_solid(
     let first_cap = &planar.patches[*first];
     let second_cap = &planar.patches[*second];
     let axis = -first_cap.normal;
-    if second_cap.normal.dot(axis) < 1.0 - 1.0e-8 {
+    if second_cap.normal.dot(&axis) < 1.0 - 1.0e-8 {
         return Ok(None);
     }
     let positions = &planar.canonical_positions;
@@ -318,10 +318,10 @@ pub fn recover_cylindrical_solid(
         return Ok(None);
     };
     let span = center1 - center0;
-    let height = span.dot(axis);
+    let height = span.dot(&axis);
     if !height.is_finite()
         || height <= 0.0
-        || (span - axis * height).magnitude() > options.max_radial_residual
+        || (span - axis * height).norm() > options.max_radial_residual
     {
         return Ok(None);
     }
@@ -357,8 +357,8 @@ pub fn recover_cylindrical_solid(
         return Ok(None);
     }
     let radial_start = positions[bottom[0]] - center0;
-    let radial_start = radial_start - axis * radial_start.dot(axis);
-    let radial_length = radial_start.magnitude();
+    let radial_start = radial_start - axis * radial_start.dot(&axis);
+    let radial_length = radial_start.norm();
     if radial_length == 0.0 || !radial_length.is_finite() {
         return Ok(None);
     }

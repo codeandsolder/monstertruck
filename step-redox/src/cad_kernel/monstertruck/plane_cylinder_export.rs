@@ -12,8 +12,8 @@ use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_modeling::{
-    BoundedCurve, BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Plane, Point3, Surface,
-    SurfaceCurve, Vector3, Vector4, algo,
+    BoundedCurve, BsplineCurve, Curve, InnerProduct, KnotVector, NurbsCurve, Plane, Point3,
+    Surface, SurfaceCurve, Vector3, Vector4, algo,
 };
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -46,11 +46,11 @@ impl Section {
 
     fn radial(&self, p: Point3) -> Vector3 {
         let delta = p - self.origin;
-        delta - self.axis * delta.dot(self.axis)
+        delta - self.axis * delta.dot(&self.axis)
     }
 
     fn plane_project(&self, p: Point3) -> Point3 {
-        p + self.axis * ((self.plane_origin - p).dot(self.normal) / self.axis.dot(self.normal))
+        p + self.axis * ((self.plane_origin - p).dot(&self.normal) / self.axis.dot(&self.normal))
     }
 
     // A degree-one line lies on an axial plane/cylinder section if its
@@ -59,7 +59,7 @@ impl Section {
     fn generator(&self, points: &[Point3], tolerance: f64) -> Option<NurbsCurve<Vector4>> {
         let start = *points.first()?;
         let end = *points.last()?;
-        let length = (end - start).dot(self.axis);
+        let length = (end - start).dot(&self.axis);
         if length.abs() <= tolerance {
             return None;
         }
@@ -67,8 +67,8 @@ impl Section {
         let sign = length.signum();
         let mut previous = 0.0;
         for &p in points {
-            let station = sign * (p - start).dot(self.axis);
-            if (self.radial(p) - radial).magnitude() > tolerance
+            let station = sign * (p - start).dot(&self.axis);
+            if (self.radial(p) - radial).norm() > tolerance
                 || station + tolerance < previous
                 || station > length.abs() + tolerance
             {
@@ -89,11 +89,14 @@ impl Section {
         let angular = tolerance / self.radius;
         for &point in points {
             let radial = self.radial(point);
-            if (radial.magnitude() - self.radius).abs() > tolerance {
+            if (radial.norm() - self.radius).abs() > tolerance {
                 return None;
             }
             let ray = radial.normalize();
-            let step = self.axis.dot(previous.cross(ray)).atan2(previous.dot(ray));
+            let step = self
+                .axis
+                .dot(&previous.cross(&ray))
+                .atan2(previous.dot(&ray));
             if !step.is_finite()
                 || step.abs() > FRAC_PI_2
                 || (sweep.abs() > angular && step * sweep.signum() < -angular)
@@ -108,17 +111,17 @@ impl Section {
 
     fn ellipse(&self, points: &[Point3], tolerance: f64) -> Option<NurbsCurve<Vector4>> {
         let (x, sweep) = self.sweep(points, tolerance)?;
-        let y = self.axis.cross(x);
+        let y = self.axis.cross(&x);
         let project_vector =
-            |v: Vector3| v - self.axis * (v.dot(self.normal) / self.axis.dot(self.normal));
+            |v: Vector3| v - self.axis * (v.dot(&self.normal) / self.axis.dot(&self.normal));
         let curve = super::conic::affine_arc(
             self.plane_project(self.origin),
             project_vector(x * self.radius),
             project_vector(y * self.radius),
             sweep.clamp(-TAU, TAU),
         )?;
-        if (curve.front() - *points.first()?).magnitude() > tolerance
-            || (curve.back() - *points.last()?).magnitude() > tolerance
+        if (curve.front() - *points.first()?).norm() > tolerance
+            || (curve.back() - *points.last()?).norm() > tolerance
         {
             return None;
         }
@@ -162,7 +165,7 @@ pub(super) fn exact_plane_cylinder_step_guide(
     let proof = DEFAULT_STEP_RECOVERY_TOLERANCES
         .solid_geometry_mm
         .min(tolerance);
-    let axial = section.normal.dot(section.axis).abs()
+    let axial = section.normal.dot(&section.axis).abs()
         <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit;
     let exact = if axial {
         section.generator(points, proof)?
@@ -207,7 +210,7 @@ mod tests {
     fn rational_ellipse_preserves_both_directed_branches() -> Result<()> {
         let section = Section {
             origin: Point3::new(1.0, 2.0, 3.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 0.5,
             plane_origin: Point3::new(1.0, 2.0, 4.0),
             normal: Vector3::new(0.2, 0.4, 1.0).normalize(),
@@ -225,13 +228,13 @@ mod tests {
                 .ellipse(&trace, 1e-9)
                 .context("missing exact section")?;
             assert!(section.certify(&curve, 1e-9));
-            assert!((curve.front() - trace[0]).magnitude() < 1e-9);
-            assert!((curve.back() - trace[64]).magnitude() < 1e-9);
+            assert!((curve.front() - trace[0]).norm() < 1e-9);
+            assert!((curve.back() - trace[64]).norm() < 1e-9);
             assert_eq!(curve.degree(), 2);
             let midpoint = curve.evaluate(0.5);
             let projected = section.radial(midpoint).normalize();
             let expected = Vector3::new((sweep * 0.5).cos(), (sweep * 0.5).sin(), 0.0);
-            assert!((projected - expected).magnitude() < 1e-9);
+            assert!((projected - expected).norm() < 1e-9);
         }
         Ok(())
     }
@@ -240,10 +243,10 @@ mod tests {
     fn axial_section_rejects_a_branch_switch() -> Result<()> {
         let section = Section {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 1.0,
             plane_origin: Point3::new(0.0, 0.0, 0.0),
-            normal: Vector3::unit_y(),
+            normal: Vector3::y(),
         };
         let start = Point3::new(1.0, 0.0, 1.0);
         let end = Point3::new(1.0, 0.0, 4.0);

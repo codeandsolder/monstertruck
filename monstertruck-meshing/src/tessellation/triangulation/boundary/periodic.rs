@@ -11,8 +11,8 @@
 //! is unchanged.
 
 use super::{
-    HashMap, InnerSpace, MetricSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface,
-    SurfacePoint, Tolerance, UvKey, connect_edges, polyline_on_surface,
+    HashMap, MetricSpace, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SurfacePoint,
+    Tolerance, UvKey, connect_edges, polyline_on_surface,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
@@ -547,8 +547,8 @@ pub(super) fn align_full_period_open_pair(
 
 fn axis_derivative_norm(surface: &impl PreMeshableSurface, axis: usize, uv: Point2) -> Option<f64> {
     let norm = match axis {
-        0 => surface.derivative_u(uv.x, uv.y).magnitude(),
-        _ => surface.derivative_v(uv.x, uv.y).magnitude(),
+        0 => surface.derivative_u(uv.x, uv.y).norm(),
+        _ => surface.derivative_v(uv.x, uv.y).norm(),
     };
     norm.is_finite().then_some(norm)
 }
@@ -716,12 +716,9 @@ mod numerical_period_tests {
                 Point3::new(2.5, 0.0, 0.0),
                 Point3::new(2.5 + parameter_scale, 0.0, parameter_scale),
             );
-            let mut surface: Processor<_, Matrix4> =
-                Processor::new(RevolutionSurface::by_revolution(
-                    profile,
-                    Point3::new(0.0, 0.0, 0.0),
-                    Vector3::unit_z(),
-                ));
+            let mut surface: Processor<_, Matrix4> = Processor::new(
+                RevolutionSurface::by_revolution(profile, Point3::new(0.0, 0.0, 0.0), Vector3::z()),
+            );
             surface.invert();
             let ring = (0..=16)
                 .map(|index| {
@@ -755,7 +752,7 @@ mod numerical_period_tests {
         let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
             profile,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
         ));
         surface.invert();
         let ring = (0..=16)
@@ -779,12 +776,9 @@ mod numerical_period_tests {
 
         for length in [0.01, 1.0, 1_000.0] {
             let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, length));
-            let mut surface: Processor<_, Matrix4> =
-                Processor::new(RevolutionSurface::by_revolution(
-                    profile,
-                    Point3::new(0.0, 0.0, 0.0),
-                    Vector3::unit_z(),
-                ));
+            let mut surface: Processor<_, Matrix4> = Processor::new(
+                RevolutionSurface::by_revolution(profile, Point3::new(0.0, 0.0, 0.0), Vector3::z()),
+            );
             surface.invert();
             let ring = |world_delta: f64| {
                 (0..=16)

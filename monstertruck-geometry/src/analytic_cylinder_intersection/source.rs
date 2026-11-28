@@ -138,7 +138,7 @@ pub(super) fn euclidean_controls(curve: &BsplineCurve<Vector4>) -> Option<Vec<Po
 }
 
 fn ray_angle(first: Vector3, second: Vector3, axis: Vector3) -> f64 {
-    axis.dot(first.cross(second)).atan2(first.dot(second))
+    axis.dot(&first.cross(&second)).atan2(first.dot(&second))
 }
 
 /// Every active control set is contained in a strict angular wedge of width
@@ -166,8 +166,8 @@ pub(super) fn ordered_sweep(
             .max(point.y.abs())
             .max(point.z.abs());
         let delta = point - origin;
-        let radial = delta - axis * delta.dot(axis);
-        let length = radial.magnitude();
+        let radial = delta - axis * delta.dot(&axis);
+        let length = radial.norm();
         if !length.is_finite() || length <= 0.0 {
             return None;
         }
@@ -244,13 +244,13 @@ impl SourceIntersectionProposal {
         let (sweep, angular_arithmetic_margin) = ordered_sweep(primary, curve, &points)?;
         let start = *points.first()?;
         let end = *points.last()?;
-        let axis_cross = primary.axis.cross(secondary.axis);
-        let length = axis_cross.magnitude();
+        let axis_cross = primary.axis.cross(&secondary.axis);
+        let length = axis_cross.norm();
         if !length.is_finite() || length <= f64::EPSILON.sqrt() {
             return None;
         }
-        let axial_projection = secondary.axis.cross(axis_cross / length).normalize();
-        let branch = if (start - secondary.origin).dot(axial_projection) > 0.0 {
+        let axial_projection = secondary.axis.cross(&(axis_cross / length)).normalize();
+        let branch = if (start - secondary.origin).dot(&axial_projection) > 0.0 {
             IntersectionBranch::Positive
         } else {
             IntersectionBranch::Negative
@@ -263,17 +263,17 @@ impl SourceIntersectionProposal {
             branch,
             endpoint_tolerance,
         )?;
-        let source_start_residual = (arc.evaluate(0.0)? - start).magnitude();
+        let source_start_residual = (arc.evaluate(0.0)? - start).norm();
         let source_end_residual = arc.end_residual(end, endpoint_tolerance)?;
         let scale = points
             .iter()
-            .map(|&p| (p - secondary.origin).magnitude())
+            .map(|&p| (p - secondary.origin).norm())
             .fold(1.0_f64, f64::max)
-            .max(secondary.origin.to_vec().magnitude());
+            .max(secondary.origin.position_vector().norm());
         let margin = 512.0 * f64::EPSILON * scale;
         let source_branch_margin = points
             .iter()
-            .map(|&point| branch.sign() * (point - secondary.origin).dot(axial_projection))
+            .map(|&point| branch.sign() * (point - secondary.origin).dot(&axial_projection))
             .fold(f64::INFINITY, f64::min)
             - margin;
         if !source_branch_margin.is_finite() || source_branch_margin <= 0.0 {
@@ -300,9 +300,9 @@ mod tests {
         // far from the global origin, with a many-span near-exact leader.
         let center = Point3::new(67.7545, 5.161372032, 0.0);
         let secondary_origin = Point3::new(67.7545, 5.364572032, 1.679434121);
-        let primary = CylinderCarrier::new(center, Vector3::unit_z(), 0.1524).expect("primary");
+        let primary = CylinderCarrier::new(center, Vector3::z(), 0.1524).expect("primary");
         let secondary =
-            CylinderCarrier::new(secondary_origin, Vector3::unit_x(), 0.3429).expect("secondary");
+            CylinderCarrier::new(secondary_origin, Vector3::x(), 0.3429).expect("secondary");
         let height = (0.3429_f64.powi(2) - (center.y - secondary_origin.y).powi(2)).sqrt();
         let start = Point3::new(center.x - 0.1524, center.y, secondary_origin.z + height);
         let arc = CylinderIntersectionArc::new(
@@ -316,18 +316,12 @@ mod tests {
         .expect("regular arc");
         let leader = arc.bounded_leader(1.9e-10, 8192).expect("fine leader");
         let curve = NurbsCurve::from(leader.curve);
-        let quantized_primary = CylinderCarrier::new(
-            Point3::new(67.7545, 5.1613720, 0.0),
-            Vector3::unit_z(),
-            0.1524,
-        )
-        .expect("quantized primary");
-        let quantized_secondary = CylinderCarrier::new(
-            Point3::new(0.0, 5.3645720, 1.6794341),
-            Vector3::unit_x(),
-            0.3429,
-        )
-        .expect("remote quantized secondary");
+        let quantized_primary =
+            CylinderCarrier::new(Point3::new(67.7545, 5.1613720, 0.0), Vector3::z(), 0.1524)
+                .expect("quantized primary");
+        let quantized_secondary =
+            CylinderCarrier::new(Point3::new(0.0, 5.3645720, 1.6794341), Vector3::x(), 0.3429)
+                .expect("remote quantized secondary");
         let bound = BoundedSourceIntersection::from_spline(
             quantized_primary,
             quantized_secondary,
@@ -341,10 +335,9 @@ mod tests {
 
     #[test]
     fn source_control_rays_choose_the_half_turn_and_reject_branch_switch() {
-        let primary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_z(), 0.2).expect("primary");
+        let primary = CylinderCarrier::new(Point3::origin(), Vector3::z(), 0.2).expect("primary");
         let secondary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_x(), 1.0).expect("secondary");
+            CylinderCarrier::new(Point3::origin(), Vector3::x(), 1.0).expect("secondary");
         // An ordinary polynomial cubic approximates the semicircle. Its
         // endpoints are exact; its interior is deliberately off both carriers.
         let controls = vec![
@@ -384,7 +377,7 @@ mod tests {
             let p = source.evaluate(f64::from(i) / 200.0);
             let angle = p.y.atan2(p.x).clamp(0.0, PI);
             let q = bounded.proposal.arc.evaluate(angle).expect("arc point");
-            assert!((p - q).magnitude() <= bounded.separation_upper);
+            assert!((p - q).norm() <= bounded.separation_upper);
         }
         points[2].z = -1.0;
         let bad = NurbsCurve::new(BsplineCurve::new_unchecked(knots, points));

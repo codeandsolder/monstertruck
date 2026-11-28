@@ -4,7 +4,7 @@ use crate::{BsplineCurve, KnotVector, Vector4};
 fn frame() -> Frame {
     Frame {
         center: Point3::new(0.0, 0.0, 0.0),
-        basis: [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()],
+        basis: [Vector3::x(), Vector3::y(), Vector3::z()],
         major: Some(3.0),
         varying: 0,
         direction: 1.0,

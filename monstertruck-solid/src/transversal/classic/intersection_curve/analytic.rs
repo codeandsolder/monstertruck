@@ -5,7 +5,7 @@
 //! their intersection. Curved boundaries remain tessellated seeds; no mesh
 //! sample is promoted to a proof of curved-edge incidence.
 use monstertruck_core::{
-    cgmath64::{EuclideanSpace, InnerSpace, Point3, Vector3},
+    math::{AffinePoint, Point3, Vector3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::{
@@ -32,7 +32,7 @@ pub(in crate::transversal::classic) fn certified_plane<S: TryIntoAnalyticSurface
     let net = net?;
     let normal = plane.normal();
     let origin = plane.origin();
-    let scale = origin.to_vec().magnitude().max(1.0);
+    let scale = origin.position_vector().norm().max(1.0);
     let allowed_deviation = COORD_EPS * scale;
     // At extreme world offsets, f64 cancellation cannot establish the
     // structural plane certificate to numerical precision. Fall back instead
@@ -46,8 +46,10 @@ pub(in crate::transversal::classic) fn certified_plane<S: TryIntoAnalyticSurface
         .all(|point| {
             point.w.is_finite()
                 && point.w > 0.0
-                && (normal.dot(Vector3::new(point.x, point.y, point.z) / point.w - origin.to_vec()))
-                    .abs()
+                && (normal.dot(
+                    &(Vector3::new(point.x, point.y, point.z) / point.w - origin.position_vector()),
+                ))
+                .abs()
                     <= allowed_deviation
         })
         .then_some(plane)
@@ -72,16 +74,16 @@ pub(in crate::transversal::classic) fn common_planar_support(
     let normal0 = plane0.normal();
     let normal1 = plane1.normal();
     let roundoff = DEFAULT_NUMERICAL_TOLERANCES.boolean_common_plane_roundoff_ulps * f64::EPSILON;
-    if !normal0.magnitude2().is_finite()
-        || !normal1.magnitude2().is_finite()
-        || normal0.cross(normal1).magnitude() > roundoff
+    if !normal0.norm_squared().is_finite()
+        || !normal1.norm_squared().is_finite()
+        || normal0.cross(&normal1).norm() > roundoff
     {
         return false;
     }
     let scale = origin0
-        .to_vec()
-        .magnitude()
-        .max(origin1.to_vec().magnitude())
+        .coords
+        .norm()
+        .max(origin1.position_vector().norm())
         .max(1.0);
     let residual = (roundoff * scale)
         .min(DEFAULT_NUMERICAL_TOLERANCES.structural * scale)
@@ -93,8 +95,8 @@ pub(in crate::transversal::classic) fn common_planar_support(
     // all polygon vertices rejects nearly-parallel planes that intersect at
     // their origins but diverge elsewhere across their actual face extents.
     let on_both = |point: &Point3| {
-        let distance0 = (*point - origin0).dot(normal0);
-        let distance1 = (*point - origin1).dot(normal1);
+        let distance0 = (*point - origin0).dot(&normal0);
+        let distance1 = (*point - origin1).dot(&normal1);
         distance0.is_finite()
             && distance1.is_finite()
             && distance0.abs() <= residual
@@ -124,17 +126,17 @@ pub(in crate::transversal::classic) fn finite_common_planar_support(
     bounds1: (Point3, Point3),
 ) -> bool {
     let (normal0, normal1) = (plane0.normal(), plane1.normal());
-    if !normal0.magnitude2().is_finite()
-        || !normal1.magnitude2().is_finite()
-        || normal0.cross(normal1).magnitude() > DEFAULT_NUMERICAL_TOLERANCES.angular
+    if !normal0.norm_squared().is_finite()
+        || !normal1.norm_squared().is_finite()
+        || normal0.cross(&normal1).norm() > DEFAULT_NUMERICAL_TOLERANCES.angular
     {
         return false;
     }
     let (origin0, origin1) = (plane0.origin(), plane1.origin());
     let scale = origin0
-        .to_vec()
-        .magnitude()
-        .max(origin1.to_vec().magnitude())
+        .coords
+        .norm()
+        .max(origin1.position_vector().norm())
         .max(1.0);
     let residual = (DEFAULT_NUMERICAL_TOLERANCES.structural * scale)
         .min(DEFAULT_NUMERICAL_TOLERANCES.parameter_projection);
@@ -145,13 +147,13 @@ pub(in crate::transversal::classic) fn finite_common_planar_support(
     // plane equation before evaluating the opposing plane. The remaining
     // affine difference has a *small* normal and can be enclosed by an AABB
     // even when an oblique face's AABB corners are far off its own plane.
-    let aligned_normal1 = if normal0.dot(normal1) >= 0.0 {
+    let aligned_normal1 = if normal0.dot(&normal1) >= 0.0 {
         normal1
     } else {
         -normal1
     };
-    let signed_offset0 = aligned_normal1.dot(origin0 - origin1);
-    let signed_offset1 = normal0.dot(origin1 - origin0);
+    let signed_offset0 = aligned_normal1.dot(&(origin0 - origin1));
+    let signed_offset1 = normal0.dot(&(origin1 - origin0));
     [
         (bounds0, aligned_normal1 - normal0, signed_offset0, origin0),
         (bounds1, normal0 - aligned_normal1, signed_offset1, origin1),
@@ -170,7 +172,8 @@ pub(in crate::transversal::classic) fn finite_common_planar_support(
         [lower.x, upper.x].into_iter().all(|x| {
             [lower.y, upper.y].into_iter().all(|y| {
                 [lower.z, upper.z].into_iter().all(|z| {
-                    let difference = difference_normal.dot(Point3::new(x, y, z) - origin) + offset;
+                    let difference =
+                        difference_normal.dot(&(Point3::new(x, y, z) - origin)) + offset;
                     difference.is_finite() && difference.abs() <= residual
                 })
             })
@@ -212,7 +215,7 @@ fn trimmed_line_intervals(
     let positions = polygon.positions();
     for triangle in polygon.faces().triangle_iter() {
         let points = triangle.map(|vertex| positions[vertex.pos]);
-        let distances = points.map(|point| (point - origin).dot(normal));
+        let distances = points.map(|point| (point - origin).dot(&normal));
         if distances.iter().any(|distance| !distance.is_finite()) {
             return None;
         }
@@ -227,12 +230,12 @@ fn trimmed_line_intervals(
             let a = distances[index];
             let b = distances[next];
             if a.abs() <= eps {
-                parameters.push((points[index] - line_origin).dot(line_direction));
+                parameters.push((points[index] - line_origin).dot(&line_direction));
             }
             if (a < -eps && b > eps) || (a > eps && b < -eps) {
                 let ratio = a / (a - b);
                 let crossing = points[index] + (points[next] - points[index]) * ratio;
-                parameters.push((crossing - line_origin).dot(line_direction));
+                parameters.push((crossing - line_origin).dot(&line_direction));
             }
         }
         if parameters.len() < 2 {
@@ -258,8 +261,8 @@ pub(super) fn planar_intersection(
 ) -> Option<Vec<PolylineCurve<Point3>>> {
     let normal0 = plane0.normal();
     let normal1 = plane1.normal();
-    let axis = normal0.cross(normal1);
-    let axis2 = axis.magnitude2();
+    let axis = normal0.cross(&normal1);
+    let axis2 = axis.norm_squared();
     if !axis2.is_finite() {
         return None;
     }
@@ -270,10 +273,10 @@ pub(super) fn planar_intersection(
         return None;
     }
     let direction = axis / axis2.sqrt();
-    let delta = (plane1.origin() - plane0.origin()).dot(normal1);
+    let delta = (plane1.origin() - plane0.origin()).dot(&normal1);
     // Lies on both planes: normal1 . (axis x normal0) = |axis|^2.
-    let line_origin = plane0.origin() + axis.cross(normal0) * (delta / axis2);
-    let scale = line_origin.to_vec().magnitude().max(1.0);
+    let line_origin = plane0.origin() + axis.cross(&normal0) * (delta / axis2);
+    let scale = line_origin.position_vector().norm().max(1.0);
     let eps = COORD_EPS * scale;
     if eps > DEFAULT_NUMERICAL_TOLERANCES.parameter_projection {
         return None;

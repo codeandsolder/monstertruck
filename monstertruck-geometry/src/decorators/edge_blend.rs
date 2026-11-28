@@ -5,10 +5,10 @@
 
 use super::{
     Bound, BoundedCurve, BoundedSurface, CurveDerivatives, CurveScalarFunction, EdgeBlendSurface,
-    EuclideanSpace, PRESEARCH_DIVISION, ParameterCurve, ParameterDivision2D, ParameterRange,
-    ParametricCurve, ParametricCurve2D, ParametricSurface, ParametricSurface3D, Point3,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceDerivatives,
-    SurfaceParameter, SurfaceParameterRange, Vector2, Vector3, algo, range_common_part,
+    PRESEARCH_DIVISION, ParameterCurve, ParameterDivision2D, ParameterRange, ParametricCurve,
+    ParametricCurve2D, ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter,
+    SearchParameter, SearchParameterHint2D, SurfaceDerivatives, SurfaceParameter,
+    SurfaceParameterRange, Vector3, algo, range_common_part,
 };
 
 impl<C0, S0, C1, S1, F0, F1> EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
@@ -85,7 +85,7 @@ const fn bezier_cubic_basis(order: usize, u: f64) -> [f64; 4] {
 // obtained by lifting `(v, |v|)` into homogeneous coordinates and projecting.
 fn normalized_derivatives(derivatives: &CurveDerivatives<Vector3>) -> CurveDerivatives<Vector3> {
     derivatives
-        .element_wise_derivatives(&derivatives.absolute_derivatives(), Vector3::extend)
+        .element_wise_derivatives(&derivatives.absolute_derivatives(), |a, b| a.push(b))
         .rational_derivatives()
 }
 
@@ -101,12 +101,12 @@ where
     S: ParametricSurface3D,
 {
     let cders = pcurve.curve().derivatives(max_order + 1, u);
-    let Vector2 { x, y } = cders[0];
+    let [x, y] = <[f64; 2]>::from(cders[0]);
     let sders = pcurve.surface().derivatives(max_order + 1, x, y);
     let pders = sders.composite_derivatives(&cders);
     let uders = sders.derivative_u().composite_derivatives(&cders);
     let vders = sders.derivative_v().composite_derivatives(&cders);
-    let normal_ders = uders.combinatorial_derivatives(&vders, Vector3::cross);
+    let normal_ders = uders.combinatorial_derivatives(&vders, |a, b| a.cross(&b));
     (pders, normal_ders)
 }
 
@@ -120,7 +120,7 @@ fn tangent_derivatives(
 ) -> CurveDerivatives<Vector3> {
     let axis_ders = pders
         .derivative()
-        .combinatorial_derivatives(normal_ders, Vector3::cross);
+        .combinatorial_derivatives(normal_ders, |a, b| a.cross(&b));
     normalized_derivatives(&axis_ders)
         .combinatorial_derivatives(magnitude_derivatives, |axis, magnitude| axis * magnitude)
 }
@@ -183,7 +183,7 @@ where
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Self::Point {
-        Point3::from_vec(self.derivatives(0, u, v)[0][0])
+        Point3::from(self.derivatives(0, u, v)[0][0])
     }
     #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(1, 0, u, v) }

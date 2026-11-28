@@ -11,9 +11,9 @@ use super::{
     trim::SectionBranch,
 };
 use crate::{
-    Curve, Edge, Face, InnerSpace, Invertible, Line, Matrix4, ParametricSurface,
-    ParametricSurface3D, Plane, Point3, Processor, RevolutionSurface, Sphere, Surface,
-    ToSameGeometry, Torus, TrimmedCurve, UnitCircle, Vector3, Vertex, Wire, builder,
+    Curve, Edge, Face, Invertible, Line, Matrix4, ParametricSurface, ParametricSurface3D, Plane,
+    Point3, Processor, RevolutionSurface, Sphere, Surface, ToSameGeometry, Torus, TrimmedCurve,
+    UnitCircle, Vector3, Vertex, Wire, builder,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -269,9 +269,7 @@ impl RegionBoundaryIndex<'_> {
         let max_vertex_displacement = vertices
             .iter()
             .zip(positions)
-            .filter_map(|(vertex, &source)| {
-                vertex.as_ref().map(|v| (v.point() - source).magnitude())
-            })
+            .filter_map(|(vertex, &source)| vertex.as_ref().map(|v| (v.point() - source).norm()))
             .fold(0.0_f64, f64::max);
         let RegionAssembly { regions, .. } = RegionAssemblyInput {
             evidence: self.evidence,
@@ -702,9 +700,9 @@ fn trim_intervals(
                 }
                 let left = *points.get(a).ok_or(NativeTrimError::InvalidSource)? - circle.center;
                 let right = *points.get(b).ok_or(NativeTrimError::InvalidSource)? - circle.center;
-                let u = left - circle.normal * left.dot(circle.normal);
-                let v = right - circle.normal * right.dot(circle.normal);
-                let step = circle.normal.dot(u.cross(v)).atan2(u.dot(v));
+                let u = left - circle.normal * left.dot(&circle.normal);
+                let v = right - circle.normal * right.dot(&circle.normal);
+                let step = circle.normal.dot(&u.cross(&v)).atan2(u.dot(&v));
                 if step * circle.signed_sweep_radians <= 0.0 {
                     return Err(NativeTrimError::EdgeGeometry);
                 }
@@ -974,7 +972,7 @@ fn junction_candidates(
             .map(|section| {
                 section
                     .projected(point)
-                    .map_or(f64::INFINITY, |p| (p - point).magnitude())
+                    .map_or(f64::INFINITY, |p| (p - point).norm())
             })
             .fold(0.0_f64, f64::max)
     };
@@ -986,7 +984,7 @@ fn junction_candidates(
     }
     let mut candidates = candidates
         .filter(|&point| {
-            (point - source).magnitude() <= options.max_vertex_displacement
+            (point - source).norm() <= options.max_vertex_displacement
                 && carriers.iter().all(|carrier| {
                     carrier
                         .signed_constraint(point)
@@ -998,8 +996,8 @@ fn junction_candidates(
     candidates.sort_by(|&a, &b| {
         branch_error(a).total_cmp(&branch_error(b)).then(
             (a - source)
-                .magnitude2()
-                .total_cmp(&(b - source).magnitude2()),
+                .norm_squared()
+                .total_cmp(&(b - source).norm_squared()),
         )
     });
     (initial, candidates)
@@ -1024,7 +1022,7 @@ fn native_edge(
         SharedTrimGeometry::Line(_) => {
             // Topological identity is not a geometric length proof. A
             // collapsed line has no STEP direction and is not a valid trim.
-            let length = (back.point() - front.point()).magnitude();
+            let length = (back.point() - front.point()).norm();
             if !length.is_finite() || length <= 0.0 {
                 return Err(NativeTrimError::EdgeGeometry);
             }
@@ -1090,24 +1088,24 @@ fn native_circle_edge(
     tolerance: f64,
 ) -> Result<Edge, NativeTrimError> {
     let delta = front.point() - center;
-    let radial = delta - normal * delta.dot(normal);
-    if radial.magnitude() <= 0.0 {
+    let radial = delta - normal * delta.dot(&normal);
+    if radial.norm() <= 0.0 {
         return Err(NativeTrimError::EdgeGeometry);
     }
     let x = radial.normalize() * radius;
     let axis = normal * sweep.signum();
-    let y = axis.cross(x);
+    let y = axis.cross(&x);
     let delta = back.point() - center;
-    let angle = delta.dot(y).atan2(delta.dot(x)).rem_euclid(TAU);
+    let angle = delta.dot(&y).atan2(delta.dot(&x)).rem_euclid(TAU);
     if (angle - sweep.abs()).abs() * radius > tolerance * 4.0 {
         return Err(NativeTrimError::EdgeGeometry);
     }
-    let transform = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        axis.extend(0.0),
+    let transform = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        axis.push(0.0),
         center.to_homogeneous(),
-    );
+    ]);
     let curve = Processor::with_transform(
         TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, angle)),
         transform,
@@ -1176,7 +1174,7 @@ fn circular_rim_axis(
         return None;
     };
     let tolerance = options.intersection_tolerance;
-    if (first.center - center).cross(first.normal).magnitude() > tolerance {
+    if (first.center - center).cross(&first.normal).norm() > tolerance {
         return None;
     }
     let mut sweep = 0.0;
@@ -1189,7 +1187,7 @@ fn circular_rim_axis(
         }
         let orientation = if reference.reversed { -1.0 } else { 1.0 };
         sweep = (circle.signed_sweep_radians * orientation)
-            .mul_add(first.normal.dot(circle.normal).signum(), sweep);
+            .mul_add(first.normal.dot(&circle.normal).signum(), sweep);
     }
     ((sweep.abs() - TAU).abs() <= options.angular_resolution).then_some(first.normal)
 }
@@ -1217,14 +1215,14 @@ fn compact_sphere_axis(
     for &id in &vertices {
         direction += *points.get(id)? - center;
     }
-    if !direction.magnitude2().is_finite() || direction.magnitude2() == 0.0 {
+    if !direction.norm_squared().is_finite() || direction.norm_squared() == 0.0 {
         return None;
     }
     direction = direction.normalize();
     let margin = options.max_vertex_displacement + options.intersection_tolerance;
     if vertices
         .iter()
-        .any(|&id| (points[id] - center).dot(direction) <= margin)
+        .any(|&id| (points[id] - center).dot(&direction) <= margin)
     {
         return None;
     }
@@ -1256,7 +1254,7 @@ fn compact_sphere_axis(
             .any(|id| {
                 points
                     .get(id)
-                    .is_none_or(|&point| (point - center).dot(direction) <= deviation + margin)
+                    .is_none_or(|&point| (point - center).dot(&direction) <= deviation + margin)
             })
         {
             return None;
@@ -1326,12 +1324,12 @@ fn native_surface(
             profile_radius,
         } => {
             let (u, v) = normal_basis(axis);
-            let transform = Matrix4::from_cols(
-                u.extend(0.0),
-                v.extend(0.0),
-                axis.extend(0.0),
+            let transform = Matrix4::from_columns(&[
+                u.push(0.0),
+                v.push(0.0),
+                axis.push(0.0),
                 axial_center.to_homogeneous(),
-            );
+            ]);
             if radial_center.abs() <= crate::KERNEL_EPSILON {
                 (
                     Surface::Sphere(Processor::with_transform(
@@ -1355,7 +1353,7 @@ fn native_surface(
         .signed_constraint(point)
         .ok_or(NativeTrimError::UnsupportedCarrier)?
         .0;
-    if (surface.normal(probe[0], probe[1]).dot(target) > 0.0) != outward {
+    if (surface.normal(probe[0], probe[1]).dot(&target) > 0.0) != outward {
         surface.invert();
     }
     Ok((surface, outward))
@@ -1389,7 +1387,7 @@ fn region_outward(
         .signed_constraint(centroid)
         .ok_or(NativeTrimError::UnsupportedCarrier)?
         .0;
-    Ok(normal.dot(support.normal) > 0.0)
+    Ok(normal.dot(&support.normal) > 0.0)
 }
 
 // Near a cone tip, roundoff can make the fitted radius slightly
@@ -1428,7 +1426,7 @@ fn axial_span(
                 .source_polygon_vertices(polygon)
                 .ok_or(NativeTrimError::InvalidSource)?
             {
-                let z = (points[v] - origin).dot(axis);
+                let z = (points[v] - origin).dot(&axis);
                 min = min.min(z);
                 max = max.max(z);
             }
@@ -1482,13 +1480,13 @@ fn chart_point(carrier: SurfaceCarrier, point: Point3, resolution: f64) -> Optio
         SurfaceCarrier::Plane { origin, normal } => {
             let (u, v) = normal_basis(normal);
             let delta = point - origin;
-            Some([delta.dot(u), delta.dot(v)])
+            Some([delta.dot(&u), delta.dot(&v)])
         }
         SurfaceCarrier::LinearRevolution { origin, axis, .. } => {
             let (u, v) = normal_basis(axis);
             let delta = point - origin;
-            let (x, y) = (delta.dot(u), delta.dot(v));
-            (x.hypot(y) > resolution).then(|| [y.atan2(x), delta.dot(axis)])
+            let (x, y) = (delta.dot(&u), delta.dot(&v));
+            (x.hypot(y) > resolution).then(|| [y.atan2(x), delta.dot(&axis)])
         }
         SurfaceCarrier::CircularRevolution {
             axial_center,
@@ -1498,9 +1496,9 @@ fn chart_point(carrier: SurfaceCarrier, point: Point3, resolution: f64) -> Optio
         } => {
             let (u, v) = normal_basis(axis);
             let delta = point - axial_center;
-            let (x, y) = (delta.dot(u), delta.dot(v));
+            let (x, y) = (delta.dot(&u), delta.dot(&v));
             let rho = x.hypot(y);
-            (rho > resolution).then(|| [y.atan2(x), delta.dot(axis).atan2(rho - radial_center)])
+            (rho > resolution).then(|| [y.atan2(x), delta.dot(&axis).atan2(rho - radial_center)])
         }
     }
 }
@@ -1647,7 +1645,7 @@ mod tests {
         supports.dedup();
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -1729,7 +1727,7 @@ mod tests {
                 &supports,
                 SurfaceCarrier::LinearRevolution {
                     origin: Point3::new(0.0, 0.0, 0.0),
-                    axis: Vector3::unit_z(),
+                    axis: Vector3::z(),
                     radius_at_origin: 2.0,
                     slope,
                 },
@@ -1801,7 +1799,7 @@ mod tests {
         let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 3.0,
             profile_radius: 1.0,
         };
@@ -1862,8 +1860,8 @@ mod tests {
         // A fitted carrier may differ at roundoff scale from a source
         // extremum. The existing native intersection tolerance covers it.
         let carrier = SurfaceCarrier::CircularRevolution {
-            axial_center: origin + Vector3::unit_z() * 1.0e-12,
-            axis: Vector3::unit_z(),
+            axial_center: origin + Vector3::z() * 1.0e-12,
+            axis: Vector3::z(),
             radial_center: major,
             profile_radius: minor,
         };
@@ -1912,7 +1910,7 @@ mod tests {
         let ring = 16_usize;
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -2039,7 +2037,7 @@ mod tests {
         }
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 3.0,
             profile_radius: 1.0,
         };
@@ -2143,7 +2141,7 @@ mod tests {
             source_edges: Vec::new(),
             geometry: SharedTrimGeometry::Line(super::super::ContactLineEvidence {
                 endpoints: [a, b],
-                direction: Vector3::unit_x(),
+                direction: Vector3::x(),
                 chord_length: 1.0,
                 max_vertex_offset: 0.0,
                 max_reverse_step: 0.0,
@@ -2172,7 +2170,7 @@ mod tests {
             &points,
             &[0, 1],
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0,
             1.0,
         )
@@ -2202,9 +2200,7 @@ mod tests {
         let original = vertices[0].clone().ok_or("vertex")?;
         let (sin, cos) = 1.0e-9_f64.sin_cos();
         let candidate = Point3::new(cos, sin, 0.0);
-        assert!(
-            (candidate - points[0]).magnitude() > native_options().intersection_tolerance * 4.0
-        );
+        assert!((candidate - points[0]).norm() > native_options().intersection_tolerance * 4.0);
         refine_native_junctions(
             &graph,
             &intervals,
@@ -2252,7 +2248,7 @@ mod tests {
             .collect::<Vec<_>>();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: radii[0],
             profile_radius: radii[1],
         };
@@ -2483,7 +2479,7 @@ mod tests {
         supports.dedup();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.0,
             profile_radius: 1.0,
         };
@@ -2543,7 +2539,7 @@ mod tests {
         supports.dedup();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_y(),
+            axis: Vector3::y(),
             radial_center: 0.0,
             profile_radius: 1.0,
         };

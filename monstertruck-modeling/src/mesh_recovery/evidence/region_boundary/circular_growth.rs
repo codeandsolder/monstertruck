@@ -5,7 +5,7 @@
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
-use crate::{InnerSpace, Vector3};
+use crate::Vector3;
 use std::collections::{BTreeSet, VecDeque};
 
 fn orientation(
@@ -35,8 +35,8 @@ fn orientation(
         let mut source_span = 0.0_f64;
         let meridian = |point: crate::Point3| {
             let offset = point - axial_center;
-            let axial = offset.dot(axis);
-            (axial, (offset - axis * axial).magnitude())
+            let axial = offset.dot(&axis);
+            (axial, (offset - axis * axial).norm())
         };
         let reference = meridian(first);
         for &vertex in ids {
@@ -48,7 +48,7 @@ fn orientation(
             normals.push(normal);
             let (axial, radial) = meridian(point);
             meridian_span = meridian_span.max((axial - reference.0).hypot(radial - reference.1));
-            source_span = source_span.max((point - first).magnitude());
+            source_span = source_span.max((point - first).norm());
             center += point - first;
         }
         // A filled polygon whose vertices all occupy the same parallel
@@ -62,16 +62,11 @@ fn orientation(
         }
         let centroid = first + center / crate::usize_to_f64(ids.len());
         let (expected, _) = carrier.signed_constraint(centroid)?;
-        let dot = expected.dot(support.normal);
-        let deviation = expected.cross(support.normal).magnitude().atan2(dot.abs());
+        let dot = expected.dot(&support.normal);
+        let deviation = expected.cross(&support.normal).norm().atan2(dot.abs());
         let span = normals
             .into_iter()
-            .map(|normal| {
-                expected
-                    .cross(normal)
-                    .magnitude()
-                    .atan2(expected.dot(normal))
-            })
+            .map(|normal| expected.cross(&normal).norm().atan2(expected.dot(&normal)))
             .fold(0.0_f64, f64::max);
         if dot.abs() <= angular_tolerance.sin()
             || deviation > span + angular_tolerance + support.max_normal_angle_radians
@@ -165,7 +160,7 @@ mod tests {
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: major,
             profile_radius: minor,
         };
@@ -224,7 +219,7 @@ mod tests {
         supports.dedup();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 2.0,
             profile_radius: 0.5,
         };

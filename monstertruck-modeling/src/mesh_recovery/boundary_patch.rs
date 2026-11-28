@@ -5,7 +5,7 @@
 use super::{
     BoundaryFacetError, BoundaryFacetInput, SurfaceRegionBudget, edge_key, source_edge_incidence,
 };
-use crate::{Edge, InnerSpace, Point3, Shell, Vertex, builder};
+use crate::{Edge, Point3, Shell, Vertex, builder};
 mod coalesce;
 
 use std::{
@@ -215,7 +215,7 @@ pub fn approximate_boundary_patch(
         let vertex = vertices
             .entry(index)
             .or_insert_with(|| builder::vertex(source[index]));
-        let movement = (vertex.point() - source[index]).magnitude();
+        let movement = (vertex.point() - source[index]).norm();
         if !movement.is_finite() || movement > budget.vertex || !identities.insert(vertex.id()) {
             return Err(InvalidJunction);
         }

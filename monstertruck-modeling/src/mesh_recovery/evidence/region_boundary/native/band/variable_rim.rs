@@ -7,7 +7,7 @@ use super::{
     world_point,
 };
 use crate::mesh_recovery::{OrientedTrim, SurfaceCarrier};
-use crate::{BoundedCurve, Curve, Edge, InnerSpace, ParametricCurve, Point3, Vector3, Vertex};
+use crate::{BoundedCurve, Curve, Edge, ParametricCurve, Point3, Vector3, Vertex};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };
@@ -29,11 +29,11 @@ struct RimChart {
 impl RimChart {
     fn radial(&self, point: Point3) -> Vector3 {
         let delta = point - self.origin;
-        delta - self.axis * delta.dot(self.axis)
+        delta - self.axis * delta.dot(&self.axis)
     }
 
     fn angle(&self, a: Vector3, b: Vector3) -> f64 {
-        self.sign * self.axis.dot(a.cross(b)).atan2(a.dot(b))
+        self.sign * self.axis.dot(&a.cross(&b)).atan2(a.dot(&b))
     }
 
     // A positive rational combination of ordered radial control vectors
@@ -52,16 +52,16 @@ impl RimChart {
             }
             let point = Point3::new(x / w, y / w, z / w);
             let radial = self.radial(point);
-            let radius = radial.magnitude();
+            let radius = radial.norm();
             if !radius.is_finite() || radius <= self.tolerance {
                 return None;
             }
-            let height = (point - self.origin).dot(self.axis);
+            let height = (point - self.origin).dot(&self.axis);
             if !height.is_finite() {
                 return None;
             }
             scale = scale
-                .max((point - self.origin).magnitude())
+                .max((point - self.origin).norm())
                 .max(point.x.abs())
                 .max(point.y.abs())
                 .max(point.z.abs());
@@ -120,13 +120,13 @@ impl RimChart {
             // A line on a regular linear revolution is a generator if both
             // endpoints lie on the same radial ray. Its whole axial range
             // is given by those endpoints.
-            if ar.dot(br) <= 0.0
-                || ar.cross(br).magnitude() > self.tolerance * ar.magnitude().max(br.magnitude())
+            if ar.dot(&br) <= 0.0
+                || ar.cross(&br).norm() > self.tolerance * ar.norm().max(br.norm())
             {
                 return None;
             }
-            let z0 = (a - self.origin).dot(self.axis);
-            let z1 = (b - self.origin).dot(self.axis);
+            let z0 = (a - self.origin).dot(&self.axis);
+            let z1 = (b - self.origin).dot(&self.axis);
             if (z1 - z0).abs() <= self.tolerance {
                 return None;
             }
@@ -156,8 +156,8 @@ fn nonretracing_rim(rim: &[Edge], proofs: &[RimEdge], axis: Vector3) -> bool {
         let j = (i + 1) % rim.len();
         proofs[i].advance != 0.0
             || proofs[j].advance != 0.0
-            || (rim[i].back().point() - rim[i].front().point()).dot(axis)
-                * (rim[j].back().point() - rim[j].front().point()).dot(axis)
+            || (rim[i].back().point() - rim[i].front().point()).dot(&axis)
+                * (rim[j].back().point() - rim[j].front().point()).dot(&axis)
                 > 0.0
     })
 }
@@ -335,8 +335,8 @@ impl BandContext<'_> {
                 let (a, b) = curve.range_tuple();
                 let point = curve.evaluate(a.midpoint(b));
                 let clearance = 4.0 * self.options.intersection_tolerance;
-                ((point - edge.front().point()).magnitude() > clearance
-                    && (point - edge.back().point()).magnitude() > clearance)
+                ((point - edge.front().point()).norm() > clearance
+                    && (point - edge.back().point()).norm() > clearance)
                     .then(|| project(point))
                     .flatten()
             }));

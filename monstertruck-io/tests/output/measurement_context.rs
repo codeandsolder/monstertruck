@@ -45,7 +45,7 @@ fn step_model_custom_measurement_context_appears() {
 fn step_models_default_measurement_context_is_millimetres() {
     let json = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../resources/shape/cube.json"
+        "/../fixtures/shape/cube.json"
     ));
     let csolid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
     let models: StepModels<_, _, _> = std::iter::once(&csolid).collect();
@@ -67,7 +67,7 @@ fn step_models_default_measurement_context_is_millimetres() {
 fn step_models_custom_measurement_context_appears() {
     let json = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../resources/shape/cube.json"
+        "/../fixtures/shape/cube.json"
     ));
     let csolid: CompressedSolid = serde_json::from_reader(json.as_slice()).unwrap();
     let context = StepMeasurementContext {

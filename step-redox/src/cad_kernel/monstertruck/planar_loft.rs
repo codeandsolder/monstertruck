@@ -10,8 +10,8 @@ use crate::cad_ir::{Curve2d, ProfileLoop};
 use anyhow::{Context, Result, ensure};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
 use monstertruck_modeling::{
-    Curve, Face, InnerSpace, Invertible, Line, Matrix4, ParametricSurface3D, Processor,
-    RevolutionSurface, Surface, Transform, Vector3, Vertex,
+    Curve, Face, GeometryTransform, InnerProduct, Invertible, Line, Matrix4, ParametricSurface3D,
+    Processor, RevolutionSurface, Surface, Vector3, Vertex,
 };
 use std::{collections::HashMap, f64::consts::TAU};
 
@@ -120,7 +120,7 @@ impl Skin {
                 *indices.entry(key(p)).or_insert_with(|| {
                     let index = self.vertices.len();
                     self.vertices.push(builder::vertex(
-                        matrix.transform_point(Point3::new(p[0], p[1], 0.)),
+                        matrix.apply_point(Point3::new(p[0], p[1], 0.)),
                     ));
                     index
                 })
@@ -142,7 +142,7 @@ impl Skin {
                     } => {
                         ensure!(a != b, "collapsed circular loft edge");
                         let mid = start_angle_rad.midpoint(*end_angle_rad);
-                        let transit = matrix.transform_point(Point3::new(
+                        let transit = matrix.apply_point(Point3::new(
                             radius_mm.mul_add(mid.cos(), center_mm[0]),
                             radius_mm.mul_add(mid.sin(), center_mm[1]),
                             0.,
@@ -230,37 +230,38 @@ impl Skin {
                 edges.extend(b.edges[i].as_ref().map(Edge::inverse));
                 edges.push(self.edge(b.vertices[i], a.vertices[i]));
                 let wire = Wire::from(edges);
-                let face =
-                    match curve {
-                        Curve2d::Line { .. } => builder::try_attach_plane(vec![wire])?,
-                        Curve2d::CircleArc {
-                            center_mm,
-                            start_angle_rad,
-                            end_angle_rad,
-                            ..
-                        } => {
-                            let low = self.vertices[a.vertices[i]].point();
-                            let high = self.vertices[b.vertices[i]].point();
-                            let axis = (high - low).normalize();
-                            let center = rigid_matrix(&section.transform)
-                                .transform_point(Point3::new(center_mm[0], center_mm[1], 0.));
-                            let radial = low - center;
-                            let forward = normal(section).dot(axis) > 0.;
-                            let outward = (*end_angle_rad > *start_angle_rad) == forward;
-                            let mut surface = Surface::Revolution(Processor::new(
-                                RevolutionSurface::by_revolution(
-                                    Curve::Line(Line(low, high)),
-                                    center,
-                                    axis,
-                                ),
-                            ));
-                            if (surface.normal(0.5, 0.).dot(radial) > 0.) != outward {
-                                surface.invert();
-                            }
-                            Face::new(vec![wire], surface)?
+                let face = match curve {
+                    Curve2d::Line { .. } => builder::try_attach_plane(vec![wire])?,
+                    Curve2d::CircleArc {
+                        center_mm,
+                        start_angle_rad,
+                        end_angle_rad,
+                        ..
+                    } => {
+                        let low = self.vertices[a.vertices[i]].point();
+                        let high = self.vertices[b.vertices[i]].point();
+                        let axis = (high - low).normalize();
+                        let center = rigid_matrix(&section.transform).apply_point(Point3::new(
+                            center_mm[0],
+                            center_mm[1],
+                            0.,
+                        ));
+                        let radial = low - center;
+                        let forward = normal(section).dot(&axis) > 0.;
+                        let outward = (*end_angle_rad > *start_angle_rad) == forward;
+                        let mut surface =
+                            Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
+                                Curve::Line(Line(low, high)),
+                                center,
+                                axis,
+                            )));
+                        if (surface.normal(0.5, 0.).dot(&radial) > 0.) != outward {
+                            surface.invert();
                         }
-                        _ => anyhow::bail!("unsupported analytic loft wall"),
-                    };
+                        Face::new(vec![wire], surface)?
+                    }
+                    _ => anyhow::bail!("unsupported analytic loft wall"),
+                };
                 shell.push(face);
             }
         }
@@ -330,7 +331,7 @@ fn orient_profiles(sections: &[LoftSection], profiles: &mut [Vec<ProfileLoop>]) 
     let axis = normal(&sections[0]);
     let progression =
         origin(sections.last().context("missing final section")?) - origin(&sections[0]);
-    let forward = axis.dot(progression) > 0.;
+    let forward = axis.dot(&progression) > 0.;
     let areas = profiles
         .iter()
         .map(|rings| rings.iter().map(signed_area).collect::<Result<Vec<_>>>())
@@ -342,9 +343,9 @@ fn orient_profiles(sections: &[LoftSection], profiles: &mut [Vec<ProfileLoop>]) 
     let reverse = first != forward;
     for (i, section) in sections.iter().enumerate() {
         ensure!(
-            normal(section).dot(axis) > 0.
+            normal(section).dot(&axis) > 0.
                 && (i == 0
-                    || (origin(section) - origin(&sections[i - 1])).dot(axis)
+                    || (origin(section) - origin(&sections[i - 1])).dot(&axis)
                         * (if forward { 1. } else { -1. })
                         > 0.),
             "analytic loft sections lack consistently oriented axial progression"
@@ -413,7 +414,7 @@ fn aligned_circular_sections(sections: &[LoftSection], profiles: &[Vec<ProfileLo
             (0..3).all(|j| {
                 s[0].transform.matrix[i][j].to_bits() == s[1].transform.matrix[i][j].to_bits()
             })
-        }) && delta.cross(axis).magnitude() <= JOIN
+        }) && delta.cross(&axis).norm() <= JOIN
             && p[0].len() == p[1].len()
             && p[0].iter().zip(&p[1]).all(|(a, b)| {
                 a.curves.len() == b.curves.len()

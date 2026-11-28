@@ -114,12 +114,12 @@ fn boundaries(surface: &NurbsSurface<Vector4>) -> Option<Vec<IsoBoundary>> {
 
 fn segment_fraction(point: Point3, start: Point3, end: Point3, tolerance: f64) -> Option<f64> {
     let edge = end - start;
-    let length2 = edge.magnitude2();
+    let length2 = edge.norm_squared();
     if !length2.is_finite() || length2 <= 0.0 {
         return None;
     }
-    let t = ((point - start).dot(edge) / length2).clamp(0.0, 1.0);
-    ((point - (start + edge * t)).magnitude() <= tolerance).then_some(t)
+    let t = ((point - start).dot(&edge) / length2).clamp(0.0, 1.0);
+    ((point - (start + edge * t)).norm() <= tolerance).then_some(t)
 }
 
 impl IsoBoundary {
@@ -168,12 +168,12 @@ impl IsoBoundary {
                 let expected = first + (last - first) * ((t - start) / (end - start));
                 let actual = Point3::new(x / w, y / w, z / w);
                 let scale = actual
-                    .to_vec()
-                    .magnitude()
-                    .max(expected.to_vec().magnitude())
+                    .coords
+                    .norm()
+                    .max(expected.position_vector().norm())
                     .max(1.0);
                 let floor = 256.0 * f64::EPSILON * (degree + 1.0).powi(2) * scale;
-                if (actual - expected).magnitude() + floor > tolerance {
+                if (actual - expected).norm() + floor > tolerance {
                     return None;
                 }
             }
@@ -226,7 +226,7 @@ pub fn collapsed_boundary_parameter(
                 control.y / control.w,
                 control.z / control.w,
             ) - point)
-                .magnitude()
+                .norm()
                 <= tolerance
     };
     // A collapsed clamped side has both of its corner controls at the
@@ -252,14 +252,14 @@ pub fn collapsed_boundary_parameter(
             .flat_map(|span| &span.controls)
             .all(|&[x, y, z, w]| {
                 let control = Point3::new(x / w, y / w, z / w);
-                let margin = 256.0 * f64::EPSILON * control.to_vec().magnitude().max(1.0);
-                (control - point).magnitude() + margin <= tolerance
+                let margin = 256.0 * f64::EPSILON * control.position_vector().norm().max(1.0);
+                (control - point).norm() + margin <= tolerance
             });
         if !certified {
             return None;
         }
         let delta = boundary.uv.1 - boundary.uv.0;
-        let t = ((hint - boundary.uv.0).dot(delta) / delta.magnitude2()).clamp(0.0, 1.0);
+        let t = ((hint - boundary.uv.0).dot(&delta) / delta.norm_squared()).clamp(0.0, 1.0);
         Some(boundary.uv.evaluate(t))
     })
 }
@@ -303,10 +303,10 @@ mod tests {
             for i in 0..=10 {
                 let t = f64::from(i) / 10.0;
                 let p = uv.evaluate(t);
-                assert!((surface.evaluate(p.x, p.y) - line.evaluate(t)).magnitude() < 1.0e-12);
+                assert!((surface.evaluate(p.x, p.y) - line.evaluate(t)).norm() < 1.0e-12);
             }
         }
-        let off = Line(side.0 + Vector3::unit_z() * 0.01, side.1);
+        let off = Line(side.0 + Vector3::z() * 0.01, side.1);
         assert!(!includes_clamped_boundary(
             &surface,
             &NurbsCurve::from(BsplineCurve::from(off)),

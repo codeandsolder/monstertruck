@@ -32,16 +32,16 @@ fn axis2_placement3d_parallel_axis_and_ref_direction_is_finite() {
 
     let matrix = Matrix4::from(&placement);
     let (x, y, z) = (
-        matrix.x.truncate(),
-        matrix.y.truncate(),
-        matrix.z.truncate(),
+        matrix.column(0).into_owned().spatial(),
+        matrix.column(1).into_owned().spatial(),
+        matrix.column(2).into_owned().spatial(),
     );
     for component in [x.x, x.y, x.z, y.x, y.y, y.z, z.x, z.y, z.z] {
         assert!(component.is_finite(), "placement basis must be finite");
     }
     // The recovered basis is orthonormal.
-    assert!((x.magnitude() - 1.0).abs() < 1.0e-9);
-    assert!((y.magnitude() - 1.0).abs() < 1.0e-9);
-    assert!(x.dot(z).abs() < 1.0e-9);
-    assert!(y.dot(z).abs() < 1.0e-9);
+    assert!((x.norm() - 1.0).abs() < 1.0e-9);
+    assert!((y.norm() - 1.0).abs() < 1.0e-9);
+    assert!(x.dot(&z).abs() < 1.0e-9);
+    assert!(y.dot(&z).abs() < 1.0e-9);
 }

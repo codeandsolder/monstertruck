@@ -124,7 +124,7 @@ fn public_parameter_curve_api_uses_descriptive_names() {
 
 #[test]
 fn surface_curve_reuses_pcurve_across_equivalent_cylinder_charts() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let source_profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
     let target_profile = Line(Point3::new(0.0, 2.0, 0.0), Point3::new(0.0, 2.0, 1.0));
     let mut source_cylinder = Processor::new(RevolutionSurface::by_revolution(

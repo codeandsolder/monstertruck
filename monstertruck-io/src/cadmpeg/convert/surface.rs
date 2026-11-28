@@ -53,13 +53,13 @@
 
 use cadmpeg_ir::geometry::nurbs::NurbsSurface as IrNurbsSurface;
 use cadmpeg_ir::geometry::{SolvedSurfaceGeometry, SurfaceGeometry};
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use monstertruck_geometry::prelude::{
     BsplineSurface, Invertible, KnotVector, NurbsSurface, Processor, RevolutionSurface, Sphere,
     Tolerance, Torus, TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_modeling::{
-    Curve, Line, Plane, Point3, SquareMatrix, Surface, Transformed, Vector4,
+    Curve, Line, Plane, Point3, SquareLinearMap, Surface, Transformed, Vector4,
 };
 
 use super::{Context, frame};

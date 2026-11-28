@@ -4,7 +4,7 @@ use super::{
     MeshEvidence, StationLinearCandidate, StationMeridianCandidate, SurfaceCarrier,
     SurfaceRegionProposal,
 };
-use crate::{InnerSpace, Point3};
+use crate::Point3;
 use std::collections::BTreeMap;
 
 fn source_ball(evidence: &MeshEvidence, supports: &[usize]) -> Option<(Point3, f64)> {
@@ -13,7 +13,7 @@ fn source_ball(evidence: &MeshEvidence, supports: &[usize]) -> Option<(Point3, f
     for &support in supports {
         for &polygon in &evidence.planar_supports.get(support)?.source_face_indices {
             for &vertex in evidence.source_polygon_vertices(polygon)? {
-                extent = extent.max((*evidence.positions.get(vertex)? - reference).magnitude());
+                extent = extent.max((*evidence.positions.get(vertex)? - reference).norm());
             }
         }
     }

@@ -13,9 +13,7 @@
 #![cfg(feature = "polynomial")]
 
 use monstertruck_core::assert_near2;
-use monstertruck_core::cgmath64::{
-    EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3,
-};
+use monstertruck_core::math::{AffinePoint, MetricSpace, Point2, Point3, Vector2, Vector3};
 use monstertruck_core::tolerance::{Origin, Tolerance};
 use monstertruck_traits::algo::surface;
 use monstertruck_traits::polynomial::{PolynomialCurve, PolynomialSurface};
@@ -79,18 +77,18 @@ fn polysurface() {
                 poly.derivative_vv(u, v)[0],
                 (2.0 * u * u + 3.0 * u + 1.0) * 8.0
             );
-            assert!(poly.normal(u, v).dot(poly.derivative_u(u, v)).so_small());
-            assert!(poly.normal(u, v).dot(poly.derivative_v(u, v)).so_small());
+            assert!(poly.normal(u, v).dot(&poly.derivative_u(u, v)).so_small());
+            assert!(poly.normal(u, v).dot(&poly.derivative_v(u, v)).so_small());
 
             let eps = 1.0e-4;
             let normal_uder_approx =
                 (poly.normal(u + eps, v) - poly.normal(u - eps, v)) / (2.0 * eps);
             let normal_uder = poly.normal_uder(u, v);
-            assert!((normal_uder - normal_uder_approx).magnitude() < eps);
+            assert!((normal_uder - normal_uder_approx).norm() < eps);
             let normal_vder_approx =
                 (poly.normal(u, v + eps) - poly.normal(u, v - eps)) / (2.0 * eps);
             let normal_vder = poly.normal_vder(u, v);
-            assert!((normal_vder - normal_vder_approx).magnitude() < eps);
+            assert!((normal_vder - normal_vder_approx).norm() < eps);
         }
     }
 }
@@ -280,11 +278,11 @@ fn exec_polysurface_division(rng: &mut StdRng) -> bool {
         {
             let p = f64::from(i) / 3.0;
             let q = f64::from(j) / 3.0;
-            let pt0 = Point3::from_vec(
-                poly.evaluate(u[0], v[0]).to_vec() * (1.0 - p) * (1.0 - q)
-                    + poly.evaluate(u[1], v[0]).to_vec() * p * (1.0 - q)
-                    + poly.evaluate(u[0], v[1]).to_vec() * (1.0 - p) * q
-                    + poly.evaluate(u[1], v[1]).to_vec() * p * q,
+            let pt0 = Point3::from(
+                poly.evaluate(u[0], v[0]).position_vector() * (1.0 - p) * (1.0 - q)
+                    + poly.evaluate(u[1], v[0]).position_vector() * p * (1.0 - q)
+                    + poly.evaluate(u[0], v[1]).position_vector() * (1.0 - p) * q
+                    + poly.evaluate(u[1], v[1]).position_vector() * p * q,
             );
             let u = u[0] * (1.0 - p) + u[1] * p;
             let v = v[0] * (1.0 - q) + v[1] * q;

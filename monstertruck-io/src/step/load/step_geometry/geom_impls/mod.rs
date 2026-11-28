@@ -4,18 +4,18 @@
 //! below need them.
 
 use super::{
-    BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, BsplineSurface, Conic2D, Conic3D,
-    Curve2D, Curve3D, CurveParameter, CurveTrimRef, Cut, ElementarySurface, Ellipse,
-    EuclideanSpace, ExactParameterBoundary2D, ExtrusionSurface, Hyperbola, IncludeCurve,
-    InnerSpace, IntersectionCurve, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4,
-    MetricSpace, NurbsCurve, NurbsSurface, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
+    AffinePoint, BoundaryCurveFromSamples, BoundedCurve, BsplineCurve, BsplineSurface, Conic2D,
+    Conic3D, Curve2D, Curve3D, CurveParameter, CurveTrimRef, Cut, ElementarySurface, Ellipse,
+    ExactParameterBoundary2D, ExtrusionSurface, GeometryTransform, Hyperbola, IncludeCurve,
+    IntersectionCurve, Invertible, KERNEL_EPSILON, KnotVector, Line, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, NurbsSurface, Origin, Parabola, ParameterBoundary2D, ParameterCurve,
     ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface,
     Plane, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, SearchParameterHint2D, Sphere, SphericalSurface, SquareMatrix,
-    StepConvertingError, StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve,
-    SurfaceCurve3D, SurfaceCurveAssociatedGeometry, SurfaceCurveTrimRef, SweepSurface,
-    ToSameGeometry, Tolerance, ToroidalSurface, Torus, Transform, Transformed, TrimmedCurve,
-    UnitCircle, UnitHyperbola, UnitParabola, Vector3, Vector4, uv_clamp,
+    SearchParameterHint1D, SearchParameterHint2D, Sphere, SphericalSurface, StepConvertingError,
+    StepParameterCurve, StepRevolutionSurface, Surface, SurfaceCurve, SurfaceCurve3D,
+    SurfaceCurveAssociatedGeometry, SurfaceCurveTrimRef, SweepSurface, ToSameGeometry, Tolerance,
+    ToroidalSurface, Torus, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola,
+    Vector3, Vector4, uv_clamp,
 };
 use monstertruck_geometry::prelude::{
     HomogeneousSurfaceConversion, SupportsExactPatchDomains, SurfaceParameterRectangle,

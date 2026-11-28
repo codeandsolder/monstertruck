@@ -92,7 +92,7 @@ fn profile_generated_difference_matrix() -> Result<()> {
         profile_box(Point3::new(3.0, 2.0, 0.0), Point3::new(7.0, 4.0, 4.0))?;
     let transformed_profile_cutter = builder::transformed(
         &profile_cutter_at_origin,
-        Matrix4::from_translation(Vector3::new(0.0, 0.0, -1.0)),
+        Matrix4::new_translation(&Vector3::new(0.0, 0.0, -1.0)),
     );
 
     for (label, solid) in [
@@ -199,7 +199,7 @@ fn revolved_cylinder_minus_axis_touching_radial_slot() -> Result<()> {
     let shell: Shell = builder::revolve_wire(
         &outward_profile,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
         builder::SweepAngle::Closed,
         2,
     )?;

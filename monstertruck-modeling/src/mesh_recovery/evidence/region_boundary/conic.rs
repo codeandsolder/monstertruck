@@ -3,7 +3,7 @@
 //! parametrization of ellipse, parabola and hyperbola branches alike.
 
 use super::SurfaceCarrier;
-use crate::{BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
+use crate::{BsplineCurve, Curve, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// Independently constrained noncircular conic on a linear surface of
@@ -102,14 +102,14 @@ impl ContactConicEvidence {
         else {
             return Vec::new();
         };
-        let cross = first_axis.cross(*second_axis);
-        let denominator = cross.magnitude2();
+        let cross = first_axis.cross(second_axis);
+        let denominator = cross.norm_squared();
         if denominator <= 64.0 * f64::EPSILON {
             return Vec::new();
         }
         let delta = second_origin - first_origin;
-        let first_axial = delta.cross(*second_axis).dot(cross) / denominator;
-        let second_axial = delta.cross(*first_axis).dot(cross) / denominator;
+        let first_axial = delta.cross(second_axis).dot(&cross) / denominator;
+        let second_axial = delta.cross(first_axis).dot(&cross) / denominator;
         let left = first_origin + first_axis * first_axial;
         let right = second_origin + second_axis * second_axial;
         let radius = first_slope.mul_add(first_axial, *first_radius);
@@ -117,7 +117,7 @@ impl ContactConicEvidence {
         if !radius.is_finite()
             || !other_radius.is_finite()
             || radius.min(other_radius) <= 0.0
-            || (left - right).magnitude() > tolerance
+            || (left - right).norm() > tolerance
             || (radius - other_radius).abs() > tolerance
             || first_slope.abs().max(second_slope.abs()) * radius.max(other_radius) > tolerance
         {
@@ -147,14 +147,14 @@ impl ContactConicEvidence {
 
     fn direction(self, point: Point3) -> Option<Vector3> {
         let delta = point - self.origin;
-        let radial = delta - self.axis * delta.dot(self.axis);
-        let norm = radial.magnitude();
+        let radial = delta - self.axis * delta.dot(&self.axis);
+        let norm = radial.norm();
         (norm.is_finite() && norm > 0.0).then(|| radial / norm)
     }
 
     pub(super) fn angular_step(self, a: Point3, b: Point3) -> Option<f64> {
         let (u, v) = (self.direction(a)?, self.direction(b)?);
-        Some(self.axis.dot(u.cross(v)).atan2(u.dot(v)))
+        Some(self.axis.dot(&u.cross(&v)).atan2(u.dot(&v)))
     }
 
     // Let D/W be the rational circle direction (homogeneous quadratic).
@@ -165,9 +165,9 @@ impl ContactConicEvidence {
     // Thus a homogeneous linear map of the circular controls gives the
     // exact conic; no sampled spline approximation is needed.
     fn homogeneous(self, direction: Vector3, weight: f64) -> Option<Vector4> {
-        let axial_normal = self.plane_normal.dot(self.axis);
-        let plane_offset = self.plane_normal.dot(self.origin - self.plane_origin);
-        let radial_normal = self.plane_normal.dot(direction);
+        let axial_normal = self.plane_normal.dot(&self.axis);
+        let plane_offset = self.plane_normal.dot(&(self.origin - self.plane_origin));
+        let radial_normal = self.plane_normal.dot(&direction);
         let denominator = self.slope.mul_add(radial_normal, axial_normal * weight);
         let axial_numerator = -self
             .radius_at_origin
@@ -192,8 +192,8 @@ impl ContactConicEvidence {
             return None;
         }
         let point = self.origin.to_homogeneous() * denominator
-            + self.axis.extend(0.0) * axial_numerator
-            + direction.extend(0.0) * radial_numerator;
+            + self.axis.push(0.0) * axial_numerator
+            + direction.push(0.0) * radial_numerator;
         (point.x.is_finite() && point.y.is_finite() && point.z.is_finite()).then_some(point)
     }
 
@@ -245,19 +245,22 @@ impl ContactConicEvidence {
         else {
             return self.secondary.is_none();
         };
-        let origin = origin.to_homogeneous().truncate();
+        let origin = origin.coords;
         let mut local_scale = 0.0_f64;
         let mut coordinate_scale = 0.0_f64;
         let mut min_weight = f64::INFINITY;
         let mut min_radius = f64::INFINITY;
         let data = controls.map(|p| {
-            let delta = p.truncate() - origin * p.w;
-            let axial = delta.dot(axis);
+            let delta = p.fixed_rows::<3>(0).into_owned() - origin * p.w;
+            let axial = delta.dot(&axis);
             let radial = delta - axis * axial;
             let radius = slope.mul_add(axial, radius_at_origin * p.w);
-            coordinate_scale =
-                coordinate_scale.max(origin.magnitude().mul_add(p.w, p.truncate().magnitude()));
-            local_scale = local_scale.max(delta.magnitude() + radius.abs());
+            coordinate_scale = coordinate_scale.max(
+                origin
+                    .norm()
+                    .mul_add(p.w, p.fixed_rows::<3>(0).into_owned().norm()),
+            );
+            local_scale = local_scale.max(delta.norm() + radius.abs());
             min_weight = min_weight.min(p.w);
             min_radius = min_radius.min(radius / p.w);
             (radial, radius)
@@ -265,7 +268,7 @@ impl ContactConicEvidence {
         if min_weight <= 0.0 || min_radius <= 0.0 {
             return false;
         }
-        let q = |i: usize, j: usize| (-data[i].1).mul_add(data[j].1, data[i].0.dot(data[j].0));
+        let q = |i: usize, j: usize| (-data[i].1).mul_add(data[j].1, data[i].0.dot(&data[j].0));
         let bound = [
             q(0, 0),
             q(0, 1),
@@ -298,12 +301,12 @@ impl ContactConicEvidence {
         // branch. Endpoint consistency is also checked by native Edge.
         let rho = |p: Point3| {
             let delta = p - self.origin;
-            (delta - self.axis * delta.dot(self.axis)).magnitude()
+            (delta - self.axis * delta.dot(&self.axis)).norm()
         };
         if step * sweep <= 0.0
             || (step - sweep).abs() * rho(a).max(rho(b)) > tolerance * 4.0
-            || (self.projected(a)? - a).magnitude() > tolerance
-            || (self.projected(b)? - b).magnitude() > tolerance
+            || (self.projected(a)? - a).norm() > tolerance
+            || (self.projected(b)? - b).norm() > tolerance
         {
             return None;
         }
@@ -344,7 +347,7 @@ fn measure_conic(
     let mut sign = 0.0_f64;
     for &id in ids {
         let point = *points.get(id)?;
-        let deviation = (conic.projected(point)? - point).magnitude();
+        let deviation = (conic.projected(point)? - point).norm();
         if deviation > tolerance {
             return None;
         }
@@ -381,7 +384,7 @@ mod tests {
     fn finite_plane_sections_are_exact_rational_quadratics()
     -> Result<(), Box<dyn std::error::Error>> {
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         // Oblique cylinder ellipse, cone ellipse, parabola and hyperbola.
         for (slope, tilt) in [(0.0, 0.5), (0.5, 0.5), (1.0, 1.0), (1.0, 2.0)] {
             let plane_origin = Point3::new(0.0, 0.0, 1.0);
@@ -408,8 +411,8 @@ mod tests {
                 supplied_conic(&points, &[0, 1, 2], &carriers, 1.0e-10).ok_or("missing conic")?;
             let plane = Surface::Plane(Plane::new(
                 plane_origin,
-                plane_origin + Vector3::unit_y(),
-                plane_origin + normal.cross(Vector3::unit_y()),
+                plane_origin + Vector3::y(),
+                plane_origin + normal.cross(&Vector3::y()),
             ));
             let revolution = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
                 Curve::Line(Line(
@@ -445,7 +448,7 @@ mod tests {
     fn intersecting_cylinders_certify_both_bisectors_at_arbitrary_angles()
     -> Result<(), Box<dyn std::error::Error>> {
         let center = Point3::new(10.0, -5.0, 7.0);
-        let a = Vector3::unit_z();
+        let a = Vector3::z();
         for angle in [0.3_f64, 0.8, 1.57, 2.2] {
             let b = Vector3::new(angle.sin(), 0.0, angle.cos());
             let carriers = [
@@ -503,19 +506,19 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
         let other = SurfaceCarrier::LinearRevolution {
             origin,
-            axis: Vector3::unit_x(),
+            axis: Vector3::x(),
             radius_at_origin: std::f64::consts::FRAC_1_SQRT_2,
             slope: 0.0,
         };
         let plane = SurfaceCarrier::Plane {
             origin,
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         };
         let mut section =
             ContactConicEvidence::from_carriers(&[cylinder, plane]).ok_or("section")?;
@@ -538,7 +541,7 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let cone = SurfaceCarrier::LinearRevolution {
             origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 2.0,
             slope: 1.0,
         };

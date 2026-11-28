@@ -325,9 +325,9 @@ fn cut_face_five_edge_boundary() {
     // Adjacent edges: front=edge[1] (1→2), back=edge[3] (3→4).
     // Build a bezier that starts near the midpoint of edge[1] and ends near
     // the midpoint of edge[3], crossing through the filleted edge region.
-    let mid1 = (pts[1] + pts[2].to_vec()) / 2.0;
-    let mid3 = (pts[3] + pts[4].to_vec()) / 2.0;
-    let mid_control = (mid1 + mid3.to_vec()) / 2.0;
+    let mid1 = (pts[1] + pts[2].position_vector()) / 2.0;
+    let mid3 = (pts[3] + pts[4].position_vector()) / 2.0;
+    let mid_control = (mid1 + mid3.position_vector()) / 2.0;
     let bezier: NurbsCurve<Vector4> = NurbsCurve::from(BsplineCurve::new_unchecked(
         KnotVector::bezier_knot(2),
         vec![mid1, mid_control, mid3],

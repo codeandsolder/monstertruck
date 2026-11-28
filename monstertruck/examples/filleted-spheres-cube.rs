@@ -13,8 +13,8 @@ use monstertruck_geometry::prelude::{
 use monstertruck_io::step::save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel};
 use monstertruck_mesh::PolylineCurve as PolylineCurve2;
 use monstertruck_modeling::{
-    Curve, Curve2D, Edge, EuclideanSpace, NurbsCurve, ParameterDivision1D, Point3, Rad, Solid,
-    Surface, SurfaceCurve, Tolerance, Vector3, Wire, builder,
+    AffinePoint, Curve, Curve2D, Edge, NurbsCurve, ParameterDivision1D, Point3, Solid, Surface,
+    SurfaceCurve, Tolerance, Vector3, Wire, builder,
 };
 use monstertruck_solid::{GeometryPolicy, difference, or};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
@@ -178,13 +178,12 @@ fn sampled_face_trim(edge: &Edge, surface: &Surface, tolerance: f64) -> Option<E
             .into_iter()
             .map(|point| {
                 let uv = surface
-                    .search_parameter(point, hint.map(Into::into), 50)
-                    .or_else(|| surface.search_nearest_parameter(point, hint.map(Into::into), 50))
+                    .search_parameter(point, hint, 50)
+                    .or_else(|| surface.search_nearest_parameter(point, hint, 50))
                     .or_else(|| surface.search_parameter(point, None, 50))
-                    .or_else(|| surface.search_nearest_parameter(point, None, 50))
-                    .map(Point2::from)?;
+                    .or_else(|| surface.search_nearest_parameter(point, None, 50))?;
                 hint = Some(uv);
-                Some(uv)
+                Some(Point2::new(uv.0, uv.1))
             })
             .collect::<Option<Vec<_>>>()?;
         if boundary.len() < 2 {
@@ -259,19 +258,19 @@ fn sphere(center: Point3, radius: f64) -> Result<Solid> {
     let wire: Wire = builder::revolve(
         &top,
         Point3::origin(),
-        Vector3::unit_x(),
-        builder::SweepAngle::Partial(Rad(PI)),
+        Vector3::x(),
+        builder::SweepAngle::Partial(PI),
         3,
     )?;
     let shell = builder::revolve_wire(
         &wire,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         4,
     )?;
     let s = Solid::new_unchecked(vec![shell]);
-    Ok(builder::translated(&s, center.to_vec()))
+    Ok(builder::translated(&s, center.position_vector()))
 }
 
 fn main() -> Result<()> {
@@ -280,9 +279,9 @@ fn main() -> Result<()> {
 
     // Unit cube at origin.
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube = builder::extrude(&f, Vector3::z());
 
     // Tetrahedral group A -- subtract these four corners.
     let subtract = [

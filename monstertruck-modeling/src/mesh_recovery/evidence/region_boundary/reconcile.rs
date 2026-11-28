@@ -7,7 +7,7 @@ use super::{
     RegionBoundaryError, RegionBoundaryIndex, SharedTrimGeometry, SharedTrimOptions,
     SurfaceCarrier, SurfaceRegionPartition, trim_intersections::supplied_circles,
 };
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Explicit policy for changing the source geometry. Independent trim-fit
@@ -185,11 +185,11 @@ impl RegionBoundaryIndex<'_> {
                     .is_some_and(|r| r.upper_bound <= trim.absolute_tolerance)
                     || circle.max_step_radians
                         > std::f64::consts::FRAC_PI_2 + trim.relative_tolerance
-                    || circle.normal.cross(normal).magnitude() > options.max_normal_angle.sin()
+                    || circle.normal.cross(&normal).norm() > options.max_normal_angle.sin()
                 {
                     continue;
                 }
-                let normal = if circle.normal.dot(normal) < 0.0 {
+                let normal = if circle.normal.dot(&normal) < 0.0 {
                     -circle.normal
                 } else {
                     circle.normal
@@ -246,16 +246,16 @@ impl RegionBoundaryIndex<'_> {
                 continue;
             };
             let angle = normal
-                .cross(seed.normal)
-                .magnitude()
-                .atan2(normal.dot(seed.normal));
+                .cross(&seed.normal)
+                .norm()
+                .atan2(normal.dot(&seed.normal));
             if angle > options.max_normal_angle {
                 continue;
             }
             // Do not absorb a separately resolved parallel plane, even
             // when its separation lies inside the displacement budget.
             if angle <= options.parallel_angle_tolerance
-                && (origin - seed.origin).dot(seed.normal).abs() > options.intersection_tolerance
+                && (origin - seed.origin).dot(&seed.normal).abs() > options.intersection_tolerance
             {
                 continue;
             }
@@ -265,9 +265,9 @@ impl RegionBoundaryIndex<'_> {
                 let support = &self.evidence.planar_supports[id];
                 if support
                     .normal
-                    .cross(seed.normal)
-                    .magnitude()
-                    .atan2(support.normal.dot(seed.normal))
+                    .cross(&seed.normal)
+                    .norm()
+                    .atan2(support.normal.dot(&seed.normal))
                     + support.max_normal_angle_radians
                     > options.max_normal_angle
                 {
@@ -278,7 +278,7 @@ impl RegionBoundaryIndex<'_> {
                     for &v in self.evidence.source_polygon_vertices(polygon)? {
                         residual = residual.max(
                             (self.evidence.positions[v] - seed.origin)
-                                .dot(seed.normal)
+                                .dot(&seed.normal)
                                 .abs(),
                         );
                     }
@@ -352,7 +352,7 @@ impl RegionBoundaryIndex<'_> {
             for edge in &path.edges {
                 for v in edge.vertices {
                     if (self.evidence.positions[v] - seed.origin)
-                        .dot(seed.normal)
+                        .dot(&seed.normal)
                         .abs()
                         <= tolerance
                     {
@@ -466,7 +466,7 @@ impl RegionBoundaryIndex<'_> {
             .positions
             .iter()
             .zip(&self.evidence.positions)
-            .map(|(p, q)| (*p - *q).magnitude())
+            .map(|(p, q)| (*p - *q).norm())
             .fold(0.0_f64, f64::max);
         result.planes.push(proposal);
         Ok(true)
@@ -478,7 +478,7 @@ fn polygon_area(points: &[Point3], ids: &[usize]) -> Vector3 {
     ids.iter()
         .zip(ids.iter().cycle().skip(1))
         .fold(Vector3::new(0.0, 0.0, 0.0), |area, (&a, &b)| {
-            area + (points[a] - origin).cross(points[b] - origin)
+            area + (points[a] - origin).cross(&(points[b] - origin))
         })
 }
 
@@ -497,7 +497,7 @@ pub(super) fn preserves_polygon_orientation(
                 };
                 let old = polygon_area(&evidence.positions, ids);
                 let new = polygon_area(positions, ids);
-                new.dot(old) > 0.0
+                new.dot(&old) > 0.0
                     && ids
                         .iter()
                         .zip(ids.iter().cycle().skip(1))
@@ -622,9 +622,9 @@ fn admissible_offsets(
             let SurfaceCarrier::Plane { origin, normal } = carrier else {
                 continue;
             };
-            let residual = (c.source + offset - origin).dot(normal);
+            let residual = (c.source + offset - origin).dot(&normal);
             let independent = orthogonal_component(normal, &basis);
-            let length = independent.magnitude();
+            let length = independent.norm();
             if length > options.parallel_angle_tolerance {
                 let direction = independent / length;
                 offset -= direction * (residual / length);
@@ -635,12 +635,12 @@ fn admissible_offsets(
         }
         let available = options
             .max_displacement
-            .mul_add(options.max_displacement, -offset.magnitude2());
+            .mul_add(options.max_displacement, -offset.norm_squared());
         if available < 0.0 {
             return None;
         }
-        let center = (c.source + offset - seed.origin).dot(seed.normal);
-        let span = available.sqrt() * orthogonal_component(seed.normal, &basis).magnitude();
+        let center = (c.source + offset - seed.origin).dot(&seed.normal);
+        let span = available.sqrt() * orthogonal_component(seed.normal, &basis).norm();
         // Several fully constrained corner vertices may give a
         // zero-width interval. Preserve the intersection under the
         // declared numerical residual, not bitwise equality of offsets.
@@ -651,7 +651,9 @@ fn admissible_offsets(
 }
 
 fn orthogonal_component(vector: Vector3, basis: &[Vector3]) -> Vector3 {
-    basis.iter().fold(vector, |v, &axis| v - axis * v.dot(axis))
+    basis
+        .iter()
+        .fold(vector, |v, &axis| v - axis * v.dot(&axis))
 }
 
 fn place_plane(
@@ -664,7 +666,7 @@ fn place_plane(
         .iter()
         .map(|c| {
             (c.source - seed.origin)
-                .dot(seed.normal)
+                .dot(&seed.normal)
                 .clamp(lower, upper)
         })
         .collect::<Vec<_>>();
@@ -727,7 +729,7 @@ fn consider_placement(
         let Some(point) = reconcile_point(c.source, &carriers, options) else {
             return;
         };
-        let displacement = (point - c.source).magnitude();
+        let displacement = (point - c.source).norm();
         maximum = maximum.max(displacement);
         squared = displacement.mul_add(displacement, squared);
         if best.as_ref().is_some_and(|b| maximum > b.max_displacement) {
@@ -759,15 +761,15 @@ fn noncollinear(points: &[Point3], ids: &BTreeSet<usize>, tolerance: f64) -> boo
     let Some(direction) = ids
         .iter()
         .map(|&id| points[id] - origin)
-        .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))
+        .max_by(|a, b| a.norm_squared().total_cmp(&b.norm_squared()))
     else {
         return false;
     };
-    let span = direction.magnitude();
+    let span = direction.norm();
     span > tolerance
         && ids
             .iter()
-            .any(|&id| direction.cross(points[id] - origin).magnitude() > tolerance * span)
+            .any(|&id| direction.cross(&(points[id] - origin)).norm() > tolerance * span)
 }
 
 // Gauss-Newton with a rank-revealing orthogonal constraint basis in R³.
@@ -788,10 +790,10 @@ pub(super) fn reconcile_point(
                 basis
                     .iter()
                     .fold((normal, -error), |(n, r), &(axis, value)| {
-                        let projection = n.dot(axis);
+                        let projection = n.dot(&axis);
                         (n - axis * projection, (-projection).mul_add(value, r))
                     });
-            let length = orthogonal.magnitude();
+            let length = orthogonal.norm();
             if length > options.parallel_angle_tolerance {
                 basis.push((orthogonal / length, rhs / length));
             }
@@ -805,7 +807,7 @@ pub(super) fn reconcile_point(
                 sum + axis * value
             });
         point += delta;
-        if (point - source).magnitude() > options.max_displacement {
+        if (point - source).norm() > options.max_displacement {
             return None;
         }
     }
@@ -828,7 +830,7 @@ mod tests {
     #[test]
     fn plane_placement_preserves_fully_constrained_bevel_corners()
     -> Result<(), Box<dyn std::error::Error>> {
-        let axis = Vector3::unit_x();
+        let axis = Vector3::x();
         let seed = PlaneSeed {
             origin: Point3::new(0.0, 0.0, 0.0),
             normal: axis,
@@ -842,7 +844,7 @@ mod tests {
                 others: vec![
                     SurfaceCarrier::Plane {
                         origin: corner,
-                        normal: Vector3::unit_y(),
+                        normal: Vector3::y(),
                     },
                     SurfaceCarrier::Plane {
                         origin: corner,
@@ -867,8 +869,8 @@ mod tests {
         ];
         let placement = place_plane(seed, &constraints, options()).ok_or("placement")?;
         assert!((placement.shift - 0.005).abs() <= 2.0e-9);
-        assert!((placement.changes[0].1 - corner).magnitude() < 1.0e-9);
-        assert!((placement.changes[1].1 - Point3::new(0.005, 1.0, 0.0)).magnitude() < 2.0e-9);
+        assert!((placement.changes[0].1 - corner).norm() < 1.0e-9);
+        assert!((placement.changes[1].1 - Point3::new(0.005, 1.0, 0.0)).norm() < 2.0e-9);
         assert!(placement.max_displacement <= options().max_displacement);
         Ok(())
     }
@@ -878,7 +880,7 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let seed = PlaneSeed {
             origin,
-            normal: Vector3::unit_x(),
+            normal: Vector3::x(),
             region: 0,
         };
         let constraints = [origin, Point3::new(0.005, 1.0, 0.0)]
@@ -887,7 +889,7 @@ mod tests {
             .map(|(vertex, source)| VertexConstraints {
                 vertex,
                 source,
-                others: [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()]
+                others: [Vector3::x(), Vector3::y(), Vector3::z()]
                     .into_iter()
                     .map(|normal| SurfaceCarrier::Plane {
                         origin: source,
@@ -907,21 +909,21 @@ mod tests {
         let carriers = [
             SurfaceCarrier::CircularRevolution {
                 axial_center: origin,
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 0.0,
                 profile_radius: 1.0,
             },
             SurfaceCarrier::Plane {
                 origin,
-                normal: Vector3::unit_z(),
+                normal: Vector3::z(),
             },
             SurfaceCarrier::Plane {
                 origin,
-                normal: Vector3::unit_y(),
+                normal: Vector3::y(),
             },
         ];
         let result = reconcile_point(point, &carriers, options()).ok_or("point")?;
-        assert!((result - Point3::new(1.0, 0.0, 0.0)).magnitude() < 1.0e-9);
+        assert!((result - Point3::new(1.0, 0.0, 0.0)).norm() < 1.0e-9);
         Ok(())
     }
 }

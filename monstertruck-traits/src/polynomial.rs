@@ -9,11 +9,11 @@ use crate::{
     SearchNearestParameter, SearchParameter, SearchParameterHint1D, SurfaceParameterRange, algo,
 };
 use monstertruck_core::{
-    cgmath64::{
-        ElementWise, EuclideanSpace, InnerSpace, MetricSpace, Point1, Point2, Point3, Vector1,
+    hash::HashGen,
+    math::{
+        AffinePoint, ComponentWise, InnerProduct, MetricSpace, Point1, Point2, Point3, Vector1,
         Vector3, Zero,
     },
-    hash::HashGen,
     tolerance::Tolerance,
 };
 use std::ops::Bound;
@@ -41,9 +41,9 @@ fn falling_factorial(value: usize, order: usize) -> f64 {
 
 /// polynomial curve
 #[derive(Clone, Debug)]
-pub struct PolynomialCurve<P: EuclideanSpace<Scalar = f64>>(pub Vec<P::Diff>);
+pub struct PolynomialCurve<P: AffinePoint<Scalar = f64>>(pub Vec<P::Diff>);
 
-impl<P: EuclideanSpace<Scalar = f64>> ParametricCurve for PolynomialCurve<P> {
+impl<P: AffinePoint<Scalar = f64>> ParametricCurve for PolynomialCurve<P> {
     type Point = P;
     type Vector = P::Diff;
     fn derivative_n(&self, n: usize, t: f64) -> P::Diff {
@@ -55,7 +55,7 @@ impl<P: EuclideanSpace<Scalar = f64>> ParametricCurve for PolynomialCurve<P> {
         res
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> P { P::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> P { P::from_coordinates(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> P::Diff { self.derivative_n(1, t) }
     #[inline]
@@ -66,12 +66,12 @@ impl<P: EuclideanSpace<Scalar = f64>> ParametricCurve for PolynomialCurve<P> {
     }
 }
 
-impl<P: EuclideanSpace<Scalar = f64>> BoundedCurve for PolynomialCurve<P> {
+impl<P: AffinePoint<Scalar = f64>> BoundedCurve for PolynomialCurve<P> {
     fn range_tuple(&self) -> (f64, f64) { (-100.0, 100.0) }
 }
 
 impl<P> ParameterDivision1D for PolynomialCurve<P>
-where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
+where P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
 {
     type Point = P;
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<Self::Point>) {
@@ -81,8 +81,8 @@ where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
 
 impl<P> SearchNearestParameter<CurveParameter> for PolynomialCurve<P>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
-    <P as EuclideanSpace>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    <P as AffinePoint>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -106,8 +106,8 @@ where
 
 impl<P> SearchParameter<CurveParameter> for PolynomialCurve<P>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
-    <P as EuclideanSpace>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    <P as AffinePoint>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     fn search_parameter<H: Into<SearchParameterHint1D>>(
@@ -131,18 +131,18 @@ where
 
 impl<P> std::ops::Add for &PolynomialCurve<P>
 where
-    P: EuclideanSpace<Scalar = f64>,
-    P::Diff: ElementWise,
+    P: AffinePoint<Scalar = f64>,
+    P::Diff: ComponentWise,
 {
     type Output = PolynomialCurve<P>;
     fn add(self, rhs: Self) -> PolynomialCurve<P> {
         if self.0.len() < rhs.0.len() {
             let mut vec = rhs.0.clone();
-            vec.iter_mut().zip(&self.0).for_each(|(x, &y)| *x = *x + y);
+            vec.iter_mut().zip(&self.0).for_each(|(x, &y)| *x += y);
             PolynomialCurve(vec)
         } else {
             let mut vec = self.0.clone();
-            vec.iter_mut().zip(&rhs.0).for_each(|(x, &y)| *x = *x + y);
+            vec.iter_mut().zip(&rhs.0).for_each(|(x, &y)| *x += y);
             PolynomialCurve(vec)
         }
     }
@@ -150,8 +150,8 @@ where
 
 impl<P> std::ops::Mul for &PolynomialCurve<P>
 where
-    P: EuclideanSpace<Scalar = f64>,
-    P::Diff: ElementWise,
+    P: AffinePoint<Scalar = f64>,
+    P::Diff: ComponentWise,
 {
     type Output = PolynomialCurve<P>;
     fn mul(self, rhs: Self) -> PolynomialCurve<P> {
@@ -159,7 +159,7 @@ where
         let iter = (0..n).map(|n| {
             (0..=n).fold(P::Diff::zero(), |sum, i| {
                 if i < self.0.len() && n - i < rhs.0.len() {
-                    sum + self.0[i].mul_element_wise(rhs.0[n - i])
+                    sum + self.0[i].component_product(rhs.0[n - i])
                 } else {
                     sum
                 }
@@ -171,9 +171,9 @@ where
 
 /// polynomial surface
 #[derive(Clone, Debug)]
-pub struct PolynomialSurface<P: EuclideanSpace<Scalar = f64>>(pub Vec<Vec<P::Diff>>);
+pub struct PolynomialSurface<P: AffinePoint<Scalar = f64>>(pub Vec<Vec<P::Diff>>);
 
-impl<P: EuclideanSpace<Scalar = f64>> ParametricSurface for PolynomialSurface<P> {
+impl<P: AffinePoint<Scalar = f64>> ParametricSurface for PolynomialSurface<P> {
     type Point = P;
     type Vector = P::Diff;
     #[inline]
@@ -191,7 +191,7 @@ impl<P: EuclideanSpace<Scalar = f64>> ParametricSurface for PolynomialSurface<P>
         res
     }
     #[inline]
-    fn evaluate(&self, u: f64, v: f64) -> P { P::from_vec(self.derivative_mn(0, 0, u, v)) }
+    fn evaluate(&self, u: f64, v: f64) -> P { P::from_coordinates(self.derivative_mn(0, 0, u, v)) }
     #[inline]
     fn derivative_u(&self, u: f64, v: f64) -> P::Diff { self.derivative_mn(1, 0, u, v) }
     #[inline]
@@ -215,17 +215,17 @@ impl ParametricSurface3D for PolynomialSurface<Point3> {
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         self.derivative_u(u, v)
-            .cross(self.derivative_v(u, v))
+            .cross(&self.derivative_v(u, v))
             .normalize()
     }
 }
 
-impl<P: EuclideanSpace<Scalar = f64>> BoundedSurface for PolynomialSurface<P> {
+impl<P: AffinePoint<Scalar = f64>> BoundedSurface for PolynomialSurface<P> {
     fn range_tuple(&self) -> SurfaceParameterRange { ((-100.0, 100.0), (-50.0, 50.0)) }
 }
 
 impl<P> ParameterDivision2D for PolynomialSurface<P>
-where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
+where P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
 {
     fn parameter_division(&self, range: SurfaceParameterRange, tol: f64) -> (Vec<f64>, Vec<f64>) {
         algo::surface::parameter_division(self, range, tol)
@@ -234,8 +234,8 @@ where P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>
 
 impl<P> PolynomialSurface<P>
 where
-    P: EuclideanSpace<Scalar = f64>,
-    P::Diff: ElementWise,
+    P: AffinePoint<Scalar = f64>,
+    P::Diff: ComponentWise,
 {
     /// create polysurface by tensor product e.g. (u^2 + 2u + 2) * (v^2 + 3v - 2)
     #[must_use = "The newly constructed value is returned rather than retained by this constructor."]
@@ -244,7 +244,7 @@ where
         let PolynomialCurve(curve1) = curve1;
         let vec = curve0
             .into_iter()
-            .map(|p| curve1.iter().map(|&q| p.mul_element_wise(q)).collect())
+            .map(|p| curve1.iter().map(|&q| p.component_product(q)).collect())
             .collect();
         Self(vec)
     }

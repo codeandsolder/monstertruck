@@ -75,7 +75,7 @@ impl BoundaryFacetInput {
 mod tests {
     use super::*;
     use crate::{
-        BsplineCurve, EuclideanSpace, KnotVector, NurbsCurve, Vector4,
+        AffinePoint, BsplineCurve, KnotVector, NurbsCurve, Vector4,
         mesh_recovery::{
             BoundaryPatchError, BoundaryPatchOptions, PrescribedSourceEdge, SurfaceRegionBudget,
             approximate_boundary_patch,
@@ -98,9 +98,9 @@ mod tests {
         let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
             KnotVector::bezier_knot(2),
             vec![
-                source[0].to_vec().extend(1.0),
+                source[0].position_vector().push(1.0),
                 Vector4::new(0.2, 0.5, 0.0, 1.0),
-                source[1].to_vec().extend(1.0),
+                source[1].position_vector().push(1.0),
             ],
         )?));
         let edges = [

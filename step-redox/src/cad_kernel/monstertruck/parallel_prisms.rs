@@ -7,7 +7,7 @@ use super::{
     rigid_matrix,
 };
 use anyhow::Result;
-use monstertruck_modeling::{Face, SquareMatrix};
+use monstertruck_modeling::{Face, SquareLinearMap};
 use std::collections::HashMap;
 
 struct Prism<'a> {
@@ -101,10 +101,10 @@ struct PlacedProfile {
 fn affine(matrix: Matrix4) -> bool {
     let values: &[f64; 16] = matrix.as_ref();
     values.iter().all(|v| v.is_finite())
-        && matrix.x.w == 0.0
-        && matrix.y.w == 0.0
-        && matrix.z.w == 0.0
-        && matrix.w.w.to_bits() == 1.0_f64.to_bits()
+        && matrix[(3, 0)] == 0.0
+        && matrix[(3, 1)] == 0.0
+        && matrix[(3, 2)] == 0.0
+        && matrix[(3, 3)].to_bits() == 1.0_f64.to_bits()
 }
 
 /// The common chart must preserve the complete axial direction and cap
@@ -116,19 +116,25 @@ fn relative_chart(frame: Matrix4, inverse: Matrix4, transform: Matrix4) -> Optio
     if !affine(transform) {
         return None;
     }
-    let mut relative = if frame.x == transform.x && frame.y == transform.y && frame.z == transform.z
+    let mut relative = if frame.column(0).into_owned() == transform.column(0).into_owned()
+        && frame.column(1).into_owned() == transform.column(1).into_owned()
+        && frame.column(2).into_owned() == transform.column(2).into_owned()
     {
         Matrix4::identity()
     } else {
         inverse * transform
     };
-    relative.w = inverse * (transform.w - frame.w) + Vector4::new(0., 0., 0., 1.);
+    relative.set_column(
+        3,
+        &(inverse * (transform.column(3).into_owned() - frame.column(3).into_owned())
+            + Vector4::new(0., 0., 0., 1.)),
+    );
     if !affine(relative)
-        || relative.x.z != 0.0
-        || relative.y.z != 0.0
-        || relative.z.x != 0.0
-        || relative.z.y != 0.0
-        || relative.z.z == 0.0
+        || relative[(2, 0)] != 0.0
+        || relative[(2, 1)] != 0.0
+        || relative[(0, 2)] != 0.0
+        || relative[(1, 2)] != 0.0
+        || relative[(2, 2)] == 0.0
     {
         return None;
     }
@@ -139,7 +145,7 @@ fn place_profiles(prisms: &[Prism<'_>], frame: Matrix4) -> Result<Option<Vec<Pla
     if !affine(frame) {
         return Ok(None);
     }
-    let Some(inverse) = frame.invert() else {
+    let Some(inverse) = frame.try_inverse() else {
         return Ok(None);
     };
     let Some(charts) = prisms
@@ -151,13 +157,13 @@ fn place_profiles(prisms: &[Prism<'_>], frame: Matrix4) -> Result<Option<Vec<Pla
     };
     let mut placed = Vec::with_capacity(prisms.len());
     for (prism, mut chart) in prisms.iter().zip(charts) {
-        let start = chart.w.z;
-        let end = chart.z.z.mul_add(prism.length, start);
+        let start = chart[(2, 3)];
+        let end = chart[(2, 2)].mul_add(prism.length, start);
         if !end.is_finite() || end - start == 0.0 {
             return Ok(None);
         }
-        chart.w.z = 0.0;
-        chart.z.z = 1.0;
+        chart[(2, 3)] = 0.0;
+        chart[(2, 2)] = 1.0;
         let face = profile::attach_plane_normalized(profile_wires(prism.profile)?)?;
         let mut face = builder::transformed(&face, chart);
         let Surface::Plane(plane) = face.oriented_surface() else {
@@ -219,7 +225,7 @@ fn section(
     let mut boundaries = Vec::new();
     for face in regions {
         let face =
-            builder::transformed(&face, Matrix4::from_translation(Vector3::new(0., 0., low)));
+            builder::transformed(&face, Matrix4::new_translation(&Vector3::new(0., 0., low)));
         let body: Solid = builder::extrude(&face, Vector3::new(0., 0., high - low));
         boundaries.extend(body.into_boundaries());
     }
@@ -341,7 +347,7 @@ mod tests {
     fn reference_section(profile: &Profile2d, low: f64, high: f64) -> Result<Solid> {
         Ok(builder::transformed(
             &extrude_profile_z(profile, high - low)?,
-            Matrix4::from_translation(Vector3::new(0., 0., low)),
+            Matrix4::new_translation(&Vector3::new(0., 0., low)),
         ))
     }
 

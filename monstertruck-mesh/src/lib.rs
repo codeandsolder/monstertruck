@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// re-export `monstertruck_core`.
 pub mod base {
     pub use monstertruck_core::{
-        assert_near, assert_near2, bounding_box::BoundingBox, cgmath64::*, hash, hash::HashGen,
+        assert_near, assert_near2, bounding_box::BoundingBox, hash, hash::HashGen, math::*,
         prop_assert_near, prop_assert_near2, tolerance::*,
     };
     pub use monstertruck_traits::*;

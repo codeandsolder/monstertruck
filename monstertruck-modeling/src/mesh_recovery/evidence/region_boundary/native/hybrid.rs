@@ -13,7 +13,7 @@ use super::{
     geometry_constraints, junction_candidates, trim_intervals,
 };
 use crate::{
-    Edge, Face, InnerSpace, Point3, Shell, Vertex, builder,
+    Edge, Face, Point3, Shell, Vertex, builder,
     mesh_recovery::{
         BoundaryPatchError, BoundaryPatchOptions, MeshEvidence, PrescribedSourceEdge,
         ReconciledPartition, RecoveredAnalyticMesh, RegionBoundaryEdge, RegionBoundaryError,
@@ -540,7 +540,7 @@ impl HybridInput<'_> {
         let max_vertex_displacement = vertices
             .iter()
             .zip(&self.evidence.positions)
-            .filter_map(|(v, p)| v.as_ref().map(|v| (v.point() - p).magnitude()))
+            .filter_map(|(v, p)| v.as_ref().map(|v| (v.point() - p).norm()))
             .fold(0.0_f64, f64::max);
         Ok(HybridRecovery {
             native: NativeTrimGraph {
@@ -713,7 +713,7 @@ impl HybridInput<'_> {
             }
             let branch = sections.as_slice();
             let valid = |p: Point3, tolerance: f64| {
-                (p - source).magnitude() <= options.max_vertex_displacement
+                (p - source).norm() <= options.max_vertex_displacement
                     && carriers.iter().all(|carrier| {
                         carrier
                             .signed_constraint(p)
@@ -722,7 +722,7 @@ impl HybridInput<'_> {
                     && branch.iter().all(|section| {
                         section
                             .projected(p)
-                            .is_some_and(|q| (p - q).magnitude() <= tolerance)
+                            .is_some_and(|q| (p - q).norm() <= tolerance)
                     })
             };
             let fine = NativeTrimOptions {
@@ -1116,7 +1116,7 @@ mod tests {
         for (varying, major) in [(0, 3.0), (1, 3.0), (0, 1.0), (0, 0.8)] {
             let carrier = SurfaceCarrier::CircularRevolution {
                 axial_center: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: major,
                 profile_radius: 1.0,
             };

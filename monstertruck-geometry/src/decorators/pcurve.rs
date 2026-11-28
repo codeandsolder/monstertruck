@@ -1,11 +1,11 @@
 use super::{
-    BoundedCurve, CurveDerivatives, CurveParameter, Cut, ElementWise, EuclideanSpace, HashGen,
-    InnerSpace, Invertible, MAX_DER_ORDER, MetricSpace, PRESEARCH_DIVISION, ParameterCurve,
-    ParameterDivision1D, ParameterRange, ParametricCurve2D, ParametricSurface, Point2,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
-    SurfaceParameter, Tolerance, Transformed, Vector2, VectorSpace, algo,
+    AffinePoint, BoundedCurve, ComponentWise, CurveDerivatives, CurveParameter, Cut, HashGen,
+    InnerProduct, Invertible, LinearVector, MAX_DER_ORDER, MetricSpace, PRESEARCH_DIVISION,
+    ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve2D, ParametricSurface,
+    Point2, SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
+    SurfaceParameter, Tolerance, Transformed, algo,
 };
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
 impl<C, S> ParameterCurve<C, S> {
@@ -31,11 +31,11 @@ where
     C: ParametricCurve2D,
     S: ParametricSurface,
     S::Point: ControlPoint<f64, Diff = S::Vector>,
-    S::Vector: VectorSpace<Scalar = f64> + ElementWise,
+    S::Vector: LinearVector<Scalar = f64> + ComponentWise,
 {
     fn der3(&self, t: f64) -> S::Vector {
         let cders = self.curve.derivatives(3, t);
-        let Vector2 { x: u, y: v } = cders[0];
+        let [u, v] = <[f64; 2]>::from(cders[0]);
         let der = cders[1];
         let der2 = cders[2];
         let der3 = cders[3];
@@ -57,7 +57,7 @@ where
     C: ParametricCurve2D,
     S: ParametricSurface,
     S::Point: ControlPoint<f64, Diff = S::Vector>,
-    S::Vector: VectorSpace<Scalar = f64> + ElementWise,
+    S::Vector: LinearVector<Scalar = f64> + ComponentWise,
 {
     type Point = S::Point;
     type Vector = S::Vector;
@@ -78,7 +78,7 @@ where
     fn derivatives(&self, n: usize, t: f64) -> CurveDerivatives<Self::Vector> {
         let n = n.min(MAX_DER_ORDER);
         let cders = self.curve.derivatives(n, t);
-        let Vector2 { x: u, y: v } = cders[0];
+        let [u, v] = <[f64; 2]>::from(cders[0]);
         let sders = self.surface.derivatives(n, u, v);
         sders.composite_derivatives(&cders)
     }
@@ -181,9 +181,9 @@ where
 impl<C, S> SearchNearestParameter<CurveParameter> for ParameterCurve<C, S>
 where
     Self: BoundedCurve,
-    <Self as ParametricCurveTrait>::Point: EuclideanSpace<Scalar = f64, Diff = <Self as ParametricCurveTrait>::Vector>
+    <Self as ParametricCurveTrait>::Point: AffinePoint<Scalar = f64, Diff = <Self as ParametricCurveTrait>::Vector>
         + MetricSpace<Metric = f64>,
-    <Self as ParametricCurveTrait>::Vector: InnerSpace<Scalar = f64> + Tolerance,
+    <Self as ParametricCurveTrait>::Vector: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = <Self as ParametricCurveTrait>::Point;
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -209,11 +209,11 @@ impl<C, S> ParameterDivision1D for ParameterCurve<C, S>
 where
     C: ParametricCurve2D,
     S: ParametricSurface,
-    S::Point: EuclideanSpace<Scalar = f64, Diff = S::Vector>
+    S::Point: AffinePoint<Scalar = f64, Diff = S::Vector>
         + MetricSpace<Metric = f64>
         + HashGen<f64>
         + ControlPoint<f64, Diff = S::Vector>,
-    S::Vector: VectorSpace<Scalar = f64> + ElementWise,
+    S::Vector: LinearVector<Scalar = f64> + ComponentWise,
 {
     type Point = S::Point;
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<S::Point>) {

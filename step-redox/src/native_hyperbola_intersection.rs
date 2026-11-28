@@ -8,7 +8,7 @@
 
 use crate::source_edge_healing::HyperbolaHealingCandidate;
 use monstertruck_geometry::prelude::{
-    EuclideanSpace, Line, Matrix4, Plane, Point3, Processor, RevolutionSurface, Vector3,
+    AffinePoint, Line, Matrix4, Plane, Point3, Processor, RevolutionSurface, Vector3,
 };
 use monstertruck_io::step::load::step_geometry::{
     Conic3D, Curve3D, ElementarySurface, Surface, SurfaceCurve3D, SurfaceCurveAssociatedGeometry,
@@ -31,7 +31,7 @@ pub fn native_healed_intersection_curve(candidate: &HyperbolaHealingCandidate) -
     let analytic = candidate.analytic;
     let axis = analytic.cone_axis();
     let normal = analytic.plane_normal();
-    let transverse = axis.cross(normal);
+    let transverse = axis.cross(&normal);
     let origin = analytic.reference_origin();
     let point_on_plane = origin + normal * analytic.signed_plane_offset();
     let plane = Plane::new(
@@ -40,17 +40,17 @@ pub fn native_healed_intersection_curve(candidate: &HyperbolaHealingCandidate) -
         point_on_plane + axis,
     );
     let (source_x, source_y) = candidate.cone_uv.reference_axes();
-    let frame = Matrix4::from_cols(
-        source_x.extend(0.0),
-        source_y.extend(0.0),
-        axis.extend(0.0),
-        origin.to_vec().extend(1.0),
-    );
+    let frame = Matrix4::from_columns(&[
+        source_x.push(0.0),
+        source_y.push(0.0),
+        axis.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     let r0 = analytic.reference_radius();
     let slope = analytic.slope();
     let generator = Line(Point3::new(r0, 0.0, 0.0), Point3::new(r0 + slope, 0.0, 1.0));
     let cone = Processor::with_transform(
-        RevolutionSurface::by_revolution(generator, Point3::new(0.0, 0.0, 0.0), Vector3::unit_z()),
+        RevolutionSurface::by_revolution(generator, Point3::new(0.0, 0.0, 0.0), Vector3::z()),
         frame,
     );
 
@@ -78,7 +78,7 @@ mod tests {
         source_edge_locus::StepEdge,
     };
     use anyhow::{Result, bail};
-    use monstertruck_geometry::prelude::{InnerSpace, ParametricCurve, ParametricSurface};
+    use monstertruck_geometry::prelude::{InnerProduct, ParametricCurve, ParametricSurface};
     use monstertruck_io::step::{
         load::{SurfaceCurveHolder, Table, step_geometry::SurfaceCurveAssociatedGeometry},
         save::StepDisplay,
@@ -154,8 +154,8 @@ mod tests {
                     .evaluate(t)
                     .ok_or_else(|| anyhow::anyhow!("invalid cone UV parameter"))?;
                 let mapped = cone.evaluate(uv.x, uv.y);
-                assert!((mapped - point).magnitude() < 1.0e-10);
-                let residual = (point - plane.origin()).dot(plane.normal()).abs();
+                assert!((mapped - point).norm() < 1.0e-10);
+                let residual = (point - plane.origin()).dot(&plane.normal()).abs();
                 assert!(residual < 1.0e-10);
             }
             let fragment = StepDisplay::new(&geometry, 1).to_string();
@@ -215,7 +215,7 @@ mod tests {
                 })?;
                 let reimported = imported.evaluate(parameter);
                 assert!(
-                    (reimported - original).magnitude() < 1.0e-9,
+                    (reimported - original).norm() < 1.0e-9,
                     "typed native re-import must retain the exact hyperbola and both carriers"
                 );
             }

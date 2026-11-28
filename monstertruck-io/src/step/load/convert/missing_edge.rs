@@ -25,9 +25,9 @@
 //! used by Monstertruck's existing intersection-curve implementation.
 
 use super::{
-    BoundResolution, Curve3D, EdgeCurve, EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace,
-    IntersectionCurve, KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2,
-    Point3, PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
+    AffinePoint, BoundResolution, Curve3D, EdgeCurve, FaceBoundHolder, HashMap, IntersectionCurve,
+    KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2, Point3,
+    PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
     step_geometry, step_p21,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -420,11 +420,11 @@ impl Table {
             // the previous UVs only seed Newton and select the local root.
             let predictor_normal0 = first.surface.normal(expected0.x, expected0.y);
             let predictor_normal1 = second.surface.normal(expected1.x, expected1.y);
-            let tangent = predictor_normal0.cross(predictor_normal1);
-            let normal_scale = predictor_normal0.magnitude() * predictor_normal1.magnitude();
+            let tangent = predictor_normal0.cross(&predictor_normal1);
+            let normal_scale = predictor_normal0.norm() * predictor_normal1.norm();
             if !normal_scale.is_finite()
                 || normal_scale <= KERNEL_EPSILON
-                || tangent.magnitude()
+                || tangent.norm()
                     <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
             {
                 trace_recovery(edge_id, "pair_fail=predictor_tangent");
@@ -454,10 +454,10 @@ impl Table {
 
         let normal0 = first.surface.normal(uv0.x, uv0.y);
         let normal1 = second.surface.normal(uv1.x, uv1.y);
-        let normal_scale = normal0.magnitude() * normal1.magnitude();
+        let normal_scale = normal0.norm() * normal1.norm();
         if !normal_scale.is_finite()
             || normal_scale <= KERNEL_EPSILON
-            || normal0.cross(normal1).magnitude()
+            || normal0.cross(&normal1).norm()
                 <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
         {
             trace_recovery(edge_id, "pair_fail=tangent");
@@ -782,7 +782,7 @@ mod tests {
     use monstertruck_geometry::prelude::{Line, Plane, Processor, RevolutionSurface, Vector3};
 
     fn cylinder() -> Surface {
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let origin = Point3::origin();
         let point = Point3::new(1.0, 0.0, 0.0);
         Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
@@ -792,25 +792,34 @@ mod tests {
 
     fn xy_plane() -> Surface { Surface::Elementary(ElementarySurface::Plane(Plane::xy())) }
 
+    fn test_support_hint(
+        surface: &Surface,
+        front: Point3,
+        back: Point3,
+        evidence: SurfaceHintEvidence,
+    ) -> SurfaceArcHint {
+        let (u0, v0) = surface
+            .search_parameter(front, None, PROJECTION_TRIALS)
+            .expect("front lies on support");
+        let (u1, v1) = surface
+            .search_parameter(back, Some((u0, v0)), PROJECTION_TRIALS)
+            .expect("back lies on support");
+        SurfaceArcHint {
+            surface: surface.clone(),
+            evidence,
+            start_uv: Point2::new(u0, v0),
+            end_uv: Point2::new(u1, v1),
+            period_u: surface.period_u(),
+            period_v: surface.period_v(),
+        }
+    }
+
     #[test]
     fn coincident_supports_do_not_define_a_recoverable_edge() {
         let surface = cylinder();
         let front = Point3::new(1.0, 0.0, 0.0);
         let back = Point3::new(0.0, 1.0, 0.0);
-        let start = surface
-            .search_parameter(front, None, PROJECTION_TRIALS)
-            .expect("front on cylinder");
-        let end = surface
-            .search_parameter(back, Some(start), PROJECTION_TRIALS)
-            .expect("back on cylinder");
-        let hint = SurfaceArcHint {
-            surface: surface.clone(),
-            evidence: SurfaceHintEvidence::ComplementPath,
-            start_uv: start.into(),
-            end_uv: end.into(),
-            period_u: surface.period_u(),
-            period_v: surface.period_v(),
-        };
+        let hint = test_support_hint(&surface, front, back, SurfaceHintEvidence::ComplementPath);
         assert!(Table::recover_from_support_pair(0, front, back, &hint, &hint).is_none());
     }
 
@@ -832,36 +841,9 @@ mod tests {
         let plane = xy_plane();
         let front = Point3::new(1.0, 0.0, 0.0);
         let back = Point3::new(0.0, 1.0, 0.0);
-
-        let c0 = cylinder
-            .search_parameter(front, None, PROJECTION_TRIALS)
-            .expect("front on cylinder");
-        let c1 = cylinder
-            .search_parameter(back, Some(c0), PROJECTION_TRIALS)
-            .expect("back on cylinder");
-        let p0 = plane
-            .search_parameter(front, None, PROJECTION_TRIALS)
-            .expect("front on plane");
-        let p1 = plane
-            .search_parameter(back, Some(p0), PROJECTION_TRIALS)
-            .expect("back on plane");
-
-        let cylinder_hint = SurfaceArcHint {
-            surface: cylinder.clone(),
-            evidence: SurfaceHintEvidence::ComplementPath,
-            start_uv: c0.into(),
-            end_uv: c1.into(),
-            period_u: cylinder.period_u(),
-            period_v: cylinder.period_v(),
-        };
-        let plane_hint = SurfaceArcHint {
-            surface: plane.clone(),
-            evidence: SurfaceHintEvidence::SupportOnly,
-            start_uv: p0.into(),
-            end_uv: p1.into(),
-            period_u: plane.period_u(),
-            period_v: plane.period_v(),
-        };
+        let cylinder_hint =
+            test_support_hint(&cylinder, front, back, SurfaceHintEvidence::ComplementPath);
+        let plane_hint = test_support_hint(&plane, front, back, SurfaceHintEvidence::SupportOnly);
 
         let curve = Table::recover_from_support_pair(0, front, back, &cylinder_hint, &plane_hint)
             .expect("one proven path plus one native support should recover the edge");
@@ -870,7 +852,7 @@ mod tests {
         assert!(midpoint.x > 0.5);
         assert!(midpoint.y > 0.5);
         assert!(midpoint.z.abs() <= GEOMETRY_TOLERANCE);
-        assert!((midpoint.to_vec().magnitude() - 1.0).abs() <= GEOMETRY_TOLERANCE);
+        assert!((midpoint.position_vector().norm() - 1.0).abs() <= GEOMETRY_TOLERANCE);
     }
     #[test]
     fn support_only_pair_does_not_invent_a_path() {
@@ -878,34 +860,10 @@ mod tests {
         let plane = xy_plane();
         let front = Point3::new(1.0, 0.0, 0.0);
         let back = Point3::new(0.0, 1.0, 0.0);
-        let c0 = cylinder
-            .search_parameter(front, None, PROJECTION_TRIALS)
-            .expect("front lies on support");
-        let c1 = cylinder
-            .search_parameter(back, Some(c0), PROJECTION_TRIALS)
-            .expect("back lies on cylinder");
-        let p0 = plane
-            .search_parameter(front, None, PROJECTION_TRIALS)
-            .expect("front lies on support");
-        let p1 = plane
-            .search_parameter(back, Some(p0), PROJECTION_TRIALS)
-            .expect("back lies on plane");
-        let cylinder_hint = SurfaceArcHint {
-            surface: cylinder.clone(),
-            evidence: SurfaceHintEvidence::SupportOnly,
-            start_uv: c0.into(),
-            end_uv: c1.into(),
-            period_u: cylinder.period_u(),
-            period_v: cylinder.period_v(),
-        };
-        let plane_hint = SurfaceArcHint {
-            surface: plane.clone(),
-            evidence: SurfaceHintEvidence::SupportOnly,
-            start_uv: p0.into(),
-            end_uv: p1.into(),
-            period_u: plane.period_u(),
-            period_v: plane.period_v(),
-        };
+        let cylinder_hint =
+            test_support_hint(&cylinder, front, back, SurfaceHintEvidence::SupportOnly);
+        let plane_hint = test_support_hint(&plane, front, back, SurfaceHintEvidence::SupportOnly);
+
         assert!(
             Table::recover_from_support_pair(0, front, back, &cylinder_hint, &plane_hint).is_none(),
             "native supports plus endpoints alone do not prove which intersection arc was intended",
@@ -919,45 +877,11 @@ mod tests {
         let angle = 10.0_f64.to_radians();
         let front = Point3::new(angle.cos(), -angle.sin(), 0.0);
         let back = Point3::new(angle.cos(), angle.sin(), 0.0);
-
-        let c0 = Point2::from(
-            cylinder
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on cylinder"),
-        );
-        let c1_raw = Point2::from(
-            cylinder
-                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
-                .expect("back on cylinder"),
-        );
-        let c1 = unwrap_uv_near(&cylinder, c1_raw, c0);
-        let p0 = Point2::from(
-            plane
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on plane"),
-        );
-        let p1 = Point2::from(
-            plane
-                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
-                .expect("back on plane"),
-        );
-
-        let cylinder_hint = SurfaceArcHint {
-            surface: cylinder.clone(),
-            evidence: SurfaceHintEvidence::ComplementPath,
-            start_uv: c0,
-            end_uv: c1,
-            period_u: cylinder.period_u(),
-            period_v: cylinder.period_v(),
-        };
-        let plane_hint = SurfaceArcHint {
-            surface: plane.clone(),
-            evidence: SurfaceHintEvidence::SupportOnly,
-            start_uv: p0,
-            end_uv: p1,
-            period_u: plane.period_u(),
-            period_v: plane.period_v(),
-        };
+        let mut cylinder_hint =
+            test_support_hint(&cylinder, front, back, SurfaceHintEvidence::ComplementPath);
+        cylinder_hint.end_uv =
+            unwrap_uv_near(&cylinder, cylinder_hint.end_uv, cylinder_hint.start_uv);
+        let plane_hint = test_support_hint(&plane, front, back, SurfaceHintEvidence::SupportOnly);
 
         let curve = Table::recover_from_support_pair(0, front, back, &cylinder_hint, &plane_hint)
             .expect("the short seam-crossing branch is uniquely proven");
@@ -977,42 +901,10 @@ mod tests {
         let plane = xy_plane();
         let front = Point3::new(1.0, 0.0, 0.0);
         let back = Point3::new(0.0, 1.0, 0.0);
-        let c0 = Point2::from(
-            cylinder
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on cylinder"),
-        );
-        let c1 = Point2::from(
-            cylinder
-                .search_parameter(back, Some((c0.x, c0.y)), PROJECTION_TRIALS)
-                .expect("back on cylinder"),
-        );
-        let p0 = Point2::from(
-            plane
-                .search_parameter(front, None, PROJECTION_TRIALS)
-                .expect("front on plane"),
-        );
-        let p1 = Point2::from(
-            plane
-                .search_parameter(back, Some((p0.x, p0.y)), PROJECTION_TRIALS)
-                .expect("back on plane"),
-        );
-        let reversed_path = SurfaceArcHint {
-            surface: cylinder.clone(),
-            evidence: SurfaceHintEvidence::ComplementPath,
-            start_uv: c1,
-            end_uv: c0,
-            period_u: cylinder.period_u(),
-            period_v: cylinder.period_v(),
-        };
-        let plane_hint = SurfaceArcHint {
-            surface: plane.clone(),
-            evidence: SurfaceHintEvidence::SupportOnly,
-            start_uv: p0,
-            end_uv: p1,
-            period_u: plane.period_u(),
-            period_v: plane.period_v(),
-        };
+        let mut reversed_path =
+            test_support_hint(&cylinder, front, back, SurfaceHintEvidence::ComplementPath);
+        std::mem::swap(&mut reversed_path.start_uv, &mut reversed_path.end_uv);
+        let plane_hint = test_support_hint(&plane, front, back, SurfaceHintEvidence::SupportOnly);
 
         assert!(
             Table::recover_from_support_pair(0, front, back, &reversed_path, &plane_hint).is_none()

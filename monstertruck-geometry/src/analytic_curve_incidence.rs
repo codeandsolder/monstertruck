@@ -87,9 +87,9 @@ fn centered(points: &[[f64; 4]], origin: Point3, direction: Vector3) -> Option<V
 
 fn coordinates(points: &[[f64; 4]], origin: Point3) -> Option<[Vec<f64>; 4]> {
     Some([
-        centered(points, origin, Vector3::unit_x())?,
-        centered(points, origin, Vector3::unit_y())?,
-        centered(points, origin, Vector3::unit_z())?,
+        centered(points, origin, Vector3::x())?,
+        centered(points, origin, Vector3::y())?,
+        centered(points, origin, Vector3::z())?,
         points.iter().map(|p| p[3]).collect(),
     ])
 }
@@ -230,8 +230,9 @@ pub(crate) fn valid(curve: &BsplineCurve<Vector4>) -> bool {
 }
 
 fn valid_axis(axis: Vector3) -> bool {
-    axis.magnitude2().is_finite()
-        && (axis.magnitude2() - 1.0).abs() <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
+    axis.norm_squared().is_finite()
+        && (axis.norm_squared() - 1.0).abs()
+            <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
 }
 fn finite_point(p: Point3) -> bool { [p.x, p.y, p.z].iter().all(|x| x.is_finite()) }
 
@@ -462,7 +463,7 @@ mod tests {
     fn point_support() -> AnalyticSupport {
         AnalyticSupport::Plane {
             origin: p(0.0, 0.0, 0.0),
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         }
     }
     fn rational_circle(radius: f64) -> NurbsCurve<Vector4> {
@@ -508,7 +509,7 @@ mod tests {
             point_support(),
             AnalyticSupport::Cylinder {
                 origin: p(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radius: 2.0,
             },
             AnalyticSupport::Sphere {
@@ -524,7 +525,7 @@ mod tests {
         }
         let wrong = AnalyticSupport::Cylinder {
             origin: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 2.01,
         };
         assert_eq!(
@@ -539,7 +540,7 @@ mod tests {
         curve.control_points_mut().nth(1).expect("middle control").x += 0.01;
         let cylinder = AnalyticSupport::Cylinder {
             origin: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 2.0,
         };
         assert_eq!(
@@ -556,7 +557,7 @@ mod tests {
         );
         let cone = AnalyticSupport::Cone {
             apex: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             slope: 1.0,
             positive_nappe: true,
         };
@@ -566,7 +567,7 @@ mod tests {
         );
         let opposite = AnalyticSupport::Cone {
             apex: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             slope: 1.0,
             positive_nappe: false,
         };
@@ -581,7 +582,7 @@ mod tests {
         let circle = rational_circle(4.0);
         let ring = AnalyticSupport::Torus {
             center: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             major_radius: 3.0,
             minor_radius: 1.0,
         };
@@ -591,7 +592,7 @@ mod tests {
         );
         let wrong = AnalyticSupport::Torus {
             center: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             major_radius: 3.2,
             minor_radius: 1.0,
         };
@@ -607,7 +608,7 @@ mod tests {
             let minor = 2.0;
             let support = AnalyticSupport::Torus {
                 center: p(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 major_radius: major,
                 minor_radius: minor,
             };
@@ -634,7 +635,7 @@ mod tests {
     fn tight_hole_torus_uses_local_quartic_factor_bound() {
         let ring = AnalyticSupport::Torus {
             center: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             major_radius: 1.0001,
             minor_radius: 1.0,
         };
@@ -665,7 +666,7 @@ mod tests {
         ));
         let circle = AnalyticSupport::Cylinder {
             origin: p(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius: 1.0,
         };
         assert_eq!(

@@ -8,7 +8,7 @@ use super::super::{
     source_edge_incidence,
 };
 use super::{EvidenceOptions, MeshEvidence, analyze_welded_evidence, validate_evidence_options};
-use crate::{InnerSpace, KERNEL_EPSILON};
+use crate::KERNEL_EPSILON;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// An oppositely oriented pair of source planar sheets with the same
@@ -85,7 +85,7 @@ impl MeshEvidence {
             }
             let first = &self.planar_supports[a.support];
             let second = &self.planar_supports[b.support];
-            if first.normal.dot(second.normal) >= 0.0 {
+            if first.normal.dot(&second.normal) >= 0.0 {
                 continue;
             }
             // Exact common boundary samples anchor the plane. Every
@@ -96,7 +96,7 @@ impl MeshEvidence {
                 .vertices
                 .iter()
                 .chain(&b.vertices)
-                .map(|&id| (self.positions[id] - first.origin).dot(first.normal).abs())
+                .map(|&id| (self.positions[id] - first.origin).dot(&first.normal).abs())
                 .fold(0.0_f64, f64::max);
             if residual > KERNEL_EPSILON.min(options.planar_support.distance_tolerance) {
                 continue;

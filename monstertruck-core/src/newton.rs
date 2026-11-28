@@ -3,7 +3,7 @@
 use std::ops::{Mul, Sub};
 
 use crate::{
-    cgmath64::{One, SquareMatrix, Zero, cgmath},
+    math::{KernelScalar, One, Zero, nalgebra},
     tolerance::Tolerance,
 };
 
@@ -36,13 +36,13 @@ where S: Mul<S, Output = S> + Zero + One + Copy + PartialEq + std::ops::Div<Outp
     }
 }
 
-/// Scalar-generic matrix Jacobians. Requires `S: BaseFloat` for
-/// `SquareMatrix::invert`.
+/// Scalar-generic matrix Jacobians. Requires `S: KernelScalar` for
+/// `Self::try_inverse`.
 macro_rules! impl_jacobian {
     ($matrix: ident, $vector: ident) => {
-        impl<S: cgmath::BaseFloat> Jacobian<cgmath::$vector<S>> for cgmath::$matrix<S> {
+        impl<S: KernelScalar> Jacobian<nalgebra::$vector<S>> for nalgebra::$matrix<S> {
             #[inline]
-            fn invert(self) -> Option<Self> { SquareMatrix::invert(&self) }
+            fn invert(self) -> Option<Self> { self.try_inverse() }
         }
     };
 }

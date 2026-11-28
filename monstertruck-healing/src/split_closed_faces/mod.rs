@@ -1,8 +1,8 @@
 use super::{
-    BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, EuclideanSpace, Face, HashMap, HashSet,
-    InnerSpace, Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D,
-    ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface3D,
-    Point2, Point3, PolylineCurve, SP, SearchNearestParameter, Shell, Tolerance, Wire,
+    AffinePoint, BoundedCurve, CurveParameter, Cut, Edge, EdgeIndex, Face, HashMap, HashSet,
+    Instant, Invertible, Line, MetricSpace, Origin, ParameterBoundary2D, ParameterCurve,
+    ParameterDivision1D, ParametricCurve, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
+    PolylineCurve, SP, SearchNearestParameter, Shell, Tolerance, Wire,
     append_unassigned_stable_ids,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -428,7 +428,7 @@ const fn diagonal_candidate_indices(i: usize, j: usize, len: usize) -> bool {
 fn diagonal_is_inside(polygon: &[Point2], i: usize, j: usize) -> bool {
     let start = polygon[i];
     let end = polygon[j];
-    let midpoint = Point2::from_vec((start.to_vec() + end.to_vec()) * 0.5);
+    let midpoint = Point2::from((start.position_vector() + end.position_vector()) * 0.5);
     polygon_contains_point(polygon, midpoint) && !diagonal_intersects_edges(polygon, i, j)
 }
 
@@ -490,7 +490,7 @@ fn polygon_contains_point(polygon: &[Point2], point: Point2) -> bool {
 fn segment_contains_point(start: Point2, end: Point2, point: Point2) -> bool {
     let edge = end - start;
     let rel = point - start;
-    let length_squared = edge.magnitude2();
+    let length_squared = edge.norm_squared();
     if !length_squared.is_finite() || !rel.x.is_finite() || !rel.y.is_finite() {
         return false;
     }
@@ -498,7 +498,7 @@ fn segment_contains_point(start: Point2, end: Point2, point: Point2) -> bool {
     let nearest_fraction = if length_squared == 0.0 {
         0.0
     } else {
-        (rel.dot(edge) / length_squared).clamp(0.0, 1.0)
+        (rel.dot(&edge) / length_squared).clamp(0.0, 1.0)
     };
     let nearest = start + edge * nearest_fraction;
     point.distance2(nearest) <= epsilon * epsilon

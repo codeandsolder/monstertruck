@@ -61,22 +61,22 @@ impl CylinderChart {
         let reference = if axis.x.abs()
             < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_reference_axis_component_limit
         {
-            Vector3::unit_x()
+            Vector3::x()
         } else {
-            Vector3::unit_y()
+            Vector3::y()
         };
-        let basis_u = axis.cross(reference).normalize();
-        let basis_v = axis.cross(basis_u).normalize();
-        let axial = (first_point - center).dot(axis);
+        let basis_u = axis.cross(&reference).normalize();
+        let basis_v = axis.cross(&basis_u).normalize();
+        let axial = (first_point - center).dot(&axis);
         let radial = first_point - center - axis * axial;
-        if (radial.magnitude() - radius).abs() > tol {
+        if (radial.norm() - radius).abs() > tol {
             return None;
         }
         let uv = surface
             .search_parameter(first_point, None, 100)
             .or_else(|| surface.search_nearest_parameter(first_point, None, 100))?;
         let normal = surface.normal(uv.0, uv.1);
-        let radial_alignment = normal.dot(radial.normalize()) / normal.magnitude();
+        let radial_alignment = normal.dot(&radial.normalize()) / normal.norm();
         if !radial_alignment.is_finite()
             || radial_alignment.abs()
                 < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine
@@ -100,7 +100,7 @@ impl CylinderChart {
 
     fn raw_phase(&self, point: Point3) -> f64 {
         let delta = point - self.center;
-        (self.handedness * delta.dot(self.basis_v).atan2(delta.dot(self.basis_u)))
+        (self.handedness * delta.dot(&self.basis_v).atan2(delta.dot(&self.basis_u)))
             .rem_euclid(std::f64::consts::TAU)
     }
 
@@ -130,9 +130,9 @@ impl CylinderChart {
 
     fn project(&self, point: Point3, previous: Option<Point2>, tol: f64) -> Option<Point2> {
         let delta = point - self.center;
-        let axial = delta.dot(self.axis);
+        let axial = delta.dot(&self.axis);
         let radial = delta - self.axis * axial;
-        if !axial.is_finite() || (radial.magnitude() - self.radius).abs() > tol {
+        if !axial.is_finite() || (radial.norm() - self.radius).abs() > tol {
             return None;
         }
         let phase = self.raw_phase(point);
@@ -249,14 +249,14 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64, tol: f64) -> boo
     };
     let on_interior = |point: Point2, start: Point2, end: Point2| {
         let direction = end - start;
-        let length2 = direction.magnitude2();
+        let length2 = direction.norm_squared();
         if length2 <= epsilon * epsilon {
             return false;
         }
-        let position = (point - start).dot(direction) / length2;
+        let position = (point - start).dot(&direction) / length2;
         position > DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
             && position < 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_end_fraction
-            && (point - (start + direction * position)).magnitude2() < epsilon * epsilon
+            && (point - (start + direction * position)).norm_squared() < epsilon * epsilon
     };
     for (index, lhs) in edges.iter().enumerate() {
         for rhs in edges.iter().skip(index + 1) {
@@ -306,8 +306,8 @@ fn needs_exact_noding<C>(edges: &[ProjectedEdge<C>], span: f64, tol: f64) -> boo
                         cross(rhs_start, rhs_end, lhs_start),
                         cross(rhs_start, rhs_end, lhs_end),
                     );
-                    let epsilon0 = (lhs_end - lhs_start).magnitude() * epsilon;
-                    let epsilon1 = (rhs_end - rhs_start).magnitude() * epsilon;
+                    let epsilon0 = (lhs_end - lhs_start).norm() * epsilon;
+                    let epsilon1 = (rhs_end - rhs_start).norm() * epsilon;
                     if (cross0 > epsilon0 && cross1 < -epsilon0
                         || cross0 < -epsilon0 && cross1 > epsilon0)
                         && (cross2 > epsilon1 && cross3 < -epsilon1
@@ -469,9 +469,9 @@ fn reconcile_local_wire_uv_closure<S: ParametricSurface3D>(
     let first = uv[0];
     let last_index = uv.len() - 1;
     let last = uv[last_index];
-    let gap = (first - last).magnitude2();
-    let first_step = (uv[1] - first).magnitude2();
-    let last_step = (uv[last_index - 1] - last).magnitude2();
+    let gap = (first - last).norm_squared();
+    let first_step = (uv[1] - first).norm_squared();
+    let last_step = (uv[last_index - 1] - last).norm_squared();
     // Reconcile only a local inverse-map discrepancy. A wire which winds
     // around a periodic surface can legitimately start/end at parameter
     // coordinates a whole period apart despite sharing its 3D vertex.
@@ -527,8 +527,8 @@ fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 let next = current + segment_count;
                 for (vertex, index) in [(edge.front(), current), (edge.back(), next)] {
                     let uv = *poly.get(index)?;
-                    let previous_step = (index > 0).then(|| (uv - poly[index - 1]).magnitude2());
-                    let next_step = poly.get(index + 1).map(|next| (*next - uv).magnitude2());
+                    let previous_step = (index > 0).then(|| (uv - poly[index - 1]).norm_squared());
+                    let next_step = poly.get(index + 1).map(|next| (*next - uv).norm_squared());
                     let local_step2 = previous_step
                         .into_iter()
                         .chain(next_step)
@@ -558,7 +558,7 @@ fn reconcile_shared_vertex_uv<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
             let representative = group
                 .iter()
                 .filter(|candidate| {
-                    let gap2 = (candidate.uv - point.uv).magnitude2();
+                    let gap2 = (candidate.uv - point.uv).norm_squared();
                     gap2 == 0.0
                         || candidate.local_step2.is_finite()
                             && point.local_step2.is_finite()
@@ -765,7 +765,7 @@ fn selected_boundary_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let middle = item.uv.len() / 2;
         let (start, end) = (item.uv[middle - 1], item.uv[middle]);
         let tangent = end - start;
-        let length = tangent.magnitude();
+        let length = tangent.norm();
         if length <= 0.0 {
             return None;
         }
@@ -885,7 +885,7 @@ fn validates_occupancy_with<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         let start = item.uv[middle - 1];
         let end = item.uv[middle];
         let tangent = end - start;
-        let length = tangent.magnitude();
+        let length = tangent.norm();
         if length <= 0.0 {
             return false;
         }
@@ -1125,7 +1125,7 @@ fn region_lies_on_plane<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
                 .into_iter()
                 .all(|parameter| {
                     let point = curve.evaluate(parameter);
-                    (point - origin).dot(normal).abs() <= tol
+                    (point - origin).dot(&normal).abs() <= tol
                 })
         })
 }
@@ -1157,7 +1157,7 @@ fn same_oriented_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     } else {
         -rhs_plane.normal()
     };
-    lhs_normal.dot(rhs_normal)
+    lhs_normal.dot(&rhs_normal)
         >= 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_normal_cosine_slack
         && region_lies_on_plane(lhs, &rhs_plane, tol)
         && region_lies_on_plane(rhs, &lhs_plane, tol)
@@ -1235,7 +1235,7 @@ fn same_oriented_difference_support<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     }
     lhs_surface
         .normal(lhs_uv.0, lhs_uv.1)
-        .dot(rhs_surface.normal(rhs_uv.0, rhs_uv.1))
+        .dot(&rhs_surface.normal(rhs_uv.0, rhs_uv.1))
         > 1.0 - DEFAULT_NUMERICAL_TOLERANCES.boolean_planar_tangent_cosine_slack
 }
 
@@ -1257,13 +1257,13 @@ fn oriented_cylinder_radial_sign<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     if surface.evaluate(uv.0, uv.1).distance(point) > tol {
         return None;
     }
-    let radial = point - center - axis * (point - center).dot(axis);
+    let radial = point - center - axis * (point - center).dot(&axis);
     let normal = surface.normal(uv.0, uv.1);
-    let length = normal.magnitude() * radial.magnitude();
+    let length = normal.norm() * radial.norm();
     if !length.is_finite() || length <= 0.0 {
         return None;
     }
-    let sign = normal.dot(radial) / length;
+    let sign = normal.dot(&radial) / length;
     if sign.abs() < DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_normal_alignment_cosine {
         return None;
     }

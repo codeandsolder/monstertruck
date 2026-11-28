@@ -39,15 +39,15 @@ struct MyApp {
 impl MyApp {
     fn create_camera() -> AppResult<Camera> {
         let matrix = Matrix4::look_at_rh(
-            Point3::new(1.5, 1.5, 1.5),
-            Point3::origin(),
-            Vector3::unit_y(),
+            &Point3::new(1.5, 1.5, 1.5),
+            &Point3::origin(),
+            &Vector3::y(),
         );
         Ok(Camera {
             matrix: matrix
-                .invert()
+                .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+            method: ProjectionMethod::perspective(PI / 4.0),
             near_clip: 0.1,
             far_clip: 40.0,
         })
@@ -55,9 +55,9 @@ impl MyApp {
 
     fn create_cube() -> Solid {
         let v = builder::vertex(Point3::origin());
-        let edge = builder::extrude(&v, Vector3::unit_x());
-        let face = builder::extrude(&edge, Vector3::unit_y());
-        builder::extrude(&face, Vector3::unit_z())
+        let edge = builder::extrude(&v, Vector3::x());
+        let face = builder::extrude(&edge, Vector3::y());
+        builder::extrude(&face, Vector3::z())
     }
 }
 
@@ -88,7 +88,7 @@ impl App for MyApp {
         let texture = image::load_from_memory(TEXTURE_BYTES)?;
         let texture = image2texture::image2texture(scene.device_handler(), &texture)?;
         let state = PolygonState {
-            matrix: Matrix4::from_translation(Vector3::new(-0.5, -0.5, -0.5)),
+            matrix: Matrix4::new_translation(&Vector3::new(-0.5, -0.5, -0.5)),
             material: Material {
                 albedo: Vector4::new(0.402, 0.262, 0.176, 1.0),
                 roughness: 0.9,
@@ -132,7 +132,8 @@ impl App for MyApp {
                         light.position = camera.position();
                     }
                     LightType::Uniform => {
-                        light.position = Point3::from_vec(camera.position().to_vec().normalize());
+                        light.position =
+                            Point3::from(camera.position().position_vector().normalize());
                     }
                 }
             }
@@ -150,7 +151,7 @@ impl App for MyApp {
                     }
                     ProjectionMethod::Perspective { .. } => {
                         let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
-                        camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                        camera.matrix = Matrix4::new_translation(&trans_vec) * camera.matrix;
                     }
                 }
             }
@@ -168,11 +169,11 @@ impl App for MyApp {
                 if dir2d.so_small() {
                     return Self::default_control_flow();
                 }
-                let mut axis = dir2d[1] * matrix[0].truncate();
-                axis += dir2d[0] * matrix[1].truncate();
-                axis /= axis.magnitude();
-                let angle = dir2d.magnitude() * 0.01;
-                let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+                let mut axis = dir2d[1] * matrix.column(0).into_owned().spatial();
+                axis += dir2d[0] * matrix.column(1).into_owned().spatial();
+                axis /= axis.norm();
+                let angle = dir2d.norm() * 0.01;
+                let inverse_rotation = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), -angle);
                 *matrix = inverse_rotation * *matrix;
             }
             self.prev_cursor = Some(position);
@@ -194,9 +195,7 @@ impl App for MyApp {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 self.camera_changed = Some(std::time::Instant::now());
                 camera.method = match camera.method {
-                    ProjectionMethod::Parallel { .. } => {
-                        ProjectionMethod::perspective(Rad(PI / 4.0))
-                    }
+                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective(PI / 4.0),
                     ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(1.0),
                 };
             }
@@ -214,7 +213,8 @@ impl App for MyApp {
                 };
                 *light = match light.kind {
                     LightType::Point => {
-                        let position = Point3::from_vec(camera.position().to_vec().normalize());
+                        let position =
+                            Point3::from(camera.position().position_vector().normalize());
                         Light {
                             position,
                             color: Vector3::new(1.0, 1.0, 1.0),

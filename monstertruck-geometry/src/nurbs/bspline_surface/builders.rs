@@ -1,8 +1,8 @@
 use super::{
-    BoundedCurve, BsplineCurve, BsplineSurface, ControlPoint, Error, InnerSpace, Invertible,
-    KERNEL_EPSILON, KnotVector, Matrix3, Origin, ParametricCurve, Point3, Rad, Result,
-    SquareMatrix, Tolerance, Vector3, compat,
+    BoundedCurve, BsplineCurve, BsplineSurface, ControlPoint, Error, Invertible, KERNEL_EPSILON,
+    KnotVector, Matrix3, Origin, ParametricCurve, Point3, Result, Tolerance, Vector3, compat,
 };
+use monstertruck_core::{Rotation3, Unit};
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {
     /// Creates a surface with normailized knot vectors connecting two curves.
@@ -183,7 +183,7 @@ impl BsplineSurface<Point3> {
         let (t_start, t_end) = rail.range_tuple();
         let rail_origin = rail.evaluate(t_start);
         let tangent0 = rail.derivative(t_start);
-        let t0_len = tangent0.magnitude();
+        let t0_len = tangent0.norm();
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
@@ -195,8 +195,8 @@ impl BsplineSurface<Point3> {
                 let translation = rail_pt - rail_origin;
 
                 // Compute rotation from initial tangent to current tangent.
-                let rotation = if t0_len.so_small() || tangent_i.magnitude().so_small() {
-                    Matrix3::from_value(1.0)
+                let rotation = if t0_len.so_small() || tangent_i.norm().so_small() {
+                    Matrix3::from_diagonal_element(1.0)
                 } else {
                     rotation_between(tangent0, tangent_i)
                 };
@@ -275,7 +275,7 @@ impl BsplineSurface<Point3> {
         let p_start = profile.evaluate(u_start);
         let p_end = profile.evaluate(u_end);
         let chord = p_end - p_start;
-        let chord_len = chord.magnitude();
+        let chord_len = chord.norm();
 
         let sections: Vec<BsplineCurve<Point3>> = (0..n_sections)
             .map(|i| {
@@ -285,7 +285,7 @@ impl BsplineSurface<Point3> {
                 let r1_pt = rail1.evaluate(t);
                 let r2_pt = rail2.evaluate(t);
                 let target_chord = r2_pt - r1_pt;
-                let target_len = target_chord.magnitude();
+                let target_len = target_chord.norm();
 
                 // Scale factor from profile chord to target chord.
                 let scale = if chord_len.so_small() {
@@ -296,7 +296,7 @@ impl BsplineSurface<Point3> {
 
                 // Rotation from profile chord to target chord direction.
                 let rotation = if chord_len.so_small() || target_len.so_small() {
-                    Matrix3::from_value(1.0)
+                    Matrix3::from_diagonal_element(1.0)
                 } else {
                     rotation_between(chord, target_chord)
                 };
@@ -380,13 +380,13 @@ impl BsplineSurface<Point3> {
         let p1_start = profile1.evaluate(u1_start);
         let p1_end = profile1.evaluate(u1_end);
         let chord1 = p1_end - p1_start;
-        let chord1_len = chord1.magnitude();
+        let chord1_len = chord1.norm();
 
         let (u2_start, u2_end) = profile2.range_tuple();
         let p2_start = profile2.evaluate(u2_start);
         let p2_end = profile2.evaluate(u2_end);
         let chord2 = p2_end - p2_start;
-        let chord2_len = chord2.magnitude();
+        let chord2_len = chord2.norm();
 
         // Make profiles compatible so we can blend control points.
         let mut compat_profiles = vec![profile1, profile2];
@@ -399,7 +399,7 @@ impl BsplineSurface<Point3> {
                 let r1_pt = rail1.evaluate(t);
                 let r2_pt = rail2.evaluate(t);
                 let target_chord = r2_pt - r1_pt;
-                let target_len = target_chord.magnitude();
+                let target_len = target_chord.norm();
 
                 // Transform profile1 to span r1->r2.
                 let transform_profile =
@@ -410,7 +410,7 @@ impl BsplineSurface<Point3> {
                             target_len / ch_len
                         };
                         let rotation = if ch_len.so_small() || target_len.so_small() {
-                            Matrix3::from_value(1.0)
+                            Matrix3::from_diagonal_element(1.0)
                         } else {
                             rotation_between(ch, target_chord)
                         };
@@ -450,27 +450,28 @@ impl BsplineSurface<Point3> {
 fn rotation_between(from: Vector3, to: Vector3) -> Matrix3 {
     let f = from.normalize();
     let t = to.normalize();
-    let dot = f.dot(t);
+    let dot = f.dot(&t);
 
     // Nearly parallel -- no rotation needed.
     if (dot - 1.0).abs() < KERNEL_EPSILON {
-        return Matrix3::from_value(1.0);
+        return Matrix3::from_diagonal_element(1.0);
     }
 
     // Nearly anti-parallel -- rotate 180 degrees around an arbitrary perpendicular axis.
     if (dot + 1.0).abs() < KERNEL_EPSILON {
         let perp = if f.x.abs() < 0.9 {
-            Vector3::unit_x()
+            Vector3::x()
         } else {
-            Vector3::unit_y()
+            Vector3::y()
         };
-        let axis = f.cross(perp).normalize();
-        return Matrix3::from_axis_angle(axis, Rad(std::f64::consts::PI));
+        let axis = f.cross(&perp).normalize();
+        return Rotation3::from_axis_angle(&Unit::new_unchecked(axis), std::f64::consts::PI)
+            .into_inner();
     }
 
-    let axis = f.cross(t).normalize();
-    let angle = Rad(dot.acos());
-    Matrix3::from_axis_angle(axis, angle)
+    let axis = f.cross(&t).normalize();
+    let angle = dot.acos();
+    Rotation3::from_axis_angle(&Unit::new_unchecked(axis), angle).into_inner()
 }
 
 impl<P: ControlPoint<f64> + Tolerance> BsplineSurface<P> {

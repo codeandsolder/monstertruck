@@ -209,8 +209,8 @@ pub mod monstertruck {
     use monstertruck_geometry::analytic_curve_incidence::CurveIncidence;
     use monstertruck_io::step::save::{self, CompleteStepDisplay};
     use monstertruck_modeling::{
-        BoundedCurve, BsplineCurve, Curve, Edge, EuclideanSpace, InnerSpace, KnotVector, Matrix4,
-        NurbsCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, Rad,
+        AffinePoint, BoundedCurve, BsplineCurve, Curve, Edge, InnerProduct, KnotVector, Matrix4,
+        NurbsCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3,
         SearchNearestParameter, SearchParameter, Shell, Solid, Surface, SurfaceCurve, Vector3,
         Vector4, Wire, algo, builder, certify_analytic_curve_on_surface, profile,
     };
@@ -281,13 +281,13 @@ pub mod monstertruck {
             .map(|segment| {
                 let [a, b] = [segment[0], segment[1]];
                 let ab = b - a;
-                let squared = ab.magnitude2();
+                let squared = ab.norm_squared();
                 let t = if squared > 0.0 {
-                    ((point - a).dot(ab) / squared).clamp(0.0, 1.0)
+                    ((point - a).dot(&ab) / squared).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                (point - (a + ab * t)).magnitude()
+                (point - (a + ab * t)).norm()
             })
             .reduce(f64::min)
     }
@@ -310,7 +310,7 @@ pub mod monstertruck {
             let Some((u, v)) = uv else { return false };
             if !u.is_finite()
                 || !v.is_finite()
-                || (surface.evaluate(u, v) - point).magnitude() > tolerance
+                || (surface.evaluate(u, v) - point).norm() > tolerance
             {
                 return false;
             }
@@ -405,7 +405,7 @@ pub mod monstertruck {
             && guide_points
                 .iter()
                 .zip(evaluated)
-                .all(|(guide, point)| (*guide - *point).magnitude() <= accuracy)
+                .all(|(guide, point)| (*guide - *point).norm() <= accuracy)
             && surfaces
                 .iter()
                 .all(|carrier| validated_step_surface_support(carrier, &guide_points, accuracy)))
@@ -752,7 +752,7 @@ pub mod monstertruck {
                 builder::CompositeSweepSegment::Rotation {
                     origin: Point3::new(axis.origin_mm[0], axis.origin_mm[1], axis.origin_mm[2]),
                     axis: Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]),
-                    angle: Rad(*angle_rad),
+                    angle: (*angle_rad),
                     division: 1,
                 }
             }
@@ -782,9 +782,9 @@ pub mod monstertruck {
                 let sum = vertices
                     .iter()
                     .fold(Vector3::new(0.0, 0.0, 0.0), |sum, point| {
-                        sum + point.to_vec()
+                        sum + point.position_vector()
                     });
-                Ok(Point3::from_vec(
+                Ok(Point3::from(
                     sum / f64::from(u32::try_from(vertices.len())?),
                 ))
             })
@@ -793,17 +793,17 @@ pub mod monstertruck {
             let before = centroids[index.saturating_sub(1)];
             let after = centroids[(index + 1).min(centroids.len() - 1)];
             let progression = after - before;
-            if progression.magnitude() <= 0.0 {
+            if progression.norm() <= 0.0 {
                 continue;
             }
             let face = builder::try_attach_plane::<Curve, Surface>(vec![wires[index].clone()])?;
             let normal = face.oriented_surface().normal(0.0, 0.0);
-            let projected = normal.dot(progression);
+            let projected = normal.dot(&progression);
             // A nearly tangential section does not offer reliable winding
             // evidence. Preserve it rather than inventing a face orientation.
             let threshold = DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
-                * normal.magnitude()
-                * progression.magnitude();
+                * normal.norm()
+                * progression.norm();
             if projected < -threshold {
                 wires[index].invert();
             }
@@ -901,10 +901,10 @@ pub mod monstertruck {
         };
         let generator = *end - *start;
         let axis = revolution.axis();
-        let length = generator.magnitude();
+        let length = generator.norm();
         if !length.is_finite()
             || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm
-            || generator.dot(axis).abs()
+            || generator.dot(&axis).abs()
                 > length * DEFAULT_STEP_RECOVERY_TOLERANCES.source_cad_frame_orthogonality
         {
             return None;
@@ -913,7 +913,7 @@ pub mod monstertruck {
         // supporting planar face is regular away from the optional pole.
         let radial = |p: Point3| {
             let relative = p - revolution.origin();
-            relative - axis * relative.dot(axis)
+            relative - axis * relative.dot(&axis)
         };
         let a = radial(*start);
         let b = radial(*end);
@@ -922,8 +922,8 @@ pub mod monstertruck {
         // A dot-product threshold in squared units incorrectly scales
         // that endpoint tolerance by the radius of the opposite endpoint.
         let axis_locus = DEFAULT_STEP_RECOVERY_TOLERANCES.cad_axis_locus_mm;
-        if a.cross(b).magnitude() > length * axis_locus
-            || (a.magnitude() > axis_locus && b.magnitude() > axis_locus && a.dot(b) < 0.0)
+        if a.cross(&b).norm() > length * axis_locus
+            || (a.norm() > axis_locus && b.norm() > axis_locus && a.dot(&b) < 0.0)
         {
             return None;
         }
@@ -935,7 +935,7 @@ pub mod monstertruck {
         let point = surface.evaluate(u, v);
         let normal = surface.normal(u, v);
         let tangent = surface.derivative_u(u, v).normalize();
-        let bitangent = normal.cross(tangent).normalize();
+        let bitangent = normal.cross(&tangent).normalize();
         if ![
             normal.x,
             normal.y,
@@ -989,7 +989,7 @@ pub mod monstertruck {
         }
 
         let direction = Vector3::new(axis.direction[0], axis.direction[1], axis.direction[2]);
-        let magnitude = direction.magnitude();
+        let magnitude = direction.norm();
         if !magnitude.is_finite() || magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit {
             bail!("revolution axis direction must be nonzero");
         }
@@ -1000,7 +1000,7 @@ pub mod monstertruck {
         let sweep = if closed {
             builder::SweepAngle::Closed
         } else {
-            builder::SweepAngle::Partial(Rad(angle_rad))
+            builder::SweepAngle::Partial(angle_rad)
         };
 
         let touches_axis = wires.iter().any(|wire| {
@@ -1063,7 +1063,7 @@ pub mod monstertruck {
             // the profile but does not contribute a swept face: choose the
             // outward material orientation before constructing any coedges.
             // This is axis-relative and independent of the world frame.
-            if (back.point() - front.point()).dot(direction) > 0.0 {
+            if (back.point() - front.point()).dot(&direction) > 0.0 {
                 wire.invert();
             }
             let shell =
@@ -1083,12 +1083,12 @@ pub mod monstertruck {
 
     const fn rigid_matrix(transform: &RigidTransform) -> Matrix4 {
         let m = transform.matrix;
-        Matrix4::from_cols(
+        Matrix4::from_columns(&[
             Vector4::new(m[0][0], m[1][0], m[2][0], m[3][0]),
             Vector4::new(m[0][1], m[1][1], m[2][1], m[3][1]),
             Vector4::new(m[0][2], m[1][2], m[2][2], m[3][2]),
             Vector4::new(m[0][3], m[1][3], m[2][3], m[3][3]),
-        )
+        ])
     }
 
     fn transform_axis(axis: Axis3, transform: &RigidTransform) -> Axis3 {
@@ -1110,7 +1110,7 @@ pub mod monstertruck {
     }
 
     fn point_axis_distance(point: Point3, origin: Point3, direction: Vector3) -> f64 {
-        (point - origin).cross(direction).magnitude()
+        (point - origin).cross(&direction).norm()
     }
 
     fn profile_loop_wire(curves: &[Curve2d]) -> Result<Wire> {
@@ -1502,7 +1502,7 @@ pub mod monstertruck {
                 let circle = builder::revolve(
                     &vertex,
                     Point3::origin(),
-                    Vector3::unit_y(),
+                    Vector3::y(),
                     builder::SweepAngle::Closed,
                     2,
                 )?;
@@ -1522,7 +1522,7 @@ pub mod monstertruck {
     }
 
     fn points_match(left: Point3, right: Point3) -> bool {
-        (left - right).magnitude() <= EDGE_SELECTOR_TOLERANCE_MM
+        (left - right).norm() <= EDGE_SELECTOR_TOLERANCE_MM
     }
 
     const CIRCLE_SELECTOR_SAMPLES: usize = 16;
@@ -1534,8 +1534,8 @@ pub mod monstertruck {
         radius_mm: f64,
     ) -> bool {
         let offset = point - center;
-        offset.dot(normal).abs() <= EDGE_SELECTOR_TOLERANCE_MM
-            && (offset.magnitude() - radius_mm).abs() <= EDGE_SELECTOR_TOLERANCE_MM
+        offset.dot(&normal).abs() <= EDGE_SELECTOR_TOLERANCE_MM
+            && (offset.norm() - radius_mm).abs() <= EDGE_SELECTOR_TOLERANCE_MM
     }
 
     fn edge_matches_circle(edge: &Edge, center: Point3, normal: Vector3, radius_mm: f64) -> bool {
@@ -1649,7 +1649,7 @@ pub mod monstertruck {
             } => {
                 let center = segment_point(*center_mm);
                 let normal = Vector3::new(normal[0], normal[1], normal[2]);
-                let normal_magnitude = normal.magnitude();
+                let normal_magnitude = normal.norm();
                 if !normal_magnitude.is_finite()
                     || normal_magnitude <= DEFAULT_STEP_RECOVERY_TOLERANCES.cad_normal_unit
                 {
@@ -2082,7 +2082,7 @@ pub mod monstertruck {
             for (parameter, point) in parameters.into_iter().zip(points) {
                 let rebuilt = exported.leader().evaluate(parameter);
                 assert!(
-                    (rebuilt - point).magnitude() < 1e-9,
+                    (rebuilt - point).norm() < 1e-9,
                     "STEP remapped native sample {parameter}: {rebuilt:?} versus {point:?}"
                 );
             }
@@ -2125,7 +2125,7 @@ pub mod monstertruck {
             let cylinder = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
                 Curve::Line(Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0))),
                 Point3::origin(),
-                Vector3::unit_z(),
+                Vector3::z(),
             )));
             let plane = Surface::Plane(Plane::xy());
             let w = f64::sqrt(0.5);
@@ -3821,7 +3821,7 @@ pub mod monstertruck {
                 let origin = Point3::new(center[0], center[1], 0.);
                 let support = AnalyticSupport::Cylinder {
                     origin,
-                    axis: Vector3::unit_z(),
+                    axis: Vector3::z(),
                     radius,
                 };
                 assert_eq!(
@@ -3829,13 +3829,13 @@ pub mod monstertruck {
                     CurveIncidence::Proven
                 );
                 let frame =
-                    CircularArcFrame::new(origin, Vector3::unit_z(), radius, curve.front(), 1e-11)
+                    CircularArcFrame::new(origin, Vector3::z(), radius, curve.front(), 1e-11)
                         .context("circle frame")?;
                 let coverage = certify_circular_arc_coverage(&curve, frame).context("whole arc")?;
                 assert!((coverage.sweep_rad - sweep.abs()).abs() < 1e-12);
-                assert!((curve.front() - Point3::new(start[0], start[1], 0.)).magnitude() < 1e-12);
-                assert!((curve.back() - Point3::new(end[0], end[1], 0.)).magnitude() < 1e-12);
-                assert!((wire[0].back().point() - curve.back()).magnitude() < 1e-12);
+                assert!((curve.front() - Point3::new(start[0], start[1], 0.)).norm() < 1e-12);
+                assert!((curve.back() - Point3::new(end[0], end[1], 0.)).norm() < 1e-12);
+                assert!((wire[0].back().point() - curve.back()).norm() < 1e-12);
             }
             Ok(())
         }

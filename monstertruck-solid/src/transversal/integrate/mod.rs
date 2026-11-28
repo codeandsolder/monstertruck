@@ -392,7 +392,7 @@ where
     C: Transformed<Matrix4>,
     S: Transformed<Matrix4>, {
     solid.mapped(
-        |point| transform.transform_point(*point),
+        |point| transform.apply_point(*point),
         |curve| curve.transformed(transform),
         |surface| surface.transformed(transform),
     )
@@ -446,19 +446,7 @@ fn axis_aligned_cuboid<C, S>(bounds: BoundingBox<Point3>) -> ShapeOpsResult<Soli
 where
     Line<Point3>: ToSameGeometry<C>,
     Plane: ToSameGeometry<S>, {
-    let p = bounds.min();
-    let q = bounds.max();
-    let vertices = [
-        Point3::new(p.x, p.y, p.z),
-        Point3::new(q.x, p.y, p.z),
-        Point3::new(q.x, q.y, p.z),
-        Point3::new(p.x, q.y, p.z),
-        Point3::new(p.x, p.y, q.z),
-        Point3::new(q.x, p.y, q.z),
-        Point3::new(q.x, q.y, q.z),
-        Point3::new(p.x, q.y, q.z),
-    ]
-    .map(Vertex::new);
+    let vertices = bounds.corners().map(Vertex::new);
     let edges = [
         line_edge(&vertices[0], &vertices[1]),
         line_edge(&vertices[1], &vertices[2]),
@@ -586,7 +574,7 @@ where
     let tol = standard_budget(policy, "clip_half_space_z")?;
     validate_tolerance(tol)?;
     let clip_to_world = world_to_clip
-        .invert()
+        .try_inverse()
         .ok_or(ShapeOpsError::NonInvertibleClipTransform)?;
     let clip_solid = transformed_solid(solid, world_to_clip);
     let bounds = solid_bounds(&clip_solid);

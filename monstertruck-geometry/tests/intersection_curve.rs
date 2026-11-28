@@ -19,8 +19,8 @@ proptest! {
         let p = curve.evaluate(t);
         let v = curve.derivative(t);
 
-        prop_assert_near!(p.to_vec().magnitude(), 1.0);
-        prop_assert!(p.to_vec().dot(v).so_small());
+        prop_assert_near!(p.position_vector().norm(), 1.0);
+        prop_assert!(p.position_vector().dot(&v).so_small());
 
         let Some(t0) = curve.search_parameter(p, None, 100) else {
             let reason = "search_parameter failed".into();
@@ -32,13 +32,13 @@ proptest! {
     #[test]
     fn cylinder_case(t in 0.0..=2.0 * PI, n in 0usize..=4) {
         let line0 = Line(Point3::new(1.0, 0.0, 2.0), Point3::new(-1.0, 0.0, 2.0));
-        let cylinder0 = RevolutionSurface::by_revolution(line0, Point3::origin(), Vector3::unit_x());
+        let cylinder0 = RevolutionSurface::by_revolution(line0, Point3::origin(), Vector3::x());
         let line1 = Line(Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, -1.0));
-        let cylinder1 = RevolutionSurface::by_revolution(line1, Point3::origin(), Vector3::unit_z());
+        let cylinder1 = RevolutionSurface::by_revolution(line1, Point3::origin(), Vector3::z());
         let z = f64::midpoint(1.0, f64::sqrt(3.0));
         let lead_circle = Processor::with_transform(
             UnitCircle::<Point3>::new(),
-            Matrix4::from_translation(z * Vector3::unit_z()),
+            Matrix4::new_translation(&(z * Vector3::z())),
         );
         let curve = IntersectionCurve::new(cylinder0, cylinder1, lead_circle);
 
@@ -56,7 +56,7 @@ proptest! {
         const EPS: f64 = 1.0e-4;
         let v0 = curve.derivative_n(n + 1, t);
         let v1 = (curve.derivative_n(n, t + EPS) - curve.derivative_n(n, t - EPS)) / (2.0 * EPS);
-        prop_assert!((v0 - v1).magnitude() < EPS * 10.0, "{v0:?} {v1:?}");
+        prop_assert!((v0 - v1).norm() < EPS * 10.0, "{v0:?} {v1:?}");
 
         let ders0 = (0..=n).map(|i| curve.derivative_n(i, t)).collect::<Vec<_>>();
         let ders1 = curve.derivatives(n, t);

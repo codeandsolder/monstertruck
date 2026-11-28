@@ -5,7 +5,7 @@
 
 use super::super::super::sample_fit::normal_basis;
 use super::SurfaceCarrier;
-use crate::{BsplineCurve, Curve, InnerSpace, KnotVector, Point3, Vector3};
+use crate::{BsplineCurve, Curve, KnotVector, Point3, Vector3};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
     analytic_curve_incidence::{CurveIncidence, certify_bspline_curve_on_support},
@@ -163,16 +163,16 @@ impl Frame {
         {
             return None;
         }
-        let axial_normal = normal.dot(axis);
+        let axial_normal = normal.dot(&axis);
         let transverse = normal - axis * axial_normal;
-        let transverse_normal = transverse.magnitude();
+        let transverse_normal = transverse.norm();
         let (u, v) = if transverse_normal > 64.0 * f64::EPSILON {
             let u = transverse / transverse_normal;
-            (u, axis.cross(u).normalize())
+            (u, axis.cross(&u).normalize())
         } else {
             normal_basis(axis)
         };
-        let offset = (center - plane_origin).dot(normal);
+        let offset = (center - plane_origin).dot(&normal);
         Some(Self {
             plane_origin,
             normal,
@@ -205,15 +205,15 @@ impl Frame {
 
     fn radial(self, point: Point3) -> (f64, Vector3) {
         let delta = point - self.center;
-        let z = delta.dot(self.axis);
+        let z = delta.dot(&self.axis);
         (z, delta - self.axis * z)
     }
 
     fn angle(self, chart: Chart, point: Point3) -> Option<f64> {
         let (z, radial) = self.radial(point);
         let (x, y) = match chart {
-            Chart::Meridian => (radial.magnitude() - self.major, z),
-            Chart::Azimuth => (radial.dot(self.u), radial.dot(self.v)),
+            Chart::Meridian => (radial.norm() - self.major, z),
+            Chart::Azimuth => (radial.dot(&self.u), radial.dot(&self.v)),
         };
         (x.is_finite() && y.is_finite() && x.hypot(y) > 0.0).then(|| y.atan2(x))
     }
@@ -388,23 +388,20 @@ impl Frame {
         let Some((_, radial)) = local
             .iter()
             .copied()
-            .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))
+            .max_by(|a, b| a.1.norm_squared().total_cmp(&b.1.norm_squared()))
         else {
             return false;
         };
-        if radial.magnitude2() <= 0.0 {
+        if radial.norm_squared() <= 0.0 {
             return false;
         }
         let direction = radial.normalize();
         let rho = Range {
             low: local
                 .iter()
-                .map(|(_, r)| r.dot(direction))
+                .map(|(_, r)| r.dot(&direction))
                 .fold(f64::INFINITY, f64::min),
-            high: local
-                .iter()
-                .map(|(_, r)| r.magnitude())
-                .fold(0.0_f64, f64::max),
+            high: local.iter().map(|(_, r)| r.norm()).fold(0.0_f64, f64::max),
         };
         if rho.low <= 0.0 {
             return false;
@@ -413,18 +410,18 @@ impl Frame {
         let z = Range::from_values(local.iter().map(|(z, _)| *z));
         match chart {
             Chart::Meridian => {
-                let branch = Range::from_values(local.iter().map(|(_, r)| r.dot(self.v)));
+                let branch = Range::from_values(local.iter().map(|(_, r)| r.dot(&self.v)));
                 let dz = Range::from_values(derivative.iter().map(|(z, _)| *z));
                 let radial_dot = Range::from_values(
                     local
                         .iter()
-                        .flat_map(|(_, r)| derivative.iter().map(move |(_, dr)| r.dot(*dr))),
+                        .flat_map(|(_, r)| derivative.iter().map(move |(_, dr)| r.dot(dr))),
                 );
                 let progress = rho.mul(q).mul(dz).add(z.mul(radial_dot).neg());
                 branch.strict_sign(positive) && progress.strict_sign(forward)
             }
             Chart::Azimuth => {
-                let projected = Range::from_values(local.iter().map(|(_, r)| r.dot(self.normal)));
+                let projected = Range::from_values(local.iter().map(|(_, r)| r.dot(&self.normal)));
                 let branch = rho
                     .mul(q)
                     .scale(self.axial_normal)
@@ -432,7 +429,7 @@ impl Frame {
                 let progress = Range::from_values(local.iter().flat_map(|(_, r)| {
                     derivative
                         .iter()
-                        .map(move |(_, dr)| self.axis.dot(r.cross(*dr)))
+                        .map(move |(_, dr)| self.axis.dot(&r.cross(dr)))
                 }));
                 branch.strict_sign(positive) && progress.strict_sign(forward)
             }
@@ -465,7 +462,7 @@ impl ContactToroidalSectionEvidence {
         for &id in ids {
             let point = *points.get(id)?;
             let (projected, _) = self.project(point)?;
-            let residual = (projected - point).magnitude();
+            let residual = (projected - point).norm();
             if !residual.is_finite() || residual > tolerance {
                 return None;
             }
@@ -489,7 +486,7 @@ impl ContactToroidalSectionEvidence {
             let (_, first_tangent) = self.evaluated(start)?;
             let (_, last_tangent) = self.evaluated(start + step)?;
             let chord = b - a;
-            if first_tangent.dot(chord) * step <= 0.0 || last_tangent.dot(chord) * step <= 0.0 {
+            if first_tangent.dot(&chord) * step <= 0.0 || last_tangent.dot(&chord) * step <= 0.0 {
                 return None;
             }
             sign = step.signum();
@@ -509,8 +506,8 @@ impl ContactToroidalSectionEvidence {
             else {
                 return false;
             };
-            (a - b).magnitude() <= tolerance
-                && da.dot(db) * self.signed_sweep_radians * other.signed_sweep_radians > 0.0
+            (a - b).norm() <= tolerance
+                && da.dot(&db) * self.signed_sweep_radians * other.signed_sweep_radians > 0.0
         })
     }
 
@@ -548,8 +545,8 @@ impl ContactToroidalSectionEvidence {
         let end = start + step;
         if step * sweep <= 0.0
             || step.abs() > FRAC_PI_2
-            || (self.evaluated(start)?.0 - a).magnitude() > tolerance
-            || (self.evaluated(end)?.0 - b).magnitude() > tolerance
+            || (self.evaluated(start)?.0 - a).norm() > tolerance
+            || (self.evaluated(end)?.0 - b).norm() > tolerance
             || !self
                 .frame
                 .regular(self.chart, self.positive, start, end, tolerance, 8)
@@ -633,7 +630,7 @@ mod tests {
             },
             SurfaceCarrier::CircularRevolution {
                 axial_center: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 2.0,
                 profile_radius: 0.5,
             },
@@ -673,7 +670,7 @@ mod tests {
     #[test]
     fn vertical_plane_section_crosses_an_azimuth_extremum() -> Result<(), Box<dyn std::error::Error>>
     {
-        let carriers = carriers(Vector3::unit_x(), Point3::new(0.7, 0.0, 0.0));
+        let carriers = carriers(Vector3::x(), Point3::new(0.7, 0.0, 0.0));
         let points = [-0.6_f64, -0.3, 0.0, 0.3, 0.6].map(|t| {
             let rho = 0.5_f64.mul_add(t.cos(), 2.0);
             Point3::new(0.7, rho.mul_add(rho, -0.49).sqrt(), 0.5 * t.sin())
@@ -693,11 +690,11 @@ mod tests {
             let surfaces = [
                 SurfaceCarrier::Plane {
                     origin: Point3::new(0.4, 0.0, 0.0),
-                    normal: Vector3::unit_x(),
+                    normal: Vector3::x(),
                 },
                 SurfaceCarrier::CircularRevolution {
                     axial_center: Point3::new(0.0, 0.0, 0.0),
-                    axis: Vector3::unit_z(),
+                    axis: Vector3::z(),
                     radial_center: major,
                     profile_radius: 1.0,
                 },

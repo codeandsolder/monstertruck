@@ -4,7 +4,7 @@
 //! path is unchanged.
 
 use monstertruck_core::DeterministicContentHash;
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::math::*;
 
 use crate::nurbs::*;
 use crate::specifieds::*;

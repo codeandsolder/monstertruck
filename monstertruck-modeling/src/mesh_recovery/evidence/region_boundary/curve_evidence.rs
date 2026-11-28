@@ -3,7 +3,7 @@
 use super::super::super::{sample_fit::fit_circle_carrier, seams::on_line};
 use super::super::MeshEvidence;
 use super::RegionContactPath;
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 /// Straight-line hypothesis through both original contact path endpoints.
 #[derive(Clone, Copy, Debug)]
@@ -103,7 +103,7 @@ pub(super) fn measure_path_curves(
     }
     let source_length = ids
         .windows(2)
-        .map(|pair| (points[pair[1]] - points[pair[0]]).magnitude())
+        .map(|pair| (points[pair[1]] - points[pair[0]]).norm())
         .sum::<f64>();
     if !source_length.is_finite() || source_length <= 0.0 {
         return None;
@@ -123,7 +123,7 @@ fn measure_line(points: &[Point3], ids: &[usize]) -> Option<ContactLineEvidence>
     let start = points[*ids.first()?];
     let end = points[*ids.last()?];
     let delta = end - start;
-    let chord_length = delta.magnitude();
+    let chord_length = delta.norm();
     if !chord_length.is_finite() || chord_length <= 0.0 {
         return None;
     }
@@ -135,8 +135,8 @@ fn measure_line(points: &[Point3], ids: &[usize]) -> Option<ContactLineEvidence>
     for &id in ids {
         let point = points[id];
         let relative = point - start;
-        let along = relative.dot(direction);
-        max_vertex_offset = max_vertex_offset.max(relative.cross(direction).magnitude());
+        let along = relative.dot(&direction);
+        max_vertex_offset = max_vertex_offset.max(relative.cross(&direction).norm());
         max_reverse_step = max_reverse_step.max(previous - along);
         previous = along;
         exactly_collinear &= on_line(start, end, point);
@@ -186,10 +186,10 @@ pub(super) fn measure_placed_circle(
         .iter()
         .map(|&id| {
             let relative = *points.get(id)? - center;
-            let axial = relative.dot(normal);
+            let axial = relative.dot(&normal);
             let planar = relative - normal * axial;
             max_plane_residual = max_plane_residual.max(axial.abs());
-            max_radial_residual = max_radial_residual.max((planar.magnitude() - radius).abs());
+            max_radial_residual = max_radial_residual.max((planar.norm() - radius).abs());
             Some(planar)
         })
         .collect::<Option<Vec<_>>>()?;
@@ -209,17 +209,17 @@ pub(super) fn measure_placed_circle(
     for pair in projected.windows(2) {
         let a = pair[0];
         let b = pair[1];
-        let step = normal.dot(a.cross(b)).atan2(a.dot(b));
+        let step = normal.dot(&a.cross(&b)).atan2(a.dot(&b));
         if !step.is_finite() {
             return None;
         }
         let delta = b - a;
-        let length_squared = delta.magnitude2();
+        let length_squared = delta.norm_squared();
         if length_squared > 0.0 {
-            let closest = a + delta * (-a.dot(delta) / length_squared).clamp(0.0, 1.0);
+            let closest = a + delta * (-a.dot(&delta) / length_squared).clamp(0.0, 1.0);
             result.max_chord_radial_residual = result
                 .max_chord_radial_residual
-                .max((closest.magnitude() - radius).abs());
+                .max((closest.norm() - radius).abs());
         }
         result.signed_sweep_radians += step;
         result.unsigned_sweep_radians += step.abs();
@@ -263,7 +263,7 @@ mod tests {
         assert!(fit.closed && fit.line.is_none());
         assert_eq!(fit.source_vertex_count, 16);
         assert!((circle.radius - 2.0).abs() < 1.0e-9);
-        assert!((circle.center - center).magnitude() < 1.0e-9);
+        assert!((circle.center - center).norm() < 1.0e-9);
         assert!(circle.max_vertex_radial_residual < 1.0e-9);
         assert!(
             (circle.max_chord_radial_residual - 2.0 * (1.0 - (TAU / 32.0).cos())).abs() < 1.0e-9

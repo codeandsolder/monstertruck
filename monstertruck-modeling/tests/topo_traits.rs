@@ -20,7 +20,7 @@ impl GeometricMapping<Line> for LinearMapping {
 }
 impl GeometricMapping<Surface> for LinearMapping {
     fn mapping(self) -> impl Fn(&Surface) -> Surface {
-        |surface| surface.transformed(Matrix4::from_translation(Vector3::new(0.0, 1.0, 0.0)))
+        |surface| surface.transformed(Matrix4::new_translation(&Vector3::new(0.0, 1.0, 0.0)))
     }
 }
 
@@ -58,9 +58,9 @@ fn consistent_line(edge: &Edge<Point3, Line>) -> bool {
 fn face_top_normal(face: &Face<Point3, Line, Surface>) -> Vector3 {
     face.edge_iter()
         .map(|edge| {
-            let vec0 = edge.front().point().to_vec();
-            let vec1 = edge.back().point().to_vec();
-            vec0.cross(vec1)
+            let vec0 = edge.front().point().position_vector();
+            let vec1 = edge.back().point().position_vector();
+            vec0.cross(&vec1)
         })
         .sum::<Vector3>()
         / 2.0
@@ -155,15 +155,15 @@ fn edge_sweep() {
     let face = sweep(&edge);
     let surface = face.oriented_surface();
     assert_eq!(face.boundaries().len(), 1);
-    assert_near!(face_top_normal(&face), Vector3::unit_z());
-    assert_near!(surface.normal(0.5, 0.5), Vector3::unit_z());
+    assert_near!(face_top_normal(&face), Vector3::z());
+    assert_near!(surface.normal(0.5, 0.5), Vector3::z());
     assert!(face.edge_iter().all(|edge| consistent_line(&edge)));
 
     let face = sweep(&edge.inverse());
     let surface = face.oriented_surface();
     assert_eq!(face.boundaries().len(), 1);
-    assert_near!(face_top_normal(&face), -Vector3::unit_z());
-    assert_near!(surface.normal(0.5, 0.5), -Vector3::unit_z());
+    assert_near!(face_top_normal(&face), -Vector3::z());
+    assert_near!(surface.normal(0.5, 0.5), -Vector3::z());
     assert!(face.edge_iter().all(|edge| consistent_line(&edge)));
 }
 
@@ -187,10 +187,10 @@ fn wire_sweep() {
 
     shell.face_iter().for_each(|face| {
         assert_eq!(face.boundaries().len(), 1);
-        assert_near!(face_top_normal(face), Vector3::unit_z());
+        assert_near!(face_top_normal(face), Vector3::z());
         let surface = face.oriented_surface();
         let normal = surface.normal(0.5, 0.5);
-        assert_near!(normal, Vector3::unit_z());
+        assert_near!(normal, Vector3::z());
     });
 }
 
@@ -209,7 +209,7 @@ fn face_sweep() {
         let normal = surface.normal(0.5, 0.5);
 
         let is_side_plane = vec.y.so_small();
-        let is_inner_side_plane = vec.magnitude() < 0.3 && is_side_plane;
+        let is_inner_side_plane = vec.norm() < 0.3 && is_side_plane;
 
         let expected_num_boundaries = if is_side_plane { 1 } else { 2 };
         let expected_normal = vec * if is_inner_side_plane { -4.0 } else { 2.0 };
@@ -236,7 +236,7 @@ fn face_sweep() {
         let normal = surface.normal(0.5, 0.5);
 
         let is_side_plane = vec.y.so_small();
-        let is_inner_side_plane = vec.magnitude() < 0.3 && is_side_plane;
+        let is_inner_side_plane = vec.norm() < 0.3 && is_side_plane;
 
         let expected_num_boundaries = if is_side_plane { 1 } else { 2 };
         let expected_normal = vec * if is_inner_side_plane { 4.0 } else { -2.0 };
@@ -271,7 +271,7 @@ fn shell_sweep() {
         let is_left_side = p.z < 1.0;
         let is_side_plane = p.y.near(&0.5);
         let is_inner_plane =
-            is_left_side && is_side_plane && Vector2::new(p.z - 0.5, p.x - 0.5).magnitude() < 0.3;
+            is_left_side && is_side_plane && Vector2::new(p.z - 0.5, p.x - 0.5).norm() < 0.3;
         let is_diagonal_plane = p.near(&Point3::new(0.5, 0.5, 1.5));
 
         let expected_normal = match (
@@ -340,8 +340,8 @@ fn edge_multi_sweep() {
     shell.face_iter().for_each(|face| {
         let surface = face.oriented_surface();
         assert_eq!(face.boundaries().len(), 1);
-        assert_near!(face_top_normal(face), Vector3::unit_z());
-        assert_near!(surface.normal(0.5, 0.5), Vector3::unit_z());
+        assert_near!(face_top_normal(face), Vector3::z());
+        assert_near!(surface.normal(0.5, 0.5), Vector3::z());
     });
 
     let shell = multi_sweep(&edge.inverse());
@@ -352,8 +352,8 @@ fn edge_multi_sweep() {
     shell.face_iter().for_each(|face| {
         let surface = face.oriented_surface();
         assert_eq!(face.boundaries().len(), 1);
-        assert_near!(face_top_normal(face), -Vector3::unit_z());
-        assert_near!(surface.normal(0.5, 0.5), -Vector3::unit_z());
+        assert_near!(face_top_normal(face), -Vector3::z());
+        assert_near!(surface.normal(0.5, 0.5), -Vector3::z());
     });
 }
 
@@ -377,10 +377,10 @@ fn wire_multi_sweep() {
 
     shell.face_iter().for_each(|face| {
         assert_eq!(face.boundaries().len(), 1);
-        assert_near!(face_top_normal(face), Vector3::unit_z());
+        assert_near!(face_top_normal(face), Vector3::z());
         let surface = face.oriented_surface();
         let normal = surface.normal(0.5, 0.5);
-        assert_near!(normal, Vector3::unit_z());
+        assert_near!(normal, Vector3::z());
     });
 }
 
@@ -400,7 +400,7 @@ fn face_multi_sweep() {
         let normal = surface.normal(0.5, 0.5);
 
         let is_side_plane = vec.y.so_small();
-        let is_inner_side_plane = vec.magnitude() < 0.3 && is_side_plane;
+        let is_inner_side_plane = vec.norm() < 0.3 && is_side_plane;
 
         let expected_num_boundaries = if is_side_plane { 1 } else { 2 };
         let expected_normal = vec * if is_inner_side_plane { -4.0 } else { 2.0 };
@@ -428,7 +428,7 @@ fn face_multi_sweep() {
         let normal = surface.normal(0.5, 0.5);
 
         let is_side_plane = vec.y.so_small();
-        let is_inner_side_plane = vec.magnitude() < 0.3 && is_side_plane;
+        let is_inner_side_plane = vec.norm() < 0.3 && is_side_plane;
 
         let expected_num_boundaries = if is_side_plane { 1 } else { 2 };
         let expected_normal = vec * if is_inner_side_plane { 4.0 } else { -2.0 };
@@ -463,7 +463,7 @@ fn shell_multi_sweep() {
         let is_left_side = p.z < 1.0;
         let is_side_plane = p.y.near(&0.5) || p.y.near(&1.5);
         let is_inner_plane =
-            is_left_side && is_side_plane && Vector2::new(p.z - 0.5, p.x - 0.5).magnitude() < 0.3;
+            is_left_side && is_side_plane && Vector2::new(p.z - 0.5, p.x - 0.5).norm() < 0.3;
         let is_diagonal_plane = is_side_plane && Point2::new(p.z, p.x).near(&Point2::new(1.5, 0.5));
 
         let expected_normal = match (
@@ -508,7 +508,7 @@ fn shell_multi_sweep() {
 struct CircleMapping;
 impl GeometricMapping<Point3> for CircleMapping {
     fn mapping(self) -> impl Fn(&Point3) -> Point3 {
-        move |p| Matrix4::from_angle_y(Rad(PI / 2.0)).transform_point(*p)
+        move |p| Matrix4::from_axis_angle(&Vector3::y_axis(), PI / 2.0).apply_point(*p)
     }
 }
 impl GeometricMapping<Line> for CircleMapping {
@@ -519,7 +519,7 @@ impl GeometricMapping<Line> for CircleMapping {
 }
 impl GeometricMapping<Surface> for CircleMapping {
     fn mapping(self) -> impl Fn(&Surface) -> Surface {
-        move |surface| surface.transformed(Matrix4::from_angle_y(Rad(PI / 2.0)))
+        move |surface| surface.transformed(Matrix4::from_axis_angle(&Vector3::y_axis(), PI / 2.0))
     }
 }
 
@@ -665,10 +665,10 @@ fn face_closed_sweep() {
         let p = surface.evaluate(0.5, 0.5);
         let normal = surface.normal(0.5, 0.5);
         let vec = Vector3::new(p.x, 0.0, p.z);
-        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.magnitude() > 1.0) {
+        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.norm() > 1.0) {
             (true, true) => (vec / f64::sqrt(2.0), 2.0 * f64::sqrt(2.0)),
             (true, false) => (-vec * f64::sqrt(2.0), f64::sqrt(2.0)),
-            (false, _) => (Vector3::unit_y() * (p.y - 0.5) * 2.0, 1.5),
+            (false, _) => (Vector3::y() * (p.y - 0.5) * 2.0, 1.5),
         };
         assert_near!(normal, expected_normal);
         assert_near!(face_top_normal(face), expected_normal * expected_area);
@@ -685,7 +685,7 @@ fn face_closed_sweep() {
         let p = surface.evaluate(0.5, 0.5);
         let normal = surface.normal(0.5, 0.5);
         let vec = Vector3::new(p.x, 0.0, p.z);
-        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.magnitude() > 1.0) {
+        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.norm() > 1.0) {
             (true, true) => (
                 -vec / (f64::sqrt(2.0) * 7.0 / 8.0),
                 f64::sqrt(2.0) * 7.0 / 8.0,
@@ -694,7 +694,7 @@ fn face_closed_sweep() {
                 vec / (f64::sqrt(2.0) * 5.0 / 8.0),
                 f64::sqrt(2.0) * 5.0 / 8.0,
             ),
-            (false, _) => (Vector3::unit_y() * (0.5 - p.y) * 4.0, 0.75),
+            (false, _) => (Vector3::y() * (0.5 - p.y) * 4.0, 0.75),
         };
         assert_near!(normal, expected_normal);
         assert_near!(face_top_normal(face), expected_normal * expected_area);
@@ -714,10 +714,10 @@ fn face_closed_sweep() {
         let p = surface.evaluate(0.5, 0.5);
         let normal = surface.normal(0.5, 0.5);
         let vec = Vector3::new(p.x, 0.0, p.z);
-        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.magnitude() > 1.0) {
+        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.norm() > 1.0) {
             (true, true) => (-vec / f64::sqrt(2.0), 2.0 * f64::sqrt(2.0)),
             (true, false) => (vec * f64::sqrt(2.0), f64::sqrt(2.0)),
-            (false, _) => (Vector3::unit_y() * (0.5 - p.y) * 2.0, 1.5),
+            (false, _) => (Vector3::y() * (0.5 - p.y) * 2.0, 1.5),
         };
         assert_near!(normal, expected_normal);
         assert_near!(face_top_normal(face), expected_normal * expected_area);
@@ -734,7 +734,7 @@ fn face_closed_sweep() {
         let p = surface.evaluate(0.5, 0.5);
         let normal = surface.normal(0.5, 0.5);
         let vec = Vector3::new(p.x, 0.0, p.z);
-        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.magnitude() > 1.0) {
+        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.norm() > 1.0) {
             (true, true) => (
                 vec / (f64::sqrt(2.0) * 7.0 / 8.0),
                 f64::sqrt(2.0) * 7.0 / 8.0,
@@ -743,7 +743,7 @@ fn face_closed_sweep() {
                 -vec / (f64::sqrt(2.0) * 5.0 / 8.0),
                 f64::sqrt(2.0) * 5.0 / 8.0,
             ),
-            (false, _) => (Vector3::unit_y() * (p.y - 0.5) * 4.0, 0.75),
+            (false, _) => (Vector3::y() * (p.y - 0.5) * 4.0, 0.75),
         };
         assert_near!(normal, expected_normal);
         assert_near!(face_top_normal(face), expected_normal * expected_area);
@@ -808,19 +808,18 @@ fn shell_closed_sweep() {
         let normal = surface.normal(0.5, 0.5);
 
         let vec = Vector3::new(p.x, 0.0, p.z);
-        let (expected_normal, expected_area) =
-            match (p.y.near(&0.5), vec.magnitude() < f64::sqrt(2.0)) {
-                (true, true) => (-vec * f64::sqrt(2.0), f64::sqrt(2.0)),
-                (true, false) => {
-                    let unit_r = vec / 2.5 * f64::sqrt(2.0);
-                    let normal = (unit_r * f64::sqrt(2.0) + Vector3::unit_y()) / f64::sqrt(3.0);
-                    (normal, 2.5 * f64::sqrt(3.0))
-                }
-                (false, _) => (
-                    Vector3::new(0.0, (p.y - 0.5) * 2.0, 0.0),
-                    vec.magnitude() * f64::sqrt(2.0),
-                ),
-            };
+        let (expected_normal, expected_area) = match (p.y.near(&0.5), vec.norm() < f64::sqrt(2.0)) {
+            (true, true) => (-vec * f64::sqrt(2.0), f64::sqrt(2.0)),
+            (true, false) => {
+                let unit_r = vec / 2.5 * f64::sqrt(2.0);
+                let normal = (unit_r * f64::sqrt(2.0) + Vector3::y()) / f64::sqrt(3.0);
+                (normal, 2.5 * f64::sqrt(3.0))
+            }
+            (false, _) => (
+                Vector3::new(0.0, (p.y - 0.5) * 2.0, 0.0),
+                vec.norm() * f64::sqrt(2.0),
+            ),
+        };
         assert_near!(normal, expected_normal);
         assert_near!(face_top_normal(face), expected_area * expected_normal);
     });

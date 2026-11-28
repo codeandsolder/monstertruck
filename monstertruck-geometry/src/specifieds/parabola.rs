@@ -1,7 +1,8 @@
 use super::{
-    CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
+    AffinePoint, CurveParameter, HashGen, MetricSpace, Origin, ParameterDivision1D,
     ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo, solver,
+    SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo,
+    monic_cubic_roots,
 };
 #[cfg(test)]
 use crate::prelude::assert_near;
@@ -26,7 +27,7 @@ impl ParametricCurve for UnitParabola<Point2> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Self::Point { Self::Point::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Self::Point { Self::Point::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     #[inline]
@@ -45,7 +46,7 @@ impl ParametricCurve for UnitParabola<Point3> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Self::Point { Self::Point::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Self::Point { Self::Point::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     #[inline]
@@ -55,7 +56,7 @@ impl ParametricCurve for UnitParabola<Point3> {
 impl<P> ParameterDivision1D for UnitParabola<P>
 where
     Self: ParametricCurve<Point = P>,
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     type Point = P;
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<P>) {
@@ -74,7 +75,7 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point2> {
     ) -> Option<f64> {
         let p = 2.0 - pt.x;
         let q = -pt.y;
-        solver::pre_solve_cubic(p, q)
+        monic_cubic_roots([0.0, p, q])?
             .into_iter()
             .filter_map(|x| if x.im.so_small() { Some(x.re) } else { None })
             .min_by(|s, t| {

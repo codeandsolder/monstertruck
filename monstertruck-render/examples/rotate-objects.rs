@@ -47,15 +47,15 @@ struct MyRender {
 impl MyRender {
     fn create_camera() -> AppResult<Camera> {
         let mat = Matrix4::look_at_rh(
-            Point3::new(15.0, 15.0, 15.0),
-            Point3::origin(),
-            Vector3::unit_y(),
+            &Point3::new(15.0, 15.0, 15.0),
+            &Point3::origin(),
+            &Vector3::y(),
         );
         Ok(Camera {
             matrix: mat
-                .invert()
+                .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+            method: ProjectionMethod::perspective(PI / 4.0),
             near_clip: 0.1,
             far_clip: 40.0,
         })
@@ -73,19 +73,19 @@ impl MyRender {
         let original_mesh: PolygonInstance = scene
             .instance_creator()
             .create_instance(&mesh, &PolygonState::default())?;
-        let rad = Rad(2.0 * PI / f64::from(NUM_OF_OBJECTS));
-        let mut mat = Matrix4::from_scale(size / 2.0);
-        mat = Matrix4::from_translation(center.to_vec()) * mat;
+        let rad = 2.0 * PI / f64::from(NUM_OF_OBJECTS);
+        let mut mat = Matrix4::new_scaling(size / 2.0);
+        mat = Matrix4::new_translation(&center.position_vector()) * mat;
         mat = mat
-            .invert()
+            .try_inverse()
             .ok_or_else(|| std::io::Error::other("object normalization matrix is singular"))?;
-        mat = Matrix4::from_translation(Vector3::new(0.0, 0.5, 5.0)) * mat;
+        mat = Matrix4::new_translation(&Vector3::new(0.0, 0.5, 5.0)) * mat;
         for _ in 0..NUM_OF_OBJECTS {
             let mut instance = original_mesh.clone_instance();
             instance.instance_state_mut().matrix = mat;
             scene.add_object(&instance);
             self.instances.push(instance);
-            mat = Matrix4::from_axis_angle(Vector3::unit_y(), rad) * mat;
+            mat = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), rad) * mat;
         }
         Ok(())
     }
@@ -94,23 +94,23 @@ impl MyRender {
         let time = self.scene.elapsed().as_secs_f64();
         let delta_time = time - self.prev_time;
         self.prev_time = time;
-        let mat0 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(delta_time));
+        let mat0 = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), delta_time);
         for (idx, instance) in self.instances.iter_mut().enumerate() {
             let state = instance.instance_state_mut();
             let (matrix, material) = (&mut state.matrix, &mut state.material);
             let k = if idx % 2 == 0 { 5.0 } else { -5.0 };
-            let mat1 = Matrix4::from_axis_angle(Vector3::unit_y(), Rad(k * delta_time));
-            let x = matrix[3][2];
-            let Some(inverse) = matrix.invert() else {
+            let mat1 = Matrix4::from_axis_angle(&Unit::new_unchecked(Vector3::y()), k * delta_time);
+            let x = matrix[(2, 3)];
+            let Some(inverse) = matrix.try_inverse() else {
                 continue;
             };
             let mat = mat0 * *matrix * mat1 * inverse;
             *matrix = mat * *matrix;
-            let obj_pos = matrix[3].truncate();
+            let obj_pos = matrix.column(3).into_owned().spatial();
             let new_length = 5.0 + time.sin() + (time * 3.0).sin() / 3.0;
-            let obj_dir = obj_pos / obj_pos.magnitude();
-            let move_vec = obj_dir * (new_length - obj_pos.magnitude());
-            let mat = Matrix4::from_translation(move_vec);
+            let obj_dir = obj_pos / obj_pos.norm();
+            let move_vec = obj_dir * (new_length - obj_pos.norm());
+            let mat = Matrix4::new_translation(&move_vec);
             *matrix = mat * *matrix;
             let color = Self::calculate_color(x / 14.0 + 0.5);
             *material = Material {
@@ -197,7 +197,8 @@ impl App for MyRender {
                         light.position = camera.position();
                     }
                     LightType::Uniform => {
-                        light.position = Point3::from_vec(camera.position().to_vec().normalize());
+                        light.position =
+                            Point3::from(camera.position().position_vector().normalize());
                     }
                 }
             }
@@ -215,7 +216,7 @@ impl App for MyRender {
                     }
                     ProjectionMethod::Perspective { .. } => {
                         let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
-                        camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                        camera.matrix = Matrix4::new_translation(&trans_vec) * camera.matrix;
                     }
                 }
             }
@@ -233,11 +234,11 @@ impl App for MyRender {
                 if dir2d.so_small() {
                     return Self::default_control_flow();
                 }
-                let mut axis = dir2d[1] * camera.matrix[0];
-                axis += dir2d[0] * camera.matrix[1];
-                axis /= axis.magnitude();
-                let angle = dir2d.magnitude() * 0.01;
-                let inverse_rotation = Matrix4::from_axis_angle(axis.truncate(), Rad(-angle));
+                let mut axis = dir2d[1] * camera.matrix.fixed_view::<3, 1>(0, 0).into_owned();
+                axis += dir2d[0] * camera.matrix.fixed_view::<3, 1>(0, 1).into_owned();
+                axis /= axis.norm();
+                let angle = dir2d.norm() * 0.01;
+                let inverse_rotation = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), -angle);
                 camera.matrix = inverse_rotation * camera.matrix;
             }
             self.prev_cursor = Some(position);
@@ -259,9 +260,7 @@ impl App for MyRender {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 self.camera_changed = Some(std::time::Instant::now());
                 camera.method = match camera.method {
-                    ProjectionMethod::Parallel { .. } => {
-                        ProjectionMethod::perspective(Rad(PI / 8.0))
-                    }
+                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective(PI / 8.0),
                     ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(10.0),
                 }
             }
@@ -280,7 +279,7 @@ impl App for MyRender {
                 *light = match light.kind {
                     LightType::Point => {
                         let mut vec = camera.position();
-                        vec /= vec.to_vec().magnitude();
+                        vec /= vec.position_vector().norm();
                         Light {
                             position: vec,
                             color: Vector3::new(1.0, 1.0, 1.0),

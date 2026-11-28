@@ -6,8 +6,7 @@
 //! subsequent recovery stages can share and certify seams with curved patches.
 
 use crate::{
-    Curve, Face, InnerSpace, KERNEL_EPSILON, Plane, Point3, Shell, Surface, Vector3, Vertex, Wire,
-    builder,
+    Curve, Face, KERNEL_EPSILON, Plane, Point3, Shell, Surface, Vector3, Vertex, Wire, builder,
 };
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::{Edge, errors::Error as TopologyError};
@@ -193,7 +192,7 @@ const fn edge_key(a: usize, b: usize) -> (EdgeKey, bool) {
 }
 
 fn signed_plane_distance(point: Point3, origin: Point3, normal: Vector3) -> f64 {
-    (point - origin).dot(normal)
+    (point - origin).dot(&normal)
 }
 
 /// Integrate signed polyhedral volume by a fan triangulation of each source
@@ -227,7 +226,7 @@ fn signed_polygon_volume<'a>(
         for pair in polygon[1..].windows(2) {
             let b = *positions.get(pair[0])? - origin;
             let c = *positions.get(pair[1])? - origin;
-            let term = a.dot(b.cross(c));
+            let term = a.dot(&b.cross(&c));
             let corrected = term - compensation;
             let next = six_volume + corrected;
             compensation = (next - six_volume) - corrected;
@@ -426,7 +425,7 @@ fn segment_patches(
                     continue;
                 }
                 let polygon = &polygons[adjacent];
-                if polygon.normal.dot(seed.normal) < cos_angle {
+                if polygon.normal.dot(&seed.normal) < cos_angle {
                     continue;
                 }
                 if polygon.vertices.iter().any(|&v| {
@@ -513,7 +512,7 @@ fn boundary_loops(
             .map(|(i, &v)| {
                 let a = positions[v] - origin;
                 let b = positions[cycle[(i + 1) % cycle.len()]] - origin;
-                a.cross(b).dot(normal)
+                a.cross(&b).dot(&normal)
             })
             .sum::<f64>()
             / 2.0
@@ -565,7 +564,7 @@ fn build_face(
     let p0 = seed.origin;
     let p1 = positions[seed.vertices[1]];
     let tangent = p1 - p0;
-    let p2 = p0 + seed.normal.cross(tangent);
+    let p2 = p0 + seed.normal.cross(&tangent);
     let plane = Plane::new(p0, p1, p2);
     Ok(Face::new(wires, Surface::Plane(plane))?)
 }

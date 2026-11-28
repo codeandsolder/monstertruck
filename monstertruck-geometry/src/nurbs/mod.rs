@@ -15,7 +15,7 @@ use crate::{
     Bound, Bounded, Debug, Deserialize, INCLUDE_CURVE_TRIALS, PRESEARCH_DIVISION, Serialize,
     errors, prelude::*,
 };
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use smallvec::SmallVec;
 
 /// A non-decreasing sequence of parameter values defining the piecewise structure of a B-spline.
@@ -321,14 +321,14 @@ pub const fn inv_or_zero(delta: f64) -> f64 { if delta == 0.0 { 0.0 } else { 1.0
 
 // This code is modified version of https://the-algorithms.com/algorithm/gaussian-elimination?lang=rust
 mod gaussian_elimination {
-    use monstertruck_core::cgmath64::cgmath::BaseFloat;
+    use monstertruck_core::math::KernelScalar;
 
     // Gaussian Elimination of Quadratic Matrices
     // Takes an augmented matrix as input, returns vector of results
     // Wikipedia reference: augmented matrix: https://en.wikipedia.org/wiki/Augmented_matrix
     // Wikipedia reference: algorithm: https://en.wikipedia.org/wiki/Gaussian_elimination
 
-    pub fn gaussian_elimination<S: BaseFloat>(matrix: &mut [Vec<S>]) -> Option<Vec<S>> {
+    pub fn gaussian_elimination<S: KernelScalar>(matrix: &mut [Vec<S>]) -> Option<Vec<S>> {
         let size = matrix.len();
         if size != matrix[0].len() - 1 {
             return None;
@@ -359,7 +359,7 @@ mod gaussian_elimination {
         Some((0..size).map(|i| matrix[i][size] / matrix[i][i]).collect())
     }
 
-    fn echelon<S: BaseFloat>(matrix: &mut [Vec<S>], i: usize, j: usize) {
+    fn echelon<S: KernelScalar>(matrix: &mut [Vec<S>], i: usize, j: usize) {
         let size = matrix.len();
         // The second test skips a row operation whose multiplier is zero. That
         // operation is a no-op on finite input, so this is work avoided rather
@@ -372,7 +372,7 @@ mod gaussian_elimination {
         }
     }
 
-    fn eliminate<S: BaseFloat>(matrix: &mut [Vec<S>], i: usize) {
+    fn eliminate<S: KernelScalar>(matrix: &mut [Vec<S>], i: usize) {
         let size = matrix.len();
         if matrix[i][i] != S::zero() {
             for j in (1..=i).rev() {

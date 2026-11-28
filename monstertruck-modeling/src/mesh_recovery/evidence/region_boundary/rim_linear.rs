@@ -6,7 +6,7 @@ use super::super::{SourceCircleObservation, StationLinearCandidate};
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Clone, Copy)]
@@ -38,7 +38,7 @@ impl Profile {
 
     fn sample(self, point: Point3) -> (f64, Vector3) {
         let delta = point - self.origin;
-        let z = delta.dot(self.axis);
+        let z = delta.dot(&self.axis);
         (z, delta - self.axis * z)
     }
 
@@ -96,13 +96,13 @@ pub(super) fn facet_bound(
         for &id in ids {
             let (z, radial) = profile.sample(*evidence.positions.get(id)?);
             let expected = profile.expected(z);
-            let rho = radial.magnitude();
+            let rho = radial.norm();
             if !expected.is_finite() || expected < -tolerance || (rho - expected).abs() > tolerance
             {
                 return None;
             }
             if rho > tolerance {
-                angles.push(radial.dot(v).atan2(radial.dot(u)));
+                angles.push(radial.dot(&v).atan2(radial.dot(&u)));
             }
             samples.push((radial, expected, rho));
         }
@@ -111,7 +111,7 @@ pub(super) fn facet_bound(
             let budget = fraction.mul_add(expected, tolerance);
             // With no resolved azimuth, the zero lower bound on radial
             // length still proves sufficiently small near-apex facets.
-            let lower = direction.map_or(0.0, |direction| radial.dot(direction));
+            let lower = direction.map_or(0.0, |direction| radial.dot(&direction));
             let bound = (expected - lower).max(rho - expected).max(0.0);
             if !budget.is_finite() || budget <= 0.0 || bound > budget {
                 return None;
@@ -153,7 +153,7 @@ pub(super) fn absolute_facet_admissible(
         for &id in ids {
             let (z, radial) = profile.sample(*evidence.positions.get(id)?);
             let expected = profile.expected(z);
-            let rho = radial.magnitude();
+            let rho = radial.norm();
             if !expected.is_finite() || !rho.is_finite() {
                 return None;
             }
@@ -167,7 +167,7 @@ pub(super) fn absolute_facet_admissible(
                 return None;
             }
             if rho > 0.0 {
-                angles.push(radial.dot(v).atan2(radial.dot(u)));
+                angles.push(radial.dot(&v).atan2(radial.dot(&u)));
             }
             above = above.max(rho - expected);
             max_expected = max_expected.max(expected);
@@ -176,7 +176,7 @@ pub(super) fn absolute_facet_admissible(
         let below = azimuth_direction(&mut angles, u, v).map_or(max_expected, |direction| {
             samples
                 .into_iter()
-                .map(|(radial, expected)| expected - radial.dot(direction))
+                .map(|(radial, expected)| expected - radial.dot(&direction))
                 .fold(0.0_f64, f64::max)
                 .min(max_expected)
         });
@@ -256,7 +256,7 @@ impl<'a> LocalGrowth<'a> {
             let (z, radial) = profile.sample(self.evidence.positions[vertex]);
             low = low.min(z);
             high = high.max(z);
-            if (radial.magnitude() - profile.expected(z)).abs() > tolerance {
+            if (radial.norm() - profile.expected(z)).abs() > tolerance {
                 return None;
             }
         }
@@ -274,18 +274,15 @@ impl<'a> LocalGrowth<'a> {
                 })
                 / crate::usize_to_f64(vertices.len());
             let expected = carrier.signed_constraint(profile.origin + centroid)?.0;
-            let dot = expected.dot(support.normal);
-            let deviation = expected.cross(support.normal).magnitude().atan2(dot.abs());
+            let dot = expected.dot(&support.normal);
+            let deviation = expected.cross(&support.normal).norm().atan2(dot.abs());
             let span = vertices
                 .iter()
                 .filter_map(|&id| {
                     carrier
                         .signed_constraint(self.evidence.positions[id])
                         .map(|(normal, _)| {
-                            expected
-                                .cross(normal)
-                                .magnitude()
-                                .atan2(expected.dot(normal))
+                            expected.cross(&normal).norm().atan2(expected.dot(&normal))
                         })
                 })
                 .fold(0.0_f64, f64::max);
@@ -340,18 +337,18 @@ impl<'a> LocalGrowth<'a> {
         let Some((_, radial)) = ids
             .iter()
             .map(|&id| profile.sample(self.evidence.positions[id]))
-            .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))
+            .max_by(|a, b| a.1.norm_squared().total_cmp(&b.1.norm_squared()))
         else {
             return false;
         };
-        if radial.magnitude() <= tolerance {
+        if radial.norm() <= tolerance {
             return false;
         }
         let direction = radial.normalize();
         ids.iter().all(|&id| {
             let (z, radial) = profile.sample(self.evidence.positions[id]);
             let radius = profile.expected(z);
-            radius >= -tolerance && (radial - direction * radius).magnitude() <= tolerance
+            radius >= -tolerance && (radial - direction * radius).norm() <= tolerance
         })
     }
 
@@ -438,13 +435,13 @@ impl<'a> LocalGrowth<'a> {
                     if (za - zb).abs() <= tolerance {
                         return false;
                     }
-                    let ra = va.magnitude();
-                    let rb = vb.magnitude();
+                    let ra = va.norm();
+                    let rb = vb.norm();
                     if ra.min(rb) <= tolerance {
                         return profile.expected(if ra < rb { za } else { zb }).abs() <= tolerance;
                     }
                     // Test azimuth in length units at the larger radius.
-                    (va / ra - vb / rb).magnitude() * ra.max(rb) <= tolerance
+                    (va / ra - vb / rb).norm() * ra.max(rb) <= tolerance
                 })
             })
         })
@@ -476,7 +473,7 @@ impl<'a> LocalGrowth<'a> {
         if z.abs() <= tolerance {
             return None;
         }
-        profile.slope = (radial.magnitude() - circle.radius) / z;
+        profile.slope = (radial.norm() - circle.radius) / z;
         Some((profile, slope_sample, tolerance))
     }
 
@@ -494,8 +491,8 @@ impl<'a> LocalGrowth<'a> {
         let first_normal = self.evidence.planar_supports[supports[0]].normal;
         if !supports.iter().any(|&id| {
             first_normal
-                .cross(self.evidence.planar_supports[id].normal)
-                .magnitude()
+                .cross(&self.evidence.planar_supports[id].normal)
+                .norm()
                 > self.options.angular_tolerance.sin()
         }) {
             return None;
@@ -600,9 +597,9 @@ fn has_independent_section(
                 let delta = fit.center - profile.origin;
                 if fit.source_span * fit.plane_span_strength > tolerance
                     && fit.max_plane_residual.max(fit.max_radial_residual) <= tolerance
-                    && delta.cross(profile.axis).magnitude() <= tolerance
-                    && fit.normal.cross(profile.axis).magnitude() * fit.radius <= tolerance
-                    && (fit.radius - profile.expected(delta.dot(profile.axis))).abs() <= tolerance
+                    && delta.cross(&profile.axis).norm() <= tolerance
+                    && fit.normal.cross(&profile.axis).norm() * fit.radius <= tolerance
+                    && (fit.radius - profile.expected(delta.dot(&profile.axis))).abs() <= tolerance
                 {
                     return true;
                 }
@@ -638,7 +635,7 @@ fn independent_profile_rank(
     let center = samples.iter().map(|&(z, _)| z).sum::<f64>() / crate::usize_to_f64(samples.len());
     let scale = samples
         .iter()
-        .map(|&(z, radial)| (z - center).abs().max(radial.magnitude()))
+        .map(|&(z, radial)| (z - center).abs().max(radial.norm()))
         .fold(0.0_f64, f64::max);
     if !scale.is_finite() || scale <= tolerance {
         return false;
@@ -646,15 +643,15 @@ fn independent_profile_rank(
     let mut columns: [Vec<f64>; PARAMETERS] =
         std::array::from_fn(|_| Vec::with_capacity(samples.len()));
     for (z, radial) in samples {
-        let radius = radial.magnitude();
+        let radius = radial.norm();
         if radius <= tolerance {
             continue; // the apex has no unique radial derivative
         }
         let direction = radial / radius;
         let axial = (z - center) / scale;
         let tilt = profile.slope.mul_add(radius / scale, axial);
-        let a = direction.dot(u);
-        let b = direction.dot(v);
+        let a = direction.dot(&u);
+        let b = direction.dot(&v);
         for (column, value) in columns
             .iter_mut()
             .zip([a, b, a * tilt, b * tilt, 1.0, axial])
@@ -732,7 +729,7 @@ impl<'a> RegionBoundaryIndex<'a> {
                     .fold(
                         (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY),
                         |(low, high, radius), (z, radial)| {
-                            (low.min(z), high.max(z), radius.min(radial.magnitude()))
+                            (low.min(z), high.max(z), radius.min(radial.norm()))
                         },
                     );
                 let tolerance = options.relative_tolerance * radius.min(high - low);
@@ -775,7 +772,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             .evidence
             .positions
             .iter()
-            .map(|&point| (point - reference).magnitude())
+            .map(|&point| (point - reference).norm())
             .fold(0.0_f64, f64::max);
         let identity_tolerance = options.absolute_tolerance.min(crate::KERNEL_EPSILON * 0.1);
         let mut candidates = Vec::new();
@@ -784,7 +781,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             // The same circle fixes all parameters except slope. Bound
             // profile differences over the entire possible growth domain,
             // not just the seed support, before skipping another seed.
-            let axial_extent = (reference - circle.center).dot(circle.normal).abs() + extent;
+            let axial_extent = (reference - circle.center).dot(&circle.normal).abs() + extent;
             for seed in growth.seeds(circle) {
                 let Some(parameters) = growth.seed_profile(circle, seed) else {
                     continue;
@@ -935,7 +932,7 @@ mod tests {
             return Err("expected linear carrier".into());
         };
         assert!((radius_at_origin - 1.0).abs() < 1.0e-9);
-        assert!(axis.cross(Vector3::unit_z()).magnitude() < 1.0e-9);
+        assert!(axis.cross(&Vector3::z()).norm() < 1.0e-9);
         assert!(slope.abs() < 1.0e-9);
         Ok(())
     }
@@ -948,7 +945,7 @@ mod tests {
         let index = RegionBoundaryIndex::new(&evidence)?;
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -984,7 +981,7 @@ mod tests {
             return Err("expected affine carrier".into());
         };
         assert_eq!(origin, Point3::new(0.0, 0.0, 0.0));
-        assert_eq!(axis, Vector3::unit_z());
+        assert_eq!(axis, Vector3::z());
         assert_eq!(radius_at_origin.to_bits(), 1.0_f64.to_bits());
         assert_eq!(slope.to_bits(), 0.0_f64.to_bits());
         Ok(())
@@ -1031,7 +1028,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &evidence,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             MeridianGraphOptions {
                 station_resolution: 1.0e-8,
                 vertex_tolerance: 1.0e-8,
@@ -1176,7 +1173,7 @@ mod tests {
                 .filter_map(|(id, p)| (p.z == 0.0).then_some(id))
                 .collect(),
             center: Point3::new(0.0, 0.0, 0.0),
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
             radius: 1.0,
             max_plane_residual: 0.0,
             max_radial_residual: 0.0,
@@ -1238,7 +1235,7 @@ mod tests {
         let SurfaceCarrier::LinearRevolution { axis, slope, .. } = proposal.carrier() else {
             return Err("expected linear carrier".into());
         };
-        assert!(axis.cross(Vector3::unit_z()).magnitude() < 1e-9);
+        assert!(axis.cross(&Vector3::z()).norm() < 1e-9);
         assert!((slope.abs() - 0.2).abs() < 1e-9);
         let profile = Profile::from_carrier(proposal.carrier()).ok_or("profile")?;
         let growth = LocalGrowth::new(&index, options()).ok_or("growth")?;
@@ -1285,7 +1282,7 @@ mod tests {
                 .filter_map(|(id, p)| (p.z == 0.0).then_some(id))
                 .collect(),
             center: Point3::new(0.0, 0.0, 0.0),
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
             radius: 1.0,
             max_plane_residual: 0.0,
             max_radial_residual: 0.0,

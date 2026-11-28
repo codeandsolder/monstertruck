@@ -31,12 +31,12 @@ fn nurbs_sphere() {
         for j in 0..=10 {
             let u = f64::from(i) / N as f64;
             let v = f64::from(j) / N as f64;
-            let p = surface.evaluate(u, v).to_vec();
-            assert_near!(p.magnitude(), 1.0);
+            let p = surface.evaluate(u, v).coords;
+            assert_near!(p.norm(), 1.0);
             let uder = surface.derivative_u(u, v);
-            assert!(p.dot(uder).so_small());
+            assert!(p.dot(&uder).so_small());
             let vder = surface.derivative_v(u, v);
-            assert!(p.dot(vder).so_small());
+            assert!(p.dot(&vder).so_small());
         }
     }
 }
@@ -79,7 +79,7 @@ proptest! {
             let der1 = (bsp.derivative_mn(m, n, u, v + EPS) - bsp.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
-        prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
+        prop_assert!((der0 - der1).norm() < 0.01 * der0.norm());
     }
 }
 
@@ -127,27 +127,27 @@ fn assert_u_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher
             assert_near!(left.derivative_v(cut, v), surface.derivative_v(cut, v));
             if check_higher_order {
                 assert!(
-                    (left.derivative_uu(cut, v) - right.derivative_uu(cut, v)).magnitude()
+                    (left.derivative_uu(cut, v) - right.derivative_uu(cut, v)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.derivative_uu(cut, v) - surface.derivative_uu(cut, v)).magnitude()
+                    (left.derivative_uu(cut, v) - surface.derivative_uu(cut, v)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.derivative_uv(cut, v) - right.derivative_uv(cut, v)).magnitude()
+                    (left.derivative_uv(cut, v) - right.derivative_uv(cut, v)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.derivative_uv(cut, v) - surface.derivative_uv(cut, v)).magnitude()
+                    (left.derivative_uv(cut, v) - surface.derivative_uv(cut, v)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.derivative_vv(cut, v) - right.derivative_vv(cut, v)).magnitude()
+                    (left.derivative_vv(cut, v) - right.derivative_vv(cut, v)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (left.derivative_vv(cut, v) - surface.derivative_vv(cut, v)).magnitude()
+                    (left.derivative_vv(cut, v) - surface.derivative_vv(cut, v)).norm()
                         <= higher_order_tolerance
                 );
             }
@@ -172,27 +172,27 @@ fn assert_v_seam_matches(surface: &NurbsSurface<Vector4>, cut: f64, check_higher
             assert_near!(lower.derivative_v(u, cut), surface.derivative_v(u, cut));
             if check_higher_order {
                 assert!(
-                    (lower.derivative_uu(u, cut) - upper.derivative_uu(u, cut)).magnitude()
+                    (lower.derivative_uu(u, cut) - upper.derivative_uu(u, cut)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.derivative_uu(u, cut) - surface.derivative_uu(u, cut)).magnitude()
+                    (lower.derivative_uu(u, cut) - surface.derivative_uu(u, cut)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.derivative_uv(u, cut) - upper.derivative_uv(u, cut)).magnitude()
+                    (lower.derivative_uv(u, cut) - upper.derivative_uv(u, cut)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.derivative_uv(u, cut) - surface.derivative_uv(u, cut)).magnitude()
+                    (lower.derivative_uv(u, cut) - surface.derivative_uv(u, cut)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.derivative_vv(u, cut) - upper.derivative_vv(u, cut)).magnitude()
+                    (lower.derivative_vv(u, cut) - upper.derivative_vv(u, cut)).norm()
                         <= higher_order_tolerance
                 );
                 assert!(
-                    (lower.derivative_vv(u, cut) - surface.derivative_vv(u, cut)).magnitude()
+                    (lower.derivative_vv(u, cut) - surface.derivative_vv(u, cut)).norm()
                         <= higher_order_tolerance
                 );
             }

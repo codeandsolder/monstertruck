@@ -1,7 +1,7 @@
 //! A shared 1D hint resolver must not change either spline family's
 //! nearest or exact parameter solver, or the precedence of supplied hints.
 use super::*;
-use monstertruck_core::cgmath64::{Point2, Vector2, Vector3};
+use monstertruck_core::math::{Point2, Vector2, Vector3};
 use monstertruck_traits::{
     CurveParameter, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
 };

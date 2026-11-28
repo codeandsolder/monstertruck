@@ -23,7 +23,7 @@ proptest! {
             let der1 = (sphere.derivative_mn(m, n, u, v + EPS) - sphere.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
-        prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
+        prop_assert!((der0 - der1).norm() < 0.01 * der0.norm());
     }
 }
 
@@ -144,8 +144,8 @@ fn sphere_derivation_test() {
             let u = PI * i as f64 / N as f64;
             let v = 2.0 * PI * j as f64 / N as f64;
             let normal = sphere.normal(u, v);
-            assert!(normal.dot(sphere.derivative_u(u, v)).so_small());
-            assert!(normal.dot(sphere.derivative_v(u, v)).so_small());
+            assert!(normal.dot(&sphere.derivative_u(u, v)).so_small());
+            assert!(normal.dot(&sphere.derivative_v(u, v)).so_small());
         }
     }
 }
@@ -157,7 +157,7 @@ fn search_nearest_parameter_at_exact_north_pole_is_finite() {
     // The pole guard picks `v = 0` arbitrarily so the result is finite.
     let center = Point3::new(0.5, 0.5, 0.5);
     let sphere = Sphere::new(center, 1.0);
-    let north_pole = center + Vector3::unit_z();
+    let north_pole = center + Vector3::z();
     let (u, v) = sphere
         .search_nearest_parameter(north_pole, None, 100)
         .expect("north pole should map to a valid (u, v).");

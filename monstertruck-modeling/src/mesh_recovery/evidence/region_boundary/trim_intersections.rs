@@ -3,7 +3,7 @@
 //! in both independently recovered incident surfaces.
 
 use super::{ContactCircleEvidence, SurfaceCarrier, curve_evidence::measure_placed_circle};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 
 #[derive(Clone, Copy)]
 struct PlacedCircle {
@@ -26,7 +26,7 @@ fn surface_circles(
             radius_at_origin,
             slope,
         } => {
-            let axial = (sample - origin).dot(axis);
+            let axial = (sample - origin).dot(&axis);
             vec![PlacedCircle {
                 center: origin + axis * axial,
                 normal: axis,
@@ -41,7 +41,7 @@ fn surface_circles(
         } => {
             let mut circles = Vec::new();
             let delta = sample - axial_center;
-            let axial = delta.dot(axis);
+            let axial = delta.dot(&axis);
             let offset = delta - axis * axial;
             // Constant-axial cross sections can have two distinct positive
             // radii. Both are proposed; the observed sheet and the other
@@ -60,11 +60,11 @@ fn surface_circles(
             // A constant azimuth section is a meridian circle. If its
             // continuation crosses the axis onto a wrong radial branch,
             // the unsquared full-carrier containment check rejects it.
-            if offset.magnitude() > tolerance {
+            if offset.norm() > tolerance {
                 let direction = offset.normalize();
                 circles.push(PlacedCircle {
                     center: axial_center + direction * radial_center,
-                    normal: axis.cross(direction).normalize(),
+                    normal: axis.cross(&direction).normalize(),
                     radius: profile_radius,
                 });
             }
@@ -73,7 +73,7 @@ fn surface_circles(
             if radial_center.abs() <= tolerance
                 && let SurfaceCarrier::Plane { origin, normal } = other
             {
-                let distance = (axial_center - origin).dot(normal);
+                let distance = (axial_center - origin).dot(&normal);
                 let squared = profile_radius.mul_add(profile_radius, -distance * distance);
                 if squared > 0.0 {
                     circles.push(PlacedCircle {
@@ -131,7 +131,7 @@ pub(super) fn same_circle(
     right: &ContactCircleEvidence,
     tolerance: f64,
 ) -> bool {
-    (left.center - right.center).magnitude() <= tolerance
+    (left.center - right.center).norm() <= tolerance
         && (left.radius - right.radius).abs() <= tolerance
-        && left.normal.cross(right.normal).magnitude() * left.radius.max(right.radius) <= tolerance
+        && left.normal.cross(&right.normal).norm() * left.radius.max(right.radius) <= tolerance
 }

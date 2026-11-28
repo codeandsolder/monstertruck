@@ -200,10 +200,11 @@ impl ToDataSet for PolygonMesh {
 }
 
 fn hash_point(p: Point3) -> Option<[i64; 3]> {
-    (p / (KERNEL_EPSILON * DEFAULT_NUMERICAL_TOLERANCES.mesh_point_hash_factor)
-        - Vector3::new(0.5, 0.5, 0.5))
-    .cast()
-    .map(Into::into)
+    crate::common::checked_grid_coordinates(
+        (p / (KERNEL_EPSILON * DEFAULT_NUMERICAL_TOLERANCES.mesh_point_hash_factor)
+            - Vector3::new(0.5, 0.5, 0.5))
+        .into(),
+    )
 }
 
 impl ToDataSet for Vertex<Point3> {

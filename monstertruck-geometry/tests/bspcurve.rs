@@ -88,7 +88,7 @@ proptest! {
         const EPS: f64 = 1.0e-4;
         let der0 = bsp.derivative_n(n + 1, t);
         let der1 = (bsp.derivative_n(n, t + EPS) - bsp.derivative_n(n, t - EPS)) / (2.0 * EPS);
-        prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
+        prop_assert!((der0 - der1).norm() < 0.01 * der0.norm());
     }
 }
 

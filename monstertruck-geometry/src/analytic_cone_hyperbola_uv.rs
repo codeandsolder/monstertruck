@@ -6,7 +6,7 @@
 //! unwrapped across the periodic seam.
 
 use crate::analytic_plane_cone_hyperbola::{AxisParallelPlaneConeHyperbola, OrientedHyperbolaTrim};
-use crate::prelude::{InnerSpace, Point2, Point3, Vector2, Vector3};
+use crate::prelude::{Point2, Point3, Vector2, Vector3};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 /// The source conical surface's axial U / azimuth V chart for one hyperbola.
@@ -32,8 +32,8 @@ pub struct ConeUvTrim {
 }
 
 fn unit(vector: Vector3) -> bool {
-    vector.magnitude2().is_finite()
-        && (vector.magnitude2() - 1.0).abs()
+    vector.norm_squared().is_finite()
+        && (vector.norm_squared() - 1.0).abs()
             <= DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
 }
 
@@ -49,16 +49,16 @@ impl ConeHyperbolaUv {
         if !unit(source_x) {
             return None;
         }
-        let misalignment = source_x.dot(axis);
+        let misalignment = source_x.dot(&axis);
         if !misalignment.is_finite()
             || misalignment.abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
         {
             return None;
         }
         let x = (source_x - axis * misalignment).normalize();
-        let y = axis.cross(x).normalize();
+        let y = axis.cross(&x).normalize();
         let radial_at_vertex = hyperbola.plane_normal() * hyperbola.signed_plane_offset().signum();
-        let azimuth_at_vertex = radial_at_vertex.dot(y).atan2(radial_at_vertex.dot(x));
+        let azimuth_at_vertex = radial_at_vertex.dot(&y).atan2(radial_at_vertex.dot(&x));
         azimuth_at_vertex.is_finite().then_some(Self {
             hyperbola,
             x,
@@ -151,7 +151,7 @@ mod tests {
             Point3::new(0.0, -0.3, 2.0),
             Vector3::new(0.0, -1.0, 0.0),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             0.5,
             1.5,
         )
@@ -161,12 +161,12 @@ mod tests {
     #[test]
     fn chart_reproduces_independent_cone_geometry() {
         let h = example();
-        let chart = ConeHyperbolaUv::new(h, Vector3::unit_x()).unwrap();
+        let chart = ConeHyperbolaUv::new(h, Vector3::x()).unwrap();
         for i in -512..=512 {
             let t = f64::from(i) / 256.0;
             let uv = chart.evaluate(t).unwrap();
             let generated = chart.cone_evaluate(uv).unwrap();
-            assert!((generated - h.evaluate(t).unwrap()).magnitude() < 1.0e-12);
+            assert!((generated - h.evaluate(t).unwrap()).norm() < 1.0e-12);
             assert!(chart.derivative(t).unwrap().y > 0.0);
         }
     }
@@ -187,14 +187,14 @@ mod tests {
         for i in 0..=256 {
             let t = f64::from(i).mul_add(2.6 / 256.0, -1.3);
             let p = chart.cone_evaluate(chart.evaluate(t).unwrap()).unwrap();
-            assert!((p - h.evaluate(t).unwrap()).magnitude() < 1.0e-12);
+            assert!((p - h.evaluate(t).unwrap()).norm() < 1.0e-12);
         }
     }
 
     #[test]
     fn source_reverse_trim_reverses_azimuth_without_wrapping() {
         let h = example();
-        let chart = ConeHyperbolaUv::new(h, Vector3::unit_x()).unwrap();
+        let chart = ConeHyperbolaUv::new(h, Vector3::x()).unwrap();
         let trim = h
             .oriented_trim(h.evaluate(1.1).unwrap(), h.evaluate(-0.7).unwrap(), 1.0e-12)
             .unwrap();
@@ -208,7 +208,7 @@ mod tests {
             Point3::new(0.0, 0.3, 2.0),
             Vector3::new(0.0, -1.0, 0.0),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             0.5,
             1.5,
         )
@@ -225,18 +225,16 @@ mod tests {
             let t = f64::from(sample).mul_add(2.0 / 100.0, -1.1);
             let uv = chart.evaluate(t).unwrap();
             assert!(chart.derivative(t).unwrap().y < 0.0);
-            assert!(
-                (chart.cone_evaluate(uv).unwrap() - h.evaluate(t).unwrap()).magnitude() < 1.0e-12
-            );
+            assert!((chart.cone_evaluate(uv).unwrap() - h.evaluate(t).unwrap()).norm() < 1.0e-12);
         }
     }
 
     #[test]
     fn invalid_source_frame_and_nonfinite_parameters_fail() {
         let h = example();
-        assert!(ConeHyperbolaUv::new(h, Vector3::unit_z()).is_none());
+        assert!(ConeHyperbolaUv::new(h, Vector3::z()).is_none());
         assert!(ConeHyperbolaUv::new(h, Vector3::new(f64::NAN, 0.0, 0.0),).is_none());
-        let chart = ConeHyperbolaUv::new(h, Vector3::unit_x()).unwrap();
+        let chart = ConeHyperbolaUv::new(h, Vector3::x()).unwrap();
         assert!(chart.evaluate(f64::INFINITY).is_none());
         assert!(chart.evaluate(1024.0).is_none());
         assert!(chart.cone_evaluate(Point2::new(-1.0, 0.0)).is_none());

@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::{
-    BoundedCurve, BsplineSurface, EuclideanSpace, KnotVector, NurbsSurface, Processor,
-    RevolutionSurface, Sphere, SurfaceCurve, ToSameGeometry, Torus, TrimmedCurve, UnitCircle,
+    BoundedCurve, BsplineSurface, KnotVector, NurbsSurface, Processor, RevolutionSurface, Sphere,
+    SurfaceCurve, ToSameGeometry, Torus, TrimmedCurve, UnitCircle,
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineSurface;
 
@@ -39,12 +39,12 @@ fn an_analytic_sphere_is_bounded_by_its_own_box_and_by_6_over_pi() {
     // Every point of the sphere is inside, including the six poles that
     // carry no vertex -- the failure mode the vertex box has.
     for offset in [
-        Vector3::unit_x(),
-        -Vector3::unit_x(),
-        Vector3::unit_y(),
-        -Vector3::unit_y(),
-        Vector3::unit_z(),
-        -Vector3::unit_z(),
+        Vector3::x(),
+        -Vector3::x(),
+        Vector3::y(),
+        -Vector3::y(),
+        Vector3::z(),
+        -Vector3::z(),
     ] {
         assert!(
             bound.contains(center + offset * radius),
@@ -210,7 +210,7 @@ fn a_non_positive_weight_refuses() {
 fn a_cylinder_face_is_bounded_by_its_boundary_wires() {
     let radius = 3.0;
     let origin = Point3::new(0.0, 0.0, 0.0);
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let profile = Line(Point3::new(radius, 0.0, 0.0), Point3::new(radius, 0.0, 1.0));
     let surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         Curve::Line(profile),
@@ -264,7 +264,7 @@ fn a_cylinder_without_wires_refuses() {
     let surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         Curve::Line(Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0))),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     )));
     assert!(
         certified_surface_bounding_box(&surface, None).is_none(),

@@ -14,7 +14,7 @@ impl StepFormat for Point2 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         f.write_fmt(format_args!(
             "#{idx} = CARTESIAN_POINT('', {coordinates});\n",
-            coordinates = SliceDisplay(AsRef::<[f64; 2]>::as_ref(self)),
+            coordinates = SliceDisplay(self.coords.as_slice()),
         ))
     }
 }
@@ -24,7 +24,7 @@ impl StepFormat for Point3 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         f.write_fmt(format_args!(
             "#{idx} = CARTESIAN_POINT('', {coordinates});\n",
-            coordinates = SliceDisplay(AsRef::<[f64; 3]>::as_ref(self)),
+            coordinates = SliceDisplay(self.coords.as_slice()),
         ))
     }
 }
@@ -55,11 +55,11 @@ impl_const_step_length!(VectorAsDirection<V>, 1, <V>);
 
 impl<V> StepFormat for V
 where
-    V: InnerSpace<Scalar = f64>,
+    V: InnerProduct<Scalar = f64>,
     VectorAsDirection<V>: StepFormat,
 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
-        let magnitude = self.magnitude();
+        let magnitude = self.norm();
         let direction_idx = idx + 1;
         f.write_fmt(format_args!(
             "#{idx} = VECTOR('', #{direction_idx}, {magnitude});\n{direction}",
@@ -76,7 +76,7 @@ impl_const_step_length!(Vector3, 2);
 /// STEP encodes an oriented coordinate frame -- a placement -- as a
 /// location point plus one (`AXIS2_PLACEMENT_2D`) or two
 /// (`AXIS2_PLACEMENT_3D`) direction vectors. This wrapper takes a
-/// transform matrix from `cgmath` (column-major) and emits the four
+/// native column-major transform matrix and emits the four
 /// referenced entities: the placement itself, the location point, and
 /// the direction(s).
 #[derive(Clone, Copy, Debug)]
@@ -86,8 +86,8 @@ impl StepFormat for MatrixAsAxis<Matrix3> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let location_idx = idx + 1;
         let ref_direction_idx = idx + 2;
-        let location = self.0[2].to_point();
-        let ref_direction = VectorAsDirection(self.0[0].truncate());
+        let location = self.0.column(2).into_owned().to_point();
+        let ref_direction = VectorAsDirection(self.0.column(0).into_owned().spatial());
         f.write_fmt(format_args!(
             "#{idx} = AXIS2_PLACEMENT_2D('', #{location_idx}, #{ref_direction_idx});\n",
         ))?;
@@ -102,9 +102,9 @@ impl StepFormat for MatrixAsAxis<Matrix4> {
         let location_idx = idx + 1;
         let axis_idx = idx + 2;
         let ref_direction_idx = idx + 3;
-        let location = self.0[3].to_point();
-        let axis = VectorAsDirection(self.0[2].truncate());
-        let ref_direction = VectorAsDirection(self.0[0].truncate());
+        let location = self.0.column(3).into_owned().to_point();
+        let axis = VectorAsDirection(self.0.column(2).into_owned().spatial());
+        let ref_direction = VectorAsDirection(self.0.column(0).into_owned().spatial());
         f.write_fmt(format_args!(
             "#{idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n",
         ))?;
@@ -117,7 +117,7 @@ impl_const_step_length!(MatrixAsAxis<Matrix4>, 4);
 
 impl<P> StepFormat for Line<P>
 where
-    P: EuclideanSpace + ConstStepLength + StepFormat,
+    P: AffinePoint + ConstStepLength + StepFormat,
     P::Diff: StepFormat,
 {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
@@ -133,7 +133,7 @@ where
 
 impl<P> StepLength for Line<P>
 where
-    P: EuclideanSpace + ConstStepLength,
+    P: AffinePoint + ConstStepLength,
     P::Diff: ConstStepLength,
 {
     fn step_length(&self) -> usize { <Self as ConstStepLength>::LENGTH }
@@ -141,7 +141,7 @@ where
 
 impl<P> ConstStepLength for Line<P>
 where
-    P: EuclideanSpace + ConstStepLength,
+    P: AffinePoint + ConstStepLength,
     P::Diff: ConstStepLength,
 {
     const LENGTH: usize = 1 + P::LENGTH + P::Diff::LENGTH;
@@ -249,10 +249,10 @@ impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3> {
         let position_idx = idx + 1;
         let location_idx = idx + 2;
         let ref_direction_idx = idx + 3;
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        let ref_direction = VectorAsDirection(transform[0].truncate() / r0);
-        let location = transform[2].to_point();
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
+        let ref_direction = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
+        let location = transform.column(2).into_owned().to_point();
         if r0.near(&r1) {
             let r = FloatDisplay(r0);
             f.write_fmt(format_args!("#{idx} = CIRCLE('', #{position_idx}, {r});\n"))?;
@@ -271,18 +271,26 @@ impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3> {
 }
 impl_const_step_length!(Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3>, 4);
 
+fn write_conic_placement_3d(transform: &Matrix4, idx: usize, f: &mut Formatter<'_>) -> Result {
+    let (location_idx, axis_idx, ref_direction_idx) = (idx + 1, idx + 2, idx + 3);
+    let location = transform.column(3).into_owned().to_point();
+    let axis = VectorAsDirection(transform.column(2).into_owned().spatial().normalize());
+    let direction =
+        VectorAsDirection(transform.column(0).into_owned().spatial() / transform.column(0).norm());
+    f.write_fmt(format_args!(
+        "#{idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n"
+    ))?;
+    StepFormat::fmt(&location, location_idx, f)?;
+    StepFormat::fmt(&axis, axis_idx, f)?;
+    StepFormat::fmt(&direction, ref_direction_idx, f)
+}
+
 impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = transform[3].to_point();
-        let axis = VectorAsDirection(transform[2].truncate().normalize());
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        let ref_direction = VectorAsDirection(transform[0].truncate() / r0);
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
         if r0.near(&r1) {
             let r = FloatDisplay(r0);
             f.write_fmt(format_args!("#{idx} = CIRCLE('', #{position_idx}, {r});\n"))?;
@@ -292,12 +300,7 @@ impl StepFormat for Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4> {
                 "#{idx} = ELLIPSE('', #{position_idx}, {r0}, {r1});\n"
             ))?;
         }
-        f.write_fmt(format_args!(
-            "#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});\n",
-        ))?;
-        StepFormat::fmt(&location, location_idx, f)?;
-        StepFormat::fmt(&axis, axis_idx, f)?;
-        StepFormat::fmt(&ref_direction, ref_direction_idx, f)
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
 impl_const_step_length!(Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>, 5);
@@ -308,11 +311,11 @@ impl StepFormat for Processor<TrimmedCurve<UnitHyperbola<Point2>>, Matrix3> {
         let position_idx = idx + 1;
         let location_idx = idx + 2;
         let ref_direction_idx = idx + 3;
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        let ref_direction_raw = VectorAsDirection(transform[0].truncate() / r0);
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
+        let ref_direction_raw = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
         let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
-        let location = StepDisplay::new(transform[2].to_point(), location_idx);
+        let location = StepDisplay::new(transform.column(2).into_owned().to_point(), location_idx);
         let (r0, r1) = (FloatDisplay(r0), FloatDisplay(r1));
         f.write_fmt(format_args!(
             "#{idx} = HYPERBOLA('', #{position_idx}, {r0}, {r1});
@@ -327,24 +330,16 @@ impl StepFormat for Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = StepDisplay::new(transform[3].to_point(), location_idx);
-        let axis_raw = VectorAsDirection(transform[2].truncate().normalize());
-        let axis = StepDisplay::new(axis_raw, axis_idx);
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
-        let ref_direction_raw = VectorAsDirection(transform[0].truncate() / r0);
-        let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
         let (r0, r1) = (FloatDisplay(r0), FloatDisplay(r1));
         f.write_fmt(format_args!(
-            "#{idx} = HYPERBOLA('', #{position_idx}, {r0}, {r1});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
-{location}{axis}{ref_direction}"
-        ))
+            "#{idx} = HYPERBOLA('', #{position_idx}, {r0}, {r1});\n"
+        ))?;
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
+
 impl_const_step_length!(Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4>, 5);
 
 impl StepFormat for Processor<TrimmedCurve<UnitParabola<Point2>>, Matrix3> {
@@ -353,12 +348,12 @@ impl StepFormat for Processor<TrimmedCurve<UnitParabola<Point2>>, Matrix3> {
         let position_idx = idx + 1;
         let location_idx = idx + 2;
         let ref_direction_idx = idx + 3;
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
         let focal_dist = FloatDisplay(r1 * r1 / r0);
-        let ref_direction_raw = VectorAsDirection(transform[0].truncate() / r0);
+        let ref_direction_raw = VectorAsDirection(transform.column(0).into_owned().spatial() / r0);
         let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
-        let location = StepDisplay::new(transform[2].to_point(), location_idx);
+        let location = StepDisplay::new(transform.column(2).into_owned().to_point(), location_idx);
         f.write_fmt(format_args!(
             "#{idx} = PARABOLA('', #{position_idx}, {focal_dist});
 #{position_idx} = AXIS2_PLACEMENT_2D('', #{location_idx}, #{ref_direction_idx});
@@ -372,24 +367,16 @@ impl StepFormat for Processor<TrimmedCurve<UnitParabola<Point3>>, Matrix4> {
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let transform = self.transform();
         let position_idx = idx + 1;
-        let location_idx = idx + 2;
-        let axis_idx = idx + 3;
-        let ref_direction_idx = idx + 4;
-        let location = StepDisplay::new(transform[3].to_point(), location_idx);
-        let axis_raw = VectorAsDirection(transform[2].truncate().normalize());
-        let axis = StepDisplay::new(axis_raw, axis_idx);
-        let r0 = transform[0].magnitude();
-        let r1 = transform[1].magnitude();
+        let r0 = transform.column(0).into_owned().norm();
+        let r1 = transform.column(1).into_owned().norm();
         let focal_dist = FloatDisplay(r1 * r1 / r0);
-        let ref_direction_raw = VectorAsDirection(transform[0].truncate() / r0);
-        let ref_direction = StepDisplay::new(ref_direction_raw, ref_direction_idx);
         f.write_fmt(format_args!(
-            "#{idx} = PARABOLA('', #{position_idx}, {focal_dist});
-#{position_idx} = AXIS2_PLACEMENT_3D('', #{location_idx}, #{axis_idx}, #{ref_direction_idx});
-{location}{axis}{ref_direction}"
-        ))
+            "#{idx} = PARABOLA('', #{position_idx}, {focal_dist});\n"
+        ))?;
+        write_conic_placement_3d(transform, position_idx, f)
     }
 }
+
 impl_const_step_length!(Processor<TrimmedCurve<UnitParabola<Point3>>, Matrix4>, 5);
 
 impl<C, M: One> StepCurve for Processor<C, M> {
@@ -694,14 +681,14 @@ impl StepSurface for Plane {}
 /// not merely be added to the translation.
 fn elementary_pose(center: Point3, transform: &Matrix4) -> Option<(Point3, Vector3, Vector3, f64)> {
     let scale = monstertruck_geometry::analytic_carrier::similarity_scale(*transform)?;
-    let location = transform.transform_point(center);
+    let location = transform.apply_point(center);
     [location.x, location.y, location.z]
         .into_iter()
         .all(f64::is_finite)
         .then_some((
             location,
-            transform.z.truncate() / scale,
-            transform.x.truncate() / scale,
+            transform.column(2).into_owned().spatial() / scale,
+            transform.column(0).into_owned().spatial() / scale,
             scale,
         ))
 }
@@ -745,7 +732,7 @@ impl StepFormat for Processor<Sphere, Matrix4> {
         } else {
             (longitude, polar)
         };
-        Some(Matrix3::from_cols(first, second, translation))
+        Some(Matrix3::from_columns(&[first, second, translation]))
     }
 }
 impl_const_step_length!(Processor<Sphere, Matrix4>, 5);
@@ -801,7 +788,7 @@ impl StepFormat for Processor<Torus, Matrix4> {
         } else {
             (meridian, longitude)
         };
-        Some(Matrix3::from_cols(first, second, Vector3::unit_z()))
+        Some(Matrix3::from_columns(&[first, second, Vector3::z()]))
     }
 }
 impl_const_step_length!(Processor<Torus, Matrix4>, 5);
@@ -985,17 +972,17 @@ where C: StepLength + Transformed<Matrix4> + StepFormat
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let surface = self.entity();
         let transform = self.transform();
-        let Some((k, a, _)) = transform.iwasawa_decomposition() else {
+        let Some((k, a)) = monstertruck_core::numerical::affine_qr(*transform) else {
             f.write_str("Transform is not regular")?;
             return ERR;
         };
-        if !a[0][0].near(&a[1][1]) || !a[1][1].near(&a[2][2]) {
+        if !a[(0, 0)].near(&a[(1, 1)]) || !a[(1, 1)].near(&a[(2, 2)]) {
             f.write_str("Transform contains non-uniform scale.")?;
             return ERR;
         }
         let curve = surface.entity_curve().transformed(*transform);
-        let axis = k.transform_vector(surface.axis());
-        let origin = transform.transform_point(surface.origin());
+        let axis = k.apply_vector(surface.axis());
+        let origin = transform.apply_point(surface.origin());
         let surface = RevolutionSurface::by_revolution(curve, origin, axis);
         StepFormat::fmt(&surface, idx, f)
     }
@@ -1053,30 +1040,30 @@ fn cylindrical_surface_from_revolution(
     let axis = revolution.axis().normalize();
     let direction = profile.1 - profile.0;
     // The profile must be parallel to the axis so the radius stays constant.
-    if direction.so_small() || !direction.normalize().cross(axis).so_small() {
+    if direction.so_small() || !direction.normalize().cross(&axis).so_small() {
         return None;
     }
     let offset = profile.0 - revolution.origin();
-    let radial = offset - axis * offset.dot(axis);
+    let radial = offset - axis * offset.dot(&axis);
     if radial.so_small() {
         return None;
     }
-    let foot = revolution.origin() + axis * offset.dot(axis);
-    let radial = transform.transform_vector(radial);
+    let foot = revolution.origin() + axis * offset.dot(&axis);
+    let radial = transform.apply_vector(radial);
     let angular_sign = transform.determinant().signum();
-    let axial = Vector3::new(0.0, direction.dot(axis) * scale, 0.0);
+    let axial = Vector3::new(0.0, direction.dot(&axis) * scale, 0.0);
     let angular = Vector3::new(angular_sign, 0.0, 0.0);
     let (first, second) = if surface.orientation() {
         (axial, angular)
     } else {
         (angular, axial)
     };
-    let uv = Matrix3::from_cols(first, second, Vector3::unit_z());
+    let uv = Matrix3::from_columns(&[first, second, Vector3::z()]);
     Some(CylindricalSurfaceData {
-        location: transform.transform_point(foot),
-        axis: transform.transform_vector(axis).normalize(),
+        location: transform.apply_point(foot),
+        axis: transform.apply_vector(axis).normalize(),
         ref_direction: radial.normalize(),
-        radius: radial.magnitude(),
+        radius: radial.norm(),
         uv,
     })
 }

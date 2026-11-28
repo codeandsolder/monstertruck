@@ -5,9 +5,9 @@
 
 use super::split_closed_faces;
 use monstertruck_geometry::prelude::{
-    BoundedCurve, Cut, EuclideanSpace, Line, Matrix4, ParameterBoundary2D, ParameterCurve,
-    ParameterDivision1D, ParametricCurve, Point2, Point3, Processor, RevolutionSurface,
-    SearchNearestParameterD1, SearchParameter, Transformed, TrimmedCurve, UnitCircle, Vector3,
+    BoundedCurve, Cut, Line, Matrix4, ParameterBoundary2D, ParameterCurve, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameterD1,
+    SearchParameter, Transformed, TrimmedCurve, UnitCircle, Vector3,
 };
 use monstertruck_topology::{
     Shell, StableId,
@@ -51,7 +51,7 @@ fn simple_cylinder_shell() -> CompressedShell<Point3, Curve, Surface> {
         Point3::new(1.0, 0.0, 1.0),
         Point3::new(-1.0, 0.0, 1.0),
     ];
-    let translate = Matrix4::from_translation(Vector3::unit_z());
+    let translate = Matrix4::new_translation(&Vector3::z());
     let edges = vec![
         CompressedEdge {
             vertices: (0, 1),
@@ -89,7 +89,7 @@ fn simple_cylinder_shell() -> CompressedShell<Point3, Curve, Surface> {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[2], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let faces = vec![Face {
         surface,
@@ -548,7 +548,7 @@ fn boundary_domain_only_synthesizes_real_singular_closure() {
     let cone = RevolutionSurface::by_revolution(
         Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
         Point3::new(0.0, 0.0, 0.0),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let period = cone.period_v().unwrap();
     let first = Point2::new(0.0, 0.0);
@@ -565,7 +565,7 @@ fn boundary_domain_only_synthesizes_real_singular_closure() {
     let cylinder = RevolutionSurface::by_revolution(
         Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
         Point3::new(0.0, 0.0, 0.0),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let mut ring = vec![
         first,
@@ -603,7 +603,7 @@ fn swapped_periodic_uv_pole_and_invalid_ranges_are_handled() {
     let base = RevolutionSurface::by_revolution(
         Line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
         Point3::new(0.0, 0.0, 0.0),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let mut swapped: Processor<_, Matrix4> = Processor::new(base);
     swapped.invert();
@@ -713,7 +713,7 @@ fn healing_divisor_periodic_offsets_exceeding_ten_thousand_turns() {
     let surface = RevolutionSurface::by_revolution(
         Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)),
         Point3::new(0.0, 0.0, 0.0),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let period = std::f64::consts::TAU;
     let mut vertices = HashMap::default();

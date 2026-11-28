@@ -5,12 +5,12 @@
 
 use super::*;
 use crate::prelude::Point3;
-use monstertruck_core::cgmath64::cgmath;
+use monstertruck_core::nalgebra;
 use monstertruck_traits::v2;
 
-type Point2F32 = cgmath::Point2<f32>;
-type Point3F32 = cgmath::Point3<f32>;
-type Vector3F32 = cgmath::Vector3<f32>;
+type Point2F32 = nalgebra::Point2<f32>;
+type Point3F32 = nalgebra::Point3<f32>;
+type Vector3F32 = nalgebra::Vector3<f32>;
 
 // -- Compile-time trait satisfaction ------------------------------------
 

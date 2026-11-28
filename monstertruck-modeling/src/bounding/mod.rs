@@ -83,8 +83,8 @@
 //!   anything else refuses.
 
 use crate::{
-    BoundingBox, Conic2D, Curve, Curve2D, EuclideanSpace, Face, InnerSpace, Line, Matrix4,
-    ParameterCurve, Point2, Point3, Solid, Surface, Vector3, Vector4,
+    AffinePoint, BoundingBox, Conic2D, Curve, Curve2D, Face, Line, Matrix4, ParameterCurve, Point2,
+    Point3, Solid, Surface, Vector3, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
@@ -178,7 +178,7 @@ pub fn certified_surface_bounding_box(
             let scale = similarity_scale(processor.transform())?;
             let torus = processor.entity();
             let center = transform_point(processor.transform(), torus.center());
-            let axis = transform_direction(processor.transform(), Vector3::unit_z())?;
+            let axis = transform_direction(processor.transform(), Vector3::z())?;
             let large = scale * torus.large_radius().abs();
             let small = scale * torus.small_radius().abs();
             (large.is_finite() && small.is_finite())
@@ -315,16 +315,16 @@ fn planar_intersection_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
     let spans = monstertruck_geometry::proof_bezier_spans(&net)?;
     let normal0 = first.normal();
     let normal1 = second.normal();
-    let cross = normal0.cross(normal1);
-    let sine = cross.magnitude();
+    let cross = normal0.cross(&normal1);
+    let sine = cross.norm();
     let policy = DEFAULT_NUMERICAL_TOLERANCES;
     if !sine.is_finite() || sine <= policy.angular {
         return None;
     }
     let direction = cross / sine;
     let origin = first.origin();
-    let r = normal1.dot(second.origin() - origin);
-    let base = origin + cross.cross(normal0) * (r / (sine * sine));
+    let r = normal1.dot(&(second.origin() - origin));
+    let base = origin + cross.cross(&normal0) * (r / (sine * sine));
     let budget = policy.parameter_projection;
     let mut points = Vec::new();
     for span in spans {
@@ -334,30 +334,30 @@ fn planar_intersection_box(curve: &Curve) -> Option<BoundingBox<Point3>> {
         let decode = |p: &[f64; 4]| projected_control_point(Vector4::new(p[0], p[1], p[2], p[3]));
         let (a, b) = (decode(a)?, decode(b)?);
         let delta = b - a;
-        let length = delta.magnitude();
+        let length = delta.norm();
         if !length.is_finite() || length <= policy.structural {
             return None;
         }
         let tangent = delta / length;
-        let cosine = tangent.dot(direction);
+        let cosine = tangent.dot(&direction);
         let scale = a
-            .to_vec()
-            .magnitude()
-            .max(b.to_vec().magnitude())
-            .max(origin.to_vec().magnitude())
-            .max(second.origin().to_vec().magnitude())
+            .coords
+            .norm()
+            .max(b.position_vector().norm())
+            .max(origin.position_vector().norm())
+            .max(second.origin().position_vector().norm())
             .max(1.0);
         let error = policy.structural * scale / sine;
         if cosine.abs() <= policy.angular || error * (1.0 + cosine.abs().recip()) > budget {
             return None;
         }
         for p in [a, b] {
-            let orthogonal = base + direction * direction.dot(p - base);
-            let projected = base + direction * (tangent.dot(p - base) / cosine);
+            let orthogonal = base + direction * direction.dot(&(p - base));
+            let projected = base + direction * (tangent.dot(&(p - base)) / cosine);
             // Only near-incidence, well-conditioned guides qualify. This
             // includes the evaluator's leader fallback without bounding a
             // remote or numerically singular branch.
-            if (p - orthogonal).magnitude() > budget || (p - projected).magnitude() > budget {
+            if (p - orthogonal).norm() > budget || (p - projected).norm() > budget {
                 return None;
             }
             points.extend([p, orthogonal, projected]);
@@ -535,9 +535,9 @@ fn surface_patch_box(
                 if !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite() {
                     return None;
                 }
-                let along = offset.dot(axis);
+                let along = offset.dot(&axis);
                 axial = (axial.0.min(along), axial.1.max(along));
-                radius = radius.max((offset - axis * along).magnitude());
+                radius = radius.max((offset - axis * along).norm());
             }
             Some(revolution_region_box(origin, axis, axial, radius))
         }
@@ -614,31 +614,28 @@ fn hull_box_iter(points: impl Iterator<Item = Point3>) -> Option<BoundingBox<Poi
 /// similarity (the only class of transform under which "revolution about an
 /// axis" and "ball of radius r" survive as such).
 fn similarity_scale(matrix: &Matrix4) -> Option<f64> {
-    if matrix.x.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
-        || matrix.y.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
-        || matrix.z.w.abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
-        || (matrix.w.w - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+    if matrix[(3, 0)].abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || matrix[(3, 1)].abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || matrix[(3, 2)].abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
+        || (matrix[(3, 3)] - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity
     {
         return None;
     }
-    let columns = [
-        matrix.x.truncate(),
-        matrix.y.truncate(),
-        matrix.z.truncate(),
-    ];
-    let scale = columns[0].magnitude();
+    let columns =
+        std::array::from_fn::<_, 3, _>(|column| matrix.fixed_view::<3, 1>(0, column).into_owned());
+    let scale = columns[0].norm();
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
     let length_tol = DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale;
     let dot_tol = DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale * scale;
     for column in &columns[1..] {
-        if (column.magnitude() - scale).abs() > length_tol {
+        if (column.norm() - scale).abs() > length_tol {
             return None;
         }
     }
     for (first, second) in [(0, 1), (0, 2), (1, 2)] {
-        if columns[first].dot(columns[second]).abs() > dot_tol {
+        if columns[first].dot(&columns[second]).abs() > dot_tol {
             return None;
         }
     }
@@ -653,8 +650,10 @@ fn transform_point(matrix: &Matrix4, point: Point3) -> Point3 {
 
 /// `matrix` applied to a direction, renormalised, or [`None`] when it collapses.
 fn transform_direction(matrix: &Matrix4, direction: Vector3) -> Option<Vector3> {
-    let mapped = (matrix * direction.extend(0.0)).truncate();
-    let length = mapped.magnitude();
+    let mapped = (matrix * direction.push(0.0))
+        .fixed_rows::<3>(0)
+        .into_owned();
+    let length = mapped.norm();
     (length.is_finite() && length > 0.0).then(|| mapped / length)
 }
 
@@ -698,10 +697,10 @@ fn revolution_face_box(
         if !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite() {
             return None;
         }
-        let along = offset.dot(axis);
+        let along = offset.dot(&axis);
         low = low.min(along);
         high = high.max(along);
-        radius = radius.max((offset - axis * along).magnitude());
+        radius = radius.max((offset - axis * along).norm());
     }
     (low <= high && radius.is_finite())
         .then(|| revolution_region_box(origin, axis, (low, high), radius))

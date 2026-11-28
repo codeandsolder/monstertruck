@@ -6,7 +6,7 @@
 
 use super::{BoundaryPatchApproximation, BoundaryPatchError, BoundaryPatchOptions};
 use crate::{
-    Edge, InnerSpace, Point3, Shell, Vector3,
+    Edge, Point3, Shell, Vector3,
     mesh_recovery::{
         BoundaryFacetApproximation, BoundaryFacetError, BoundaryFacetInput, EdgeIncidence,
         approximate_boundary_facet, edge_key, source_edge_incidence,
@@ -87,9 +87,9 @@ impl Projection {
         let normal = boundary
             .iter()
             .zip(boundary.iter().cycle().skip(1))
-            .map(|(&a, &b)| (source[a] - origin).cross(source[b] - origin))
+            .map(|(&a, &b)| (source[a] - origin).cross(&(source[b] - origin)))
             .fold(Vector3::new(0.0, 0.0, 0.0), |sum, term| sum + term);
-        let length = normal.magnitude();
+        let length = normal.norm();
         if !length.is_finite() || length <= 0.0 {
             return None;
         }
@@ -104,7 +104,7 @@ impl Projection {
         })
     }
 
-    const fn project(&self, p: Point3) -> Coord<f64> {
+    fn project(&self, p: Point3) -> Coord<f64> {
         let coords = [p.x, p.y, p.z];
         let mut x = coords[(self.axis + 1) % 3];
         let mut y = coords[(self.axis + 2) % 3];
@@ -154,8 +154,8 @@ impl Projection {
         let (low, high, scale) = vertices.iter().map(|&id| source[id] - self.origin).fold(
             (0.0_f64, 0.0_f64, 0.0_f64),
             |(lo, hi, scale), p| {
-                let h = self.normal.dot(p);
-                (lo.min(h), hi.max(h), scale.max(p.magnitude()))
+                let h = self.normal.dot(&p);
+                (lo.min(h), hi.max(h), scale.max(p.norm()))
             },
         );
         (64.0 * f64::EPSILON).mul_add(scale, high - low) / component

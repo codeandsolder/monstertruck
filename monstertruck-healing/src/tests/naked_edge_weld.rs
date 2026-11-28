@@ -264,9 +264,9 @@ fn invalid_tolerance_is_refused() {
 #[test]
 fn closed_shell_is_unchanged() {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube = builder::extrude(&f, Vector3::z());
     let before = cube.boundaries()[0].compress();
     let mut shell = before.clone();
     let report = snap_naked_edges(&mut shell, 0.01).expect("closed cube");
@@ -738,9 +738,9 @@ fn a_curve_end_gap_that_exists_before_the_weld_is_not_blamed_on_it() {
 #[test]
 fn a_closed_non_manifold_shell_is_a_noop() {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube = builder::extrude(&f, Vector3::z());
     let mut before = cube.boundaries()[0].compress();
     let duplicate = before.faces[0].clone();
     before.faces.push(duplicate);

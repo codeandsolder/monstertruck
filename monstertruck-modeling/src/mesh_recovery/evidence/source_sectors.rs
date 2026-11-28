@@ -6,7 +6,7 @@
 //! volume are independently certified.
 
 use super::super::{EdgeKey, EdgeUse, InputPolygon, seams};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{Point3, Vector3};
 use robust::{Coord3D, orient3d};
 use std::cmp::Ordering;
 
@@ -21,7 +21,7 @@ pub struct SourceSectorPair {
     pub positive_volume: bool,
 }
 
-const fn coord(point: Point3) -> Coord3D<f64> {
+fn coord(point: Point3) -> Coord3D<f64> {
     Coord3D {
         x: point.x,
         y: point.y,
@@ -40,7 +40,7 @@ struct Ray {
     transverse_normal: Vector3,
 }
 
-const fn scale(vector: Vector3) -> f64 { vector.x.abs().max(vector.y.abs()).max(vector.z.abs()) }
+fn scale(vector: Vector3) -> f64 { vector.x.abs().max(vector.y.abs()).max(vector.z.abs()) }
 
 impl Ray {
     fn from_use(
@@ -75,7 +75,7 @@ impl Ray {
             return None;
         }
         let normal = (cross / magnitude).normalize();
-        let alignment = normal.dot(source.normal);
+        let alignment = normal.dot(&source.normal);
         if !alignment.is_finite() || alignment == 0.0 {
             return None;
         }
@@ -116,14 +116,14 @@ impl Fan {
 
     fn same_ray(&self, left: Ray, right: Ray) -> bool {
         self.turn(left, right) == Some(Ordering::Equal)
-            && left.transverse_normal.dot(right.transverse_normal) > 0.0
+            && left.transverse_normal.dot(&right.transverse_normal) > 0.0
     }
 
     fn half(&self, reference: Ray, ray: Ray) -> Option<bool> {
         Some(match self.turn(reference, ray)? {
             Ordering::Greater => false,
             Ordering::Less => true,
-            Ordering::Equal => reference.transverse_normal.dot(ray.transverse_normal) < 0.0,
+            Ordering::Equal => reference.transverse_normal.dot(&ray.transverse_normal) < 0.0,
         })
     }
 

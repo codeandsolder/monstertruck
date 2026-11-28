@@ -1,6 +1,6 @@
 use crate::{
-    Attributes, Matrix4, Point3, StandardAttribute, StandardAttributes, StandardVertex, Transform,
-    TransformedAttributes, Vector2, Vector3,
+    Attributes, GeometryTransform, Matrix4, Point3, StandardAttribute, StandardAttributes,
+    StandardVertex, TransformedAttributes, Vector2, Vector3,
 };
 
 impl<T: Copy> Attributes<usize> for Vec<T> {
@@ -84,12 +84,12 @@ impl TransformedAttributes for Vec<Point3> {
     #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
         for point in self.iter_mut() {
-            *point = trans.transform_point(*point);
+            *point = trans.apply_point(*point);
         }
     }
     #[inline]
     fn transformed(&self, trans: Matrix4) -> Self {
-        self.iter().map(|p| trans.transform_point(*p)).collect()
+        self.iter().map(|p| trans.apply_point(*p)).collect()
     }
 }
 
@@ -97,9 +97,9 @@ impl TransformedAttributes for Vec<StandardAttribute> {
     #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
         for attr in self.iter_mut() {
-            attr.position = trans.transform_point(attr.position);
+            attr.position = trans.apply_point(attr.position);
             if let Some(normal) = &mut attr.normal {
-                *normal = trans.transform_vector(*normal);
+                *normal = trans.apply_vector(*normal);
             }
         }
     }
@@ -107,9 +107,9 @@ impl TransformedAttributes for Vec<StandardAttribute> {
     fn transformed(&self, trans: Matrix4) -> Self {
         self.iter()
             .map(|attr| StandardAttribute {
-                position: trans.transform_point(attr.position),
+                position: trans.apply_point(attr.position),
                 uv_coord: attr.uv_coord,
-                normal: attr.normal.map(|n| trans.transform_vector(n)),
+                normal: attr.normal.map(|n| trans.apply_vector(n)),
             })
             .collect()
     }
@@ -119,10 +119,10 @@ impl TransformedAttributes for StandardAttributes {
     #[inline]
     fn transform_by(&mut self, trans: Matrix4) {
         self.positions_mut().iter_mut().for_each(|p| {
-            *p = trans.transform_point(*p);
+            *p = trans.apply_point(*p);
         });
         self.normals_mut().iter_mut().for_each(|n| {
-            *n = trans.transform_vector(*n);
+            *n = trans.apply_vector(*n);
         });
     }
     #[inline]
@@ -131,13 +131,13 @@ impl TransformedAttributes for StandardAttributes {
             positions: self
                 .positions()
                 .iter()
-                .map(|&p| trans.transform_point(p))
+                .map(|&p| trans.apply_point(p))
                 .collect(),
             uv_coords: self.uv_coords().clone(),
             normals: self
                 .normals()
                 .iter()
-                .map(|&n| trans.transform_vector(n))
+                .map(|&n| trans.apply_vector(n))
                 .collect(),
         }
     }

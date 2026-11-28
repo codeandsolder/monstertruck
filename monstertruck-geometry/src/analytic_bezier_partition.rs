@@ -152,7 +152,7 @@ pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{InnerSpace, KnotVector, NurbsCurve, ParametricCurve};
+    use crate::prelude::{KnotVector, NurbsCurve, ParametricCurve};
 
     fn p(x: f64, y: f64, z: f64, w: f64) -> Vector4 { Vector4::new(x, y, z, w) }
 
@@ -221,7 +221,7 @@ mod tests {
             ));
             for index in 1..10 {
                 let t = span.start + (span.end - span.start) * f64::from(index) / 10.0;
-                assert!((original.evaluate(t) - bezier.evaluate(t)).magnitude() < 1.0e-9);
+                assert!((original.evaluate(t) - bezier.evaluate(t)).norm() < 1.0e-9);
             }
         }
     }
@@ -301,9 +301,9 @@ mod tests {
                     let t = (span.end - span.start).mul_add(fraction, span.start);
                     let reference = reference_homogeneous(&curve, t);
                     let extracted = reference_homogeneous(&bezier, t);
-                    let error = (reference - extracted).magnitude();
+                    let error = (reference - extracted).norm();
                     assert!(
-                        error <= 5.0e-9 * reference.magnitude().max(1.0),
+                        error <= 5.0e-9 * reference.norm().max(1.0),
                         "failed for t={t}, difference={error}"
                     );
                 }

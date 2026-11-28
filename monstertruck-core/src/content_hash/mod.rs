@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::hash::Hasher;
 
-use cgmath::{Matrix3, Matrix4, Point2, Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector2, Vector3, Vector4};
 
 use crate::StableId;
 
@@ -223,7 +223,7 @@ impl<T: DeterministicContentHash + ?Sized> DeterministicContentHash for Box<T> {
 }
 
 // ---------------------------------------------------------------------------
-// cgmath types -- hash by component bit patterns.
+// native math types -- hash by component bit patterns.
 // ---------------------------------------------------------------------------
 
 impl DeterministicContentHash for Point2<f64> {
@@ -267,18 +267,15 @@ impl DeterministicContentHash for Vector4<f64> {
 
 impl DeterministicContentHash for Matrix3<f64> {
     fn content_hash<H: Hasher>(&self, state: &mut H) {
-        self.x.content_hash(state);
-        self.y.content_hash(state);
-        self.z.content_hash(state);
+        self.iter()
+            .for_each(|component| component.content_hash(state));
     }
 }
 
 impl DeterministicContentHash for Matrix4<f64> {
     fn content_hash<H: Hasher>(&self, state: &mut H) {
-        self.x.content_hash(state);
-        self.y.content_hash(state);
-        self.z.content_hash(state);
-        self.w.content_hash(state);
+        self.iter()
+            .for_each(|component| component.content_hash(state));
     }
 }
 

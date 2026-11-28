@@ -9,15 +9,14 @@
 
 use super::intersection_trace;
 use super::{
-    BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug, EuclideanSpace,
-    InnerSpace, IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix, Matrix3, Matrix4,
-    NurbsCurve, ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve,
-    ParametricCurve3D, ParametricSurface3D, Plane, Point2, Point3, Processor,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SquareMatrix, SurfaceCurve,
-    SurfaceDerivatives, SurfaceParameter, Tolerance, Transformed, TrimmedCurve, Vector2, Vector3,
-    Vector4, algo,
+    AffinePoint, BoundedCurve, BsplineCurve, CurveDerivatives, CurveParameter, Cut, Debug,
+    IntersectionCurve, Invertible, KERNEL_EPSILON, Line, Matrix3, Matrix4, NurbsCurve,
+    ParameterCurve, ParameterDivision1D, ParameterRange, ParametricCurve, ParametricCurve3D,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, SearchNearestParameter, SearchParameter,
+    SearchParameterHint1D, SurfaceCurve, SurfaceDerivatives, SurfaceParameter, Tolerance,
+    Transformed, TrimmedCurve, Vector2, Vector3, Vector4, algo,
 };
-use monstertruck_core::Transform;
+use monstertruck_core::GeometryTransform;
 use monstertruck_core::newton::{self, CalcOutput};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_traits::{ParametricCurve as ParametricCurveTrait, SnapCurveEndpoints};
@@ -63,32 +62,33 @@ where
     S1: ParametricSurface3D + SearchNearestParameter<SurfaceParameter, Point = Point3>,
 {
     intersection_trace::mark(3);
-    let function = move |Vector4 { x, y, z, w }| {
+    let function = move |parameter: Vector4| {
+        let [x, y, z, w] = <[f64; 4]>::from(parameter);
         // The 4-variable surface/surface Newton solve needs two first-order
         // surface jets. Asking for six independent derivative_mn evaluations
         // at every iteration duplicates NURBS rational basis work.
         let (pt0, uder0, vder0) = surface0.evaluate_with_first_derivatives(x, y);
         let (pt1, uder1, vder1) = surface1.evaluate_with_first_derivatives(z, w);
-        let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
+        let (pt0, pt1) = (pt0.position_vector(), pt1.position_vector());
         CalcOutput {
-            value: (pt0 - pt1).extend(plane_normal.dot((pt0 + pt1) / 2.0 - plane_point.to_vec())),
-            derivation: Matrix4::from_cols(
-                uder0.extend(plane_normal.dot(uder0) / 2.0),
-                vder0.extend(plane_normal.dot(vder0) / 2.0),
-                (-uder1).extend(plane_normal.dot(uder1) / 2.0),
-                (-vder1).extend(plane_normal.dot(vder1) / 2.0),
-            ),
+            value: (pt0 - pt1).push(plane_normal.dot(&((pt0 + pt1) / 2.0 - plane_point.coords))),
+            derivation: Matrix4::from_columns(&[
+                uder0.push(plane_normal.dot(&uder0) / 2.0),
+                vder0.push(plane_normal.dot(&vder0) / 2.0),
+                (-uder1).push(plane_normal.dot(&uder1) / 2.0),
+                (-vder1).push(plane_normal.dot(&vder1) / 2.0),
+            ]),
         }
     };
     let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(plane_point, hint0, trials))?;
     let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(plane_point, hint1, trials))?;
     let res = newton::solve(
         function,
-        Vector4 { x, y, z, w },
+        Vector4::new(x, y, z, w),
         trials,
         DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
     );
-    let Ok(Vector4 { x, y, z, w }) = res else {
+    let Ok(parameter) = res else {
         let pt0 = surface0.evaluate(x, y);
         let pt1 = surface1.evaluate(z, w);
         let n0 = surface0.normal(x, y);
@@ -97,12 +97,13 @@ where
         // when surfaces are coplanar or tangent.
         // If the points are close enough and normals are parallel (indicating
         // coplanarity), accept the initial guess as a valid intersection point.
-        if pt0.near(&pt1) && n0.cross(n1).magnitude() < KERNEL_EPSILON {
+        if pt0.near(&pt1) && n0.cross(&n1).norm() < KERNEL_EPSILON {
             let point = pt0.midpoint(pt1);
             return Some((point, Point2::new(x, y), Point2::new(z, w)));
         }
         return None;
     };
+    let [x, y, z, w] = <[f64; 4]>::from(parameter);
     let point = surface0.evaluate(x, y).midpoint(surface1.evaluate(z, w));
     Some((point, Point2::new(x, y), Point2::new(z, w)))
 }
@@ -295,38 +296,41 @@ where
     ) -> Option<(Point3, Point2, Point2)> {
         intersection_trace::mark(2);
         let (surface0, surface1) = (self.surface0(), self.surface1());
-        let function = |Vector4 { x, y, z, w }| {
+        let function = |parameter: Vector4| {
+            let [x, y, z, w] = <[f64; 4]>::from(parameter);
             let (pt0, uder0, vder0, uuder0, uvder0, vvder0) =
                 surface0.evaluate_with_second_derivatives(x, y);
             let (pt1, uder1, vder1, uuder1, uvder1, vvder1) =
                 surface1.evaluate_with_second_derivatives(z, w);
-            let (pt0, pt1) = (pt0.to_vec(), pt1.to_vec());
-            let diff = (pt0 + pt1) / 2.0 - point.to_vec();
-            let (n0, n1) = (uder0.cross(vder0), uder1.cross(vder1));
-            let n = n0.cross(n1);
-            let n_xder = (uuder0.cross(vder0) + uder0.cross(uvder0)).cross(n1);
-            let n_yder = (uvder0.cross(vder0) + uder0.cross(vvder0)).cross(n1);
-            let n_zder = n0.cross(uuder1.cross(vder1) + uder1.cross(uvder1));
-            let n_wder = n0.cross(uvder1.cross(vder1) + uder1.cross(vvder1));
+            let (pt0, pt1) = (pt0.position_vector(), pt1.position_vector());
+            let diff = (pt0 + pt1) / 2.0 - point.position_vector();
+            let (n0, n1) = (uder0.cross(&vder0), uder1.cross(&vder1));
+            let n = n0.cross(&n1);
+            let n_xder = (uuder0.cross(&vder0) + uder0.cross(&uvder0)).cross(&n1);
+            let n_yder = (uvder0.cross(&vder0) + uder0.cross(&vvder0)).cross(&n1);
+            let n_zder = n0.cross(&(uuder1.cross(&vder1) + uder1.cross(&uvder1)));
+            let n_wder = n0.cross(&(uvder1.cross(&vder1) + uder1.cross(&vvder1)));
             CalcOutput {
-                value: (pt0 - pt1).extend(n.dot(diff)),
-                derivation: Matrix4::from_cols(
-                    uder0.extend(n_xder.dot(diff) + n.dot(uder0) / 2.0),
-                    vder0.extend(n_yder.dot(diff) + n.dot(vder0) / 2.0),
-                    (-uder1).extend(n_zder.dot(diff) + n.dot(uder1) / 2.0),
-                    (-vder1).extend(n_wder.dot(diff) + n.dot(vder1) / 2.0),
-                ),
+                value: (pt0 - pt1).push(n.dot(&diff)),
+                derivation: Matrix4::from_columns(&[
+                    uder0.push(n_xder.dot(&diff) + n.dot(&uder0) / 2.0),
+                    vder0.push(n_yder.dot(&diff) + n.dot(&vder0) / 2.0),
+                    (-uder1).push(n_zder.dot(&diff) + n.dot(&uder1) / 2.0),
+                    (-vder1).push(n_wder.dot(&diff) + n.dot(&vder1) / 2.0),
+                ]),
             }
         };
         let (x, y) = hint0.or_else(|| surface0.search_nearest_parameter(point, hint0, trials))?;
         let (z, w) = hint1.or_else(|| surface1.search_nearest_parameter(point, hint1, trials))?;
-        let Vector4 { x, y, z, w } = newton::solve(
-            function,
-            Vector4 { x, y, z, w },
-            trials,
-            DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
-        )
-        .ok()?;
+        let [x, y, z, w] = <[f64; 4]>::from(
+            newton::solve(
+                function,
+                Vector4::new(x, y, z, w),
+                trials,
+                DEFAULT_NUMERICAL_TOLERANCES.newton_intersection_parameter_step,
+            )
+            .ok()?,
+        );
         let point = surface0.evaluate(x, y).midpoint(surface1.evaluate(z, w));
         Some((point, Point2::new(x, y), Point2::new(z, w)))
     }
@@ -391,13 +395,13 @@ fn curve_der_n(
     cders: &CurveDerivatives<Vector3>,
     n: usize,
 ) -> Option<Vector3> {
-    let mat = Matrix3::from_cols(s0normal, s1normal, leaders[1]).transpose();
+    let mat = Matrix3::from_columns(&[s0normal, s1normal, leaders[1]]).transpose();
     let sub = leaders.element_wise_derivatives(cders, |x, y| x - y);
     let suml = leaders
         .derivative()
-        .combinatorial_derivative(&sub, Vector3::dot, n);
-    let b = Vector3::new(s0normal.dot(sum0), s1normal.dot(sum1), suml);
-    Some(mat.invert()? * b)
+        .combinatorial_derivative(&sub, |a, b| a.dot(&b), n);
+    let b = Vector3::new(s0normal.dot(&sum0), s1normal.dot(&sum1), suml);
+    Some(mat.try_inverse()? * b)
 }
 
 fn uv_der_n(
@@ -407,9 +411,9 @@ fn uv_der_n(
     normal: Vector3,
     cder_n: Vector3,
 ) -> Option<Vector2> {
-    let mat = Matrix3::from_cols(uder, vder, normal);
+    let mat = Matrix3::from_columns(&[uder, vder, normal]);
     let b = cder_n - sum;
-    let uv_der_n = mat.invert()? * b;
+    let uv_der_n = mat.try_inverse()? * b;
     debug_assert!(
         uv_der_n.z.abs() < DEFAULT_NUMERICAL_TOLERANCES.derivative_residual,
         "{}",
@@ -477,8 +481,8 @@ where
             return leader.derivative(t);
         };
         let (n0, n1) = (surface0.normal(uv0.x, uv0.y), surface1.normal(uv1.x, uv1.y));
-        let n = n0.cross(n1);
-        let k = (l_der.magnitude2() - (c - l).dot(l_der2)) / n.dot(l_der);
+        let n = n0.cross(&n1);
+        let k = (l_der.norm_squared() - (c.coords - l).dot(&l_der2)) / n.dot(&l_der);
         n * k
     }
     #[inline]
@@ -486,7 +490,7 @@ where
     #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Vector3 {
         match n {
-            0 => return self.evaluate(t).to_vec(),
+            0 => return self.evaluate(t).position_vector(),
             1 => return self.derivative(t),
             _ => {}
         }
@@ -500,11 +504,11 @@ where
             return cders;
         };
         let mut uv0ders = CurveDerivatives::new(n);
-        uv0ders[0] = uv0.to_vec();
+        uv0ders[0] = uv0.position_vector();
         let mut uv1ders = CurveDerivatives::new(n);
-        uv1ders[0] = uv1.to_vec();
+        uv1ders[0] = uv1.position_vector();
         let mut cders = CurveDerivatives::new(n);
-        cders[0] = c.to_vec();
+        cders[0] = c.position_vector();
 
         let Self {
             surface0,
@@ -835,8 +839,8 @@ where
         if let Some(boundary) = self.boundary1_mut() {
             boundary.transform_by(trans);
         }
-        self.front_anchor = self.front_anchor.map(|p| trans.transform_point(p));
-        self.back_anchor = self.back_anchor.map(|p| trans.transform_point(p));
+        self.front_anchor = self.front_anchor.map(|p| trans.apply_point(p));
+        self.back_anchor = self.back_anchor.map(|p| trans.apply_point(p));
     }
 }
 

@@ -13,9 +13,9 @@ use monstertruck_modeling::*;
 /// Builds a unit cube solid via the extrude chain.
 fn unit_cube() -> Solid {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    builder::extrude(&f, Vector3::unit_z())
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    builder::extrude(&f, Vector3::z())
 }
 
 #[test]

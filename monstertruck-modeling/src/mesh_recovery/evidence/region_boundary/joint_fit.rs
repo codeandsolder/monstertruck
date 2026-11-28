@@ -5,7 +5,7 @@ use super::{
     MeshEvidence, ReconciliationOptions, SurfaceCarrier, SurfaceRegionPartition,
     reconcile::{preserves_polygon_orientation, reconcile_point},
 };
-use crate::{InnerSpace, KERNEL_EPSILON, Point3, Vector3};
+use crate::{KERNEL_EPSILON, Point3, Vector3};
 use std::collections::BTreeSet;
 mod fillet;
 mod ownership;
@@ -361,7 +361,7 @@ impl<'a> Neighborhood<'a> {
                 )
                 .ok_or(rejection)?
             };
-            let displacement = (point - source).magnitude();
+            let displacement = (point - source).norm();
             if !displacement.is_finite() || displacement > sample.allowance {
                 return Err(rejection);
             }
@@ -398,7 +398,7 @@ fn fixed_sample_position(
 ) -> Option<Point3> {
     let tolerance = KERNEL_EPSILON * 0.01;
     if let Some(point) = native
-        && (point - source).magnitude() <= allowance
+        && (point - source).norm() <= allowance
         && satisfies(point, carriers, tolerance)
     {
         return Some(point);
@@ -406,7 +406,7 @@ fn fixed_sample_position(
     if satisfies(source, carriers, tolerance) {
         return Some(source);
     }
-    if (prior - source).magnitude() <= allowance && satisfies(prior, carriers, tolerance) {
+    if (prior - source).norm() <= allowance && satisfies(prior, carriers, tolerance) {
         return Some(prior);
     }
     reconcile_point(
@@ -462,13 +462,13 @@ fn plane_from_junctions(
         return Ok((original, 0.0));
     }
     let pivot = positions[a];
-    let cross = (positions[b] - pivot).cross(positions[c] - pivot);
-    let magnitude = cross.magnitude();
+    let cross = (positions[b] - pivot).cross(&(positions[c] - pivot));
+    let magnitude = cross.norm();
     if magnitude == 0.0 || !magnitude.is_finite() {
         return Err(JointFitRejection::Orientation);
     }
     let mut fitted = cross / magnitude;
-    if fitted.dot(normal) < 0.0 {
+    if fitted.dot(&normal) < 0.0 {
         fitted = -fitted;
     }
     let carrier = SurfaceCarrier::Plane {
@@ -483,7 +483,7 @@ fn plane_from_junctions(
     let mut budget = 0.0_f64;
     for &id in ids {
         let p = neighborhood.evidence.positions[id];
-        let change = ((p - pivot).dot(fitted) - (p - origin).dot(normal)).abs();
+        let change = ((p - pivot).dot(&fitted) - (p - origin).dot(&normal)).abs();
         if !change.is_finite() {
             return Err(JointFitRejection::Linearization);
         }
@@ -543,7 +543,7 @@ fn fit_dependent_planes(
             context.options.angular_resolution,
         )
         .ok_or(rejection)?;
-        let displacement = (point - source).magnitude();
+        let displacement = (point - source).norm();
         if !displacement.is_finite() || displacement > sample.allowance {
             return Err(rejection);
         }
@@ -611,7 +611,7 @@ impl CarrierModel {
         let pivot = neighborhood.evidence.positions[first.id];
         let (mut scale, mut allowance) = (0.0_f64, first.allowance);
         for sample in samples {
-            scale = scale.max((neighborhood.evidence.positions[sample.id] - pivot).magnitude());
+            scale = scale.max((neighborhood.evidence.positions[sample.id] - pivot).norm());
             allowance = allowance.max(sample.allowance);
         }
         allowance = (allowance - neighborhood.context.carrier_change[region]).max(0.0);
@@ -622,7 +622,7 @@ impl CarrierModel {
                 radius_at_origin,
                 slope,
             } => {
-                let z = (pivot - origin).dot(axis);
+                let z = (pivot - origin).dot(&axis);
                 SurfaceCarrier::LinearRevolution {
                     origin: origin + axis * z,
                     axis,
@@ -646,13 +646,13 @@ impl CarrierModel {
         let translation = Vector3::new(p[0], p[1], p[2]);
         let rotation = Vector3::new(p[3], p[4], p[5]) / self.scale;
         let rotate = |v: Vector3| {
-            let angle = rotation.magnitude();
+            let angle = rotation.norm();
             if angle == 0.0 {
                 return v;
             }
             let axis = rotation / angle;
             let (sin, cos) = angle.sin_cos();
-            v * cos + axis.cross(v) * sin + axis * (axis.dot(v) * (1.0 - cos))
+            v * cos + axis.cross(&v) * sin + axis * (axis.dot(&v) * (1.0 - cos))
         };
         let place = |v: Point3| self.pivot + rotate(v - self.pivot) + translation;
         match self.base {
@@ -711,8 +711,8 @@ impl CarrierModel {
     // under rigid motion (radial norm and meridian norm are contractions).
     fn additional_residual_bound(self) -> f64 {
         let p = self.parameters;
-        let translation = Vector3::new(p[0], p[1], p[2]).magnitude();
-        let rotation = Vector3::new(p[3], p[4], p[5]).magnitude();
+        let translation = Vector3::new(p[0], p[1], p[2]).norm();
+        let rotation = Vector3::new(p[3], p[4], p[5]).norm();
         // ||R p-p|| <= angle*||p||, with all source points in the
         // pivot-centered ball of radius scale.
         let motion = translation + rotation;
@@ -739,8 +739,8 @@ impl CarrierModel {
                 // Axis reference is centered at the pivot's axial
                 // coordinate; include the actual coordinate roundoff.
                 let delta = self.pivot - origin;
-                let z = delta.dot(axis);
-                let rho = (delta - axis * z).magnitude();
+                let z = delta.dot(&axis);
+                let rho = (delta - axis * z).norm();
                 let pivot_residual = (rho - slope.mul_add(z, radius_at_origin)).abs() / old_norm;
                 let extent = self.scale + motion;
                 let profile = delta_slope.abs().mul_add(extent + z.abs(), p[6].abs()) / new_norm;
@@ -944,7 +944,7 @@ fn project_sample(
     // Accumulate the projected Jacobian as a Gram matrix, avoiding
     // cancellation of nearly equal normal equations at constrained vertices.
     for row in rows {
-        let project = |v: [f64; 3]| row.normal.dot(Vector3::new(v[0], v[1], v[2]));
+        let project = |v: [f64; 3]| row.normal.dot(&Vector3::new(v[0], v[1], v[2]));
         let error = row.residual - project(projected);
         let jacobian = row
             .jacobian
@@ -1248,23 +1248,23 @@ mod tests {
         let models = [
             SurfaceCarrier::Plane {
                 origin: pivot,
-                normal: Vector3::unit_x(),
+                normal: Vector3::x(),
             },
             SurfaceCarrier::LinearRevolution {
                 origin: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radius_at_origin: 2.0,
                 slope: 0.3,
             },
             SurfaceCarrier::CircularRevolution {
                 axial_center: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 2.0,
                 profile_radius: 1.0,
             },
             SurfaceCarrier::CircularRevolution {
                 axial_center: Point3::new(0.0, 0.0, 0.0),
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 0.0,
                 profile_radius: 2.0,
             },

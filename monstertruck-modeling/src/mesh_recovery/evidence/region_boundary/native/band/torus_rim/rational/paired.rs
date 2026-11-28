@@ -11,7 +11,7 @@ use super::{
     BandContext, Frame, Interval, Piece, Rejection, Ring, lift_cycle, near, simplicity, unique_cut,
 };
 use crate::mesh_recovery::{OrientedTrim, SurfaceCarrier};
-use crate::{Edge, InnerSpace, ParametricCurve, Point3, Vertex};
+use crate::{Edge, ParametricCurve, Point3, Vertex};
 use std::f64::consts::TAU;
 
 struct LiftedRim {
@@ -91,8 +91,8 @@ impl LiftedRim {
     fn interior(&self, context: &BandContext<'_>, piece: &Piece, point: Point3) -> bool {
         let edge = &self.rim.edges[piece.edge];
         let clearance = 4.0 * context.options.intersection_tolerance;
-        (point - edge.front().point()).magnitude() > clearance
-            && (point - edge.back().point()).magnitude() > clearance
+        (point - edge.front().point()).norm() > clearance
+            && (point - edge.back().point()).norm() > clearance
     }
 
     fn candidate(

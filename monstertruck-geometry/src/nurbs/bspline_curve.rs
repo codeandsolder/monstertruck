@@ -4,12 +4,12 @@
 )]
 
 use super::{
-    Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
-    CurveCollector, CurveParameter, Cut, Deserialize, EuclideanSpace, HashGen, Homogeneous,
-    InnerSpace, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, Origin, ParameterDivision1D,
-    ParameterRange, ParameterTransform, ParametricCurve, Result, SearchNearestParameter,
-    SearchParameter, SearchParameterHint1D, Tolerance, Transform, Transformed, Zero, algo,
-    gaussian_elimination, inv_or_zero, search_curve_with_hint,
+    AffinePoint, Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError,
+    ControlPoint, CurveCollector, CurveParameter, Cut, Deserialize, GeometryTransform, HashGen,
+    Homogeneous, InnerProduct, Invertible, KERNEL_EPSILON, KnotVector, MetricSpace, Origin,
+    ParameterDivision1D, ParameterRange, ParameterTransform, ParametricCurve, Result,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, Tolerance, Transformed, Zero,
+    algo, gaussian_elimination, inv_or_zero, search_curve_with_hint,
 };
 use crate::errors::Error;
 #[cfg(test)]
@@ -543,10 +543,10 @@ impl<P> v2::SearchNearestParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Tolerance,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     #[inline]
@@ -564,10 +564,10 @@ impl<P> v2::SearchParameter<v2::CurveParameter<f64>> for BsplineCurve<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Tolerance,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     #[inline]
@@ -1236,7 +1236,7 @@ impl<P: ControlPoint<f64> + Tolerance> Concat<Self> for BsplineCurve<P> {
 
 impl<P> ParameterDivision1D for BsplineCurve<P>
 where P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + HashGen<f64>
 {
@@ -1249,10 +1249,10 @@ where P: ControlPoint<f64>
 impl<P> BsplineCurve<P>
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Tolerance,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     /// Determines whether `self` is an arc of `curve` by repeating applying Newton method.
     ///
@@ -1313,10 +1313,10 @@ where
 impl<P> SearchNearestParameter<CurveParameter> for BsplineCurve<P>
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Tolerance,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     /// Searches the parameter `t` which minimize |self(t) - point| by Newton's method with initial guess `hint`.
@@ -1360,7 +1360,7 @@ where
     /// let pt1 = ParametricCurve::evaluate(&bspcurve, 3.0);
     /// // the point corresponding the obtained parameter is not
     /// // the globally nearest point in the curve.
-    /// assert!((pt0 - pt).magnitude() > (pt1 - pt).magnitude());
+    /// assert!((pt0 - pt).norm() > (pt1 - pt).norm());
     /// ```
     #[inline]
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -1381,9 +1381,9 @@ where
 impl<P> SearchParameter<CurveParameter> for BsplineCurve<P>
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     #[inline]
@@ -1414,14 +1414,14 @@ impl<P: Clone> Invertible for BsplineCurve<P> {
 
 impl<M, P> Transformed<M> for BsplineCurve<P>
 where
-    P: EuclideanSpace,
-    M: Transform<P>,
+    P: AffinePoint,
+    M: GeometryTransform<P>,
 {
     #[inline]
     fn transform_by(&mut self, trans: M) {
         self.control_points
             .iter_mut()
-            .for_each(|pt| *pt = trans.transform_point(*pt));
+            .for_each(|pt| *pt = trans.apply_point(*pt));
     }
 }
 
@@ -1446,17 +1446,17 @@ where P: Deserialize<'de>
 impl<P> BsplineCurve<P>
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Tolerance
         + HashGen<f64>,
-    <P as ControlPoint<f64>>::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    <P as ControlPoint<f64>>::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     fn cubic_bezier_interpolation(
         pt0: P,
         pt1: P,
-        der0: <P as EuclideanSpace>::Diff,
-        der1: <P as EuclideanSpace>::Diff,
+        der0: <P as AffinePoint>::Diff,
+        der1: <P as AffinePoint>::Diff,
         range: (f64, f64),
     ) -> Self {
         let width = range.1 - range.0;
@@ -1472,13 +1472,13 @@ where
         curve: &C,
         range: (f64, f64),
         ends: (P, P),
-        enders: (<P as EuclideanSpace>::Diff, <P as EuclideanSpace>::Diff),
+        enders: (<P as AffinePoint>::Diff, <P as AffinePoint>::Diff),
         p_tol: f64,
         d_tol: f64,
         trialis: usize,
     ) -> Option<Self>
     where
-        C: ParametricCurve<Point = P, Vector = <P as EuclideanSpace>::Diff>,
+        C: ParametricCurve<Point = P, Vector = <P as AffinePoint>::Diff>,
     {
         let bezier = Self::cubic_bezier_interpolation(ends.0, ends.1, enders.0, enders.1, range);
         let seed = ends.0.midpoint(ends.1);
@@ -1486,15 +1486,15 @@ where
         let t = range.1.mul_add(p, range.0 * (1.0 - p));
         let ders0 = bezier.derivatives(1, t);
         let ders1 = curve.derivatives(1, t);
-        let pt_dist2 = (ders0[0] - ders1[0]).magnitude2();
-        let der_dist2 = (ders0[1] - ders1[1]).magnitude2();
+        let pt_dist2 = (ders0[0] - ders1[0]).norm_squared();
+        let der_dist2 = (ders0[1] - ders1[1]).norm_squared();
         if pt_dist2 > p_tol * p_tol || der_dist2 > d_tol * d_tol {
             if trialis == 0 {
                 return None;
             }
             let t = f64::midpoint(range.0, range.1);
             let ders = curve.derivatives(1, t);
-            let pt = <P as EuclideanSpace>::from_vec(ders[0]);
+            let pt = <P as AffinePoint>::from_coordinates(ders[0]);
             let bspcurve0 = Self::sub_cubic_approximation(
                 curve,
                 (range.0, t),
@@ -1535,7 +1535,7 @@ where
     /// for i in 0..N {
     ///     let t = i as f64 / N as f64;
     ///     assert!(circle.evaluate(t).distance(bspcurve.evaluate(t)) < 0.02);
-    ///     assert!((circle.derivative(t) - bspcurve.derivative(t)).magnitude() < 0.02);
+    ///     assert!((circle.derivative(t) - bspcurve.derivative(t)).norm() < 0.02);
     /// }
     /// ```
     pub fn cubic_approximation<C>(
@@ -1546,7 +1546,7 @@ where
         trials: usize,
     ) -> Option<Self>
     where
-        C: ParametricCurve<Point = P, Vector = <P as EuclideanSpace>::Diff>,
+        C: ParametricCurve<Point = P, Vector = <P as AffinePoint>::Diff>,
     {
         let ends = (curve.evaluate(range.0), curve.evaluate(range.1));
         let enders = (curve.derivative(range.0), curve.derivative(range.1));

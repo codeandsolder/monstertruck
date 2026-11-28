@@ -1,4 +1,4 @@
-use monstertruck_core::{assert_near, cgmath64::*, tolerance::*};
+use monstertruck_core::{assert_near, math::*, tolerance::*};
 use monstertruck_topology::*;
 use monstertruck_traits::*;
 use std::ops::Bound;
@@ -23,7 +23,7 @@ impl ParametricCurve for Segment {
     type Vector = Vector3;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         match n {
-            0 => self.evaluate(t).to_vec(),
+            0 => self.evaluate(t).coords,
             1 => self.derivative(t),
             _ => Vector3::zero(),
         }
@@ -85,7 +85,7 @@ impl Concat<Segment> for Segment {
             ))
         } else if !self.ends.1.near(&rhs.ends.0)
             // by this condition, this is not correctly implementation of concat
-            || !(self.ends.1 - self.ends.0).cross(rhs.ends.1 - rhs.ends.0).so_small()
+            || !(self.ends.1 - self.ends.0).cross(&(rhs.ends.1 - rhs.ends.0)).so_small()
         {
             Err(ConcatError::DisconnectedPoints(self.ends.1, rhs.ends.0))
         } else {
@@ -107,7 +107,7 @@ impl SearchParameter<CurveParameter> for Segment {
     ) -> Option<f64> {
         let p = point - self.ends.0;
         let r = self.ends.1 - self.ends.0;
-        let t = p.dot(r) / r.dot(r);
+        let t = p.dot(&r) / r.dot(&r);
         if (p - t * r).so_small() && -KERNEL_EPSILON < t && t < 1.0 + KERNEL_EPSILON {
             Some(self.range.0 + (self.range.1 - self.range.0) * t)
         } else {

@@ -5,7 +5,7 @@ use monstertruck_geometry::{
     analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage},
     prelude::TryIntoHomogeneousBsplineCurve,
 };
-use monstertruck_modeling::{Edge, InnerSpace, NurbsCurve, Point3, Shell, Vector3};
+use monstertruck_modeling::{Edge, InnerProduct, NurbsCurve, Point3, Shell, Vector3};
 use std::collections::{HashMap, HashSet};
 
 const TURN: f64 = std::f64::consts::TAU;
@@ -46,7 +46,7 @@ fn verify_chain(edges: &[Edge], frame: CircularArcFrame, sweep: f64) -> Result<(
     );
     let p = points[a];
     let q = points[b];
-    let close = |p: Point3, q: Point3| (p - q).magnitude() <= EDGE_SELECTOR_TOLERANCE_MM;
+    let close = |p: Point3, q: Point3| (p - q).norm() <= EDGE_SELECTOR_TOLERANCE_MM;
     ensure!(
         (close(p, start) && close(q, end)) || (close(q, start) && close(p, end)),
         "bounded circular chain has incorrect endpoints"

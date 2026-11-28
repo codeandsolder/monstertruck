@@ -366,12 +366,12 @@ fn full_unit_circle_curve() -> BsplineCurve<Vector4> {
 }
 
 fn circle_orbit_transform(center: Point3, radial: Vector3, axis: Vector3) -> Matrix4 {
-    Matrix4::from_cols(
-        radial.extend(0.0),
-        axis.cross(radial).extend(0.0),
-        axis.extend(0.0),
+    Matrix4::from_columns(&[
+        radial.push(0.0),
+        axis.cross(&radial).push(0.0),
+        axis.push(0.0),
         center.to_homogeneous(),
-    )
+    ])
 }
 
 impl<C> RevolutionSurface<C>
@@ -420,7 +420,7 @@ where C: TryIntoHomogeneousBsplineCurve
                     return None;
                 }
                 let point = profile_point.to_point();
-                let center = origin + axis * (point - origin).dot(axis);
+                let center = origin + axis * (point - origin).dot(&axis);
                 let radial = point - center;
                 if radial == Vector3::zero() {
                     // All orbit points collapse to the pole, but preserve the
@@ -817,7 +817,7 @@ where E: TryIntoHomogeneousBsplineCurve
 impl<E, T> TryIntoBsplineSurface for Processor<E, T>
 where
     E: TryIntoBsplineSurface,
-    T: Transform<Point3> + Copy,
+    T: GeometryTransform<Point3> + Copy,
 {
     #[inline]
     fn try_into_bspline_surface(&self) -> Option<BsplineSurface<Point3>> {

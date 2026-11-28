@@ -6,9 +6,9 @@ use image::{Rgb, RgbImage};
 use monstertruck_io::step::load::{
     Table,
     step_geometry::{
-        Attributes, BoundedCurve, BoundingBox, Curve3D, EuclideanSpace, InnerSpace, Invertible,
-        KERNEL_EPSILON, Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
-        PolygonMesh, PolylineCurve, StepParameterCurve, Surface, Vector2, Vector3, Zero,
+        AffinePoint, Attributes, BoundedCurve, BoundingBox, Curve3D, Invertible, KERNEL_EPSILON,
+        Origin, ParametricCurve3D, ParametricSurface3D, Point2, Point3, PolygonMesh, PolylineCurve,
+        StepParameterCurve, Surface, Vector2, Vector3, Zero,
     },
 };
 use monstertruck_meshing::prelude::*;
@@ -305,7 +305,7 @@ fn render_mesh_3d(mesh: &PolygonMesh, path: &Path, size: u32) -> Result<()> {
         .iter()
         .map(|point| {
             let offset = *point - origin;
-            Vector2::new(offset.dot(axis_x), offset.dot(axis_y))
+            Vector2::new(offset.dot(&axis_x), offset.dot(&axis_y))
         })
         .collect::<Vec<_>>();
     let bounds = Bounds2::from_points(points.iter().copied())
@@ -334,11 +334,11 @@ fn view_frame(mesh: &PolygonMesh) -> Result<(Point3, Vector3, Vector3)> {
         .iter()
         .copied()
         .fold(Point3::origin(), |sum, point| {
-            Point3::from_vec(sum.to_vec() + point.to_vec())
+            Point3::from(sum.position_vector() + point.position_vector())
         });
     let position_count =
         u32::try_from(positions.len()).context("preview mesh has more than u32::MAX positions")?;
-    let origin = Point3::from_vec(origin.to_vec() / f64::from(position_count));
+    let origin = Point3::from(origin.position_vector() / f64::from(position_count));
     let normal = mesh
         .normals()
         .iter()
@@ -351,7 +351,7 @@ fn view_frame(mesh: &PolygonMesh) -> Result<(Point3, Vector3, Vector3)> {
                 let a = positions[triangle[0].pos];
                 let b = positions[triangle[1].pos];
                 let c = positions[triangle[2].pos];
-                let normal = (b - a).cross(c - a);
+                let normal = (b - a).cross(&(c - a));
                 (!normal.so_small()).then_some(normal.normalize())
             })
             .ok_or_else(|| anyhow!("cannot derive view normal"))?
@@ -359,12 +359,12 @@ fn view_frame(mesh: &PolygonMesh) -> Result<(Point3, Vector3, Vector3)> {
         normal.normalize()
     };
     let seed = if normal.x.abs() < 0.8 {
-        Vector3::unit_x()
+        Vector3::x()
     } else {
-        Vector3::unit_y()
+        Vector3::y()
     };
-    let axis_x = normal.cross(seed).normalize();
-    let axis_y = normal.cross(axis_x).normalize();
+    let axis_x = normal.cross(&seed).normalize();
+    let axis_y = normal.cross(&axis_x).normalize();
     Ok((origin, axis_x, axis_y))
 }
 

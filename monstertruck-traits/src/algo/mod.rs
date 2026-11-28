@@ -21,11 +21,11 @@ fn scalar_from_usize(mut value: usize) -> f64 {
 }
 
 use monstertruck_core::{
-    cgmath64::{
-        EuclideanSpace, InnerSpace, Matrix2, Matrix3, MetricSpace, Point2, Point3, Vector2,
-        Vector3, VectorSpace, Zero,
-    },
     hash::HashGen,
+    math::{
+        AffinePoint, InnerProduct, LinearVector, Matrix2, Matrix3, MetricSpace, Point2, Point3,
+        Vector2, Vector3, Zero,
+    },
     newton::{self, CalcOutput},
     tolerance::{KERNEL_EPSILON, Tolerance},
 };

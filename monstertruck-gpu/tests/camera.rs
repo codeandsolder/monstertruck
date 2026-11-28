@@ -3,7 +3,7 @@
 #![recursion_limit = "256"]
 #![cfg(not(target_arch = "wasm32"))]
 
-use monstertruck_core::{bounding_box::*, cgmath64::*, prop_assert_near, tolerance::*};
+use monstertruck_core::{bounding_box::*, math::*, prop_assert_near, tolerance::*};
 use monstertruck_gpu::*;
 use proptest::{prelude::*, test_runner::TestCaseError};
 use std::f64::consts::PI;
@@ -20,11 +20,11 @@ proptest! {
         let z = rot_axis.0;
         let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
-        let rot = Matrix3::from_axis_angle(rot_axis, Rad(rot_angle));
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), rot_angle).into_inner();
         let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {
-            Matrix3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0])
+            Matrix3::from_columns(&[p[1] - p[0], p[2] - p[0], p[3] - p[0]])
                 .determinant()
                 .so_small()
         });
@@ -38,7 +38,7 @@ proptest! {
         };
         let nvolume = points
             .iter()
-            .map(|p| projection.transform_point(*p))
+            .map(|p| projection.apply_point(*p))
             .collect::<BoundingBox<Point3>>();
 
         let (min, max) = (nvolume.min(), nvolume.max());
@@ -59,17 +59,17 @@ proptest! {
         let z = rot_axis.0;
         let r = f64::mul_add(z, -z, 1.0).sqrt();
         let rot_axis = Vector3::new(r * f64::cos(rot_axis.1), r * f64::sin(rot_axis.1), z);
-        let rot = Matrix3::from_axis_angle(rot_axis, Rad(rot_angle));
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(rot_axis), rot_angle).into_inner();
         let points: [Point3; 32] = points.map(std::convert::Into::into);
 
         let same_plane = points.windows(4).all(|p| {
-            Matrix3::from_cols(p[1] - p[0], p[2] - p[0], p[3] - p[0])
+            Matrix3::from_columns(&[p[1] - p[0], p[2] - p[0], p[3] - p[0]])
                 .determinant()
                 .so_small()
         });
         prop_assume!(!same_plane);
 
-        let Some(camera) = Camera::perspective_view_fitting(rot, aspect, Rad(fov), &points) else {
+        let Some(camera) = Camera::perspective_view_fitting(rot, aspect, fov, &points) else {
             return Err(TestCaseError::fail("rotation unexpectedly produced a singular view basis"));
         };
         prop_assume!(camera.near_clip > KERNEL_EPSILON);
@@ -79,7 +79,7 @@ proptest! {
         };
         let nvolume = points
             .iter()
-            .map(|p| projection.transform_point(*p))
+            .map(|p| projection.apply_point(*p))
             .collect::<BoundingBox<Point3>>();
 
         let (min, max) = (nvolume.min(), nvolume.max());
@@ -93,7 +93,7 @@ proptest! {
 #[test]
 fn singular_camera_is_undefined_instead_of_aborting() {
     let camera = Camera {
-        matrix: Matrix4::from_value(0.0),
+        matrix: Matrix4::from_diagonal_element(0.0),
         ..Camera::default()
     };
     assert!(camera.projection(1.0).is_none());
@@ -102,8 +102,8 @@ fn singular_camera_is_undefined_instead_of_aborting() {
 
 #[test]
 fn singular_view_basis_is_rejected() {
-    let direction = Matrix3::from_value(0.0);
+    let direction = Matrix3::from_diagonal_element(0.0);
     let points = [Point3::origin(), Point3::new(1.0, 1.0, 1.0)];
     assert!(Camera::parallel_view_fitting(direction, 1.0, 0.1, &points).is_none());
-    assert!(Camera::perspective_view_fitting(direction, 1.0, Rad(1.0), &points).is_none());
+    assert!(Camera::perspective_view_fitting(direction, 1.0, 1.0, &points).is_none());
 }

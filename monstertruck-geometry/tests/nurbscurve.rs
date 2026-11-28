@@ -14,10 +14,10 @@ fn nurbs_circle() {
     const N: usize = 10;
     for i in 0..=N {
         let t = i as f64 / N as f64;
-        let p = curve.evaluate(t).to_vec();
-        assert_near!(p.magnitude(), 1.0);
+        let p = curve.evaluate(t).coords;
+        assert_near!(p.norm(), 1.0);
         let der = curve.derivative(t);
-        assert!(p.dot(der).so_small());
+        assert!(p.dot(&der).so_small());
     }
 }
 
@@ -43,7 +43,7 @@ proptest! {
         const EPS: f64 = 1.0e-4;
         let der0 = bsp.derivative_n(n + 1, t);
         let der1 = (bsp.derivative_n(n, t + EPS) - bsp.derivative_n(n, t - EPS)) / (2.0 * EPS);
-        prop_assert!((der0 - der1).magnitude() <= 0.01 * der0.magnitude());
+        prop_assert!((der0 - der1).norm() <= 0.01 * der0.norm());
     }
 
     #[test]
@@ -88,7 +88,7 @@ fn exec_concat_positive_test(
         KnotVector::uniform_knot(4, 4),
         v0.into_iter()
             .zip(v1)
-            .map(|(v0, v1)| Vector3::from(v0).extend(v1))
+            .map(|(v0, v1)| Vector3::from(v0).push(v1))
             .collect(),
     ));
     let mut part1 = part0.cut(t);

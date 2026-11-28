@@ -6,7 +6,7 @@
 //! the same infinite ruled carrier under an affine sweep-coordinate change.
 //! A positive common sweep interval is independently required below.
 
-use monstertruck_core::{cgmath64::InnerSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 pub(in crate::transversal::classic) use monstertruck_geometry::analytic_cylinder_intersection::certified_circular_cylinder;
 use monstertruck_geometry::{
     analytic_cylinder_intersection::project_positive_homogeneous_point as project,
@@ -61,8 +61,8 @@ fn congruent_ruled_sweeps(
     };
     let sweep_a = end_a - origin_a;
     let sweep_b = end_b - origin_b;
-    let length_a = sweep_a.magnitude();
-    let length_b = sweep_b.magnitude();
+    let length_a = sweep_a.norm();
+    let length_b = sweep_b.norm();
     if !length_a.is_finite()
         || !length_b.is_finite()
         || length_a <= spatial_tol
@@ -74,9 +74,9 @@ fn congruent_ruled_sweeps(
     // Both the angle and its model-space displacement along the complete
     // sweep must agree. A tiny angle over a long sweep can still separate
     // supporting carriers by much more than the permitted spatial residual.
-    if axis.cross(sweep_b / length_b).magnitude() > direction_tol
-        || axis.cross(sweep_b).magnitude() > spatial_tol
-        || (origin_b - origin_a).cross(axis).magnitude() > spatial_tol
+    if axis.cross(&(sweep_b / length_b)).norm() > direction_tol
+        || axis.cross(&sweep_b).norm() > spatial_tol
+        || (origin_b - origin_a).cross(&axis).norm() > spatial_tol
     {
         return false;
     }
@@ -104,9 +104,9 @@ fn congruent_ruled_sweeps(
         let Some(bb) = project(row_b[1]) else {
             return false;
         };
-        if (ab - aa - sweep_a).magnitude() > spatial_tol
-            || (bb - ba - sweep_b).magnitude() > spatial_tol
-            || (ba - aa - offset).magnitude() > spatial_tol
+        if (ab - aa - sweep_a).norm() > spatial_tol
+            || (bb - ba - sweep_b).norm() > spatial_tol
+            || (ba - aa - offset).norm() > spatial_tol
         {
             return false;
         }
@@ -120,15 +120,15 @@ fn congruent_ruled_sweeps(
         {
             return false;
         }
-        profile_is_nondegenerate |= (aa - origin_a).cross(axis).magnitude() > spatial_tol;
+        profile_is_nondegenerate |= (aa - origin_a).cross(&axis).norm() > spatial_tol;
     }
     if !profile_is_nondegenerate {
         return false;
     }
     // The complete two-control-point sweeps each describe an exact finite
     // axial interval; unlike a broad-phase bbox this is a support certificate.
-    let offset_on_axis = offset.dot(axis);
-    let sweep_b_on_axis = sweep_b.dot(axis);
+    let offset_on_axis = offset.dot(&axis);
+    let sweep_b_on_axis = sweep_b.dot(&axis);
     let (b0, b1) = (
         offset_on_axis.min(offset_on_axis + sweep_b_on_axis),
         offset_on_axis.max(offset_on_axis + sweep_b_on_axis),
@@ -196,8 +196,8 @@ pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
     };
     let spatial_eps = DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_structural_length;
     let axis_eps = DEFAULT_NUMERICAL_TOLERANCES.boolean_cylinder_axis_direction;
-    if axis_a.cross(axis_b).magnitude() > axis_eps
-        || (cb - ca).cross(axis_a).magnitude() > spatial_eps
+    if axis_a.cross(&axis_b).norm() > axis_eps
+        || (cb - ca).cross(&axis_a).norm() > spatial_eps
         || (ra - rb).abs() > spatial_eps
     {
         return false;
@@ -205,7 +205,11 @@ pub(in crate::transversal::classic) fn common_circular_extrusion_cylinder(
     let a = (span_a.0.min(span_a.1), span_a.0.max(span_a.1));
     // Axial coordinates must share A's frame, even when B's sweep runs
     // in the opposite direction.
-    let sign = if axis_a.dot(axis_b) >= 0.0 { 1.0 } else { -1.0 };
+    let sign = if axis_a.dot(&axis_b) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
     let bx0 = sign * span_b.0;
     let bx1 = sign * span_b.1;
     let b = (bx0.min(bx1), bx0.max(bx1));
@@ -310,18 +314,18 @@ mod tests {
         };
         let radial = 0.4826;
         let origin = Point3::new(59.384_373_707_781_98, -5.257_812_234_042_557, 0.0);
-        let start = origin + Vector3::unit_x() * radial;
+        let start = origin + Vector3::x() * radial;
         let cylinder = RevolutionSurface::by_revolution(
-            Line(start, start + Vector3::unit_z()),
+            Line(start, start + Vector3::z()),
             origin,
-            Vector3::unit_z(),
+            Vector3::z(),
         );
         let mut net = cylinder.try_into_homogeneous_bspline_surface().unwrap();
         net.swap_axes();
         let (center, axis, radius, _) = certified_circular_cylinder(&net)
             .expect("a closed 360-degree rational circle is structurally a cylinder");
         assert!((radius - radial).abs() < 1e-10);
-        assert!((center - origin).cross(axis).magnitude() < 1e-10);
+        assert!((center - origin).cross(&axis).norm() < 1e-10);
         // Break a control point well beyond the coefficient proof tolerance.
         net.control_point_mut(1, 0).x += 0.002;
         assert!(

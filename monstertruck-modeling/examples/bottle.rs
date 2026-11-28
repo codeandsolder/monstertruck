@@ -16,7 +16,7 @@
 
 #[cfg(feature = "fillet")]
 use monstertruck_modeling::{Curve, Edge, FilletOptions, RadiusSpec, fillet_edges};
-use monstertruck_modeling::{EuclideanSpace, Point3, Rad, Shell, Solid, Vector3, builder};
+use monstertruck_modeling::{Point3, Shell, Solid, Vector3, builder};
 use std::f64::consts::PI;
 
 type ExampleResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -26,7 +26,7 @@ fn body_shell(bottom: f64, height: f64, width: f64, thickness: f64) -> ExampleRe
     let vertex1 = builder::vertex(Point3::new(width / 2.0, bottom, thickness / 4.0));
     let transit = Point3::new(0.0, bottom, thickness / 2.0);
     let arc0 = builder::circle_arc(&vertex0, &vertex1, transit)?;
-    let arc1 = builder::rotated(&arc0, Point3::origin(), Vector3::unit_y(), Rad(PI));
+    let arc1 = builder::rotated(&arc0, Point3::origin(), Vector3::y(), PI);
     let face = builder::homotopy(&arc0, &arc1.inverse());
     let solid = builder::extrude(&face, Vector3::new(0.0, height, 0.0));
     solid
@@ -40,7 +40,7 @@ fn cylinder(bottom: f64, height: f64, radius: f64) -> ExampleResult<Shell> {
     let circle = builder::revolve(
         &vertex,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;

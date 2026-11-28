@@ -1,11 +1,11 @@
 use crate::{
-    BoundedCurve, CurveParameter, Cut, EuclideanSpace, HashGen, InnerSpace, Invertible, Origin,
-    ParameterDivision1D, ParameterRange, ParametricCurve, Point2, Point3, PolylineCurve,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SnapCurveEndpoints, Tolerance,
-    Transform, Transformed, Vector2, Zero,
+    AffinePoint, BoundedCurve, CurveParameter, Cut, GeometryTransform, HashGen, InnerProduct,
+    Invertible, Origin, ParameterDivision1D, ParameterRange, ParametricCurve, Point2, Point3,
+    PolylineCurve, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
+    SnapCurveEndpoints, Tolerance, Transformed, Vector2, Zero,
 };
 use itertools::Itertools;
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use num_traits::ToPrimitive;
 use std::ops::{Bound, Deref, DerefMut};
 
@@ -352,7 +352,7 @@ impl<P: ControlPoint<f64>> Cut for PolylineCurve<P> {
 impl<P> SearchParameter<CurveParameter> for PolylineCurve<P>
 where
     P: ControlPoint<f64>,
-    P::Diff: InnerSpace<Scalar = f64> + Tolerance,
+    P::Diff: InnerProduct<Scalar = f64> + Tolerance,
 {
     type Point = P;
     fn search_parameter<H: Into<SearchParameterHint1D>>(
@@ -364,7 +364,7 @@ where
         for (i, p) in self.0.windows(2).enumerate() {
             let a = point - p[0];
             let b = p[1] - p[0];
-            let t = f64::clamp(a.dot(b) / b.dot(b), 0.0, 1.0);
+            let t = f64::clamp(a.dot(&b) / b.dot(&b), 0.0, 1.0);
             let h = a - b * t;
             if h.so_small() {
                 return Some(t + usize_to_f64(i));
@@ -377,7 +377,7 @@ where
 impl<P> SearchNearestParameter<CurveParameter> for PolylineCurve<P>
 where
     P: ControlPoint<f64>,
-    P::Diff: InnerSpace<Scalar = f64>,
+    P::Diff: InnerProduct<Scalar = f64>,
 {
     type Point = P;
     fn search_nearest_parameter<H: Into<SearchParameterHint1D>>(
@@ -390,11 +390,11 @@ where
         for (i, p) in self.0.windows(2).enumerate() {
             let a = point - p[0];
             let b = p[1] - p[0];
-            let t = f64::clamp(a.dot(b) / b.dot(b), 0.0, 1.0);
+            let t = f64::clamp(a.dot(&b) / b.dot(&b), 0.0, 1.0);
             let h = a - b * t;
-            if h.dot(h) < dist2 {
+            if h.dot(&h) < dist2 {
                 t0 = t + usize_to_f64(i);
-                dist2 = h.dot(h);
+                dist2 = h.dot(&h);
             }
         }
         Some(t0)
@@ -420,13 +420,11 @@ impl<P: ControlPoint<f64>> ParameterDivision1D for PolylineCurve<P> {
 
 impl<P, T> Transformed<T> for PolylineCurve<P>
 where
-    P: EuclideanSpace,
-    T: Transform<P>,
+    P: AffinePoint,
+    T: GeometryTransform<P>,
 {
     fn transform_by(&mut self, trans: T) {
-        self.0
-            .iter_mut()
-            .for_each(|p| *p = trans.transform_point(*p));
+        self.0.iter_mut().for_each(|p| *p = trans.apply_point(*p));
     }
 }
 
@@ -471,7 +469,7 @@ fn polyline_test() {
     assert!(
         polyline
             .derivative(t)
-            .dot(pt - polyline.evaluate(t))
+            .dot(&(pt - polyline.evaluate(t)))
             .so_small()
     );
 

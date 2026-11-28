@@ -4,8 +4,8 @@
 
 use super::tangent::visit_span_tangents;
 use super::{
-    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, InnerSpace, Point3, Vector3,
-    directed_pairs, proof_bezier_spans,
+    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, Point3, Vector3, directed_pairs,
+    proof_bezier_spans,
 };
 
 // A direction in R^3 is represented by its intersection with one of the six
@@ -14,7 +14,7 @@ use super::{
 fn clip(polygon: &mut Vec<Vector3>, constraint: Vector3) {
     let old = std::mem::take(polygon);
     for (&a, &b) in directed_pairs(&old) {
-        let (da, db) = (constraint.dot(a), constraint.dot(b));
+        let (da, db) = (constraint.dot(&a), constraint.dot(&b));
         if da >= 0.0 {
             polygon.push(a);
         }
@@ -49,7 +49,7 @@ impl NormalCone {
     }
 
     fn constrain(&mut self, constraint: Vector3) {
-        let length = constraint.magnitude();
+        let length = constraint.norm();
         // Degenerate samples are not a proof of orientation or its absence.
         // The authoritative continuous certificate handles them.
         if length > 0.0 && length.is_finite() {
@@ -68,7 +68,7 @@ impl NormalCone {
             // An average lies in the convex feasible face, avoiding the
             // sampled inequalities' extreme rays. It is only a proposal.
             let sum = polygon.iter().copied().sum::<Vector3>();
-            (sum.magnitude2() > 0.0).then(|| sum.normalize())
+            (sum.norm_squared() > 0.0).then(|| sum.normalize())
         })
     }
 }
@@ -84,9 +84,9 @@ impl FacetFan<'_> {
         cone.constrain(self.normal);
         for polygon in [self.source, self.native] {
             for (&a, &b) in directed_pairs(polygon) {
-                cone.constrain((b - a).cross(apex - a));
+                cone.constrain((b - a).cross(&(apex - a)));
                 for &p in polygon {
-                    cone.constrain((b - a).cross(p - a));
+                    cone.constrain((b - a).cross(&(p - a)));
                 }
             }
         }
@@ -104,7 +104,7 @@ impl FacetFan<'_> {
                     depth,
                     &mut remaining,
                     &mut |p, tangent| {
-                        cone.constrain((p - apex).cross(tangent));
+                        cone.constrain((p - apex).cross(&tangent));
                         cone.faces.iter().any(|polygon| polygon.len() >= 3)
                     },
                 )

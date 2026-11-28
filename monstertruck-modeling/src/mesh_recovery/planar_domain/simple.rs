@@ -6,7 +6,7 @@
 //! bound is permitted; no native geometry is mutated.
 
 use super::{Span, normal_basis, point, projected_spans};
-use crate::{Edge, InnerSpace, Point3, Vector2, Vector3, Wire};
+use crate::{Edge, Point3, Vector2, Vector3, Wire};
 use robust::{Coord, orient2d};
 
 const MAX_DEPTH: usize = 6;
@@ -37,7 +37,7 @@ struct Piece {
     count: usize,
 }
 
-const fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
+fn coord(p: Vector2) -> Coord<f64> { Coord { x: p.x, y: p.y } }
 
 fn turn(a: Vector2, b: Vector2, p: Vector2) -> f64 { orient2d(coord(a), coord(b), coord(p)) }
 
@@ -83,7 +83,7 @@ impl Piece {
             return false;
         };
         let direction = last - first;
-        if direction.magnitude() <= 2.0 * self.margin {
+        if direction.norm() <= 2.0 * self.margin {
             return false;
         }
         // Positive rational weights preserve strict scalar control order.
@@ -96,9 +96,10 @@ impl Piece {
                     .controls
                     .windows(2)
                     .all(|pair| sign * (pair[1][axis] - pair[0][axis]) > 2.0 * self.margin)
-        }) || self.controls.windows(2).all(|pair| {
-            (pair[1] - pair[0]).dot(direction) > 2.0 * self.margin * direction.magnitude()
-        })
+        }) || self
+            .controls
+            .windows(2)
+            .all(|pair| (pair[1] - pair[0]).dot(&direction) > 2.0 * self.margin * direction.norm())
     }
 
     fn end(&self) -> Vector2 { self.controls[self.controls.len() - 1] }
@@ -118,7 +119,7 @@ impl Piece {
     fn interval(&self, origin: Vector2, axis: Vector2) -> [f64; 2] {
         self.controls
             .iter()
-            .map(|&p| (p - origin).dot(axis))
+            .map(|&p| (p - origin).dot(&axis))
             .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], v| {
                 [lo.min(v), hi.max(v)]
             })
@@ -135,7 +136,7 @@ impl Piece {
                 return false;
             };
             *remaining_axes = remaining;
-            let len = axis.magnitude();
+            let len = axis.norm();
             if len <= margin || !len.is_finite() {
                 return false;
             }
@@ -177,21 +178,21 @@ impl Piece {
         let Some(&first) = rays.first() else {
             return false;
         };
-        if first.magnitude() <= margin {
+        if first.norm() <= margin {
             return false;
         }
         let axis = first.normalize();
         let cross_axis = Vector2::new(-axis.y, axis.x);
         let [lo, hi] = rays
             .iter()
-            .map(|&v| v.dot(cross_axis).atan2(v.dot(axis)))
+            .map(|&v| v.dot(&cross_axis).atan2(v.dot(&axis)))
             .fold([0.0_f64, 0.0_f64], |[lo, hi], a| [lo.min(a), hi.max(a)]);
         if hi - lo >= std::f64::consts::PI {
             return false;
         }
         let (sin, cos) = lo.midpoint(hi).sin_cos();
         let separator = axis * cos + cross_axis * sin;
-        rays.iter().all(|v| v.dot(separator) > margin)
+        rays.iter().all(|v| v.dot(&separator) > margin)
     }
 }
 
@@ -258,7 +259,7 @@ impl AlignedSpan {
         let points = self.points();
         if !points
             .iter()
-            .all(|p| (*p - apex).dot(half_plane) > 2.0 * margin)
+            .all(|p| (*p - apex).dot(&half_plane) > 2.0 * margin)
         {
             return false;
         }
@@ -275,9 +276,9 @@ impl AlignedSpan {
             .collect::<Vec<_>>();
         controls.windows(2).all(|pair| {
             let derivative = pair[1] - pair[0];
-            let length = derivative.magnitude();
+            let length = derivative.norm();
             controls.iter().all(|&p| {
-                let norm = p.magnitude();
+                let norm = p.norm();
                 let uncertainty = 2.0_f64.mul_add(margin, 2.0_f64.mul_add(norm, length));
                 let error = (64.0 * f64::EPSILON * norm).mul_add(length, margin * uncertainty);
                 det(p, derivative) > error
@@ -290,7 +291,7 @@ fn det(a: Vector2, b: Vector2) -> f64 { a.x.mul_add(b.y, -a.y * b.x) }
 
 fn project(p: Point3, origin: Point3, basis: [Vector3; 2]) -> Vector2 {
     let p = p - origin;
-    Vector2::new(p.dot(basis[0]), p.dot(basis[1]))
+    Vector2::new(p.dot(&basis[0]), p.dot(&basis[1]))
 }
 
 struct ProjectedEdge {
@@ -333,8 +334,8 @@ impl ProjectedEdge {
                     },
                 ];
                 let gap = (ends[0] - span.ends[0])
-                    .magnitude()
-                    .max((ends[1] - span.ends[1]).magnitude());
+                    .norm()
+                    .max((ends[1] - span.ends[1]).norm());
                 let bound = 2.0_f64.mul_add(span.margin, gap);
                 if !bound.is_finite() {
                     return None;
@@ -441,15 +442,13 @@ pub(in crate::mesh_recovery) fn certify_projected_radial_fan(
     let [a, b] =
         [edge.front().point(), edge.back().point()].map(|p| project(p, origin, basis) - apex);
     let margin = projected.margin;
-    let error = (64.0 * f64::EPSILON * a.magnitude()).mul_add(
-        b.magnitude(),
-        margin * (a.magnitude() + b.magnitude() + margin),
-    );
+    let error =
+        (64.0 * f64::EPSILON * a.norm()).mul_add(b.norm(), margin * (a.norm() + b.norm() + margin));
     if det(a, b) <= error {
         return None;
     }
     let direction = a.normalize() + b.normalize();
-    if direction.magnitude() <= 64.0 * f64::EPSILON {
+    if direction.norm() <= 64.0 * f64::EPSILON {
         return None;
     }
     let half_plane = direction.normalize();
@@ -587,8 +586,8 @@ pub fn certify_projected_planar_domain(
 ) -> Option<PlanarDomainCertificate> {
     if !seam_limit.is_finite()
         || seam_limit <= 0.0
-        || !normal.magnitude2().is_finite()
-        || (normal.magnitude2() - 1.0).abs() > 1e-10
+        || !normal.norm_squared().is_finite()
+        || (normal.norm_squared() - 1.0).abs() > 1e-10
         || wires.is_empty()
         || ![origin.x, origin.y, origin.z]
             .into_iter()
@@ -646,7 +645,7 @@ pub fn certify_projected_planar_domain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BsplineCurve, Curve, EuclideanSpace, KnotVector, NurbsCurve, builder};
+    use crate::{AffinePoint, BsplineCurve, Curve, KnotVector, NurbsCurve, builder};
 
     fn polygon(points: &[(f64, f64)]) -> Wire {
         let vertices = points
@@ -661,7 +660,7 @@ mod tests {
     }
 
     fn check(wires: &[Wire]) -> Option<PlanarDomainCertificate> {
-        certify_projected_planar_domain(wires, Point3::new(0.0, 0.0, 0.0), Vector3::unit_z(), 1e-6)
+        certify_projected_planar_domain(wires, Point3::new(0.0, 0.0, 0.0), Vector3::z(), 1e-6)
     }
 
     #[test]
@@ -710,9 +709,9 @@ mod tests {
         let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
-                points[0].to_vec().extend(1.),
-                control.to_vec().extend(1.),
-                points[1].to_vec().extend(1.),
+                points[0].position_vector().push(1.),
+                control.position_vector().push(1.),
+                points[1].position_vector().push(1.),
             ],
         )));
         Ok([
@@ -755,9 +754,9 @@ mod tests {
                 let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new_unchecked(
                     KnotVector::bezier_knot(2),
                     vec![
-                        points[i].to_vec().extend(1.),
-                        midpoint.to_vec().extend(1.) * std::f64::consts::FRAC_1_SQRT_2,
-                        points[j].to_vec().extend(1.),
+                        points[i].position_vector().push(1.),
+                        midpoint.position_vector().push(1.) * std::f64::consts::FRAC_1_SQRT_2,
+                        points[j].position_vector().push(1.),
                     ],
                 )));
                 Edge::new(&vertices[i], &vertices[j], curve)

@@ -1,4 +1,4 @@
-use monstertruck_core::cgmath64::{Point3, Vector4};
+use monstertruck_core::math::{Point3, Vector4};
 
 use super::*;
 

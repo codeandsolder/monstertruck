@@ -3,8 +3,6 @@ use super::{
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
     Vector3,
 };
-#[cfg(test)]
-use monstertruck_geometry::prelude::InnerSpace;
 use std::f64::consts::PI;
 use std::ops::Bound;
 impl ParametricSurface for Sphere {
@@ -116,42 +114,42 @@ proptest::proptest! {
         let uder0 = sphere.derivative_u(u, v);
         let uder1 = (sphere.evaluate(u + EPS, v) - sphere.evaluate(u - EPS, v)) / (2.0 * EPS);
         assert!(
-            (uder0 - uder1).magnitude2() < EPS,
+            (uder0 - uder1).norm_squared() < EPS,
             "uder failed: {uder0:?}, {uder1:?}"
         );
 
         let vder0 = sphere.derivative_v(u, v);
         let vder1 = (sphere.evaluate(u, v + EPS) - sphere.evaluate(u, v - EPS)) / (2.0 * EPS);
         assert!(
-            (vder0 - vder1).magnitude2() < EPS,
+            (vder0 - vder1).norm_squared() < EPS,
             "vder failed: {vder0:?}, {vder1:?}"
         );
 
         let uuder0 = sphere.derivative_uu(u, v);
         let uuder1 = (sphere.derivative_u(u + EPS, v) - sphere.derivative_u(u - EPS, v)) / (2.0 * EPS);
         assert!(
-            (uuder0 - uuder1).magnitude2() < EPS,
+            (uuder0 - uuder1).norm_squared() < EPS,
             "uuder failed: {uuder0:?}, {uuder1:?}"
         );
 
         let uvder0 = sphere.derivative_uv(u, v);
         let uvder1 = (sphere.derivative_u(u, v + EPS) - sphere.derivative_u(u, v - EPS)) / (2.0 * EPS);
         assert!(
-            (uvder0 - uvder1).magnitude2() < EPS,
+            (uvder0 - uvder1).norm_squared() < EPS,
             "uvder failed: {uvder0:?}, {uvder1:?}"
         );
 
         let vvder0 = sphere.derivative_vv(u, v);
         let vvder1 = (sphere.derivative_v(u, v + EPS) - sphere.derivative_v(u, v - EPS)) / (2.0 * EPS);
         assert!(
-            (vvder0 - vvder1).magnitude2() < EPS,
+            (vvder0 - vvder1).norm_squared() < EPS,
             "vvder failed: {vvder0:?}, {vvder1:?}"
         );
 
         let n0 = sphere.normal(u, v);
-        let n1 = sphere.derivative_u(u, v).cross(sphere.derivative_v(u, v)).normalize();
+        let n1 = sphere.derivative_u(u, v).cross(&sphere.derivative_v(u, v)).normalize();
         assert!(
-            (n0 - n1).magnitude2() < EPS,
+            (n0 - n1).norm_squared() < EPS,
             "normal failed: {n0:?}, {n1:?}"
         );
     }

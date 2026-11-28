@@ -1,9 +1,7 @@
-#[cfg(test)]
-use super::EuclideanSpace;
 use super::active_sweep::ActiveSweep;
 use super::{
-    BoundingBox, InnerSpace, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh,
-    StandardVertex, Vector3, hash, sweep_coordinate_key, triangle_projection_interval,
+    BoundingBox, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh, StandardVertex,
+    Vector3, hash, sweep_coordinate_key, triangle_projection_interval,
 };
 use array_macro::array;
 
@@ -87,7 +85,7 @@ fn sorted_endpoints(triangles: &[Vec<TriangleData>; 2], unit: Vector3) -> Vec<En
         .enumerate()
         .filter(|(_, triangle)| {
             let [a, b, c] = triangle.points;
-            !(b - a).cross(c - a).so_small()
+            !(b - a).cross(&(c - a)).so_small()
         })
         .flat_map(|(index, triangle)| {
             EndPoint::from_seg(
@@ -152,22 +150,22 @@ fn collide_seg_triangle(seg: [Point3; 2], tri: [Point3; 3]) -> Option<Point3> {
     let ab = tri[1] - tri[0];
     let bc = tri[2] - tri[1];
     let ca = tri[0] - tri[2];
-    let nor = ab.cross(ca);
+    let nor = ab.cross(&ca);
     if nor.so_small() {
         return None;
     }
     let ap = seg[0] - tri[0];
     let aq = seg[1] - tri[0];
-    let front_plane_distance = ap.dot(nor);
-    let back_plane_distance = aq.dot(nor);
+    let front_plane_distance = ap.dot(&nor);
+    let back_plane_distance = aq.dot(&nor);
     if front_plane_distance * back_plane_distance > 0.0 {
         return None;
     }
     let h = seg[0]
         + front_plane_distance / (front_plane_distance - back_plane_distance) * (seg[1] - seg[0]);
-    if f64::signum(ab.cross(nor).dot(h - tri[0]) + KERNEL_EPSILON_SQUARED)
-        + f64::signum(bc.cross(nor).dot(h - tri[1]) + KERNEL_EPSILON_SQUARED)
-        + f64::signum(ca.cross(nor).dot(h - tri[2]) + KERNEL_EPSILON_SQUARED)
+    if f64::signum(ab.cross(&nor).dot(&(h - tri[0])) + KERNEL_EPSILON_SQUARED)
+        + f64::signum(bc.cross(&nor).dot(&(h - tri[1])) + KERNEL_EPSILON_SQUARED)
+        + f64::signum(ca.cross(&nor).dot(&(h - tri[2])) + KERNEL_EPSILON_SQUARED)
         >= 2.0
     {
         Some(h)
@@ -361,7 +359,7 @@ fn cached_collision_matches_original_order_and_narrow_phase() -> anyhow::Result<
             for (operand, list) in triangles.iter().enumerate() {
                 for (index, &triangle) in list.iter().enumerate() {
                     if !(triangle[1] - triangle[0])
-                        .cross(triangle[2] - triangle[0])
+                        .cross(&(triangle[2] - triangle[0]))
                         .so_small()
                     {
                         let (low, high) = triangle_projection_interval(triangle, unit, 0.0);

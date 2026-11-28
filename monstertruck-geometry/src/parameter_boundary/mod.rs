@@ -160,16 +160,16 @@ where
         .then_some(())?;
     let u_axis = p10 - p00;
     let v_axis = p01 - p00;
-    let uu = u_axis.dot(u_axis);
-    let uv = u_axis.dot(v_axis);
-    let vv = v_axis.dot(v_axis);
+    let uu = u_axis.dot(&u_axis);
+    let uv = u_axis.dot(&v_axis);
+    let vv = v_axis.dot(&v_axis);
     let uv_squared = uv * uv;
     let denominator = f64::mul_add(uu, vv, -uv_squared);
     (!denominator.so_small()).then_some(())?;
     let project = |point: Point3| {
         let delta = point - p00;
-        let du = delta.dot(u_axis);
-        let dv = delta.dot(v_axis);
+        let du = delta.dot(&u_axis);
+        let dv = delta.dot(&v_axis);
         let su = f64::mul_add(dv, -uv, du * vv) / denominator;
         let sv = f64::mul_add(du, -uv, dv * uu) / denominator;
         let parameter = Point2::new(f64::mul_add(u1 - u0, su, u0), f64::mul_add(v1 - v0, sv, v0));
@@ -198,10 +198,10 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
     };
     let vector = extrusion.vector;
     let line_vector = line.back() - line.front();
-    let vector2 = vector.magnitude2();
-    let line_vector2 = line_vector.magnitude2();
+    let vector2 = vector.norm_squared();
+    let line_vector2 = line_vector.norm_squared();
     (!vector2.so_small() && !line_vector2.so_small()).then_some(())?;
-    (line_vector.cross(vector).magnitude2()
+    (line_vector.cross(&vector).norm_squared()
         <= KERNEL_EPSILON * KERNEL_EPSILON * line_vector2 * vector2)
         .then_some(())?;
     let base_curve = NurbsCurve::new(extrusion.curve.clone());
@@ -216,7 +216,7 @@ fn exact_line_boundary_on_homogeneous_extrusion_surface(
     ((back_curve_parameter - curve_parameter).abs() <= curve_tolerance).then_some(())?;
     let base_point = base_curve.evaluate(curve_parameter);
     let extrusion_parameter = |point: Point3| {
-        let factor = (point - base_point).dot(vector) / vector2;
+        let factor = (point - base_point).dot(&vector) / vector2;
         let parameter = f64::mul_add(
             extrusion.extrusion_range.1 - extrusion.extrusion_range.0,
             factor,
@@ -296,9 +296,9 @@ fn compatible_polynomial_control_nets(
             .zip(boundary.control_points())
             .all(|(left, right)| {
                 let scale = left
-                    .to_vec()
-                    .magnitude()
-                    .max(right.to_vec().magnitude())
+                    .position_vector()
+                    .norm()
+                    .max(right.position_vector().norm())
                     .max(1.0);
                 left.distance(*right) <= KERNEL_EPSILON * scale
             })
@@ -350,8 +350,8 @@ fn compatible_homogeneous_control_nets(
         .zip(boundary.control_points())
         .all(|(left, right)| {
             let scaled = *right * ratio;
-            let scale = left.magnitude().max(scaled.magnitude()).max(1.0);
-            (*left - scaled).magnitude() <= KERNEL_EPSILON * scale
+            let scale = left.norm().max(scaled.norm()).max(1.0);
+            (*left - scaled).norm() <= KERNEL_EPSILON * scale
         })
 }
 
@@ -518,8 +518,9 @@ where
             .try_into_homogeneous_bspline_curve()?;
         restricted_bspline_segment(&profile, u0, u1)?
     };
-    let origin = surface.origin().to_vec();
-    let rotation = Matrix3::from_axis_angle(surface.axis(), Rad(angle));
+    let origin = surface.origin().position_vector();
+    let rotation =
+        Rotation3::from_axis_angle(&Unit::new_unchecked(surface.axis()), angle).into_inner();
     segment.control_points_mut().for_each(|point| {
         let xyz = Vector3::new(point.x, point.y, point.z);
         let rotated = rotation * (xyz - origin * point.w) + origin * point.w;
@@ -560,15 +561,15 @@ where
     C: Clone + ParametricCurve3D + BoundedCurve + TryIntoHomogeneousBsplineCurve,
     D: ParametricCurve3D<Point = Point3> + BoundedCurve + TryIntoHomogeneousBsplineCurve,
 {
-    let inverse = surface.transform().invert()?;
+    let inverse = surface.transform().try_inverse()?;
     let mut homogeneous = curve.try_into_homogeneous_bspline_curve()?;
     homogeneous
         .control_points_mut()
         .for_each(|point| *point = inverse * *point);
     let mut boundary = exact_revolution_isoparametric_boundary_from_homogeneous(
         &homogeneous,
-        inverse.transform_point(curve.front()),
-        inverse.transform_point(curve.back()),
+        inverse.apply_point(curve.front()),
+        inverse.apply_point(curve.back()),
         surface.entity(),
     )?;
     if !surface.orientation() {

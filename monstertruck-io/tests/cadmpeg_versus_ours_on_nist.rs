@@ -92,7 +92,7 @@ fn centred_volume(mesh: &PolygonMesh) -> f64 {
             high[axis] = high[axis].max(p[axis]);
         }
     }
-    let centre = low.midpoint(high).to_vec();
+    let centre = low.midpoint(high).coords;
     mesh.faces()
         .triangle_iter()
         .map(|[a, b, c]| {
@@ -101,7 +101,8 @@ fn centred_volume(mesh: &PolygonMesh) -> f64 {
                 positions[b.pos] - centre,
                 positions[c.pos] - centre,
             );
-            p.to_vec().dot(q.to_vec().cross(r.to_vec()))
+            p.position_vector()
+                .dot(&q.position_vector().cross(&r.position_vector()))
         })
         .sum::<f64>()
         / 6.0
@@ -164,7 +165,7 @@ fn diagonal_of(points: impl Iterator<Item = Point3>) -> f64 {
             high[axis] = high[axis].max(p[axis]);
         }
     }
-    (high - low).magnitude().max(1.0)
+    (high - low).norm().max(1.0)
 }
 
 /// Our reader: every shell record, converted to a trimmed shell and meshed.

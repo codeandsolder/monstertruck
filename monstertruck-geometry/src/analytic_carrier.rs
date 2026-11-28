@@ -61,7 +61,7 @@ pub enum CarrierDomainRelation {
 /// A finite, nonzero direction normalized with a deterministic sign.
 #[must_use = "The optional canonical direction outcome must be inspected to distinguish a value from absence."]
 pub fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
-    let magnitude = vector.magnitude();
+    let magnitude = vector.norm();
     if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
         return None;
     }
@@ -82,49 +82,30 @@ pub fn canonical_direction(mut vector: Vector3) -> Option<Vector3> {
 #[must_use = "The optional similarity scale must be checked before accepting a transformed carrier."]
 pub fn similarity_scale(transform: Matrix4) -> Option<f64> {
     let tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
-    if ![
-        transform.x.x,
-        transform.x.y,
-        transform.x.z,
-        transform.x.w,
-        transform.y.x,
-        transform.y.y,
-        transform.y.z,
-        transform.y.w,
-        transform.z.x,
-        transform.z.y,
-        transform.z.z,
-        transform.z.w,
-        transform.w.x,
-        transform.w.y,
-        transform.w.z,
-        transform.w.w,
-    ]
-    .into_iter()
-    .all(f64::is_finite)
-        || transform.x.w.abs() > tolerance
-        || transform.y.w.abs() > tolerance
-        || transform.z.w.abs() > tolerance
-        || (transform.w.w - 1.0).abs() > tolerance
+    if !transform.iter().all(|coefficient| coefficient.is_finite())
+        || transform[(3, 0)].abs() > tolerance
+        || transform[(3, 1)].abs() > tolerance
+        || transform[(3, 2)].abs() > tolerance
+        || (transform[(3, 3)] - 1.0).abs() > tolerance
     {
         return None;
     }
     let columns = [
-        transform.x.truncate(),
-        transform.y.truncate(),
-        transform.z.truncate(),
+        transform.column(0).into_owned().spatial(),
+        transform.column(1).into_owned().spatial(),
+        transform.column(2).into_owned().spatial(),
     ];
-    let scale = columns[0].magnitude();
+    let scale = columns[0].norm();
     if !scale.is_finite() || scale <= KERNEL_EPSILON {
         return None;
     }
     let length_tolerance = tolerance * scale.max(1.0);
     let dot_tolerance = tolerance * scale * scale;
     if columns[1..].iter().any(|column| {
-        !column.magnitude().is_finite() || (column.magnitude() - scale).abs() > length_tolerance
+        !column.norm().is_finite() || (column.norm() - scale).abs() > length_tolerance
     }) || [(0, 1), (0, 2), (1, 2)]
         .into_iter()
-        .any(|(left, right)| columns[left].dot(columns[right]).abs() > dot_tolerance)
+        .any(|(left, right)| columns[left].dot(&columns[right]).abs() > dot_tolerance)
     {
         return None;
     }
@@ -165,7 +146,7 @@ impl AnalyticCarrier {
         if !finite_point(origin) {
             return None;
         }
-        let orientation = plane.normal().dot(normal);
+        let orientation = plane.normal().dot(&normal);
         if !orientation.is_finite() || orientation.abs() <= KERNEL_EPSILON {
             return None;
         }
@@ -196,7 +177,7 @@ impl AnalyticCarrier {
         chart_orientation: bool,
     ) -> Option<Self> {
         let scale = similarity_scale(transform)?;
-        let center = transform.transform_point(center);
+        let center = transform.apply_point(center);
         let radius = radius * scale;
         if !finite_point(center) || !radius.is_finite() || radius <= KERNEL_EPSILON {
             return None;
@@ -214,8 +195,8 @@ impl AnalyticCarrier {
     pub fn torus(torus: &Processor<Torus, Matrix4>) -> Option<Self> {
         let transform = *torus.transform();
         let scale = similarity_scale(transform)?;
-        let center = transform.transform_point(torus.entity().center());
-        let axis = canonical_direction(transform.transform_vector(Vector3::unit_z()))?;
+        let center = transform.apply_point(torus.entity().center());
+        let axis = canonical_direction(transform.apply_vector(Vector3::z()))?;
         let major_radius = torus.entity().large_radius() * scale;
         let minor_radius = torus.entity().small_radius() * scale;
         if !finite_point(center)
@@ -254,34 +235,34 @@ impl AnalyticCarrier {
         similarity_scale(transform)?;
         // The revolution chart's angular sense uses the ORIGINAL axis
         // direction, not the sign-canonicalized support axis.
-        let axis_magnitude = axis.magnitude();
+        let axis_magnitude = axis.norm();
         if !axis_magnitude.is_finite() || axis_magnitude <= KERNEL_EPSILON {
             return None;
         }
         let local_axis = axis / axis_magnitude;
         let Line(local_front, local_back) = profile;
-        let axial_step = (local_back - local_front).dot(local_axis);
+        let axial_step = (local_back - local_front).dot(&local_axis);
         if !axial_step.is_finite() || axial_step.abs() <= KERNEL_EPSILON {
             return None;
         }
         let orientation =
             -axial_step.signum() * processor_orientation(chart_orientation, transform)?;
-        let origin = transform.transform_point(origin);
-        let axis = canonical_direction(transform.transform_vector(axis))?;
-        let front = transform.transform_point(local_front);
-        let back = transform.transform_point(local_back);
+        let origin = transform.apply_point(origin);
+        let axis = canonical_direction(transform.apply_vector(axis))?;
+        let front = transform.apply_point(local_front);
+        let back = transform.apply_point(local_back);
         if !finite_point(origin) || !finite_point(front) || !finite_point(back) {
             return None;
         }
 
         let direction = back - front;
-        let radial0 = (front - origin) - axis * (front - origin).dot(axis);
-        let radial_direction = direction - axis * direction.dot(axis);
-        let scale = direction.magnitude().max(radial0.magnitude()).max(1.0);
-        let support = if radial_direction.magnitude()
+        let radial0 = (front - origin) - axis * (front - origin).dot(&axis);
+        let radial_direction = direction - axis * direction.dot(&axis);
+        let scale = direction.norm().max(radial0.norm()).max(1.0);
+        let support = if radial_direction.norm()
             <= DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale
         {
-            let radius = radial0.magnitude();
+            let radius = radial0.norm();
             if !radius.is_finite() || radius <= KERNEL_EPSILON {
                 return None;
             }
@@ -291,33 +272,29 @@ impl AnalyticCarrier {
                 radius,
             }
         } else {
-            let radial_direction2 = radial_direction.magnitude2();
+            let radial_direction2 = radial_direction.norm_squared();
             if !radial_direction2.is_finite() || radial_direction2 <= KERNEL_EPSILON.powi(2) {
                 return None;
             }
-            let parameter = -radial0.dot(radial_direction) / radial_direction2;
+            let parameter = -radial0.dot(&radial_direction) / radial_direction2;
             let apex = front + direction * parameter;
-            let apex_radial = (apex - origin) - axis * (apex - origin).dot(axis);
-            let scale = direction
-                .magnitude()
-                .max((apex - origin).magnitude())
-                .max(1.0);
+            let apex_radial = (apex - origin) - axis * (apex - origin).dot(&axis);
+            let scale = direction.norm().max((apex - origin).norm()).max(1.0);
             if !finite_point(apex)
-                || apex_radial.magnitude()
-                    > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale
+                || apex_radial.norm() > DEFAULT_NUMERICAL_TOLERANCES.transform_similarity * scale
             {
                 return None;
             }
-            let axial = direction.dot(axis).abs();
+            let axial = direction.dot(&axis).abs();
             if !axial.is_finite() || axial <= KERNEL_EPSILON {
                 return None;
             }
-            let slope = radial_direction.magnitude() / axial;
+            let slope = radial_direction.norm() / axial;
             if !slope.is_finite() {
                 return None;
             }
-            let front_axial = (front - apex).dot(axis);
-            let back_axial = (back - apex).dot(axis);
+            let front_axial = (front - apex).dot(&axis);
+            let back_axial = (back - apex).dot(&axis);
             let tolerance = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity * scale;
             if !front_axial.is_finite()
                 || !back_axial.is_finite()
@@ -374,11 +351,11 @@ impl AnalyticCarrier {
 }
 
 fn parallel(left: Vector3, right: Vector3, angular_tolerance: f64) -> bool {
-    left.cross(right).magnitude() <= angular_tolerance.sin().abs().max(64.0 * f64::EPSILON)
+    left.cross(&right).norm() <= angular_tolerance.sin().abs().max(64.0 * f64::EPSILON)
 }
 
 fn axis_line_distance(origin: Point3, axis: Vector3, other: Point3) -> f64 {
-    (other - origin).cross(axis).magnitude()
+    (other - origin).cross(&axis).norm()
 }
 
 /// Compare certified unoriented analytic supports, independently of charts.
@@ -406,7 +383,7 @@ pub fn same_support(
                 origin: o1,
                 normal: n1,
             },
-        ) => parallel(n0, n1, angular_tolerance) && (o1 - o0).dot(n0).abs() <= linear_tolerance,
+        ) => parallel(n0, n1, angular_tolerance) && (o1 - o0).dot(&n0).abs() <= linear_tolerance,
         (
             AnalyticSupport::Sphere {
                 center: c0,
@@ -486,7 +463,7 @@ mod tests {
             Line(first, second),
             point(0.0, 0.0, 0.0),
             axis,
-            Matrix4::from_scale(1.0),
+            Matrix4::new_scaling(1.0),
             true,
         )
     }
@@ -514,18 +491,10 @@ mod tests {
 
     #[test]
     fn reversed_revolution_axis_changes_global_chart_orientation() -> anyhow::Result<()> {
-        let forward = revolution(
-            point(2.0, 0.0, 0.0),
-            point(2.0, 0.0, 1.0),
-            Vector3::unit_z(),
-        )
-        .ok_or_else(|| anyhow::anyhow!("cylinder"))?;
-        let reversed_axis = revolution(
-            point(2.0, 0.0, 0.0),
-            point(2.0, 0.0, 1.0),
-            -Vector3::unit_z(),
-        )
-        .ok_or_else(|| anyhow::anyhow!("cylinder with reversed axis"))?;
+        let forward = revolution(point(2.0, 0.0, 0.0), point(2.0, 0.0, 1.0), Vector3::z())
+            .ok_or_else(|| anyhow::anyhow!("cylinder"))?;
+        let reversed_axis = revolution(point(2.0, 0.0, 0.0), point(2.0, 0.0, 1.0), -Vector3::z())
+            .ok_or_else(|| anyhow::anyhow!("cylinder with reversed axis"))?;
         assert_eq!(
             forward.same_domain(reversed_axis, 1.0e-9, 1.0e-9),
             Some(CarrierDomainRelation::ReversedOrientation),
@@ -535,18 +504,10 @@ mod tests {
 
     #[test]
     fn cone_nappes_are_distinct_even_with_the_same_implicit_equation() -> anyhow::Result<()> {
-        let upper = revolution(
-            point(1.0, 0.0, 1.0),
-            point(2.0, 0.0, 2.0),
-            Vector3::unit_z(),
-        )
-        .ok_or_else(|| anyhow::anyhow!("upper cone"))?;
-        let lower = revolution(
-            point(1.0, 0.0, -1.0),
-            point(2.0, 0.0, -2.0),
-            Vector3::unit_z(),
-        )
-        .ok_or_else(|| anyhow::anyhow!("lower cone"))?;
+        let upper = revolution(point(1.0, 0.0, 1.0), point(2.0, 0.0, 2.0), Vector3::z())
+            .ok_or_else(|| anyhow::anyhow!("upper cone"))?;
+        let lower = revolution(point(1.0, 0.0, -1.0), point(2.0, 0.0, -2.0), Vector3::z())
+            .ok_or_else(|| anyhow::anyhow!("lower cone"))?;
         assert!(matches!(
             upper.support(),
             AnalyticSupport::Cone {
@@ -564,29 +525,22 @@ mod tests {
         assert_eq!(upper.same_domain(lower, 1.0e-9, 1.0e-9), None);
 
         // A line spanning the apex cannot have one globally regular chart.
-        assert!(
-            revolution(
-                point(1.0, 0.0, 1.0),
-                point(-1.0, 0.0, -1.0),
-                Vector3::unit_z(),
-            )
-            .is_none()
-        );
+        assert!(revolution(point(1.0, 0.0, 1.0), point(-1.0, 0.0, -1.0), Vector3::z(),).is_none());
         Ok(())
     }
 
     #[test]
     fn sheared_and_perspective_spheres_are_refused() -> anyhow::Result<()> {
         let sphere = Sphere::new(point(0.0, 0.0, 0.0), 2.0);
-        let shear = Matrix4::from_cols(
+        let shear = Matrix4::from_columns(&[
             Vector4::new(1.0, 0.0, 0.0, 0.0),
             Vector4::new(0.5, 1.0, 0.0, 0.0),
             Vector4::new(0.0, 0.0, 1.0, 0.0),
             Vector4::new(0.0, 0.0, 0.0, 1.0),
-        );
+        ]);
         assert!(AnalyticCarrier::sphere(&Processor::with_transform(sphere, shear)).is_none());
-        let mut perspective = Matrix4::from_scale(1.0);
-        perspective.z.w = 0.1;
+        let mut perspective = Matrix4::new_scaling(1.0);
+        perspective[(3, 2)] = 0.1;
         assert!(AnalyticCarrier::sphere(&Processor::with_transform(sphere, perspective)).is_none());
         Ok(())
     }
@@ -598,7 +552,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("sphere"))?;
         let reflected = AnalyticCarrier::sphere(&Processor::with_transform(
             sphere,
-            Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
+            Matrix4::new_nonuniform_scaling(&Vector3::new(-1.0, 1.0, 1.0)),
         ))
         .ok_or_else(|| anyhow::anyhow!("reflected sphere"))?;
         assert_eq!(

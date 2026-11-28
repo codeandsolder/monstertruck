@@ -232,10 +232,9 @@ mod tests {
 
     #[test]
     fn compact_plan_uses_the_smallest_feasible_integral_segment_count() {
-        let primary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_z(), 0.4).expect("primary");
+        let primary = CylinderCarrier::new(Point3::origin(), Vector3::z(), 0.4).expect("primary");
         let secondary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_x(), 1.2).expect("secondary");
+            CylinderCarrier::new(Point3::origin(), Vector3::x(), 1.2).expect("secondary");
         let arc = CylinderIntersectionArc::new(
             primary,
             secondary,
@@ -277,7 +276,7 @@ mod tests {
     #[test]
     fn compact_leaders_preserve_skew_separated_branches_near_tangency() {
         let origin = Point3::new(2., -1., 3.);
-        let primary = CylinderCarrier::new(origin, Vector3::unit_z(), 0.4).expect("primary");
+        let primary = CylinderCarrier::new(origin, Vector3::z(), 0.4).expect("primary");
         let secondary = CylinderCarrier::new(origin, Vector3::new(1., 0., 1.).normalize(), 0.41)
             .expect("secondary");
         for (branch, sign) in [
@@ -302,10 +301,9 @@ mod tests {
 
     #[test]
     fn bounded_leader_matches_directed_analytical_arc() {
-        let primary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_z(), 0.4).expect("primary");
+        let primary = CylinderCarrier::new(Point3::origin(), Vector3::z(), 0.4).expect("primary");
         let secondary =
-            CylinderCarrier::new(Point3::origin(), Vector3::unit_x(), 1.2).expect("secondary");
+            CylinderCarrier::new(Point3::origin(), Vector3::x(), 1.2).expect("secondary");
         for sweep in [-3.0, 3.0] {
             let arc = CylinderIntersectionArc::new(
                 primary,
@@ -322,7 +320,7 @@ mod tests {
             for i in 0..=4096 {
                 let t = f64::from(i) / 4096.0;
                 let expected = arc.evaluate(t * sweep).expect("point");
-                assert!((leader.curve.evaluate(t) - expected).magnitude() <= leader.maximum_error);
+                assert!((leader.curve.evaluate(t) - expected).norm() <= leader.maximum_error);
             }
             assert!(arc.bounded_leader(1e-20, 8192).is_none());
             assert!(arc.bounded_leader(1e-9, 1).is_none());

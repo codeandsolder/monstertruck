@@ -119,12 +119,12 @@ let seed = builder::vertex(Point3::new(0.3, 0.0, -0.1));
 let rim = builder::revolve(
     &seed,
     Point3::new(0.0, 0.0, -0.1),
-    Vector3::unit_z(),
+    Vector3::z(),
     builder::SweepAngle::Closed,
     4,
 );
 let base = builder::try_attach_plane(&[rim])?;
-let mut cylinder: Solid = builder::extrude(&base, Vector3::unit_z() * 1.2);
+let mut cylinder: Solid = builder::extrude(&base, Vector3::z() * 1.2);
 
 // Invert the cylinder so `and` performs a subtraction.
 cylinder.not();

@@ -4,10 +4,10 @@ use monstertruck_meshing::analyzers::ProjectionNeighborhood;
 use std::sync::OnceLock;
 
 use super::{
-    BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, EuclideanSpace, HashMap, InnerSpace,
-    Invertible, LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2,
-    Point3, PolygonMesh, SearchNearestParameter, SearchParameter, ShapesOpStatus, StandardVertex,
-    Vector2, Vector3,
+    AffinePoint, BooleanTolerance, BoundedCurve, CurveParameter, Cut, Edge, HashMap, Invertible,
+    LoopsStore, MetricSpace, Origin, ParameterDivision1D, ParametricCurve3D, Point2, Point3,
+    PolygonMesh, SearchNearestParameter, SearchParameter, ShapesOpStatus, StandardVertex, Vector2,
+    Vector3,
 };
 
 fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vector3)> {
@@ -17,8 +17,8 @@ fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vect
     let mut normal = None;
     'outer: for i in 1..positions.len() {
         for j in i + 1..positions.len() {
-            let candidate = (positions[i] - origin).cross(positions[j] - origin);
-            if candidate.magnitude() > tolerance.area_floor {
+            let candidate = (positions[i] - origin).cross(&(positions[j] - origin));
+            if candidate.norm() > tolerance.area_floor {
                 normal = Some(candidate.normalize());
                 break 'outer;
             }
@@ -27,7 +27,7 @@ fn planar_polygon_plane(polygon: &PolygonMesh, tol: f64) -> Option<(Point3, Vect
     let normal = normal?;
     positions
         .iter()
-        .all(|point| (*point - origin).dot(normal).abs() <= tolerance.length)
+        .all(|point| (*point - origin).dot(&normal).abs() <= tolerance.length)
         .then_some((origin, normal))
 }
 
@@ -89,8 +89,8 @@ fn planar_polygons_coplanar(lhs: &PlanarMesh<'_>, rhs: &PlanarMesh<'_>, tol: f64
         return false;
     };
     let tolerance = BooleanTolerance::new(tol);
-    lhs_normal.cross(rhs_normal).magnitude() <= tolerance.angular
-        && (rhs_origin - lhs_origin).dot(lhs_normal).abs() <= tolerance.length
+    lhs_normal.cross(&rhs_normal).norm() <= tolerance.angular
+        && (rhs_origin - lhs_origin).dot(&lhs_normal).abs() <= tolerance.length
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -102,16 +102,16 @@ struct PlanarPolygonSignature {
 
 fn planar_basis(normal: Vector3) -> Option<(Vector3, Vector3)> {
     let reference = if normal.x.abs() <= normal.y.abs() && normal.x.abs() <= normal.z.abs() {
-        Vector3::unit_x()
+        Vector3::x()
     } else if normal.y.abs() <= normal.z.abs() {
-        Vector3::unit_y()
+        Vector3::y()
     } else {
-        Vector3::unit_z()
+        Vector3::z()
     };
-    let u = normal.cross(reference);
-    (!u.magnitude2().so_small()).then(|| {
+    let u = normal.cross(&reference);
+    (!u.norm_squared().so_small()).then(|| {
         let u = u.normalize();
-        (u, normal.cross(u).normalize())
+        (u, normal.cross(&u).normalize())
     })
 }
 
@@ -135,17 +135,18 @@ fn planar_polygon_set_signature<'a>(
             let a = polygon.positions()[triangle[0].pos];
             let b = polygon.positions()[triangle[1].pos];
             let c = polygon.positions()[triangle[2].pos];
-            let triangle_area = 0.5 * (b - a).cross(c - a).magnitude();
+            let triangle_area = 0.5 * (b - a).cross(&(c - a)).norm();
             if !triangle_area.is_finite() || triangle_area.so_small() {
                 continue;
             }
             area += triangle_area;
-            weighted_centroid += (a.to_vec() + b.to_vec() + c.to_vec()) * (triangle_area / 3.0);
+            weighted_centroid += (a.position_vector() + b.position_vector() + c.position_vector())
+                * (triangle_area / 3.0);
         }
         for point in polygon.positions() {
             let delta = *point - origin;
-            let pu = delta.dot(u);
-            let pv = delta.dot(v);
+            let pu = delta.dot(&u);
+            let pv = delta.dot(&v);
             min_u = min_u.min(pu);
             max_u = max_u.max(pu);
             min_v = min_v.min(pv);
@@ -155,7 +156,7 @@ fn planar_polygon_set_signature<'a>(
     if !any || !area.is_finite() || area.so_small() {
         return None;
     }
-    let centroid = Point3::from_vec(weighted_centroid / area);
+    let centroid = Point3::from(weighted_centroid / area);
     [min_u, max_u, min_v, max_v]
         .iter()
         .all(|value| value.is_finite())
@@ -206,7 +207,7 @@ fn projected_triangle(
 ) -> [Point2; 3] {
     triangle.map(|vertex| {
         let delta = polygon.positions()[vertex.pos] - origin;
-        Point2::new(delta.dot(u), delta.dot(v))
+        Point2::new(delta.dot(&u), delta.dot(&v))
     })
 }
 
@@ -235,7 +236,7 @@ fn clip_convex_polygon(subject: &[Point2], clip: [Point2; 3], tol: f64) -> Vec<P
         let a = clip[edge_index];
         let b = clip[(edge_index + 1) % 3];
         let edge = b - a;
-        let cross_tol = tol * edge.magnitude().max(tol);
+        let cross_tol = tol * edge.norm().max(tol);
         let input = std::mem::take(&mut output);
         let Some(&mut_previous) = input.last() else {
             break;
@@ -343,8 +344,8 @@ pub(super) fn planar_polygons_same_trimmed_face(
         return false;
     };
     let tolerance = BooleanTolerance::new(tol);
-    if lhs_normal.cross(rhs_normal).magnitude() > tolerance.angular
-        || (rhs_origin - lhs_origin).dot(lhs_normal).abs() > tolerance.length
+    if lhs_normal.cross(&rhs_normal).norm() > tolerance.angular
+        || (rhs_origin - lhs_origin).dot(&lhs_normal).abs() > tolerance.length
     {
         return false;
     }
