@@ -80,9 +80,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene =
-            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &scene_desc)
-                .await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let vertex = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
         let edge = builder::extrude(&vertex, Vector3::unit_x());
         let face = builder::extrude(&edge, Vector3::unit_y());

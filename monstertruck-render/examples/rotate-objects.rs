@@ -155,7 +155,7 @@ impl App for MyRender {
         };
         let mut app = Self {
             scene: SurfaceScene::from_target(
-                Arc::clone(&window),
+                Arc::clone(&window).into(),
                 window.inner_size().into(),
                 &scene_desc,
             )

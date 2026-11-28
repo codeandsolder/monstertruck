@@ -49,7 +49,7 @@ thiserror = { workspace = true }
 # `performance.now()` on wasm32-unknown-unknown (where `std::time::*` panics).
 web-time = { workspace = true }
 jiff = { workspace = true, optional = true }
-derive_more = { workspace = true, optional = true }
+derive_more = { workspace = true, features = ["from"], optional = true }
 step-p21 = { workspace = true, optional = true }
 encoding_rs = { version = "0.8.41", optional = true }
 serde = { workspace = true, optional = true }

@@ -170,9 +170,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene =
-            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &scene_desc)
-                .await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let creator = scene.instance_creator();
         let (instance, wireframe) = Self::load_obj(&creator, TEAPOT_BYTES)?;
         scene.add_object(&instance);

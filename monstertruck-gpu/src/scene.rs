@@ -943,11 +943,11 @@ impl SurfaceScene {
     /// # Errors
     /// Returns a [`GpuError`] if adapter/device/surface initialization fails.
     pub async fn from_target(
-        target: impl Into<SurfaceTarget<'static>>,
+        target: SurfaceTarget<'static>,
         size: (u32, u32),
         scene_desc: &SurfaceSceneDescriptor,
     ) -> Result<Self, GpuError> {
-        let (device_handler, surface) = init_default_device(Some(target.into())).await?;
+        let (device_handler, surface) = init_default_device(Some(target)).await?;
         let surface = surface.ok_or(GpuError::MissingSurface)?;
         let render_texture = RenderTextureConfig {
             canvas_size: (size.0.max(1), size.1.max(1)),

@@ -251,7 +251,7 @@ async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let window = Arc::new(window);
     let mut scene = SurfaceScene::from_target(
-        Arc::clone(&window),
+        Arc::clone(&window).into(),
         window.inner_size().into(),
         &SurfaceSceneDescriptor::default(),
     )

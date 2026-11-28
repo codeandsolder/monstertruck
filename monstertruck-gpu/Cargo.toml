@@ -16,7 +16,7 @@ webgl = ["wgpu/webgl"]
 
 [dependencies]
 bytemuck = { workspace = true }
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["deref", "deref_mut", "from"] }
 futures-channel = { workspace = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }

@@ -70,9 +70,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene =
-            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &scene_desc)
-                .await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &scene_desc,
+        )
+        .await?;
         let sphere0 = sphere(Point3::new(0.0, 0.0, 0.7), 1.0, 50, 50)?;
         let sphere1 = sphere(Point3::new(0.0, 0.0, -0.7), 1.0, 50, 50)?;
         let intersect = sphere0.extract_interference(&sphere1);

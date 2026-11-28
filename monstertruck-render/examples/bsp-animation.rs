@@ -127,9 +127,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene =
-            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &desc)
-                .await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &desc,
+        )
+        .await?;
         let creator = scene.instance_creator();
         let surface = Self::init_surface(3, 4)?;
         let object = StructuredMesh::from_surface(&surface, surface.range_tuple(), 0.01);

@@ -79,9 +79,12 @@ impl App for MyApp {
                 ..Default::default()
             },
         };
-        let mut scene =
-            SurfaceScene::from_target(Arc::clone(&window), window.inner_size().into(), &desc)
-                .await?;
+        let mut scene = SurfaceScene::from_target(
+            Arc::clone(&window).into(),
+            window.inner_size().into(),
+            &desc,
+        )
+        .await?;
         let texture = image::load_from_memory(TEXTURE_BYTES)?;
         let texture = image2texture::image2texture(scene.device_handler(), &texture)?;
         let state = PolygonState {
