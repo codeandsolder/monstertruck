@@ -5,11 +5,12 @@ fn frame() -> Frame {
     Frame {
         center: Point3::new(0.0, 0.0, 0.0),
         basis: [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()],
-        major: 3.0,
+        major: Some(3.0),
         varying: 0,
         direction: 1.0,
         side: 1.0,
         resolution: 1e-8,
+        height_resolution: 1e-8,
     }
 }
 
@@ -145,4 +146,35 @@ fn distinct_periodic_rims_can_overlap_in_height_but_not_in_domain() {
     touching[6][1] = lower[6][1];
     let b = polygonal_rim(&touching).expect("touching chart cycle");
     assert!(simplicity::disjoint_cycles(frame(), &a, &b).is_err());
+}
+
+#[test]
+fn linear_chart_does_not_wrap_axial_coordinates() {
+    let frame = Frame {
+        major: None,
+        height_resolution: 1e-10,
+        ..frame()
+    };
+    let first = [Interval::point(0.0), Interval::point(1.0)];
+    let values = vec![
+        control([3.0, 0.0, 1.0]),
+        control([3.0, 0.0, 1.0 + 2.0 * TAU]),
+    ];
+    let piece = Piece::new(
+        frame,
+        Controls {
+            values,
+            parameter: [0.0, 1.0],
+        },
+        first,
+        0,
+    )
+    .expect("regular long generator");
+    assert!(
+        piece.end[1]
+            .sub(Interval::point(1.0 + 2.0 * TAU))
+            .magnitude()
+            < 1e-9
+    );
+    assert!(piece.bounds[1].width() >= 2.0 * TAU);
 }

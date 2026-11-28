@@ -132,13 +132,17 @@ impl BandContext<'_> {
         let rings = match (self.ring(first), self.ring(second)) {
             (Some(a), Some(b)) => [a, b],
             (Some(ring), None) => {
-                return self.variable_band([first, second], 0, ring, trims, obstacles);
+                return self
+                    .variable_band([first, second], 0, ring, trims, obstacles)
+                    .or_else(|| self.paired_band([first, second], trims, obstacles));
             }
             (None, Some(ring)) => {
-                return self.variable_band([first, second], 1, ring, trims, obstacles);
+                return self
+                    .variable_band([first, second], 1, ring, trims, obstacles)
+                    .or_else(|| self.paired_band([first, second], trims, obstacles));
             }
             (None, None) => {
-                return self.paired_torus_band([first, second], trims, obstacles);
+                return self.paired_band([first, second], trims, obstacles);
             }
         };
         let (first_lower, lower, span) = self.ring_domain(rings)?;

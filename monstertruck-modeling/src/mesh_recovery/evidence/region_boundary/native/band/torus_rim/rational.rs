@@ -25,23 +25,32 @@ const MAX_DEPTH: usize = 16;
 struct Frame {
     center: Point3,
     basis: [Vector3; 3],
-    major: f64,
+    major: Option<f64>,
     varying: usize,
     direction: f64,
     side: f64,
     resolution: f64,
+    height_resolution: f64,
 }
 
 impl Frame {
     fn new(context: &BandContext<'_>, ring: Ring, side: f64) -> Option<Self> {
-        let SurfaceCarrier::CircularRevolution {
-            axial_center: center,
-            axis,
-            radial_center: major,
-            ..
-        } = context.carrier
-        else {
-            return None;
+        let (center, axis, major, height_resolution) = match context.carrier {
+            SurfaceCarrier::CircularRevolution {
+                axial_center,
+                axis,
+                radial_center,
+                ..
+            } => (
+                axial_center,
+                axis,
+                Some(radial_center),
+                context.options.angular_resolution,
+            ),
+            SurfaceCarrier::LinearRevolution { origin, axis, .. } if ring.axis == 0 => {
+                (origin, axis, None, context.options.intersection_tolerance)
+            }
+            _ => return None,
         };
         let (u, v) = super::super::normal_basis(axis);
         Some(Self {
@@ -52,7 +61,23 @@ impl Frame {
             direction: if ring.positive { -1.0 } else { 1.0 },
             side,
             resolution: context.options.angular_resolution,
+            height_resolution,
         })
+    }
+    const fn periodic_height(self) -> bool { self.major.is_some() }
+    const fn tolerance(self, axis: usize) -> f64 {
+        if axis == 0 {
+            self.resolution
+        } else {
+            self.height_resolution
+        }
+    }
+    fn unwrap(self, axis: usize, value: Interval, reference: f64) -> Interval {
+        if axis == 0 || self.periodic_height() {
+            near(value, reference)
+        } else {
+            value
+        }
     }
     fn local(self, value: Control) -> Control {
         let centered: [Interval; 3] =
@@ -75,10 +100,11 @@ impl Frame {
         let [x, y, z, w] = control;
         let [x, y, z] = [x.div(w)?, y.div(w)?, z.div(w)?];
         let rho = x.square().add(y.square()).sqrt()?;
-        Some(self.orient([
-            angle(x, y)?,
-            angle(rho.sub(Interval::point(self.major)), z)?,
-        ]))
+        let height = match self.major {
+            Some(major) => angle(rho.sub(Interval::point(major)), z)?,
+            None => z,
+        };
+        Some(self.orient([angle(x, y)?, height]))
     }
     fn rates(self, controls: &[Control]) -> Option<[Interval; 2]> {
         let hull = |i: usize| controls.iter().map(|p| p[i]).reduce(Interval::union);
@@ -109,21 +135,22 @@ impl Frame {
         if radius.lo <= self.resolution {
             return None;
         }
-        let radial_rate = x.mul(dx).add(y.mul(dy)).div(radius)?;
-        let profile_radial = radius.sub(Interval::point(self.major));
-        let meridian2 = profile_radial.square().add(z.square());
-        if meridian2.lo <= self.resolution * self.resolution {
-            return None;
-        }
-        Some(
-            self.orient([
-                x.mul(dy).sub(y.mul(dx)).div(radius_squared)?,
-                profile_radial
-                    .mul(dz)
-                    .sub(z.mul(radial_rate))
-                    .div(meridian2)?,
-            ]),
-        )
+        let angular_rate = x.mul(dy).sub(y.mul(dx)).div(radius_squared)?;
+        let height_rate = if let Some(major) = self.major {
+            let radial_rate = x.mul(dx).add(y.mul(dy)).div(radius)?;
+            let profile_radial = radius.sub(Interval::point(major));
+            let meridian2 = profile_radial.square().add(z.square());
+            if meridian2.lo <= self.resolution * self.resolution {
+                return None;
+            }
+            profile_radial
+                .mul(dz)
+                .sub(z.mul(radial_rate))
+                .div(meridian2)?
+        } else {
+            dz
+        };
+        Some(self.orient([angular_rate, height_rate]))
     }
 }
 
@@ -151,20 +178,19 @@ impl Piece {
         edge: usize,
     ) -> Option<Self> {
         let rates = frame.rates(&controls.values)?;
-        if rates
-            .iter()
-            .any(|r| !r.finite() || r.magnitude() >= PI * 0.5)
-            || !rates.iter().any(|r| r.directed())
+        if rates.iter().enumerate().any(|(i, r)| {
+            !r.finite() || ((i == 0 || frame.periodic_height()) && r.magnitude() >= PI * 0.5)
+        }) || !rates.iter().any(|r| r.directed())
         {
             return None;
         }
         let raw_start = frame.endpoint(*controls.values.first()?)?;
-        let start = std::array::from_fn(|i| near(raw_start[i], reference[i].mid()));
-        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.resolution) {
+        let start = std::array::from_fn(|i| frame.unwrap(i, raw_start[i], reference[i].mid()));
+        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.tolerance(i)) {
             return None;
         }
         let raw_end = frame.endpoint(*controls.values.last()?)?;
-        let end = std::array::from_fn(|i| near(raw_end[i], start[i].mid()));
+        let end = std::array::from_fn(|i| frame.unwrap(i, raw_end[i], start[i].mid()));
         let extent = |i: usize| {
             let step = Interval::point(0.0).union(rates[i]);
             start[i].add(step).intersection(end[i].sub(step))

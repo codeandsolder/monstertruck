@@ -1,10 +1,10 @@
-//! Two variable rims on a regular toroidal annulus. Prove the actual
+//! Two variable rims on a regular revolution annulus. Prove the actual
 //! rational curves are simple, oppositely winding and mutually disjoint in
 //! a common periodic strip, then cut both native cycles at the same two
 //! unique transverse coordinates. No reference-ring approximation is used.
 
 use super::super::super::{
-    BandPlan, NativeChartObstacle, NativeTrimError, commit_rings, copy_rings, cut_ring,
+    BandPlan, NativeChartObstacle, NativeTrimError, chart_point, commit_rings, copy_rings, cut_ring,
 };
 use super::super::{OrientedRim, chart_obstacles, regular_radial_band, signed_delta};
 use super::{
@@ -29,13 +29,16 @@ struct Cut {
 
 impl LiftedRim {
     fn new(context: &BandContext<'_>, frame: Frame, rim: OrientedRim) -> Result<Self, Rejection> {
-        let uv = context
-            .torus_chart(rim.edges.first().ok_or(Rejection::Invalid)?.front().point())
-            .ok_or(Rejection::Invalid)?;
+        let uv = chart_point(
+            context.carrier,
+            rim.edges.first().ok_or(Rejection::Invalid)?.front().point(),
+            context.options.angular_resolution,
+        )
+        .ok_or(Rejection::Invalid)?;
         let start = [uv[frame.varying], uv[1 - frame.varying]].map(Interval::point);
         let (pieces, end) = lift_cycle(frame, &rim.edges, start)?;
         if end[0].sub(start[0]).sub(Interval::point(TAU)).magnitude() > frame.resolution
-            || end[1].sub(start[1]).magnitude() > frame.resolution
+            || end[1].sub(start[1]).magnitude() > frame.height_resolution
         {
             return Err(Rejection::Winding);
         }
@@ -44,7 +47,7 @@ impl LiftedRim {
             .map(|p| p.bounds[1])
             .reduce(Interval::union)
             .ok_or(Rejection::Invalid)?;
-        if height.width() >= TAU - frame.resolution {
+        if frame.periodic_height() && height.width() >= TAU - frame.height_resolution {
             return Err(Rejection::Invalid);
         }
         Ok(Self {
@@ -73,11 +76,15 @@ impl LiftedRim {
     ) -> Option<(Point3, [f64; 2])> {
         let piece = &self.pieces[index];
         let point = self.rim.edges[piece.edge].oriented_curve().evaluate(t);
-        let uv = context.torus_chart(point)?;
+        let uv = chart_point(context.carrier, point, context.options.angular_resolution)?;
         let phase = [uv[frame.varying], uv[1 - frame.varying]];
         Some((
             point,
-            std::array::from_fn(|i| near(Interval::point(phase[i]), piece.bounds[i].mid()).mid()),
+            std::array::from_fn(|i| {
+                frame
+                    .unwrap(i, Interval::point(phase[i]), piece.bounds[i].mid())
+                    .mid()
+            }),
         ))
     }
 
@@ -212,33 +219,47 @@ fn prove_pair(
     })?;
     // Fix the transverse lift using the observed oriented cut, not the
     // relative positions of independently chosen angular branch origins.
-    let [lo, hi] = cuts[0].heights;
-    let shift = ((lo - hi) / TAU).floor().mul_add(TAU, TAU);
-    b.shift_height(shift);
-    for cut in &mut cuts {
-        cut.heights[1] += shift;
+    if frame.periodic_height() {
+        let [lo, hi] = cuts[0].heights;
+        let shift = ((lo - hi) / TAU).floor().mul_add(TAU, TAU);
+        b.shift_height(shift);
+        for cut in &mut cuts {
+            cut.heights[1] += shift;
+        }
     }
     let extent = a.height.union(b.height);
-    let SurfaceCarrier::CircularRevolution {
-        radial_center,
-        profile_radius,
-        ..
-    } = context.carrier
-    else {
-        return None;
-    };
-    if extent.width() >= TAU - frame.resolution
-        || cuts
-            .iter()
-            .any(|c| c.heights[1] - c.heights[0] <= frame.resolution)
-        || !regular_radial_band(
+    let regular = match context.carrier {
+        SurfaceCarrier::CircularRevolution {
             radial_center,
             profile_radius,
-            axis,
-            extent.lo,
-            extent.width(),
-            context.options.intersection_tolerance,
-        )
+            ..
+        } => {
+            extent.width() < TAU - frame.height_resolution
+                && regular_radial_band(
+                    radial_center,
+                    profile_radius,
+                    axis,
+                    extent.lo,
+                    extent.width(),
+                    context.options.intersection_tolerance,
+                )
+        }
+        SurfaceCarrier::LinearRevolution {
+            radius_at_origin,
+            slope,
+            ..
+        } => {
+            slope
+                .mul_add(extent.lo, radius_at_origin)
+                .min(slope.mul_add(extent.hi, radius_at_origin))
+                > context.options.intersection_tolerance
+        }
+        SurfaceCarrier::Plane { .. } => false,
+    };
+    if !regular
+        || cuts
+            .iter()
+            .any(|c| c.heights[1] - c.heights[0] <= frame.height_resolution)
         || !context.covers_band(1 - axis, extent.lo, extent.width())
         || !context.source_chart_positive()
     {
@@ -266,22 +287,27 @@ fn prove_pair(
 }
 
 impl BandContext<'_> {
-    pub(in super::super::super) fn paired_torus_band(
+    pub(in super::super::super) fn paired_band(
         &self,
         cycles: [&[OrientedTrim]; 2],
         trims: &mut [Result<Vec<Edge>, NativeTrimError>],
         obstacles: &mut Vec<NativeChartObstacle>,
     ) -> Option<BandPlan> {
-        if !matches!(self.carrier,SurfaceCarrier::CircularRevolution {radial_center,..} if radial_center>crate::KERNEL_EPSILON)
-        {
-            return None;
-        }
+        let mut axes = match self.carrier {
+            SurfaceCarrier::LinearRevolution { .. } => 0..1,
+            SurfaceCarrier::CircularRevolution { radial_center, .. }
+                if radial_center > crate::KERNEL_EPSILON =>
+            {
+                0..2
+            }
+            _ => return None,
+        };
         let mut changed = copy_rings(cycles[0].iter().chain(cycles[1]), trims)?;
         let rims = [
             OrientedRim::collect(cycles[0], |id| changed.get(&id).map(Vec::as_slice))?,
             OrientedRim::collect(cycles[1], |id| changed.get(&id).map(Vec::as_slice))?,
         ];
-        let proof = (0..2).find_map(|axis| {
+        let proof = axes.find_map(|axis| {
             (0..2).find_map(|lower| prove_pair(self, &rims, axis, lower, obstacles))
         })?;
         let plan = (|| {

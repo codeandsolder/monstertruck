@@ -8,11 +8,14 @@ enum Junction {
     StartEnd,
 }
 
-fn separate(a: [Interval; 2], b: [Interval; 2], margin: f64) -> bool {
-    (0..2).any(|i| a[i].hi + margin < b[i].lo || b[i].hi + margin < a[i].lo)
+fn separate(frame: Frame, a: [Interval; 2], b: [Interval; 2]) -> bool {
+    (0..2).any(|i| {
+        let margin = frame.tolerance(i);
+        a[i].hi + margin < b[i].lo || b[i].hi + margin < a[i].lo
+    })
 }
 
-fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, margin: f64) -> bool {
+fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, frame: Frame) -> bool {
     let (left, right, offset) = match junction {
         Junction::EndStart => (a, b, shift),
         Junction::StartEnd => (b, a, -shift),
@@ -20,8 +23,8 @@ fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, margi
     if left.end[0]
         .sub(right.start[0].add(Interval::point(offset)))
         .magnitude()
-        > margin
-        || left.end[1].sub(right.start[1]).magnitude() > margin
+        > frame.resolution
+        || left.end[1].sub(right.start[1]).magnitude() > frame.height_resolution
     {
         return false;
     }
@@ -53,9 +56,8 @@ fn disjoint(
     }
     *remaining -= 1;
     let bounds = b.shifted_bounds(shift);
-    let margin = frame.resolution;
-    if separate(a.bounds, bounds, margin)
-        || junction.is_some_and(|j| tangent_separates(a, b, shift, j, margin))
+    if separate(frame, a.bounds, bounds)
+        || junction.is_some_and(|j| tangent_separates(a, b, shift, j, frame))
     {
         return true;
     }

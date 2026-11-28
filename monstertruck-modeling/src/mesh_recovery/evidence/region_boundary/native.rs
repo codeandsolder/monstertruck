@@ -1680,6 +1680,83 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn tilted_planes_bound_a_closed_linear_revolution_band()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for slope in [0.0_f64, 0.1] {
+            let ring = 24_usize;
+            let mut positions = Vec::new();
+            // Two parallel oblique planes, z = offset + 0.8*x, cut the
+            // revolution into disjoint non-isoparametric rims whose axial
+            // ranges overlap substantially. Neither boundary is a ring.
+            for offset in [-0.4, 0.4] {
+                for i in 0..ring {
+                    let angle = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(ring);
+                    let (sin, cos) = angle.sin_cos();
+                    let tilt = 0.8 * cos;
+                    let z = tilt.mul_add(2.0, offset) / (-slope).mul_add(tilt, 1.0);
+                    let r = slope.mul_add(z, 2.0);
+                    positions.push(Point3::new(r * cos, r * sin, z));
+                }
+            }
+            let mut faces = Vec::new();
+            for i in 0..ring {
+                let next = (i + 1) % ring;
+                faces.push(vec![i, next, next + ring, i + ring]);
+            }
+            faces.push((0..ring).rev().collect());
+            faces.push((ring..2 * ring).collect());
+            let mesh = PolygonMesh::new(
+                StandardAttributes {
+                    positions,
+                    ..Default::default()
+                },
+                Faces::from_iter(faces),
+            )?;
+            let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+            let mut supports = evidence.source_planar_support[..ring].to_vec();
+            supports.sort_unstable();
+            supports.dedup();
+            let native = native_for_carrier(
+                &evidence,
+                &supports,
+                SurfaceCarrier::LinearRevolution {
+                    origin: Point3::new(0.0, 0.0, 0.0),
+                    axis: Vector3::unit_z(),
+                    radius_at_origin: 2.0,
+                    slope,
+                },
+                0.2,
+            )?;
+            assert!(native.trims.iter().all(Result::is_ok));
+            assert!(
+                native
+                    .regions
+                    .iter()
+                    .all(|r| r.faces.is_ok() && !r.requires_chart_cut)
+            );
+            assert_eq!(
+                native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+                2
+            );
+            let shell = native
+                .regions
+                .into_iter()
+                .map(|r| r.faces)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), 4);
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.is_geometric_consistent());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn toroidal_band_splits_the_periodic_meridian_into_shared_chart_seams()
     -> Result<(), Box<dyn std::error::Error>> {
         let ring = 8_usize;
