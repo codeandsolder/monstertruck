@@ -132,12 +132,18 @@ impl BandContext<'_> {
         let rings = match (self.ring(first), self.ring(second)) {
             (Some(a), Some(b)) => [a, b],
             (Some(ring), None) => {
-                return self.variable_band([first, second], 0, ring, trims, obstacles);
+                return self
+                    .variable_band([first, second], 0, ring, trims, obstacles)
+                    .or_else(|| self.paired_band([first, second], trims, obstacles));
             }
             (None, Some(ring)) => {
-                return self.variable_band([first, second], 1, ring, trims, obstacles);
+                return self
+                    .variable_band([first, second], 1, ring, trims, obstacles)
+                    .or_else(|| self.paired_band([first, second], trims, obstacles));
             }
-            (None, None) => return None,
+            (None, None) => {
+                return self.paired_band([first, second], trims, obstacles);
+            }
         };
         let (first_lower, lower, span) = self.ring_domain(rings)?;
         if !self.covers_band(1 - rings[0].axis, lower, span) {
@@ -676,6 +682,10 @@ impl BandContext<'_> {
             }
             edges
         } else {
+            let length = (back.point() - front.point()).magnitude();
+            if !length.is_finite() || length <= 0.0 {
+                return None;
+            }
             vec![builder::line(front, back)]
         };
         edges

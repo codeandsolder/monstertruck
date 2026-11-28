@@ -6,7 +6,9 @@
 //! convex source facet. The shared edge itself is never approximated again.
 
 mod apex;
+mod projection;
 mod replay;
+mod tangent;
 pub use replay::BoundaryFacetInput;
 
 use crate::{
@@ -409,7 +411,9 @@ pub fn approximate_boundary_facet(
     };
     match fan.construct(apex, 0.0) {
         Ok(result) => Ok(result),
-        Err(error @ (InvalidBoundary | Uncertified)) => fan.recover(apex, error),
+        Err(error @ (InvalidBoundary | Uncertified)) => fan
+            .recover(apex, error)
+            .or_else(|_| fan.recover_projection(apex, error)),
         Err(error) => Err(error),
     }
 }
@@ -564,6 +568,46 @@ mod tests {
         );
         assert_eq!(approximation.faces[0].boundaries()[0][0], edges[0]);
         assert!(approximate_boundary_facet(&points, &edges, 0.1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn sliver_projection_can_turn_without_changing_the_reference_fan()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(1.0, 0.05, 0.0),
+        ];
+        let [a, b, c] = points.map(builder::vertex);
+        for height in [0.2, 0.0] {
+            let curve = Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
+                KnotVector::bezier_knot(2),
+                vec![
+                    a.point().to_vec().extend(1.0),
+                    Vector4::new(1.0, 0.2, height, 1.0),
+                    b.point().to_vec().extend(1.0),
+                ],
+            )?));
+            let edges = [
+                Edge::new(&a, &b, curve)?,
+                builder::line(&b, &c),
+                builder::line(&c, &a),
+            ];
+            let result = approximate_boundary_facet(&points, &edges, 0.3);
+            if height == 0.0 {
+                // A genuinely crossing planar boundary remains crossing
+                // under every nondegenerate projection.
+                assert!(result.is_err());
+            } else {
+                let result = result?;
+                assert!(result.deviation_upper_bound <= 0.3);
+                assert_eq!(result.faces.len(), 3);
+                assert!(result.faces.iter().all(Face::is_geometric_consistent));
+                assert_eq!(result.faces[0].boundaries()[0][0], edges[0]);
+                assert!(approximate_boundary_facet(&points, &edges, 0.01).is_err());
+            }
+        }
         Ok(())
     }
 
