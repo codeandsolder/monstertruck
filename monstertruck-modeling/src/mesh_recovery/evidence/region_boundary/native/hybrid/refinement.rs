@@ -245,6 +245,27 @@ impl<'a> ReleaseContext<'a> {
             .collect()
     }
 
+    // A failed retained or lifted edge can be caused by an incident
+    // carrier at an endpoint, not only its two boundary-side supports.
+    // Offer complete parent constraint releases for actual source vertices.
+    fn edge_repair_choices(
+        &self,
+        edges: &[RegionBoundaryEdge],
+        selected: &[usize],
+    ) -> Vec<Vec<usize>> {
+        let mut alternatives = self.contact_choices(edges, selected);
+        let vertices = edges
+            .iter()
+            .flat_map(|edge| edge.vertices)
+            .collect::<BTreeSet<_>>();
+        alternatives.extend(
+            vertices
+                .into_iter()
+                .flat_map(|id| self.junction_choices(id, selected)),
+        );
+        alternatives
+    }
+
     // A facet's original polygon is retained even after a connected patch
     // coalesces its internal triangulation. Only its actual edge neighbors
     // and incident junction constraints are relevant local repairs.
@@ -299,16 +320,10 @@ impl<'a> ReleaseContext<'a> {
                 })
                 .collect(),
             HybridRecoveryError::RetainedTrim { source_edges, .. } => {
-                vec![self.contact_choices(source_edges, selected)]
+                vec![self.edge_repair_choices(source_edges, selected)]
             }
             HybridRecoveryError::LiftedEdge { edge, .. } => {
-                let mut alternatives = self.contact_choices(std::slice::from_ref(edge), selected);
-                alternatives.extend(
-                    edge.vertices
-                        .iter()
-                        .flat_map(|&id| self.junction_choices(id, selected)),
-                );
-                vec![alternatives]
+                vec![self.edge_repair_choices(std::slice::from_ref(edge), selected)]
             }
             HybridRecoveryError::Patch {
                 source_polygon: Some(polygon),
@@ -1004,10 +1019,14 @@ mod tests {
             source_edges: Box::new([edge]),
             error: NativeTrimError::EdgeGeometry,
         };
-        assert_eq!(
-            context.repair_choices(&trim, &[left]),
-            vec![vec![vec![right]]]
-        );
+        let choices = context.repair_choices(&trim, &[left]);
+        assert_eq!(choices.len(), 1);
+        assert!(choices[0].contains(&vec![right]));
+        for vertex in edge.vertices {
+            for choice in context.junction_choices(vertex, &[left]) {
+                assert!(choices[0].contains(&choice));
+            }
+        }
         let limited = ReleaseContext::new(&evidence, &partition, &[left], options(0.25, 10))?;
         assert_eq!(
             limited.repair_choices(&crossing, &[left]),

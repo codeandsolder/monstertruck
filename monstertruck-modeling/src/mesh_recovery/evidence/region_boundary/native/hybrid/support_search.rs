@@ -91,6 +91,7 @@ struct CoverSearch {
     max_states: usize,
     frontier: BTreeSet<(usize, Reverse<usize>, CoverCandidate)>,
     crossing_searches: Vec<CrossingSearch>,
+    deferred_rejected: Vec<CoverCandidate>,
     visited: BTreeSet<Vec<usize>>,
     states: usize,
     // Reserve one state for a deterministic feasible cover if exact
@@ -142,6 +143,7 @@ impl CoverSearch {
             max_states: options.max_states,
             frontier: BTreeSet::new(),
             crossing_searches: Vec::new(),
+            deferred_rejected: Vec::new(),
             visited: BTreeSet::new(),
             states: 0,
             greedy_root: None,
@@ -425,6 +427,12 @@ impl CoverSearch {
     fn next_cover(&mut self) -> Option<CoverCandidate> {
         if let Some(candidate) = self.next_crossing_cover() {
             return Some(candidate);
+        }
+        // Broad supersets are a fallback, not evidence for the next local
+        // repair. Do not spend the finite state allowance on them while a
+        // witnessed repair chain is still producing transactions.
+        for candidate in std::mem::take(&mut self.deferred_rejected) {
+            self.extend_rejected(&candidate);
         }
         while let Some((_, _, candidate)) = self.frontier.pop_first() {
             self.states += 1;
@@ -977,7 +985,9 @@ impl HybridSource<'_> {
                     last = error;
                 }
             }
-            search.extend_rejected(&candidate);
+            if trials < options.max_trials {
+                search.deferred_rejected.push(candidate);
+            }
         }
         Err(HybridRecoveryError::SupportSearch {
             states: search.states,
@@ -1152,6 +1162,38 @@ mod tests {
                 .is_none()
         );
         assert!(crossing_only.next_cover().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn consecutive_witness_repairs_do_not_queue_unrelated_supersets()
+    -> Result<(), HybridRecoveryError> {
+        let mut search = CoverSearch::new(
+            (1..=5).map(|id| [0, id]).collect(),
+            identity_closures(0..8),
+            vec![1; 8],
+            options(8, 8),
+        )?;
+        let first = search
+            .next_cover()
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        assert_eq!(first.selected, vec![0]);
+        let second = search
+            .witnessed_cover(&first, &[vec![vec![6]]])
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        search.deferred_rejected.push(first);
+        assert_eq!(second.selected, vec![0, 6]);
+        let third = search
+            .witnessed_cover(&second, &[vec![vec![7]]])
+            .ok_or(HybridRecoveryError::NoSupportCandidate)?;
+        search.deferred_rejected.push(second);
+        assert_eq!(third.selected, vec![0, 6, 7]);
+        assert!(search.visited.len() < search.max_states);
+        // When the witnessed frontier is exhausted, the ordinary rejected
+        // supersets become available again, subject to the same budget.
+        assert!(search.next_cover().is_some());
+        assert!(search.deferred_rejected.is_empty());
+        assert!(search.visited.len() <= search.max_states);
         Ok(())
     }
 
