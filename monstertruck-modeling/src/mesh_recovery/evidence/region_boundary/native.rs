@@ -2164,76 +2164,89 @@ mod tests {
     #[test]
     fn tilted_planar_section_bounds_a_closed_toroidal_band()
     -> Result<(), Box<dyn std::error::Error>> {
-        let n = 24_usize;
-        let stations = 4_usize;
-        let mut positions = Vec::new();
-        // z = 0.1*x + 0.45 gives a regular noncircular upper rim.
-        for row in 0..stations {
-            for i in 0..n {
-                let azimuth = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
-                let (sine, cosine) = azimuth.sin_cos();
-                let slope = 0.1 * cosine;
-                let end = slope.atan() + ((0.45 + 3.0 * slope) / 1.0_f64.hypot(slope)).asin();
-                let meridian = end * crate::usize_to_f64(row) / crate::usize_to_f64(stations - 1);
-                let radius = 3.0 + meridian.cos();
-                positions.push(Point3::new(radius * cosine, radius * sine, meridian.sin()));
+        for both_variable in [false, true] {
+            let n = 24_usize;
+            let stations = 4_usize;
+            let mut positions = Vec::new();
+            // Both parallel tilted planes have globally overlapping meridian ranges,
+            // yet they are disjoint at every azimuth. Also retain the original
+            // exact lower-ring case.
+            for row in 0..stations {
+                for i in 0..n {
+                    let azimuth = TAU * crate::usize_to_f64(i) / crate::usize_to_f64(n);
+                    let (sine, cosine) = azimuth.sin_cos();
+                    let slope = 0.1 * cosine;
+                    let meridian_at = |height: f64| {
+                        slope.atan() + ((height + 3.0 * slope) / 1.0_f64.hypot(slope)).asin()
+                    };
+                    let start = if both_variable {
+                        meridian_at(-0.2)
+                    } else {
+                        0.0
+                    };
+                    let end = meridian_at(if both_variable { 0.2 } else { 0.45 });
+                    let fraction = crate::usize_to_f64(row) / crate::usize_to_f64(stations - 1);
+                    let meridian = (end - start).mul_add(fraction, start);
+                    let radius = 3.0 + meridian.cos();
+                    positions.push(Point3::new(radius * cosine, radius * sine, meridian.sin()));
+                }
             }
-        }
-        let mut faces = Vec::new();
-        for row in 0..stations - 1 {
-            for i in 0..n {
-                let a = row * n + i;
-                let b = row * n + (i + 1) % n;
-                let c = b + n;
-                let d = a + n;
-                faces.extend([vec![a, b, c], vec![a, c, d]]);
+            let mut faces = Vec::new();
+            for row in 0..stations - 1 {
+                for i in 0..n {
+                    let a = row * n + i;
+                    let b = row * n + (i + 1) % n;
+                    let c = b + n;
+                    let d = a + n;
+                    faces.extend([vec![a, b, c], vec![a, c, d]]);
+                }
             }
+            let patch_faces = faces.len();
+            faces.push((0..n).rev().collect());
+            faces.push(((stations - 1) * n..stations * n).collect());
+            let (native, trims) =
+                torus_section_fixture(positions, faces, patch_faces, [3.0, 1.0], 0.2)?;
+            assert!(
+                trims
+                    .trims
+                    .iter()
+                    .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
+            );
+            assert!(
+                native
+                    .regions
+                    .iter()
+                    .all(|r| r.faces.is_ok() && !r.requires_chart_cut),
+                "{:?}",
+                native
+                    .regions
+                    .iter()
+                    .map(|r| (
+                        r.region,
+                        r.faces.as_ref().map(Vec::len),
+                        r.requires_chart_cut
+                    ))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
+                2
+            );
+            let shell = native
+                .regions
+                .into_iter()
+                .map(|r| r.faces)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<crate::Shell>();
+            assert_eq!(shell.len(), 4);
+            assert_eq!(
+                shell.shell_condition(),
+                monstertruck_topology::shell::ShellCondition::Closed
+            );
+            assert!(shell.is_geometric_consistent());
         }
-        let patch_faces = faces.len();
-        faces.push((0..n).rev().collect());
-        faces.push(((stations - 1) * n..stations * n).collect());
-        let (native, trims) =
-            torus_section_fixture(positions, faces, patch_faces, [3.0, 1.0], 0.2)?;
-        assert!(
-            trims
-                .trims
-                .iter()
-                .any(|trim| matches!(trim.geometry, SharedTrimGeometry::ToroidalSection(_)))
-        );
-        assert!(
-            native
-                .regions
-                .iter()
-                .all(|r| r.faces.is_ok() && !r.requires_chart_cut),
-            "{:?}",
-            native
-                .regions
-                .iter()
-                .map(|r| (
-                    r.region,
-                    r.faces.as_ref().map(Vec::len),
-                    r.requires_chart_cut
-                ))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            native.regions.iter().map(|r| r.chart_seams).sum::<usize>(),
-            2
-        );
-        let shell = native
-            .regions
-            .into_iter()
-            .map(|r| r.faces)
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<crate::Shell>();
-        assert_eq!(shell.len(), 4);
-        assert_eq!(
-            shell.shell_condition(),
-            monstertruck_topology::shell::ShellCondition::Closed
-        );
-        assert!(shell.is_geometric_consistent());
         Ok(())
     }
 

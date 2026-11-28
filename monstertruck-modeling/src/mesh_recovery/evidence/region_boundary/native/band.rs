@@ -137,7 +137,9 @@ impl BandContext<'_> {
             (None, Some(ring)) => {
                 return self.variable_band([first, second], 1, ring, trims, obstacles);
             }
-            (None, None) => return None,
+            (None, None) => {
+                return self.paired_torus_band([first, second], trims, obstacles);
+            }
         };
         let (first_lower, lower, span) = self.ring_domain(rings)?;
         if !self.covers_band(1 - rings[0].axis, lower, span) {

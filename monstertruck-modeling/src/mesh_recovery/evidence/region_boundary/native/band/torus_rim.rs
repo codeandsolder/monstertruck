@@ -32,6 +32,59 @@ struct RimPath {
     kind: PathKind,
 }
 
+/// The actual oriented native edges, with their original trim ordinals.
+pub(super) struct OrientedRim {
+    pub(super) edges: Vec<Edge>,
+    pub(super) sources: Vec<(usize, usize)>,
+}
+
+impl OrientedRim {
+    pub(super) fn collect<'a>(
+        cycle: &[OrientedTrim],
+        mut lookup: impl FnMut(usize) -> Option<&'a [Edge]>,
+    ) -> Option<Self> {
+        let mut edges = Vec::new();
+        let mut sources = Vec::new();
+        for reference in cycle {
+            let current = lookup(reference.trim)?;
+            if reference.reversed {
+                edges.extend(current.iter().rev().map(Edge::inverse));
+                sources.extend(
+                    (0..current.len())
+                        .rev()
+                        .map(|ordinal| (reference.trim, ordinal)),
+                );
+            } else {
+                edges.extend(current.iter().cloned());
+                sources.extend((0..current.len()).map(|ordinal| (reference.trim, ordinal)));
+            }
+        }
+        if edges.is_empty()
+            || edges
+                .iter()
+                .zip(edges.iter().cycle().skip(1))
+                .any(|(a, b)| a.back() != b.front())
+        {
+            return None;
+        }
+        Some(Self { edges, sources })
+    }
+
+    fn reversed(&self, reverse: bool) -> Self {
+        if reverse {
+            Self {
+                edges: self.edges.iter().rev().map(Edge::inverse).collect(),
+                sources: self.sources.iter().rev().copied().collect(),
+            }
+        } else {
+            Self {
+                edges: self.edges.clone(),
+                sources: self.sources.clone(),
+            }
+        }
+    }
+}
+
 struct RimInputs {
     edges: Vec<Edge>,
     sources: Vec<(usize, usize)>,
@@ -310,19 +363,16 @@ impl BandContext<'_> {
         ring: Ring,
         side: f64,
     ) -> Option<RimInputs> {
-        let mut rim = Vec::new();
-        let mut rim_sources = Vec::new();
+        let OrientedRim {
+            edges: rim,
+            sources: rim_sources,
+        } = OrientedRim::collect(cycle, |id| changed.get(&id).map(Vec::as_slice))?;
         let mut spans = Vec::new();
         let mut tensor_only = true;
-        for reference in cycle {
-            let edges = changed.get(&reference.trim)?;
-            let trim = self.graph.trims.get(reference.trim)?;
-            let kind = if self
-                .lifted_deviations
-                .get(reference.trim)
-                .is_some_and(Option::is_some)
-            {
-                if edges.len() != trim.source_edges.len() {
+        for (edge, &(id, _)) in rim.iter().zip(&rim_sources) {
+            let trim = self.graph.trims.get(id)?;
+            let kind = if self.lifted_deviations.get(id).is_some_and(Option::is_some) {
+                if changed.get(&id)?.len() != trim.source_edges.len() {
                     return None;
                 }
                 Some(PathKind::Lifted)
@@ -331,36 +381,14 @@ impl BandContext<'_> {
             } else {
                 None
             };
-            let oriented: Vec<_> = if reference.reversed {
-                edges.iter().rev().map(Edge::inverse).collect()
-            } else {
-                edges.clone()
-            };
-            for (ordinal, edge) in oriented.into_iter().enumerate() {
-                let ordinal = if reference.reversed {
-                    edges.len() - 1 - ordinal
+            if tensor_only {
+                if let Some(parts) = kind.and_then(|kind| self.torus_spans(edge, kind, ring, side))
+                {
+                    spans.extend(parts);
                 } else {
-                    ordinal
-                };
-                rim_sources.push((reference.trim, ordinal));
-                if tensor_only {
-                    if let Some(parts) =
-                        kind.and_then(|kind| self.torus_spans(&edge, kind, ring, side))
-                    {
-                        spans.extend(parts);
-                    } else {
-                        tensor_only = false;
-                    }
+                    tensor_only = false;
                 }
-                rim.push(edge);
             }
-        }
-        if rim
-            .iter()
-            .zip(rim.iter().cycle().skip(1))
-            .any(|(a, b)| a.back() != b.front())
-        {
-            return None;
         }
         Some(RimInputs {
             edges: rim,

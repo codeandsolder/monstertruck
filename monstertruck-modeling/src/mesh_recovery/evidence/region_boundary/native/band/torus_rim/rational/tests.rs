@@ -120,3 +120,29 @@ fn interval_extraction_covers_nonclamped_knots_and_tiny_active_spans()
     }
     Ok(())
 }
+
+#[test]
+fn distinct_periodic_rims_can_overlap_in_height_but_not_in_domain() {
+    let lower = [
+        [0.0, -0.5],
+        [1.0, 0.2],
+        [2.0, 0.2],
+        [3.0, -0.5],
+        [4.0, -0.5],
+        [5.0, -0.5],
+        [TAU, -0.5],
+    ];
+    let upper = lower.map(|[u, v]| [u, v + 0.3]);
+    let a = polygonal_rim(&lower).expect("first chart cycle");
+    let b = polygonal_rim(&upper).expect("second chart cycle");
+    assert!(simplicity::disjoint_cycles(frame(), &a, &b).is_ok());
+    let mut crossed = upper;
+    crossed[1][1] = -0.4;
+    let b = polygonal_rim(&crossed).expect("crossing chart cycle");
+    assert!(simplicity::disjoint_cycles(frame(), &a, &b).is_err());
+    let mut touching = upper;
+    touching[0][1] = lower[0][1];
+    touching[6][1] = lower[6][1];
+    let b = polygonal_rim(&touching).expect("touching chart cycle");
+    assert!(simplicity::disjoint_cycles(frame(), &a, &b).is_err());
+}

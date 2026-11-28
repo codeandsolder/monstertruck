@@ -5,6 +5,7 @@ mod controls;
 mod holes;
 pub(in super::super) use holes::hole_bounds;
 mod interval;
+mod paired;
 mod simplicity;
 #[cfg(test)]
 mod tests;
