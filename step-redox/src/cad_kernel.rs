@@ -1,6 +1,6 @@
 use crate::cad_ir::{CadModel, NodeId};
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 
 /// User-facing geometry accuracy contract at the unit-aware Step Redox boundary.
 ///
@@ -16,9 +16,8 @@ pub enum GeometryPolicy {
 }
 
 impl GeometryPolicy {
-    /// Project-wide Standard preset: 0.01 mm.
-    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 =
-        DEFAULT_STEP_RECOVERY_TOLERANCES.cad_project_standard_mm;
+    /// Default native reconstruction preset: 10 µm.
+    pub const PROJECT_STANDARD_TOLERANCE_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 
     #[must_use = "The returned policy configures the requested millimeter tolerance."]
     pub const fn standard_mm(tolerance_mm: f64) -> Self { Self::Standard { tolerance_mm } }
@@ -26,6 +25,19 @@ impl GeometryPolicy {
     #[must_use = "The returned policy carries the project's standard geometry tolerances."]
     pub const fn project_standard() -> Self {
         Self::standard_mm(Self::PROJECT_STANDARD_TOLERANCE_MM)
+    }
+
+    /// Raise the physical modeling allowance to the source recovery budget.
+    /// Explicit exact/equivalent modeling and invalid caller policies retain
+    /// their semantics; only Standard recovery uses the source floor.
+    #[must_use = "The returned policy applies the source recovery allowance."]
+    pub fn for_source_recovery(self, minimum_mm: f64) -> Self {
+        match self {
+            Self::Standard { tolerance_mm } if tolerance_mm.is_finite() && tolerance_mm > 0.0 => {
+                Self::standard_mm(tolerance_mm.max(minimum_mm))
+            }
+            other => other,
+        }
     }
 }
 
@@ -83,6 +95,12 @@ pub enum ReplayMode {
 /// STEP representation or independent boundary comparison is actually needed.
 pub trait CadKernel {
     type Evaluated;
+
+    /// Create a replay kernel whose physical modeling budget is not below
+    /// the effective source recovery tolerance. Exact modeling remains exact.
+    #[must_use = "Source recovery must use the returned kernel."]
+    fn for_source_recovery(&self, minimum_mm: f64) -> Self
+    where Self: Sized;
 
     /// Evaluate one canonical CAD root in the backend.
     ///
@@ -382,7 +400,7 @@ pub mod monstertruck {
         tolerance: f64,
     ) -> Option<Vec<Point3>> {
         let proof_tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES
-            .solid_geometry_mm
+            .numerical_geometry_mm
             .min(tolerance);
         let globally_proven = matches!(guide, Curve::NurbsCurve(_))
             && surfaces.iter().all(|&carrier| {
@@ -1847,6 +1865,10 @@ pub mod monstertruck {
     impl CadKernel for MonstertruckKernel {
         type Evaluated = EvaluatedShape;
 
+        fn for_source_recovery(&self, minimum_mm: f64) -> Self {
+            Self::new(self.policy.for_source_recovery(minimum_mm))
+        }
+
         fn evaluate(&self, model: &CadModel, root: NodeId) -> Result<Self::Evaluated> {
             model.validate()?;
             let mut cache = EvaluationCache::single_root(model, root, self.policy)?;
@@ -3192,10 +3214,28 @@ pub mod monstertruck {
         }
 
         #[test]
-        fn project_standard_maps_exactly_to_point_zero_one_mm() {
+        fn project_standard_maps_to_native_recovery_accuracy() {
             assert_eq!(
                 monstertruck_policy(GeometryPolicy::project_standard()).tolerance(),
-                Some(0.01)
+                Some(monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM)
+            );
+        }
+
+        #[test]
+        fn source_replay_budget_is_never_below_source_accuracy() {
+            let base = GeometryPolicy::project_standard();
+            assert_eq!(base.for_source_recovery(0.001), base);
+            assert_eq!(
+                base.for_source_recovery(0.05),
+                GeometryPolicy::standard_mm(0.05)
+            );
+            assert_eq!(
+                GeometryPolicy::standard_mm(0.1).for_source_recovery(0.05),
+                GeometryPolicy::standard_mm(0.1)
+            );
+            assert_eq!(
+                GeometryPolicy::Equivalent.for_source_recovery(0.05),
+                GeometryPolicy::Equivalent
             );
         }
 

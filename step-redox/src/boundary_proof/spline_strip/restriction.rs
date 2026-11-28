@@ -2,7 +2,7 @@
 //! Partition vertices are parameter proposals; complete homogeneous
 //! coefficient comparison and ordered coverage are the geometric evidence.
 use super::{
-    BernsteinSpanKey, CurveEvidence, POINT_Q_MM, PointKey, SplineCurveKey, TOL, decode, point_key,
+    BernsteinSpanKey, CurveEvidence, POINT_Q_MM, PointKey, SplineCurveKey, decode, point_key,
 };
 use crate::math3::{distance, dot, mul, normalize, sub};
 use monstertruck_geometry::prelude::Vector4;
@@ -74,11 +74,16 @@ fn projected(p: Vector4) -> [f64; 3] { [p.x / p.w, p.y / p.w, p.z / p.w] }
 /// Locate endpoints on a monotone Bernstein span. The coordinate is only a
 /// parameter proposal; full restricted coefficient equality below is the
 /// certificate. Identical endpoint keys always obtain the same parameter.
-fn span_parameter(controls: &[Vector4], direction: [f64; 3], target: PointKey) -> Option<f64> {
+fn span_parameter(
+    controls: &[Vector4],
+    direction: [f64; 3],
+    target: PointKey,
+    tolerance_mm: f64,
+) -> Option<f64> {
     let start = dot(projected(*controls.first()?), direction);
     let end = dot(projected(*controls.last()?), direction);
     let value = dot(decode(target)?, direction);
-    if value < start - TOL || value > end + TOL {
+    if value < start - tolerance_mm || value > end + tolerance_mm {
         return None;
     }
     if target == point_key(projected(*controls.first()?))? {
@@ -109,7 +114,7 @@ fn span_parameter(controls: &[Vector4], direction: [f64; 3], target: PointKey) -
 /// basis using the minimum relative weight and the control-hull radius.
 /// The actual (unrounded) child net is compared with the canonical parent.
 /// Reserve its extraction and subdivision arithmetic error budgets.
-fn same_restricted_span(a: &[Vector4], b: &[Vector4]) -> bool {
+fn same_restricted_span(a: &[Vector4], b: &[Vector4], tolerance_mm: f64) -> bool {
     if a.len() != b.len() || a.is_empty() {
         return false;
     }
@@ -140,7 +145,7 @@ fn same_restricted_span(a: &[Vector4], b: &[Vector4]) -> bool {
     let input_error = POINT_Q_MM / 4.;
     let total =
         point_error + 2. * radius * weight_error / weight_min + subdivision_error + input_error;
-    weight_min > 0. && total.is_finite() && total <= TOL / 2.
+    weight_min > 0. && total.is_finite() && total <= tolerance_mm
 }
 
 /// Pick one deterministic monotone coordinate for the parent span, never
@@ -150,7 +155,7 @@ fn span_direction(controls: &[Vector4]) -> Option<[f64; 3]> {
     let chord = sub(projected(*controls.last()?), projected(*controls.first()?));
     [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
-        .filter_map(|d| normalize(d, TOL))
+        .filter_map(|d| normalize(d, POINT_Q_MM))
         .map(|axis| {
             if dot(chord, axis) < 0. {
                 mul(axis, -1.)
@@ -159,7 +164,7 @@ fn span_direction(controls: &[Vector4]) -> Option<[f64; 3]> {
             }
         })
         .filter(|&d| {
-            dot(chord, d) > TOL
+            dot(chord, d) > POINT_Q_MM
                 && controls
                     .windows(2)
                     .all(|p| dot(sub(projected(p[1]), projected(p[0])), d) >= 0.)
@@ -171,6 +176,7 @@ fn restricted_span(
     parent: &BernsteinSpanKey,
     piece: &BernsteinSpanKey,
     actual: &[Vector4],
+    tolerance_mm: f64,
 ) -> Option<[f64; 2]> {
     if parent == piece {
         return Some([0., 1.]);
@@ -187,7 +193,7 @@ fn restricted_span(
                 let delta = p[axis].abs_diff(p[axis].clamp(minimum, maximum));
                 delta
                     .to_f64()
-                    .is_none_or(|distance| distance * POINT_Q_MM > TOL)
+                    .is_none_or(|distance| distance * POINT_Q_MM > tolerance_mm)
             })
         {
             return None;
@@ -198,9 +204,15 @@ fn restricted_span(
         return None;
     }
     let direction = span_direction(&controls)?;
-    let lo = span_parameter(&controls, direction, *piece.points_mm.first()?)?;
-    let hi = span_parameter(&controls, direction, *piece.points_mm.last()?)?;
-    (lo < hi && same_restricted_span(&restrict_span(&controls, lo, hi), actual)).then_some([lo, hi])
+    let lo = span_parameter(
+        &controls,
+        direction,
+        *piece.points_mm.first()?,
+        tolerance_mm,
+    )?;
+    let hi = span_parameter(&controls, direction, *piece.points_mm.last()?, tolerance_mm)?;
+    (lo < hi && same_restricted_span(&restrict_span(&controls, lo, hi), actual, tolerance_mm))
+        .then_some([lo, hi])
 }
 
 /// A restriction may subdivide any individual original knot span. Its
@@ -210,6 +222,7 @@ fn restriction_in_order(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
     ends: [PointKey; 2],
+    tolerance_mm: f64,
 ) -> Option<[ProfilePosition; 2]> {
     let mut interval: Option<[ProfilePosition; 2]> = None;
     for (j, (span, actual)) in piece.key.spans.iter().zip(&piece.controls).enumerate() {
@@ -233,7 +246,7 @@ fn restriction_in_order(
             // normalized parent position, so only one span can qualify.
             .filter(|(i, _)| interval.is_none_or(|prior| prior[1].span == *i))
             .filter_map(|(i, candidate)| {
-                let [lo, hi] = restricted_span(candidate, span, actual)?;
+                let [lo, hi] = restricted_span(candidate, span, actual, tolerance_mm)?;
                 // Topological vertices may differ slightly from the spline
                 // trim's evaluated endpoints, but must still be on the
                 // parent at their certified parameter position.
@@ -243,7 +256,7 @@ fn restriction_in_order(
                     for (t, point) in [lo, hi].into_iter().zip(points) {
                         let error =
                             distance(projected(blossom(&controls, t, t, 0)), decode(point)?);
-                        if error + POINT_Q_MM * 3.0_f64.sqrt() / 2. > TOL {
+                        if error + POINT_Q_MM * 3.0_f64.sqrt() / 2. > tolerance_mm {
                             return None;
                         }
                     }
@@ -281,11 +294,12 @@ pub(super) fn profile_piece(
     parent: &SplineCurveKey,
     piece: &CurveEvidence,
     mut ends: [PointKey; 2],
+    tolerance_mm: f64,
 ) -> Option<[ProfilePosition; 2]> {
     if *parent == piece.key && parent.ends()? == ends {
         return full_profile_interval(parent);
     }
-    if let Some(interval) = restriction_in_order(parent, piece, ends) {
+    if let Some(interval) = restriction_in_order(parent, piece, ends, tolerance_mm) {
         return Some(interval);
     }
     let mut reversed = piece.clone();
@@ -297,7 +311,7 @@ pub(super) fn profile_piece(
         controls.reverse();
     }
     ends.reverse();
-    restriction_in_order(parent, &reversed, ends)
+    restriction_in_order(parent, &reversed, ends, tolerance_mm)
 }
 
 /// Exact, ordered coverage of the complete canonical parent. Each
@@ -371,7 +385,12 @@ mod tests {
             .collect::<Vec<_>>();
         let interval = |curve: &BSplineSupport| {
             let piece = curve_evidence(curve)?;
-            profile_piece(&parent.key, &piece, piece.key.ends()?)
+            profile_piece(
+                &parent.key,
+                &piece,
+                piece.key.ends()?,
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+            )
         };
         let pieces = children
             .iter()

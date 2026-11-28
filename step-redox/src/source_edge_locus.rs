@@ -450,8 +450,12 @@ pub fn incident_edge_plane(
     }
     let surface_id = brep::face_surface(face_id, entities, &index)
         .with_context(|| format!("face #{face_id} has no surface"))?;
-    let brep::SurfaceSupport::Plane(plane) = brep::surface_support(surface_id, entities, &index)
-    else {
+    let brep::SurfaceSupport::Plane(plane) = brep::surface_support(
+        surface_id,
+        entities,
+        &index,
+        crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, &index),
+    ) else {
         bail!("face #{face_id} does not have an analytic planar carrier");
     };
     Ok(ReferencePlane {
@@ -899,7 +903,15 @@ fn audited_carrier(
         .map(|record| record.name.as_str());
     let carrier = match name {
         Some("PLANE" | "CYLINDRICAL_SURFACE" | "CONICAL_SURFACE") => {
-            match (name, brep::surface_support(surface_id, entities, index)) {
+            match (
+                name,
+                brep::surface_support(
+                    surface_id,
+                    entities,
+                    index,
+                    monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+                ),
+            ) {
                 (Some("PLANE"), brep::SurfaceSupport::Plane(plane)) => AuditedCarrier::Plane(plane),
                 (Some("CYLINDRICAL_SURFACE"), brep::SurfaceSupport::Cylinder(cylinder)) => {
                     AuditedCarrier::Cylinder(cylinder)
@@ -968,7 +980,7 @@ pub fn audit_source_solid_bspline_incidences(
         conical_faces: 0,
         unexamined_faces: 0,
         declared_uncertainty_mm:
-            crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+            crate::source_accuracy::declared_source_uncertainty_by_representation_item(
                 entities, &index,
             )
             .get(&solid_id)

@@ -6,12 +6,11 @@ use crate::math3::{
 };
 use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::ReducedSolid;
-use crate::step_entities::{parameter_number, representation_items_and_context};
-use crate::step_graph::{build_index, entity_id, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use crate::step_graph::{build_index, entity_id, simple_record};
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use step_p21::ast::{EntityInstance, Parameter, Record};
+use step_p21::ast::EntityInstance;
 
 mod profile_graph;
 use profile_graph::{
@@ -22,14 +21,9 @@ use profile_graph::{
 mod meridian;
 use meridian::{MeridianArc, MeridianCurve, MeridianLine, MeridianProfile};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
-/// Default source-evidence tolerance when STEP provides no trusted uncertainty context.
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
+/// Native source fitting budget, independent of the exporter uncertainty.
 pub(crate) const REVOLUTION_SOURCE_SUPPORT_TOL_MM: f64 = GEOM_TOL_MM;
-/// Hard ceiling for source-declared length uncertainty used by revolution recovery.
-/// This is 10 nm / 100x the strict default: enough for known exporter roundoff,
-/// still far below any dimension we want to approximate semantically.
-pub(crate) const MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM: f64 =
-    DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_max_source_uncertainty_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.revolution_direction;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -47,10 +41,7 @@ pub struct RecoveredSolidRevolution {
     /// Worst observed disagreement between source trim evidence and the recovered
     /// analytic/profile geometry.
     pub max_residual_mm: f64,
-    /// Maximum source-evidence residual admitted for this recovery. Exact/legacy
-    /// paths use `GEOM_TOL_MM`; a straight analytic path may inherit a larger,
-    /// explicitly declared representation-context uncertainty, capped by
-    /// `MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM`.
+    /// Maximum source fitting residual admitted by the project accuracy policy.
     pub source_tolerance_mm: f64,
 }
 
@@ -199,6 +190,7 @@ fn source_face_infos(
     face_ids: &[u64],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> Option<Vec<FaceInfo>> {
     face_ids
         .iter()
@@ -209,6 +201,7 @@ fn source_face_infos(
                     brep::face_surface(id, entities, index)?,
                     entities,
                     index,
+                    tolerance_mm,
                 ),
                 loops: brep::face_loops(id, entities, index)?,
             })
@@ -276,126 +269,6 @@ impl<'ctx, 'data> ProfileSegmentContext<'ctx, 'data> {
     }
 }
 
-/// Effective recovery tolerance: an authored uncertainty smaller than the
-/// kernel's geometric proof quantum does not tighten the existing source
-/// construction path. Do not use this floored value as a claim about what
-/// the file itself declares.
-pub(crate) fn source_tolerance_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> HashMap<u64, f64> {
-    source_uncertainty_by_representation_item(entities, index, GEOM_TOL_MM)
-}
-
-/// Literal author-declared length uncertainty (including unit conversion),
-/// without any fallback to the kernel's own recovery geometry tolerance.
-pub(crate) fn declared_source_uncertainty_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> HashMap<u64, f64> {
-    source_uncertainty_by_representation_item(entities, index, 0.0)
-}
-
-fn source_uncertainty_by_representation_item(
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-    floor_mm: f64,
-) -> HashMap<u64, f64> {
-    let mut context_cache = HashMap::<u64, Option<f64>>::new();
-    let mut out = HashMap::<u64, f64>::new();
-
-    for entity in entities {
-        let Some(record) = simple_record(entity) else {
-            continue;
-        };
-        if record.name != "ADVANCED_BREP_SHAPE_REPRESENTATION" {
-            continue;
-        }
-        let Some((items, context_id)) = representation_items_and_context(entity) else {
-            continue;
-        };
-        let tolerance = *context_cache.entry(context_id).or_insert_with(|| {
-            representation_context_length_uncertainty_mm(context_id, entities, index)
-        });
-        let Some(tolerance) = tolerance else {
-            continue;
-        };
-        let tolerance = tolerance.max(floor_mm);
-
-        for item in items {
-            out.entry(item)
-                .and_modify(|existing| *existing = existing.min(tolerance))
-                .or_insert(tolerance);
-        }
-    }
-
-    out
-}
-
-fn representation_context_length_uncertainty_mm(
-    context_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<f64> {
-    let entity = entities.get(*index.get(&context_id)?)?;
-    let record = entity_record_named(entity, "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT")?;
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let [Parameter::List(uncertainties)] = params.as_slice() else {
-        return None;
-    };
-
-    let [uncertainty] = uncertainties.as_slice() else {
-        return None;
-    };
-    let uncertainty_id = entity_ref_value(uncertainty)?;
-    let value = uncertainty_measure_mm(uncertainty_id, entities, index)?;
-    if !value.is_finite() || value <= 0.0 || value > MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM {
-        return None;
-    }
-    Some(value)
-}
-
-fn uncertainty_measure_mm(
-    uncertainty_id: u64,
-    entities: &[EntityInstance],
-    index: &HashMap<u64, usize>,
-) -> Option<f64> {
-    let entity = entities.get(*index.get(&uncertainty_id)?)?;
-    let record = entity_record_named(entity, "UNCERTAINTY_MEASURE_WITH_UNIT")?;
-    let Parameter::List(params) = &record.parameter else {
-        return None;
-    };
-    let [
-        Parameter::Typed { keyword, parameter },
-        unit,
-        Parameter::String(name),
-        _,
-    ] = params.as_slice()
-    else {
-        return None;
-    };
-    if keyword.as_ref() != "LENGTH_MEASURE" || name != "distance_accuracy_value" {
-        return None;
-    }
-    let value = parameter_number(parameter)?;
-    let unit_id = entity_ref_value(unit)?;
-    let section = crate::step_document::StepSectionView::new(entities, index);
-    let scale_mm = crate::units::length_unit_scale_mm(unit_id, &section)?;
-    let result = value * scale_mm;
-    result.is_finite().then_some(result)
-}
-
-fn entity_record_named<'a>(entity: &'a EntityInstance, name: &str) -> Option<&'a Record> {
-    match entity {
-        EntityInstance::Simple { record, .. } => (record.name == name).then_some(record),
-        EntityInstance::Complex { subsuper, .. } => {
-            subsuper.0.iter().find(|record| record.name == name)
-        }
-    }
-}
-
 #[must_use = "The computed detect solid surface signatures collection is returned and must be retained or inspected."]
 pub fn detect_solid_surface_signatures(entities: &[EntityInstance]) -> Vec<SolidSurfaceSignature> {
     let index = build_index(entities);
@@ -407,6 +280,8 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
     index: &HashMap<u64, usize>,
 ) -> Vec<SolidSurfaceSignature> {
     let mut out = Vec::new();
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     for entity in entities {
         let Some(record) = simple_record(entity) else {
             continue;
@@ -418,7 +293,11 @@ pub(crate) fn detect_solid_surface_signatures_with_index(
         let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
             continue;
         };
-        let Some(faces) = source_face_infos(&face_ids, entities, index) else {
+        let tolerance_mm = source_tolerances
+            .get(&solid_id)
+            .copied()
+            .unwrap_or(GEOM_TOL_MM);
+        let Some(faces) = source_face_infos(&face_ids, entities, index, tolerance_mm) else {
             continue;
         };
 
@@ -482,7 +361,8 @@ pub(crate) fn detect_solid_revolutions_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidRevolution> {
-    let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     detect_solid_revolutions_with_tolerances(
         entities,
         index,
@@ -525,7 +405,8 @@ pub(crate) fn detect_radial_slot_revolutions_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredRadialSlotRevolution> {
-    let source_tolerances = source_tolerance_by_representation_item(entities, index);
+    let source_tolerances =
+        crate::source_accuracy::source_tolerance_by_representation_item(entities, index);
     detect_radial_slot_revolutions_with_tolerances(
         entities,
         index,
@@ -563,7 +444,7 @@ fn detect_one_solid(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredSolidRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = source_face_infos(&face_ids, entities, index)?;
+    let faces = source_face_infos(&face_ids, entities, index, source_tolerance_mm)?;
     detect_one_solid_from_faces(
         solid_id,
         face_ids,
@@ -587,10 +468,7 @@ pub(crate) fn detect_solid_revolution_from_reduced(
             loops: face.loops.clone(),
         })
         .collect::<Vec<_>>();
-    let source_tolerance_mm = source_tolerance_by_representation_item(entities, index)
-        .get(&solid.solid_id())
-        .copied()
-        .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
+    let source_tolerance_mm = solid.recovery_tolerance_mm();
     detect_one_solid_from_faces(
         solid.solid_id(),
         face_ids,
@@ -602,7 +480,7 @@ pub(crate) fn detect_solid_revolution_from_reduced(
 }
 
 /// Recover a native edited solid without requiring a serialized STEP source
-/// table. The default geometry tolerance applies to these new topology IDs.
+/// table. The edited solid retains the original body's accuracy budget.
 pub(crate) fn detect_native_solid_revolution_from_reduced(
     solid: &ReducedSolid,
 ) -> Option<RecoveredSolidRevolution> {
@@ -627,16 +505,20 @@ fn detect_one_solid_from_faces(
         index,
     };
 
-    if let Some(torus) = detect_full_ring_torus(solid_id, &face_ids, faces) {
+    if let Some(mut torus) = detect_full_ring_torus(solid_id, &face_ids, faces) {
+        torus.source_tolerance_mm = source_tolerance_mm;
         return Some(torus);
     }
-    if let Some(cap) = detect_spherical_cap(solid_id, &face_ids, faces) {
+    if let Some(mut cap) = detect_spherical_cap(solid_id, &face_ids, faces) {
+        cap.source_tolerance_mm = source_tolerance_mm;
         return Some(cap);
     }
-    if let Some(end) = detect_hemispherical_end(solid_id, &face_ids, faces, &context) {
+    if let Some(mut end) = detect_hemispherical_end(solid_id, &face_ids, faces, &context) {
+        end.source_tolerance_mm = source_tolerance_mm;
         return Some(end);
     }
-    if let Some(mixed) = detect_mixed_curved_revolution(solid_id, &face_ids, faces, &context) {
+    if let Some(mut mixed) = detect_mixed_curved_revolution(solid_id, &face_ids, faces, &context) {
+        mixed.source_tolerance_mm = source_tolerance_mm;
         return Some(mixed);
     }
     if face_ids.len() < 3 {
@@ -711,7 +593,9 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
     if selected_face_ids.len() < 3 {
         return None;
     }
-    let faces = source_face_infos(selected_face_ids, entities, index)?;
+    let source_tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
+    let faces = source_face_infos(selected_face_ids, entities, index, source_tolerance_mm)?;
     let edge_faces = face_edge_uses(&faces)?;
     if !selected_faces_connected(faces.len(), &edge_faces) {
         return None;
@@ -763,7 +647,7 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
         || point_to_unit_line_distance(interface_circle.center_mm, axis_origin_mm, axis_direction)
             > GEOM_TOL_MM
         || !interface_circle.radius_mm.is_finite()
-        || interface_circle.radius_mm <= GEOM_TOL_MM
+        || interface_circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -779,10 +663,6 @@ pub(crate) fn recover_axisymmetric_subbody_with_circular_cap(
         entities,
         index,
     };
-    let source_tolerance_mm = source_tolerance_by_representation_item(entities, index)
-        .get(&solid_id)
-        .copied()
-        .unwrap_or(REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     let mut recovered = detect_mixed_curved_revolution_with_synthetic(
         solid_id,
         selected_face_ids,
@@ -810,7 +690,7 @@ fn detect_one_radial_slot(
     source_tolerance_mm: f64,
 ) -> Option<RecoveredRadialSlotRevolution> {
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
-    let faces = source_face_infos(&face_ids, entities, index)?;
+    let faces = source_face_infos(&face_ids, entities, index, source_tolerance_mm)?;
 
     let edge_faces = closed_shell_edge_uses(&faces)?;
     let context = TopologyContext {
@@ -1220,8 +1100,8 @@ fn detect_full_ring_torus(
     };
     if !first.major_radius_mm.is_finite()
         || !first.minor_radius_mm.is_finite()
-        || first.minor_radius_mm <= GEOM_TOL_MM
-        || first.major_radius_mm <= first.minor_radius_mm + GEOM_TOL_MM
+        || first.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+        || first.major_radius_mm <= first.minor_radius_mm
     {
         return None;
     }
@@ -1326,7 +1206,9 @@ fn detect_spherical_cap(
     }
     let (plane_face, plane) = plane_face?;
     let (_, first_sphere) = *sphere_faces.first()?;
-    if !first_sphere.radius_mm.is_finite() || first_sphere.radius_mm <= GEOM_TOL_MM {
+    if !first_sphere.radius_mm.is_finite()
+        || first_sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
 
@@ -1518,9 +1400,9 @@ fn detect_hemispherical_end(
     let (plane_index, plane_face, plane) = plane_face?;
 
     if !first_sphere.radius_mm.is_finite()
-        || first_sphere.radius_mm <= GEOM_TOL_MM
+        || first_sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || !first_cylinder.radius_mm.is_finite()
-        || first_cylinder.radius_mm <= GEOM_TOL_MM
+        || first_cylinder.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -1835,8 +1717,8 @@ fn detect_mixed_curved_revolution_with_synthetic(
     for (face_index, torus) in torus_faces {
         if !torus.major_radius_mm.is_finite()
             || !torus.minor_radius_mm.is_finite()
-            || torus.minor_radius_mm <= GEOM_TOL_MM
-            || torus.major_radius_mm <= GEOM_TOL_MM
+            || torus.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+            || torus.major_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
             || !parallel(torus.axis, axis_direction)
             || point_to_unit_line_distance(torus.center_mm, axis_origin_mm, axis_direction)
                 > GEOM_TOL_MM
@@ -1858,7 +1740,7 @@ fn detect_mixed_curved_revolution_with_synthetic(
     let mut sphere_supports = Vec::<brep::SphereSupport>::new();
     for (face_index, sphere) in sphere_faces {
         if !sphere.radius_mm.is_finite()
-            || sphere.radius_mm <= GEOM_TOL_MM
+            || sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
             || point_to_unit_line_distance(sphere.center_mm, axis_origin_mm, axis_direction)
                 > GEOM_TOL_MM
         {
@@ -1947,7 +1829,7 @@ fn sphere_profile_arc(
 ) -> Option<(MeridianCurve, f64)> {
     if face_indices.is_empty()
         || !sphere.radius_mm.is_finite()
-        || sphere.radius_mm <= GEOM_TOL_MM
+        || sphere.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
         || point_to_unit_line_distance(sphere.center_mm, axis_origin_mm, axis_direction)
             > GEOM_TOL_MM
     {
@@ -2081,7 +1963,9 @@ fn sphere_parallel_boundary_point(
     axis_origin_mm: [f64; 3],
     axis_direction: [f64; 3],
 ) -> Option<([f64; 2], f64)> {
-    if !parallel(circle.normal, axis_direction) || circle.radius_mm <= GEOM_TOL_MM {
+    if !parallel(circle.normal, axis_direction)
+        || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let axial = axial_coordinate(circle.center_mm, axis_origin_mm, axis_direction);
@@ -2134,8 +2018,8 @@ fn torus_profile_arc(
     edge_faces: &HashMap<u64, Vec<usize>>,
 ) -> Option<(MeridianCurve, f64)> {
     if face_indices.is_empty()
-        || torus.major_radius_mm <= GEOM_TOL_MM
-        || torus.minor_radius_mm <= GEOM_TOL_MM
+        || torus.major_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+        || torus.minor_radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -2262,7 +2146,9 @@ fn torus_parallel_boundary_point(
     axis_origin_mm: [f64; 3],
     axis_direction: [f64; 3],
 ) -> Option<([f64; 2], f64)> {
-    if !parallel(circle.normal, axis_direction) || circle.radius_mm <= GEOM_TOL_MM {
+    if !parallel(circle.normal, axis_direction)
+        || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let axial = axial_coordinate(circle.center_mm, axis_origin_mm, axis_direction);
@@ -2404,9 +2290,10 @@ fn cylinder_profile_segment_with_angular_trims(
     } = segment_context;
     if face.loops.len() != 1
         || !parallel(cylinder.axis, axis)
-        || point_to_unit_line_distance(cylinder.axis_origin_mm, axis_origin, axis) > GEOM_TOL_MM
+        || point_to_unit_line_distance(cylinder.axis_origin_mm, axis_origin, axis)
+            > source_tolerance_mm
         || !cylinder.radius_mm.is_finite()
-        || cylinder.radius_mm <= GEOM_TOL_MM
+        || cylinder.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
     {
         return None;
     }
@@ -2571,7 +2458,8 @@ fn cone_profile_segment_with_angular_trims_inner(
     } = segment_context;
     if face.loops.len() != 1
         || !parallel(cone.axis, axis)
-        || point_to_unit_line_distance(cone.reference_origin_mm, axis_origin, axis) > GEOM_TOL_MM
+        || point_to_unit_line_distance(cone.reference_origin_mm, axis_origin, axis)
+            > source_tolerance_mm
         || !cone.reference_radius_mm.is_finite()
         || cone.reference_radius_mm < 0.0
         || !cone.semi_angle_rad.is_finite()
@@ -2669,7 +2557,7 @@ fn cone_profile_segment_with_angular_trims_inner(
             }
             CurveSupport::Circle(circle) => {
                 if !circle.radius_mm.is_finite()
-                    || circle.radius_mm <= GEOM_TOL_MM
+                    || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                     || !parallel(circle.normal, axis)
                     || point_to_unit_line_distance(circle.center_mm, axis_origin, axis)
                         > GEOM_TOL_MM
@@ -2707,7 +2595,8 @@ fn cone_profile_segment_with_angular_trims_inner(
                                     axis,
                                 ) > GEOM_TOL_MM
                                 || !cylinder.radius_mm.is_finite()
-                                || cylinder.radius_mm <= GEOM_TOL_MM
+                                || cylinder.radius_mm
+                                    <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                             {
                                 return None;
                             }
@@ -2847,7 +2736,7 @@ fn cone_profile_segment_with_angular_trims_inner(
     for sample in &boundary_samples {
         profile_residual = profile_residual.max((sample[0] - radius_at(sample[1])).abs());
     }
-    if profile_residual > GEOM_TOL_MM {
+    if profile_residual > source_tolerance_mm {
         return None;
     }
 
@@ -3167,7 +3056,8 @@ fn plane_profile_segment_with_angular_trims(
             match &edge.support {
                 CurveSupport::Circle(circle) => {
                     if !circle.radius_mm.is_finite()
-                        || circle.radius_mm <= GEOM_TOL_MM
+                        || circle.radius_mm
+                            <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
                         || !parallel(circle.normal, axis)
                         || point_to_unit_line_distance(circle.center_mm, axis_origin, axis)
                             > GEOM_TOL_MM
@@ -3291,7 +3181,7 @@ fn plane_profile_segment_with_angular_trims(
         }
     }
 
-    if geometry_residual > GEOM_TOL_MM || source_support_residual > source_tolerance_mm {
+    if geometry_residual > source_tolerance_mm || source_support_residual > source_tolerance_mm {
         return None;
     }
 

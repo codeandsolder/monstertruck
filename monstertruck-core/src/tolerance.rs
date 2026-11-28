@@ -354,6 +354,24 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
     stl_quantization_step_factor: 0.5,
 };
 
+/// Default native STEP reconstruction accuracy in mm (10 µm).
+/// Source-declared uncertainty can increase, but never decrease, this budget.
+pub const NATIVE_STEP_RECOVERY_MM: f64 = 1.0e-2;
+
+/// Effective native recovery budget. The declared uncertainty must already
+/// be converted to millimetres. Missing/invalid metadata uses the default.
+#[must_use]
+pub fn native_step_recovery_mm(source_uncertainty_mm: Option<f64>) -> f64 {
+    source_uncertainty_mm
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map_or(NATIVE_STEP_RECOVERY_MM, |value| {
+            value.max(NATIVE_STEP_RECOVERY_MM)
+        })
+}
+
+/// Default geometric deviation for reconstruction from tessellated source, in mm (10 µm).
+pub const MESH_RECOVERY_MM: f64 = 1.0e-2;
+
 /// STEP-specific accuracy policy.
 ///
 /// Unlike the unitless kernel thresholds, all distance fields here are in
@@ -361,9 +379,10 @@ pub const DEFAULT_NUMERICAL_TOLERANCES: NumericalTolerances = NumericalTolerance
 /// explicitly labeled. These are measured source admissibility/recognition
 /// thresholds; none grants permission to collapse unrelated topology.
 ///
-/// Deliberately separate fields for different semantic decisions even where
-/// the current numbers happen to coincide: future tuning must not silently
-/// couple unrelated proof and recovery operations.
+/// Numerical and representation thresholds remain distinct. All physical
+/// source fitting defaults to NATIVE_STEP_RECOVERY_MM; a valid declared
+/// source uncertainty is a lower bound. The acceptance budget is not
+/// inferred from these arithmetic or indexing parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StepRecoveryTolerances {
     /// Numerical consistency of a reconstructed STEP support, not permission to heal a feature.
@@ -372,9 +391,6 @@ pub struct StepRecoveryTolerances {
     /// Maximum source-feature reconciliation distance, subject to separate topology checks.
     /// Unit: mm.
     pub feature_heal_mm: f64,
-    /// Default permitted STEP CAD modeling-error budget.
-    /// Unit: mm.
-    pub cad_project_standard_mm: f64,
     /// STEP intersection chord-sampling accuracy target, independent of the
     /// CAD modeling-change budget. Unit: mm.
     pub cad_step_export_accuracy_mm: f64,
@@ -396,18 +412,12 @@ pub struct StepRecoveryTolerances {
     /// Rejecting zero or nonunit CAD edge selector normals.
     /// Unit: dimensionless.
     pub cad_normal_unit: f64,
-    /// Surface recovery/recognition residual against input coordinates.
-    /// Unit: mm.
-    pub surface_geometry_mm: f64,
     /// Homogeneous NURBS weight comparison for recovery.
     /// Unit: dimensionless.
     pub surface_weight_relative: f64,
     /// Knot/parameter endpoint comparison for surface recognition.
     /// Unit: native surface parameter.
     pub surface_parameter: f64,
-    /// Geometric residual in extrusion, loft, revolution, and sweep reconstruction.
-    /// Unit: mm.
-    pub solid_geometry_mm: f64,
     /// Direction cosines/orthogonality for extrusion and loft recognition.
     /// Unit: dimensionless.
     pub solid_direction: f64,
@@ -432,9 +442,6 @@ pub struct StepRecoveryTolerances {
     /// Direction agreement in reduced boundary representation.
     /// Unit: dimensionless.
     pub reduced_brep_direction: f64,
-    /// Thickness and overlap matching for sheet-metal recovery.
-    /// Unit: mm.
-    pub sheet_geometry_mm: f64,
     /// Direction agreement for formed sheet faces and bends.
     /// Unit: dimensionless.
     pub sheet_direction: f64,
@@ -444,9 +451,6 @@ pub struct StepRecoveryTolerances {
     /// Degenerate-angle threshold in extrusion inference.
     /// Unit: radians.
     pub solid_extrusion_angle_rad: f64,
-    /// Spatial residual for periodic chains and periodic bodies.
-    /// Unit: mm.
-    pub periodic_geometry_mm: f64,
     /// Coordinate matching while resizing periodic features.
     /// Unit: mm.
     pub periodic_resize_mm: f64,
@@ -480,9 +484,6 @@ pub struct StepRecoveryTolerances {
     /// Axis/normal quantization in independent boundary proof.
     /// Unit: dimensionless.
     pub boundary_direction_quant: f64,
-    /// Factor converting boundary scalar quantum to admitted support locus residual.
-    /// Unit: multiplier.
-    pub boundary_locus_scale: f64,
     /// Factor converting boundary direction quantum to proof normal residual.
     /// Unit: multiplier.
     pub boundary_angular_scale: f64,
@@ -516,12 +517,6 @@ pub struct StepRecoveryTolerances {
     /// Side and orientation checks in planar feature recognition.
     /// Unit: dimensionless.
     pub planar_feature_side: f64,
-    /// Planar feature candidate residual.
-    /// Unit: mm.
-    pub planar_feature_fit_mm: f64,
-    /// Upper source-data uncertainty for revolution reconstruction.
-    /// Unit: mm.
-    pub revolution_max_source_uncertainty_mm: f64,
     /// Axis grouping criterion in compound CAD recovery.
     /// Unit: dimensionless.
     pub axis_group_dot: f64,
@@ -534,12 +529,6 @@ pub struct StepRecoveryTolerances {
     /// Orthonormality for reconstructed source sweep profiles.
     /// Unit: dimensionless.
     pub source_sweep_frame: f64,
-    /// Strict original sweep support fitting error.
-    /// Unit: mm.
-    pub source_sweep_strict_residual_mm: f64,
-    /// Larger source sweep support fitting error.
-    /// Unit: mm.
-    pub source_sweep_loose_residual_mm: f64,
     /// Tie breaker between alternative pattern basis fits.
     /// Unit: dimensionless cost.
     pub pattern_basis_cost_delta: f64,
@@ -618,12 +607,6 @@ pub struct StepRecoveryTolerances {
     /// Inverse normal quantization step for source identity keys.
     /// Unit: dimensionless.
     pub source_identity_normal_quantization: f64,
-    /// Point-on-original-source support recovery check.
-    /// Unit: mm.
-    pub source_feature_incidence_mm: f64,
-    /// Analytic surface candidate fitting in boundary proof.
-    /// Unit: mm.
-    pub source_analytic_fit_mm: f64,
     /// Finite parameter sampling fraction for boundary tangent proof.
     /// Unit: dimensionless.
     pub source_boundary_tangent_fraction: f64,
@@ -648,18 +631,9 @@ pub struct StepRecoveryTolerances {
     /// Allowed slack when decomposing corner arcs into quarter turns.
     /// Unit: radians.
     pub source_rounding_quarter_turn_slack_rad: f64,
-    /// Straight source curve fit against expected 3D locus.
-    /// Unit: mm.
-    pub source_line_residual_mm: f64,
-    /// Point matching while reconstructing source cap boundary.
-    /// Unit: mm.
-    pub source_cap_point_match_mm: f64,
     /// Direction agreement in source cap and circle sweep frames.
     /// Unit: dimensionless.
     pub source_cap_direction_cosine: f64,
-    /// Source cap and sphere common-support matching.
-    /// Unit: mm.
-    pub source_cap_rounding_residual_mm: f64,
     /// Relative radius offset bound in source support interning.
     /// Unit: dimensionless.
     pub source_intern_radius_scale_relative: f64,
@@ -669,12 +643,6 @@ pub struct StepRecoveryTolerances {
     /// Reject near-degenerate pattern-recovery support vectors.
     /// Unit: mm².
     pub pattern_inverse_norm_squared: f64,
-    /// Maximum acceptable fitted sweep support residual.
-    /// Unit: mm.
-    pub source_sweep_absolute_residual_mm: f64,
-    /// Scale-dependent sweep support comparison.
-    /// Unit: dimensionless.
-    pub source_sweep_relative_compare: f64,
     /// Scale-dependent sheet geometry comparison.
     /// Unit: dimensionless.
     pub source_sheet_relative_compare: f64,
@@ -687,9 +655,6 @@ pub struct StepRecoveryTolerances {
     /// Tiny allowed source-fitted sweep tolerance budget overrun.
     /// Unit: mm.
     pub source_sweep_tolerance_slack_mm: f64,
-    /// Position check for cap-slot boundary recovery.
-    /// Unit: mm.
-    pub source_slot_boundary_mm: f64,
     /// Arc sweep endpoint slop in CAD feature reconstruction.
     /// Unit: radians.
     pub source_cad_arc_angle_slack_rad: f64,
@@ -699,7 +664,6 @@ pub struct StepRecoveryTolerances {
 pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecoveryTolerances {
     numerical_geometry_mm: 1.0e-7,
     feature_heal_mm: 0.01,
-    cad_project_standard_mm: 0.01,
     cad_step_export_accuracy_mm: 1.0e-5,
     cad_edge_selector_mm: 1.0e-7,
     cad_axis_angle_rad: 1.0e-10,
@@ -707,10 +671,8 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     cad_profile_join_mm: 1.0e-8,
     cad_profile_angle_rad: 1.0e-12,
     cad_normal_unit: 1.0e-12,
-    surface_geometry_mm: 1.0e-5,
     surface_weight_relative: 1.0e-12,
     surface_parameter: 1.0e-12,
-    solid_geometry_mm: 1.0e-7,
     solid_direction: 1.0e-10,
     sweep_direction: 1.0e-9,
     revolution_direction: 1.0e-9,
@@ -719,11 +681,9 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     edge_treatment_direction: 1.0e-8,
     inverse_edge_treatment_direction: 1.0e-10,
     reduced_brep_direction: 1.0e-10,
-    sheet_geometry_mm: 1.0e-5,
     sheet_direction: 1.0e-9,
     formed_sheet_direction: 1.0e-10,
     solid_extrusion_angle_rad: 1.0e-10,
-    periodic_geometry_mm: 1.0e-5,
     periodic_resize_mm: 1.0e-7,
     pattern_geometry_mm: 1.0e-7,
     pattern_orientation: 1.0e-10,
@@ -735,7 +695,6 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     boundary_point_quant_mm: 1.0e-7,
     boundary_scalar_quant_mm: 1.0e-7,
     boundary_direction_quant: 1.0e-10,
-    boundary_locus_scale: 4.0,
     boundary_angular_scale: 4.0,
     line_collinear: 1.0e-12,
     line_monotonic: 1.0e-12,
@@ -747,14 +706,10 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     curve_replica_transform_mm: 1.0e-12,
     surface_replica_transform_mm: 1.0e-12,
     planar_feature_side: 1.0e-8,
-    planar_feature_fit_mm: 1.0e-7,
-    revolution_max_source_uncertainty_mm: 1.0e-5,
     axis_group_dot: 1.0e-10,
     station_position_mm: 1.0e-7,
     source_cap_frame: 1.0e-10,
     source_sweep_frame: 1.0e-8,
-    source_sweep_strict_residual_mm: 1.0e-6,
-    source_sweep_loose_residual_mm: 1.0e-5,
     pattern_basis_cost_delta: 1.0e-12,
     pattern_quantization_floor: 1.0e-9,
     pattern_determinant_squared: 1.0e-18,
@@ -781,8 +736,6 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     source_identity_transform: 1.0e-12,
     source_identity_quantization_inv_mm: 1.0e9,
     source_identity_normal_quantization: 1.0e5,
-    source_feature_incidence_mm: 1.0e-7,
-    source_analytic_fit_mm: 1.0e-7,
     source_boundary_tangent_fraction: 1.0e-5,
     source_revolution_angle_floor_rad: 1.0e-12,
     source_revolution_param_floor: 1.0e-12,
@@ -791,20 +744,14 @@ pub const DEFAULT_STEP_RECOVERY_TOLERANCES: StepRecoveryTolerances = StepRecover
     source_rounding_arc_max_slack_rad: 1.0e-7,
     source_rounding_parameter_slack: 1.0e-9,
     source_rounding_quarter_turn_slack_rad: 1.0e-10,
-    source_line_residual_mm: 1.0e-7,
-    source_cap_point_match_mm: 1.0e-8,
     source_cap_direction_cosine: 1.0e-8,
-    source_cap_rounding_residual_mm: 1.0e-12,
     source_intern_radius_scale_relative: 1.0e-10,
     source_periodic_direction_quant: 1.0e-10,
     pattern_inverse_norm_squared: 1.0e-24,
-    source_sweep_absolute_residual_mm: 1.0e-5,
-    source_sweep_relative_compare: 1.0e-9,
     source_sheet_relative_compare: 1.0e-9,
     source_periodic_weld_quantization_inv: 1.0e12,
     source_periodic_area_min: 1.0e-12,
     source_sweep_tolerance_slack_mm: 1.0e-15,
-    source_slot_boundary_mm: 1.0e-7,
     source_cad_arc_angle_slack_rad: 1.0e-9,
 };
 

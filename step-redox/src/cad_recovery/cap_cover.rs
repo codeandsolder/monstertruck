@@ -15,10 +15,10 @@ use crate::solid_extrusions::{
     profile_contains_with_rotated_ray, signed_area_curves, source_boundary_edge_witness_points,
 };
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use std::collections::HashSet;
 
-const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const LENGTH: f64 = NATIVE_STEP_RECOVERY_MM;
 
 fn strict_contains(cap: &RecoveredSourceCapExtrusion, point: [f64; 3]) -> bool {
     let delta = sub(point, cap.origin_mm);

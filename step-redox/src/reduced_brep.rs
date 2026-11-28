@@ -5,10 +5,12 @@ use crate::math3::{
 };
 use crate::step_graph::entity_id;
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+#[cfg(test)]
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use step_p21::ast::EntityInstance;
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.reduced_brep_direction;
 
 /// Geometry/topology view used by inverse-feature reducers.
@@ -29,9 +31,10 @@ impl ReducedFace {
         face_id: u64,
         entities: &[EntityInstance],
         index: &HashMap<u64, usize>,
+        tolerance_mm: f64,
     ) -> Option<Self> {
         let surface_id = brep::face_surface(face_id, entities, index)?;
-        let surface = brep::surface_support(surface_id, entities, index);
+        let surface = brep::surface_support(surface_id, entities, index, tolerance_mm);
         let loops = brep::face_loops(face_id, entities, index)?;
         let surface_forward = match brep::face_sense(face_id, entities, index)?.as_str() {
             "T" => true,
@@ -54,6 +57,7 @@ impl ReducedFace {
 #[derive(Debug, Clone)]
 pub struct ReducedSolid {
     solid_id: u64,
+    recovery_tolerance_mm: f64,
     faces: BTreeMap<u64, ReducedFace>,
     next_virtual_id: u64,
 }
@@ -91,10 +95,17 @@ impl ReducedSolid {
         entities: &[EntityInstance],
         index: &HashMap<u64, usize>,
     ) -> Option<Self> {
+        let recovery_tolerance_mm =
+            crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
         let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
         let faces = face_ids
             .into_iter()
-            .map(|face_id| Some((face_id, ReducedFace::from_step(face_id, entities, index)?)))
+            .map(|face_id| {
+                Some((
+                    face_id,
+                    ReducedFace::from_step(face_id, entities, index, recovery_tolerance_mm)?,
+                ))
+            })
             .collect::<Option<BTreeMap<_, _>>>()?;
         let next_virtual_id = entities
             .iter()
@@ -104,6 +115,7 @@ impl ReducedSolid {
             .checked_add(1)?;
         Some(Self {
             solid_id,
+            recovery_tolerance_mm,
             faces,
             next_virtual_id,
         })
@@ -111,13 +123,20 @@ impl ReducedSolid {
 
     pub const fn solid_id(&self) -> u64 { self.solid_id }
 
+    /// Physical accuracy of the original source, retained through topology edits.
+    pub const fn recovery_tolerance_mm(&self) -> f64 { self.recovery_tolerance_mm }
+
     /// Build a semantic B-rep view directly from a kernel-owned native solid.
     ///
     /// The caller supplies its already ordered, exact-trim faces. Native
     /// topology identities belong to the current native solid and never
     /// masquerade as STEP source provenance.
     #[cfg(feature = "cad-kernel-monstertruck")]
-    pub(crate) fn from_native_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
+    pub(crate) fn from_native_faces(
+        solid_id: u64,
+        faces: Vec<ReducedFace>,
+        recovery_tolerance_mm: f64,
+    ) -> Self {
         let max_id = faces
             .iter()
             .flat_map(|face| {
@@ -139,6 +158,7 @@ impl ReducedSolid {
             .unwrap_or(0);
         Self {
             solid_id,
+            recovery_tolerance_mm,
             faces: faces.into_iter().map(|face| (face.id, face)).collect(),
             next_virtual_id: max_id.saturating_add(1),
         }
@@ -148,6 +168,7 @@ impl ReducedSolid {
     pub(crate) fn from_test_faces(solid_id: u64, faces: Vec<ReducedFace>) -> Self {
         Self {
             solid_id,
+            recovery_tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             faces: faces.into_iter().map(|face| (face.id, face)).collect(),
             next_virtual_id: 1,
         }
@@ -945,6 +966,7 @@ mod tests {
         };
         let mut solid = ReducedSolid {
             solid_id: 100,
+            recovery_tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             faces: BTreeMap::from([(1, first), (2, second)]),
             next_virtual_id: 1000,
         };
@@ -970,6 +992,7 @@ mod tests {
         };
         let mut solid = ReducedSolid {
             solid_id: 100,
+            recovery_tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             faces: BTreeMap::from([(1, first), (2, second), (99, treatment)]),
             next_virtual_id: 1000,
         };

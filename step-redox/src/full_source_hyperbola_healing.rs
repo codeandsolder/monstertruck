@@ -345,14 +345,20 @@ fn prepare_source_repair(
     let (native, intersection_id, plane_id, cone_id) =
         analytic_geometry_with_local_refs(&candidate, scale)?;
     let native_index = build_index(&native);
-    let brep::SurfaceSupport::Plane(replacement) =
-        brep::surface_support(plane_id, &native, &native_index)
-    else {
+    let brep::SurfaceSupport::Plane(replacement) = brep::surface_support(
+        plane_id,
+        &native,
+        &native_index,
+        monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+    ) else {
         bail!("serialized replacement plane cannot be resolved");
     };
-    let brep::SurfaceSupport::Plane(original) =
-        brep::surface_support(original_plane, &source.entities, &index)
-    else {
+    let brep::SurfaceSupport::Plane(original) = brep::surface_support(
+        original_plane,
+        &source.entities,
+        &index,
+        monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+    ) else {
         bail!("original source plane cannot be resolved");
     };
     if crate::math3::dot(original.normal, replacement.normal) <= 0.0 {
@@ -688,9 +694,12 @@ mod tests {
         let control_id = 51619;
         let control = crate::step_entities::cartesian_point(control_id, &section.entities, &index)
             .context("retained spline control is missing")?;
-        let brep::SurfaceSupport::Plane(plane) =
-            brep::surface_support(82429, &section.entities, &index)
-        else {
+        let brep::SurfaceSupport::Plane(plane) = brep::surface_support(
+            82429,
+            &section.entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             bail!("fixture plane is missing");
         };
         let changed = crate::math3::add(control, crate::math3::scale(plane.normal, 0.01));

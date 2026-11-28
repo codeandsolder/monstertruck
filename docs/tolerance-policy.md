@@ -134,7 +134,6 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `step_uv_clamp_probe` | `1.0e-3` | Native UV-coordinate threshold for STEP trim seam probe. |
 | `step_trim_residual_mm` | `1.0e-8` | Millimetre residual for STEP trim curve reconstruction. |
 | `step_output_distance_accuracy` | `1.0e-6` | STEP file uncertainty metadata (current model units). |
-| `step_output_scientific_notation_threshold` | `1.0e-2` | Non-geometric STEP number formatting threshold, dimensionless. |
 | `boolean_fragment_stitch_scale` | `4.0` | Scale multiplying Boolean numeric tolerance when joining near-fragments. |
 | `boolean_coplanar_scale` | `2.0` | Scale multiplying Boolean numerical tolerance in coplanar matching. |
 | `boolean_classifier_offset_factor` | `8.0` | Classifier witness offset relative to explicit Boolean length tolerance. |
@@ -148,23 +147,29 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `stl_quantization_offset_factor` | `0.25` | Offset multiplier for STL coordinate quantization. |
 | `stl_quantization_step_factor` | `0.5` | Step multiplier for STL coordinate quantization. |
 
+## Physical recovery accuracy (millimetres)
+
+- Native STEP reconstruction: `NATIVE_STEP_RECOVERY_MM` = 0.01 mm (10 µm) default; effective budget = max(default, declared source uncertainty in mm).
+- Tessellated source reconstruction: `MESH_RECOVERY_MM` = 0.01 mm (10 µm).
+
+A fitting allowance is not a minimum feature size, a coordinate quantization
+step, or an arithmetic epsilon. A large candidate-fit search neighborhood
+does not authorize an output outside the native reconstruction budget.
+
 ## STEP reconstruction inventory: current active defaults
 
 | Field | Current | Meaning / units |
 |---|---:|---|
 | `numerical_geometry_mm` | `1.0e-7` | Numerical consistency of a reconstructed STEP support, not permission to heal a feature. Unit: mm. |
 | `feature_heal_mm` | `0.01` | Maximum source-feature reconciliation distance, subject to separate topology checks. Unit: mm. |
-| `cad_project_standard_mm` | `0.01` | Default permitted STEP CAD modeling-error budget. Unit: mm. |
 | `cad_edge_selector_mm` | `1.0e-7` | Matching user-selected edge endpoints against their literal coordinates. Unit: mm. |
 | `cad_axis_angle_rad` | `1.0e-10` | Detecting revolution full turns and zero angular sweeps. Unit: radians. |
 | `cad_axis_locus_mm` | `1.0e-9` | Detecting vertices and edges along a revolution axis. Unit: mm. |
 | `cad_profile_join_mm` | `1.0e-8` | Joining successive CAD profile segments. Unit: mm. |
 | `cad_profile_angle_rad` | `1.0e-12` | Rejecting vanishing profile arc sweep. Unit: radians. |
 | `cad_normal_unit` | `1.0e-12` | Rejecting zero or nonunit CAD edge selector normals. Unit: dimensionless. |
-| `surface_geometry_mm` | `1.0e-5` | Surface recovery/recognition residual against input coordinates. Unit: mm. |
 | `surface_weight_relative` | `1.0e-12` | Homogeneous NURBS weight comparison for recovery. Unit: dimensionless. |
 | `surface_parameter` | `1.0e-12` | Knot/parameter endpoint comparison for surface recognition. Unit: native surface parameter. |
-| `solid_geometry_mm` | `1.0e-7` | Geometric residual in extrusion, loft, revolution, and sweep reconstruction. Unit: mm. |
 | `solid_direction` | `1.0e-10` | Direction cosines/orthogonality for extrusion and loft recognition. Unit: dimensionless. |
 | `sweep_direction` | `1.0e-9` | Direction cosines in swept-profile recognition. Unit: dimensionless. |
 | `revolution_direction` | `1.0e-9` | Axis/orientation agreement for revolution recognition. Unit: dimensionless. |
@@ -173,11 +178,9 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `edge_treatment_direction` | `1.0e-8` | Direction agreement for edge-treatment recognition. Unit: dimensionless. |
 | `inverse_edge_treatment_direction` | `1.0e-10` | Direction agreement in inverse fillet/chamfer identification. Unit: dimensionless. |
 | `reduced_brep_direction` | `1.0e-10` | Direction agreement in reduced boundary representation. Unit: dimensionless. |
-| `sheet_geometry_mm` | `1.0e-5` | Thickness and overlap matching for sheet-metal recovery. Unit: mm. |
 | `sheet_direction` | `1.0e-9` | Direction agreement for formed sheet faces and bends. Unit: dimensionless. |
 | `formed_sheet_direction` | `1.0e-10` | Tighter formed-sheet normal and axis agreement. Unit: dimensionless. |
 | `solid_extrusion_angle_rad` | `1.0e-10` | Degenerate-angle threshold in extrusion inference. Unit: radians. |
-| `periodic_geometry_mm` | `1.0e-5` | Spatial residual for periodic chains and periodic bodies. Unit: mm. |
 | `periodic_resize_mm` | `1.0e-7` | Coordinate matching while resizing periodic features. Unit: mm. |
 | `pattern_geometry_mm` | `1.0e-7` | Pattern center and lattice matching during feature recognition. Unit: mm. |
 | `pattern_orientation` | `1.0e-10` | Pattern basis orientation and angular consistency. Unit: dimensionless. |
@@ -189,7 +192,6 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `boundary_point_quant_mm` | `1.0e-7` | Position quantization for independent boundary proof. Unit: mm. |
 | `boundary_scalar_quant_mm` | `1.0e-7` | Scalar offsets quantization in boundary proof. Unit: mm. |
 | `boundary_direction_quant` | `1.0e-10` | Axis/normal quantization in independent boundary proof. Unit: dimensionless. |
-| `boundary_locus_scale` | `4.0` | Factor converting boundary scalar quantum to admitted support locus residual. Unit: multiplier. |
 | `boundary_angular_scale` | `4.0` | Factor converting boundary direction quantum to proof normal residual. Unit: multiplier. |
 | `line_collinear` | `1.0e-12` | Line segment angular collinearity comparison. Unit: dimensionless. |
 | `line_monotonic` | `1.0e-12` | Ordering slack in line recovery. Unit: dimensionless. |
@@ -201,14 +203,10 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `curve_replica_transform_mm` | `1.0e-12` | Pure translation residual for exact curve replication. Unit: mm. |
 | `surface_replica_transform_mm` | `1.0e-12` | Pure translation residual for exact surface replication. Unit: mm. |
 | `planar_feature_side` | `1.0e-8` | Side and orientation checks in planar feature recognition. Unit: dimensionless. |
-| `planar_feature_fit_mm` | `1.0e-7` | Planar feature candidate residual. Unit: mm. |
-| `revolution_max_source_uncertainty_mm` | `1.0e-5` | Upper source-data uncertainty for revolution reconstruction. Unit: mm. |
 | `axis_group_dot` | `1.0e-10` | Axis grouping criterion in compound CAD recovery. Unit: dimensionless. |
 | `station_position_mm` | `1.0e-7` | Station clustering in cap/loft CAD reconstruction. Unit: mm. |
 | `source_cap_frame` | `1.0e-10` | Frame orthonormality for reconstructed source cap. Unit: dimensionless. |
 | `source_sweep_frame` | `1.0e-8` | Orthonormality for reconstructed source sweep profiles. Unit: dimensionless. |
-| `source_sweep_strict_residual_mm` | `1.0e-6` | Strict original sweep support fitting error. Unit: mm. |
-| `source_sweep_loose_residual_mm` | `1.0e-5` | Larger source sweep support fitting error. Unit: mm. |
 | `pattern_basis_cost_delta` | `1.0e-12` | Tie breaker between alternative pattern basis fits. Unit: dimensionless cost. |
 | `pattern_quantization_floor` | `1.0e-9` | Minimum position quantization for feature pattern candidates. Unit: mm. |
 | `pattern_determinant_squared` | `1.0e-18` | Reject nearly degenerate two-dimensional pattern bases. Unit: mm⁴. |
@@ -235,8 +233,6 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `source_identity_transform` | `1.0e-12` | Zero-motion matching in source rigid transformations. Unit: mm. |
 | `source_identity_quantization_inv_mm` | `1.0e9` | Reciprocal position quantization step for source identity keys. Unit: mm^-1. |
 | `source_identity_normal_quantization` | `1.0e5` | Inverse normal quantization step for source identity keys. Unit: dimensionless. |
-| `source_feature_incidence_mm` | `1.0e-7` | Point-on-original-source support recovery check. Unit: mm. |
-| `source_analytic_fit_mm` | `1.0e-7` | Analytic surface candidate fitting in boundary proof. Unit: mm. |
 | `source_boundary_tangent_fraction` | `1.0e-5` | Finite parameter sampling fraction for boundary tangent proof. Unit: dimensionless. |
 | `source_revolution_angle_floor_rad` | `1.0e-12` | Minimum valid source meridian-angle comparison. Unit: radians. |
 | `source_revolution_param_floor` | `1.0e-12` | Lower bound for parameter-space arc geometry slop. Unit: native curve parameter. |
@@ -245,20 +241,14 @@ field. Do not conflate default *numeric resolution* with a user's maximum
 | `source_rounding_arc_max_slack_rad` | `1.0e-7` | Allowed angular excess beyond a full rounding sweep. Unit: radians. |
 | `source_rounding_parameter_slack` | `1.0e-9` | Bound on source rounding parameter interval comparisons. Unit: native curve parameter. |
 | `source_rounding_quarter_turn_slack_rad` | `1.0e-10` | Allowed slack when decomposing corner arcs into quarter turns. Unit: radians. |
-| `source_line_residual_mm` | `1.0e-7` | Straight source curve fit against expected 3D locus. Unit: mm. |
-| `source_cap_point_match_mm` | `1.0e-8` | Point matching while reconstructing source cap boundary. Unit: mm. |
 | `source_cap_direction_cosine` | `1.0e-8` | Direction agreement in source cap and circle sweep frames. Unit: dimensionless. |
-| `source_cap_rounding_residual_mm` | `1.0e-12` | Source cap and sphere common-support matching. Unit: mm. |
 | `source_intern_radius_scale_relative` | `1.0e-10` | Relative radius offset bound in source support interning. Unit: dimensionless. |
 | `source_periodic_direction_quant` | `1.0e-10` | Direction quantization for periodic source feature chains. Unit: dimensionless. |
 | `pattern_inverse_norm_squared` | `1.0e-24` | Reject near-degenerate pattern-recovery support vectors. Unit: mm². |
-| `source_sweep_absolute_residual_mm` | `1.0e-5` | Maximum acceptable fitted sweep support residual. Unit: mm. |
-| `source_sweep_relative_compare` | `1.0e-9` | Scale-dependent sweep support comparison. Unit: dimensionless. |
 | `source_sheet_relative_compare` | `1.0e-9` | Scale-dependent sheet geometry comparison. Unit: dimensionless. |
 | `source_periodic_weld_quantization_inv` | `1.0e12` | Inverse coordinate quantization for periodic graph weld keys. Unit: model-coordinate^-1. |
 | `source_periodic_area_min` | `1.0e-12` | Minimum nondegenerate reference area for periodic graph editing. Unit: mm². |
 | `source_sweep_tolerance_slack_mm` | `1.0e-15` | Tiny allowed source-fitted sweep tolerance budget overrun. Unit: mm. |
-| `source_slot_boundary_mm` | `1.0e-7` | Position check for cap-slot boundary recovery. Unit: mm. |
 | `source_cad_arc_angle_slack_rad` | `1.0e-9` | Arc sweep endpoint slop in CAD feature reconstruction. Unit: radians. |
 
 ## Candidate ranges for our source-STEP reconstruction target
@@ -270,8 +260,8 @@ source STEP examples and geometric difference, not just face count.
 | Family / job | Candidate target | Why / required check |
 |---|---|---|
 | Structural algebraic identity (exact knot structure, homogeneous proportionality) | f64 relative error ~1e-12--1e-10, scaled by coefficient magnitude and conditioning | Reject incompatible supports without trying to 'heal' them; separate source representation quantization from geometric equivalence |
-| STEP source fitting / recognition of intended features | 1e-6--1e-4 mm for clean CAD, up to ~0.01 mm only when source discrepancy is measured and topology can still be disambiguated | Prefer residuals measured from original STEP entities and a scale-dependent bound; a fixed 0.01 mm across models can collapse smaller details |
-| CAD reconstruction max geometry deviation | User-selected bound, often ~0.005--0.02 mm for supplier CAD recovery; for high-fidelity editing use ~0.001 mm | Output checks must measure Hausdorff-like boundary distance, continuity, orientation and signed volume, not merely face count |
+| STEP source fitting / recognition of intended features | 10 µm default native project accuracy, raised to declared source uncertainty when larger; broader proposal searches do not change output accuracy | Evaluate geometric residuals in original model coordinates, not arbitrary numerical quanta |
+| CAD reconstruction max geometry deviation | 10 µm default for native and mesh, never below known source uncertainty; explicit CAD modeling policies are separate | Compare the rebuilt shape with the source, preserving meaningful topology and material orientation |
 | Surface/curve sampling for *seeding* intersections | Curvature/feature-dependent chord deviation ~0.005--0.05 mm, with a minimum-feature guard; subdivide adaptively | Tolerance-only benchmark reached a plateau at 0.01 mm sampling; coarse samples must never be used alone to prove incidence |
 | Exact surface-intersection residual | Conditioned spatial residual, typically aim 1e-7--1e-5 mm on mm-normalized source; escalate precision only where required | Need local Jacobian, floating-point scale, tangent near-singular handling; strict 4e-6 mm global cutoff is not a proof of branch identity |
 | Newton parameter convergence | No single meaningful universal value. Stop based on spatial residual + scaled parameter update, e.g. normalized relative 1e-8--1e-6 and conditioning-aware acceptance | Current 1e-6 is in *parameter coordinates*, can mean vastly different mm on different surfaces; log residual and step separately |

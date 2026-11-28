@@ -8,7 +8,7 @@ use crate::step_entities::{
 use crate::step_graph::{
     build_index, entity_id, entity_ref_value, simple_record, visit_entity_refs,
 };
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub use precision_rechart::{
     SourceCapPrecisionPatch, SourceCapRechartManifest, SourceCapRechartProposal,
@@ -20,7 +20,7 @@ use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 // Geometry below 10 nm is exporter noise for the ECAD/display corpus.  Do not
 // let sub-1e-5 mm differences prevent semantic recovery; parameter/weight
 // checks remain stricter where they affect the actual STEP parameterization.
-const GEOMETRY_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_geometry_mm;
+const GEOMETRY_TOLERANCE: f64 = NATIVE_STEP_RECOVERY_MM;
 const WEIGHT_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_weight_relative;
 const PARAMETER_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_parameter;
 
@@ -139,7 +139,7 @@ pub fn recover_v_extrusion_surfaces(entities: &mut Vec<EntityInstance>) -> VExtr
 
     for candidate in candidates {
         let length = norm(candidate.extrusion);
-        if !length.is_finite() || length <= GEOMETRY_TOLERANCE {
+        if !length.is_finite() || length <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
             continue;
         }
         let direction = [
@@ -425,7 +425,9 @@ fn detect_v_extrusion(
         let p0 = cartesian_point(point_row[0], entities, index)?;
         let p1 = cartesian_point(point_row[1], entities, index)?;
         let delta = sub(p1, p0);
-        if norm(delta) <= geometry_tolerance_mm {
+        // The fit allowance does not define the minimum thickness of an
+        // authored wall. Only a numerically degenerate extrusion is invalid.
+        if norm(delta) <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm {
             return None;
         }
         if let Some(expected) = shared_delta {

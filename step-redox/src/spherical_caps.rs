@@ -9,7 +9,7 @@ use crate::step_entities::{
     representation_items_and_context,
 };
 use crate::step_graph::{ReferenceGraph, build_index, entity_id, entity_ref_value, simple_record};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::{EntityInstance, Parameter};
 
@@ -687,10 +687,7 @@ fn single_face_style(
 }
 
 fn same_point(a: [f64; 3], b: [f64; 3]) -> bool {
-    (0..3).all(|axis| {
-        (a[axis] - b[axis]).abs()
-            <= DEFAULT_STEP_RECOVERY_TOLERANCES.source_cap_rounding_residual_mm
-    })
+    crate::math3::distance(a, b) <= NATIVE_STEP_RECOVERY_MM
 }
 
 #[cfg(test)]
@@ -698,8 +695,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn point_comparison_uses_tight_geometry_tolerance() {
-        assert!(same_point([1.0, 2.0, 3.0], [1.0, 2.0, 3.0 + 5.0e-13]));
-        assert!(!same_point([1.0, 2.0, 3.0], [1.0, 2.0, 3.0 + 2.0e-12]));
+    fn common_cap_center_uses_native_recovery_accuracy() {
+        assert!(same_point(
+            [1.0, 2.0, 3.0],
+            [1.0, 2.0, 3.0 + 0.5 * NATIVE_STEP_RECOVERY_MM]
+        ));
+        assert!(!same_point(
+            [1.0, 2.0, 3.0],
+            [1.0, 2.0, 3.0 + 2.0 * NATIVE_STEP_RECOVERY_MM]
+        ));
     }
 }

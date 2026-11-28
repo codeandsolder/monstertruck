@@ -5,9 +5,9 @@
 //! close to that locus over its full domain, not just at endpoint samples.
 
 use super::{
-    Arc, BoundaryChainKey, BoundedEdge, DIRECTION_Q, EdgeGeometry, OrientedSupportKey,
-    SupportLocusKey, TOL, decode, dequantize_scalar, dequantize_vector, normalize_angular_chains,
-    point, support_locus_key, vector,
+    Arc, BoundaryChainKey, BoundedEdge, DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM,
+    SupportLocusKey, decode, dequantize_scalar, dequantize_vector, normalize_angular_chains, point,
+    support_locus_key, vector,
 };
 use crate::math3::{distance, dot, mul, normalize, sub};
 use monstertruck_geometry::{
@@ -45,7 +45,7 @@ impl CylinderChart {
         let origin = decode(*closest_mm)?;
         let axis = normalize(dequantize_vector(*axis, DIRECTION_Q)?, 0.0)?;
         let radius = dequantize_scalar(*radius_mm)?;
-        if radius <= TOL {
+        if radius <= POINT_Q_MM {
             return None;
         }
         let carrier = CylinderCarrier::new(point(origin), vector(axis), radius)?;
@@ -88,18 +88,23 @@ impl IntersectionChart {
         })
     }
 
-    fn certify(&self, edge: &EdgeGeometry, curve: &NurbsCurve<Vector4>) -> Option<BoundedEdge> {
+    fn certify(
+        &self,
+        edge: &EdgeGeometry,
+        curve: &NurbsCurve<Vector4>,
+        tolerance_mm: f64,
+    ) -> Option<BoundedEdge> {
         let bound = BoundedSourceIntersection::from_spline(
             self.primary.carrier,
             self.secondary.carrier,
             curve,
-            TOL,
-            TOL / 64.0,
+            tolerance_mm,
+            tolerance_mm / 64.0,
         )?;
         // The bidirectional separation includes the amplification of both
         // carrier deviations by the transverse intersection conditioning.
-        // Independent incidence within TOL alone is not enough near tangency.
-        if bound.separation_upper > TOL {
+        // Independent incidence within tolerance_mm alone is not enough near tangency.
+        if bound.separation_upper > tolerance_mm {
             return None;
         }
         let arc = bound.proposal.arc;
@@ -107,7 +112,7 @@ impl IntersectionChart {
         let last = arc.evaluate(arc.sweep())?;
         let start = decode(edge.start)?;
         let end = decode(edge.end)?;
-        let near = |p: Point3, q: [f64; 3]| distance([p.x, p.y, p.z], q) <= TOL;
+        let near = |p: Point3, q: [f64; 3]| distance([p.x, p.y, p.z], q) <= tolerance_mm;
         let mut ends = if near(first, start) && near(last, end) {
             [edge.start, edge.end]
         } else if near(first, end) && near(last, start) {
@@ -115,10 +120,11 @@ impl IntersectionChart {
         } else {
             return None;
         };
-        let tolerance = TOL / self.primary.radius;
+        let tolerance = tolerance_mm / self.primary.radius;
         let sweep = arc.sweep().abs();
-        if sweep <= tolerance
-            || (ends[0] == ends[1]) != ((sweep - std::f64::consts::TAU).abs() <= tolerance)
+        if sweep <= 0.0
+            || (ends[0] == ends[1] && (sweep - std::f64::consts::TAU).abs() > tolerance)
+            || (ends[0] != ends[1] && sweep >= std::f64::consts::TAU)
             || (ends[0] == ends[1] && edge.start_vertex != edge.end_vertex)
         {
             return None;
@@ -144,23 +150,28 @@ pub(super) fn certify_crossing_cylinders(
     edge: &EdgeGeometry,
     curve: &NurbsCurve<Vector4>,
     loci: &[SupportLocusKey; 2],
+    tolerance_mm: f64,
 ) -> Option<BoundedEdge> {
-    IntersectionChart::new(loci)?.certify(edge, curve)
+    IntersectionChart::new(loci)?.certify(edge, curve, tolerance_mm)
 }
 
 pub(in crate::boundary_proof) fn normalize_intersections(
     supports: &[OrientedSupportKey; 2],
     key: CylinderIntersectionKey,
     arcs: &[Arc],
+    tolerance_mm: f64,
 ) -> Result<Vec<BoundaryChainKey>, String> {
     let chart = IntersectionChart::new(&supports.each_ref().map(support_locus_key))
         .ok_or("invalid cylinder intersection chart")?;
     if chart.primary_is_second != key.primary_is_second {
         return Err("inconsistent primary cylinder chart".into());
     }
-    normalize_angular_chains(arcs, TOL / chart.primary.radius, chart.primary.axis, |p| {
-        chart.primary.radial(p)
-    })
+    normalize_angular_chains(
+        arcs,
+        tolerance_mm / chart.primary.radius,
+        chart.primary.axis,
+        |p| chart.primary.radial(p),
+    )
     .map(|chains| {
         chains
             .into_iter()
@@ -221,9 +232,12 @@ mod tests {
             support: CurveSupport::Other { entity_id: id },
         };
         let rational = NurbsCurve::from(leader.curve);
-        let Some(BoundedEdge::CylinderIntersection(branch, arc)) =
-            certify_crossing_cylinders(&e, &rational, loci)
-        else {
+        let Some(BoundedEdge::CylinderIntersection(branch, arc)) = certify_crossing_cylinders(
+            &e,
+            &rational,
+            loci,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+        ) else {
             bail!("analytical crossing-cylinder locus was not certified");
         };
         Ok((branch, arc))
@@ -262,21 +276,52 @@ mod tests {
         assert_eq!(key, key_b);
         assert_eq!(key, key_r);
         assert_eq!(key, key_c);
-        let expected =
-            normalize_intersections(&supports, key, &[arc]).map_err(anyhow::Error::msg)?;
+        let expected = normalize_intersections(
+            &supports,
+            key,
+            &[arc],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
+        )
+        .map_err(anyhow::Error::msg)?;
         assert_eq!(
-            normalize_intersections(&supports, key, &[b, a]).map_err(anyhow::Error::msg)?,
+            normalize_intersections(
+                &supports,
+                key,
+                &[b, a],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?,
             expected
         );
         assert_eq!(
-            normalize_intersections(&supports, key, &[r]).map_err(anyhow::Error::msg)?,
+            normalize_intersections(
+                &supports,
+                key,
+                &[r],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?,
             expected
         );
         assert_ne!(
-            normalize_intersections(&supports, key, &[c]).map_err(anyhow::Error::msg)?,
+            normalize_intersections(
+                &supports,
+                key,
+                &[c],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?,
             expected
         );
-        assert!(normalize_intersections(&supports, key, &[arc, a, b]).is_err());
+        assert!(
+            normalize_intersections(
+                &supports,
+                key,
+                &[arc, a, b],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_err()
+        );
         // Same angular domain, different transverse root.
         let negative = new_arc(
             Point3::new(0.2, 0.0, -0.5),
@@ -286,8 +331,13 @@ mod tests {
         let (negative_key, negative_arc) = certify(negative, &loci, 6)?;
         assert_ne!(key, negative_key);
         assert_ne!(
-            normalize_intersections(&supports, negative_key, &[negative_arc])
-                .map_err(anyhow::Error::msg)?,
+            normalize_intersections(
+                &supports,
+                negative_key,
+                &[negative_arc],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .map_err(anyhow::Error::msg)?,
             expected
         );
         // Endpoints match, but an off-carrier interior must not qualify.
@@ -303,7 +353,15 @@ mod tests {
             curve_id: 1,
             support: CurveSupport::Other { entity_id: 1 },
         };
-        assert!(certify_crossing_cylinders(&e, &NurbsCurve::from(leader), &loci).is_none());
+        assert!(
+            certify_crossing_cylinders(
+                &e,
+                &NurbsCurve::from(leader),
+                &loci,
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         assert!((end - origin).magnitude() > 0.3);
         Ok(())
     }

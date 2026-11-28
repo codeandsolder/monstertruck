@@ -1,11 +1,11 @@
 use crate::math3::{canonical_direction, cross, norm, normalize as normalize3};
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use serde::Serialize;
 
 use crate::patterns::{InstancePattern, linear_pattern_sites};
 use crate::periodic_bodies::PeriodicBodyPattern;
 
-const TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.periodic_geometry_mm;
+const TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RecoveredCountParameter {

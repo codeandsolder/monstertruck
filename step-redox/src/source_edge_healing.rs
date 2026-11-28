@@ -229,8 +229,12 @@ fn source_analytic_carriers(
     {
         bail!("source conical face must have a literal authored STEP CONICAL_SURFACE");
     }
-    let SurfaceSupport::Cone(cone) = brep::surface_support(cone_surface_id, source.entities, index)
-    else {
+    let SurfaceSupport::Cone(cone) = brep::surface_support(
+        cone_surface_id,
+        source.entities,
+        index,
+        monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+    ) else {
         bail!("source conical carrier is numerically unsupported");
     };
     Ok((plane, cone))
@@ -247,7 +251,7 @@ fn verified_solid_uncertainty_mm(
     {
         bail!("both incident surfaces must be faces of the given source solid");
     }
-    crate::solid_revolutions::source_tolerance_by_representation_item(
+    crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         request.source.entities,
         index,
     )

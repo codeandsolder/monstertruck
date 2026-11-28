@@ -394,7 +394,7 @@ pub struct SplineCapPrecisionGap {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SplineCapPrecisionAudit {
     pub solid_id: u64,
-    pub authored_uncertainty_mm: f64,
+    pub authored_uncertainty_mm: Option<f64>,
     pub target_bound_mm: f64,
     pub strip_faces: usize,
     pub fully_certified_strip_faces: usize,
@@ -460,12 +460,13 @@ fn verify_source_strip_cap_rows(
 /// Read-only STEP/source-context precision audit for complete B-spline strips.
 ///
 /// Cap curves are independently bounded against the two source surface rows.
-/// Source uncertainty must be explicit, unit-correct, and subject to the
-/// existing revolution uncertainty ceiling; no default precision is assumed.
+/// An explicit requested bound is a diagnostic measurement target. With no
+/// requested bound, audit the declared precision; recovery callers provide
+/// the effective source recovery tolerance instead.
 /// This is not the strict complete-source boundary proof.
 ///
 /// # Errors
-/// Invalid STEP structure, missing source solid or uncertainty context, or
+/// Invalid STEP structure, missing source solid or required uncertainty, or
 /// unresolvable/conflicting source length unit.
 #[cfg(feature = "cad-kernel-monstertruck")]
 pub fn audit_source_spline_cap_precision(
@@ -487,18 +488,16 @@ pub fn audit_source_spline_cap_precision(
     let index = build_index(entities);
     let faces = super::super::strict_closed_shell_faces(solid_id, entities, &index)
         .map_err(anyhow::Error::msg)?;
-    let declared = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+    let declared = crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         entities, &index,
     );
-    let authored_uncertainty_mm = *declared
-        .get(&solid_id)
-        .context("missing trusted source-declared precision")?;
-    let target_bound_mm = requested_bound_mm.unwrap_or(authored_uncertainty_mm);
+    let authored_uncertainty_mm = declared.get(&solid_id).copied();
+    let target_bound_mm = requested_bound_mm
+        .or(authored_uncertainty_mm)
+        .context("missing requested or source-declared precision")?;
     ensure!(
-        target_bound_mm.is_finite()
-            && target_bound_mm > 0.0
-            && target_bound_mm <= authored_uncertainty_mm,
-        "requested bound must be positive and no larger than author-declared STEP uncertainty",
+        target_bound_mm.is_finite() && target_bound_mm > 0.0,
+        "requested bound must be finite and positive",
     );
     let mm_per_unit = crate::source_edge_locus::source_solid_length_scale_mm(solid_id, entities)?;
     let coordinate_tolerance = target_bound_mm / mm_per_unit;
@@ -639,8 +638,8 @@ mod tests {
         assert_eq!(report.cap_witnesses.len(), 26);
         assert_eq!(report.unresolved_strip_faces.len(), 0);
         assert_eq!(
-            report.authored_uncertainty_mm.to_bits(),
-            1.0e-5_f64.to_bits()
+            report.authored_uncertainty_mm.map(f64::to_bits),
+            Some(1.0e-5_f64.to_bits())
         );
         let maximum = report
             .cap_witnesses
@@ -648,13 +647,17 @@ mod tests {
             .map(|e| e.bound_mm)
             .reduce(f64::max)
             .ok_or_else(|| anyhow::anyhow!("missing precision evidence"))?;
-        assert!(maximum <= report.authored_uncertainty_mm);
+        assert!(maximum <= report.target_bound_mm);
 
-        let strict =
-            audit_source_spline_cap_precision(original, 0, *solid, Some(super::super::TOL))?;
+        let strict = audit_source_spline_cap_precision(
+            original,
+            0,
+            *solid,
+            Some(crate::boundary_proof::TEST_BOUNDARY_TOL_MM),
+        )?;
         eprintln!(
             "strict boundary quantum={} mm, certified={}/{} caps={}, worst={} mm",
-            super::super::TOL,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM,
             strict.fully_certified_strip_faces,
             strict.strip_faces,
             strict.cap_witnesses.len(),
@@ -670,7 +673,7 @@ mod tests {
             strict
                 .cap_witnesses
                 .iter()
-                .all(|cap| cap.bound_mm <= super::super::TOL)
+                .all(|cap| cap.bound_mm <= crate::boundary_proof::TEST_BOUNDARY_TOL_MM)
         );
         // The bound must be meaningful, not a tolerance-independent
         // acceptance of every author-declared STEP curve mismatch.
@@ -678,15 +681,13 @@ mod tests {
         assert_eq!(sub_angstrom.strip_faces, 13);
         assert!(sub_angstrom.fully_certified_strip_faces < strict.fully_certified_strip_faces);
         assert!(audit_source_spline_cap_precision(original, 0, *solid, Some(0.0)).is_err());
-        assert!(
-            audit_source_spline_cap_precision(
-                original,
-                0,
-                *solid,
-                Some(2.0 * report.authored_uncertainty_mm)
-            )
-            .is_err()
-        );
+        let broader = audit_source_spline_cap_precision(
+            original,
+            0,
+            *solid,
+            Some(2.0 * report.target_bound_mm),
+        )?;
+        assert_eq!(broader.target_bound_mm, 2.0 * report.target_bound_mm);
 
         let original_utf8 = std::str::from_utf8(original)?;
         let micron_precision =
@@ -694,7 +695,7 @@ mod tests {
         assert_ne!(micron_precision, original_utf8);
         let narrow =
             audit_source_spline_cap_precision(micron_precision.as_bytes(), 0, *solid, None)?;
-        assert_eq!(narrow.authored_uncertainty_mm, 1.0e-9);
+        assert_eq!(narrow.authored_uncertainty_mm, Some(1.0e-9));
         assert!(narrow.fully_certified_strip_faces < report.fully_certified_strip_faces);
         assert_eq!(
             narrow.unresolved_strip_faces.len(),
@@ -722,7 +723,7 @@ mod tests {
         assert!(independent_oblique.unresolved_strip_faces.is_empty());
 
         eprintln!(
-            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {} mm",
+            "manufacturer: {} source strip faces, {} independently bounded caps, max certified {} mm / source {:?} mm",
             report.fully_certified_strip_faces,
             report.cap_witnesses.len(),
             maximum,

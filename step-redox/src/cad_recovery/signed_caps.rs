@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use std::collections::{HashMap, HashSet};
 
 mod convex;
@@ -27,6 +27,7 @@ mod convex;
 fn cap(prism: &RecoveredSolidExtrusion) -> RecoveredSourceCapExtrusion {
     RecoveredSourceCapExtrusion {
         solid_id: prism.solid_id,
+        source_tolerance_mm: prism.source_tolerance_mm,
         cap_face_id: prism.cap_face_ids[0],
         profile_curves: prism.profile_curves.clone(),
         inner_profile_loops: prism.inner_profile_loops.clone(),
@@ -76,7 +77,7 @@ fn cutter_cap_witnesses<K: CadKernel>(
 /// profile and need not share a global axis.
 fn adjacent_pairs<'a>(candidates: &[&'a SignedCapPairProposal]) -> Vec<&'a SignedCapPairProposal> {
     let mut nearest = HashMap::<u64, (usize, f64, bool)>::new();
-    let tolerance = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+    let tolerance = NATIVE_STEP_RECOVERY_MM;
     for (index, candidate) in candidates.iter().enumerate() {
         let height = candidate.prism.height_mm;
         for face in candidate.prism.cap_face_ids {

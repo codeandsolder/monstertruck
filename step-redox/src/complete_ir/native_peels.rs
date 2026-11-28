@@ -455,7 +455,7 @@ mod tests {
         let index = crate::step_graph::build_index(entities);
         let ids = tools.iter().map(|tool| tool.solid_id).collect::<Vec<_>>();
         let tolerances =
-            crate::solid_revolutions::source_tolerance_by_representation_item(entities, &index);
+            crate::source_accuracy::source_tolerance_by_representation_item(entities, &index);
         let candidates = super::super::recover_constructive_fragments_with_tolerances(
             entities,
             &index,

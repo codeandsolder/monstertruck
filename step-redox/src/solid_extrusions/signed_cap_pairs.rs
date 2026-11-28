@@ -7,7 +7,7 @@
 //! coverage or source-solid equivalence.
 
 use super::{
-    CanonicalProfile, DIR_TOL, FaceInfo, GEOM_TOL_MM, RecoveredProfileCurve,
+    CanonicalProfile, DIR_TOL, FaceInfo, NUMERICAL_GEOMETRY_MM, RecoveredProfileCurve,
     RecoveredSolidExtrusion, canonical_direction, canonical_profile, canonical_profile_loop,
     cap_loop_roles, distance2, dot, face_info, face_lies_on_plane, mul, parallel,
 };
@@ -55,7 +55,11 @@ fn same_parameters(first: &[f64], second: &[f64]) -> bool {
             .all(|(a, b)| a.is_finite() && b.is_finite() && a.total_cmp(b).is_eq())
 }
 
-fn curve_residual(first: &RecoveredProfileCurve, second: &RecoveredProfileCurve) -> Option<f64> {
+fn curve_residual(
+    first: &RecoveredProfileCurve,
+    second: &RecoveredProfileCurve,
+    tolerance_mm: f64,
+) -> Option<f64> {
     use RecoveredProfileCurve::{BSpline, Bezier, CircleArc, Line};
     let endpoints = distance2(first.start_point()?, second.start_point()?)
         .max(distance2(first.end_point()?, second.end_point()?));
@@ -120,12 +124,13 @@ fn curve_residual(first: &RecoveredProfileCurve, second: &RecoveredProfileCurve)
         _ => return None,
     };
     let residual = endpoints.max(support);
-    (residual.is_finite() && residual <= GEOM_TOL_MM).then_some(residual)
+    (residual.is_finite() && residual <= tolerance_mm).then_some(residual)
 }
 
 fn directed_loop_residual(
     first: &[RecoveredProfileCurve],
     second: &[RecoveredProfileCurve],
+    tolerance_mm: f64,
 ) -> Option<f64> {
     if first.len() != second.len() || first.is_empty() {
         return None;
@@ -135,19 +140,25 @@ fn directed_loop_residual(
             first
                 .iter()
                 .zip(second.iter().cycle().skip(shift))
-                .try_fold(0.0_f64, |max, (a, b)| Some(max.max(curve_residual(a, b)?)))
+                .try_fold(0.0_f64, |max, (a, b)| {
+                    Some(max.max(curve_residual(a, b, tolerance_mm)?))
+                })
         })
         .min_by(f64::total_cmp)
 }
 
-fn loop_residual(first: &[RecoveredProfileCurve], second: &[RecoveredProfileCurve]) -> Option<f64> {
-    directed_loop_residual(first, second).or_else(|| {
+fn loop_residual(
+    first: &[RecoveredProfileCurve],
+    second: &[RecoveredProfileCurve],
+    tolerance_mm: f64,
+) -> Option<f64> {
+    directed_loop_residual(first, second, tolerance_mm).or_else(|| {
         let reversed = second
             .iter()
             .rev()
             .map(RecoveredProfileCurve::reversed)
             .collect::<Vec<_>>();
-        directed_loop_residual(first, &reversed)
+        directed_loop_residual(first, &reversed, tolerance_mm)
     })
 }
 
@@ -165,6 +176,7 @@ fn profile_residual(profile: &CanonicalProfile, top: &FaceInfo, z_axis: [f64; 3]
                 profile.y_axis,
                 z_axis,
                 outer,
+                top.tolerance_mm,
             )?;
             Some((outer, curves))
         })
@@ -184,7 +196,7 @@ fn profile_residual(profile: &CanonicalProfile, top: &FaceInfo, z_axis: [f64; 3]
             .enumerate()
             .filter_map(|(i, (role, other))| {
                 (*role == outer)
-                    .then(|| loop_residual(curves, other))
+                    .then(|| loop_residual(curves, other, top.tolerance_mm))
                     .flatten()
                     .map(|r| (i, r))
             });
@@ -212,7 +224,7 @@ fn pair(solid_id: u64, first: &FaceInfo, second: &FaceInfo) -> Option<SignedCapP
     }
     let axis = canonical_direction(a.normal);
     let distance = dot(axis, b.origin_mm) - dot(axis, a.origin_mm);
-    if !distance.is_finite() || distance.abs() <= GEOM_TOL_MM {
+    if !distance.is_finite() || distance.abs() <= NUMERICAL_GEOMETRY_MM {
         return None;
     }
     let (bottom, top, bottom_plane, top_plane) = if distance > 0.0 {
@@ -245,6 +257,7 @@ fn pair(solid_id: u64, first: &FaceInfo, second: &FaceInfo) -> Option<SignedCapP
         interval,
         prism: RecoveredSolidExtrusion {
             solid_id,
+            source_tolerance_mm: bottom.tolerance_mm,
             cap_face_ids: [bottom.id, top.id],
             side_face_ids: Vec::new(),
             profile_curves: profile.curves,
@@ -267,9 +280,11 @@ pub fn detect_signed_cap_pairs_for_solid_with_index(
     let Some(ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return Vec::new();
     };
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let faces = ids
         .into_iter()
-        .filter_map(|id| face_info(id, entities, index))
+        .filter_map(|id| face_info(id, entities, index, tolerance_mm))
         .filter(|f| matches!(f.surface, SurfaceSupport::Plane(_)))
         .collect::<Vec<_>>();
     let mut out = Vec::new();
@@ -312,13 +327,13 @@ mod tests {
             .find(|p| p.prism.cap_face_ids == [391, 429])
             .context("translated source channel not recognized")?;
         assert_eq!(void.interval, CapInterval::Void);
-        assert!((void.prism.height_mm - 0.3048).abs() < GEOM_TOL_MM);
+        assert!((void.prism.height_mm - 0.3048).abs() < super::super::GEOM_TOL_MM);
         let material = proposals
             .iter()
             .find(|p| p.prism.cap_face_ids == [620, 1159])
             .context("translated source host caps not recognized")?;
         assert_eq!(material.interval, CapInterval::Material);
-        assert!((material.prism.height_mm - 1.27).abs() < GEOM_TOL_MM);
+        assert!((material.prism.height_mm - 1.27).abs() < super::super::GEOM_TOL_MM);
         Ok(())
     }
 }

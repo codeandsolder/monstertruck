@@ -2,7 +2,7 @@
 //! agree. A station is kept as an editable loft section when the affine
 //! trajectories change, rather than becoming two Boolean operands.
 use super::super::{extrusion_node, local_frame_transform};
-use super::{Frame, LENGTH, same_profiles};
+use super::{Frame, IDENTITY_MM, same_profiles};
 use crate::{
     cad_ir::{CadModel, CadNode, Curve2d, LoftSection, NodeId, Profile2d, ProfileLoop},
     math2::distance,
@@ -76,7 +76,7 @@ pub(super) fn matching_curve(a: &Curve2d, b: &Curve2d) -> bool {
                 start_mm: b,
                 end_mm: be,
             },
-        ) => distance(*a, *b) <= LENGTH && distance(*ae, *be) <= LENGTH,
+        ) => distance(*a, *b) <= IDENTITY_MM && distance(*ae, *be) <= IDENTITY_MM,
         (Curve2d::CircleArc { .. }, Curve2d::CircleArc { .. }) => a == b,
         _ => false,
     }
@@ -237,7 +237,7 @@ mod tests {
             Span {
                 limits: [0, 1],
                 start: rectangle(3., 0)?,
-                end: rectangle(2. + 1.5 * LENGTH, 0)?,
+                end: rectangle(2. + 1.5 * IDENTITY_MM, 0)?,
             },
             Span {
                 limits: [1, 2],
@@ -246,7 +246,7 @@ mod tests {
             },
             Span {
                 limits: [1, 2],
-                start: rectangle(2. + 0.75 * LENGTH, 0)?,
+                start: rectangle(2. + 0.75 * IDENTITY_MM, 0)?,
                 end: rectangle(4., 0)?,
             },
         ];

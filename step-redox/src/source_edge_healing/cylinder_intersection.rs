@@ -92,9 +92,12 @@ fn incident_cylinders(
         {
             bail!("incident source face is not an authored CYLINDRICAL_SURFACE");
         }
-        let SurfaceSupport::Cylinder(cylinder) =
-            brep::surface_support(surface_id, source.entities, index)
-        else {
+        let SurfaceSupport::Cylinder(cylinder) = brep::surface_support(
+            surface_id,
+            source.entities,
+            index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             bail!("unsupported authored cylindrical carrier");
         };
         let carrier = CylinderCarrier::new(
@@ -198,7 +201,7 @@ pub fn propose_cylinder_intersection_healing(
     let source = request.source;
     let index = build_index(source.entities);
     let scale = source_solid_length_scale_mm(request.solid_id, source.entities)?;
-    let uncertainty = crate::solid_revolutions::declared_source_uncertainty_by_representation_item(
+    let uncertainty = crate::source_accuracy::declared_source_uncertainty_by_representation_item(
         source.entities,
         &index,
     )

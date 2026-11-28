@@ -118,15 +118,17 @@ checked with OpenCascade during development. The architecture spike is in
 
 ## Geometry tolerance policy
 
-All distances below are in millimetres. **Imported inverse-edge-treatment
-recognition** uses a default **0.01 mm (10 micrometre)** fit budget for
-near-coincident tangencies, carrier axes, shared feature-end ranges and nominal
-chamfer setbacks. Other constructive recognizers are migrated individually:
-their numerical B-rep proof thresholds are not silently loosened.
-Suppliers do not guarantee sub-nanometre consistency between independently
-exported faces; these fits are marked distinctly from exact analytic evidence,
-and the measured residual is retained. For example, chamfer setbacks differing
-by 0.0067 mm can produce one nominal editable chamfer.
+All distances are in millimetres. Native STEP reconstruction has a single
+physical accuracy target, **0.01 mm (10 µm)** by default. The effective budget is the maximum of the default and the source-declared
+length uncertainty. Source primitive recognition,
+support fitting and reconstruction residual checks use this budget, not the
+coordinate hash quantum or internal arithmetic epsilon. Mesh reconstruction also defaults to **0.01 mm (10 µm)**.
+
+Imported inverse-edge-treatment proposals can still search a 0.01 mm
+fit neighborhood to find the intended feature. This is a proposal budget,
+not a native reconstruction acceptance budget. Preserve unequal source
+chamfer setbacks and other actual dimensions when needed for the final fit.
+Explicit user-selected CAD modeling policies remain independent.
 
 **Numerical B-rep integrity** is separate: 1e-7 mm remains the current internal
 consistency check for native patch vertex identity and constructed edge curves.

@@ -15,6 +15,7 @@
     reason = "test assertions intentionally state emptiness expectations explicitly"
 )]
 use super::*;
+use crate::step_graph::entity_ref_value;
 
 fn test_linear_profile_segment(
     face_index: usize,
@@ -74,67 +75,6 @@ fn profile_has_arc(
             && ((distance2(start, first) <= 1.0e-12 && distance2(end, second) <= 1.0e-12)
                 || (distance2(start, second) <= 1.0e-12 && distance2(end, first) <= 1.0e-12))
     })
-}
-
-#[test]
-fn reads_representation_length_uncertainty_with_hard_cap() -> anyhow::Result<()> {
-    fn tolerance_from(text: &str) -> anyhow::Result<Option<f64>> {
-        let exchange = step_p21::parser::parse(text)?;
-        let entities = &exchange
-            .data
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("parsed exchange has no DATA section"))?
-            .entities;
-        let index = build_index(entities);
-        let solid_id = entities
-            .iter()
-            .find(|entity| {
-                simple_record(entity).is_some_and(|record| record.name == "MANIFOLD_SOLID_BREP")
-            })
-            .map(entity_id)
-            .ok_or_else(|| anyhow::anyhow!("fixture has no MANIFOLD_SOLID_BREP"))?;
-        Ok(source_tolerance_by_representation_item(entities, &index)
-            .get(&solid_id)
-            .copied())
-    }
-
-    let source = std::str::from_utf8(include_bytes!(
-        "../../validation/fixtures/native_conical_frustum.step"
-    ))?;
-    assert_eq!(tolerance_from(source)?, Some(GEOM_TOL_MM));
-
-    let widened = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-06)", 1);
-    assert!(
-        (tolerance_from(&widened)?
-            .ok_or_else(|| anyhow::anyhow!("widened uncertainty missing"))?
-            - 5.0e-6)
-            .abs()
-            <= 1.0e-15
-    );
-
-    let excessive = source.replacen("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(2.E-05)", 1);
-    assert_eq!(tolerance_from(&excessive)?, None);
-
-    let centimetres = source.replacen(
-        "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.)",
-        "LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.CENTI.,.METRE.)",
-        1,
-    );
-    assert!(
-        (tolerance_from(&centimetres)?
-            .ok_or_else(|| anyhow::anyhow!("centimetre uncertainty missing"))?
-            - 1.0e-6)
-            .abs()
-            <= 1.0e-15
-    );
-
-    let ambiguous = source.replacen(
-        "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117))",
-        "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#117,#117))",
-        1,
-    );
-    assert_eq!(tolerance_from(&ambiguous)?, None);
-    Ok(())
 }
 
 fn test_circle_edge(
@@ -496,7 +436,7 @@ fn cone_profile_accepts_proven_apex_and_bounded_source_noise() -> anyhow::Result
             .is_none()
     );
 
-    let declared_tolerance_mm = 1.0e-6;
+    let declared_tolerance_mm = 4.0 * REVOLUTION_SOURCE_SUPPORT_TOL_MM;
     let declared_noisy = make_frustum(1.0 + 0.5 * declared_tolerance_mm);
     let faces = vec![declared_noisy.clone()];
     let context = TopologyContext {
@@ -586,13 +526,9 @@ fn cone_profile_uses_neighbor_constraint_plus_repeated_trim_circle() -> anyhow::
         index: &index,
     };
 
-    assert!(
+    let (segment, residual) =
         test_linear_profile_segment(0, &cone_face, &context, REVOLUTION_SOURCE_SUPPORT_TOL_MM)
-            .is_none()
-    );
-
-    let (segment, residual) = test_linear_profile_segment(0, &cone_face, &context, 1.0e-5)
-        .ok_or_else(|| anyhow::anyhow!("expected recovered test geometry"))?;
+            .ok_or_else(|| anyhow::anyhow!("expected recovered test geometry"))?;
 
     // The cylinder constrains radius while preserving the repeated trim-circle
     // axial coordinate; the plane constrains axial position while preserving
@@ -600,8 +536,8 @@ fn cone_profile_uses_neighbor_constraint_plus_repeated_trim_circle() -> anyhow::
     // sole source of truth when its own parameters disagree within STEP uncertainty.
     assert_eq!(segment.a, [1.5, 0.5000005]);
     assert_eq!(segment.b, [2.0000004, 1.0]);
-    assert!(residual > REVOLUTION_SOURCE_SUPPORT_TOL_MM);
-    assert!(residual < 1.0e-5);
+    assert!(residual > DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm);
+    assert!(residual <= REVOLUTION_SOURCE_SUPPORT_TOL_MM);
     Ok(())
 }
 
@@ -1352,8 +1288,13 @@ fn shared_source_face_loader_matches_surface_signature_census() -> anyhow::Resul
         .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no solid"))?;
     let face_ids = brep::solid_face_ids(solid_id, entities, &index)
         .ok_or_else(|| anyhow::anyhow!("spherical cap fixture has no faces"))?;
-    let faces = source_face_infos(&face_ids, entities, &index)
-        .ok_or_else(|| anyhow::anyhow!("source face loading failed"))?;
+    let faces = source_face_infos(
+        &face_ids,
+        entities,
+        &index,
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, &index),
+    )
+    .ok_or_else(|| anyhow::anyhow!("source face loading failed"))?;
     let incidence = closed_shell_edge_uses(&faces)
         .ok_or_else(|| anyhow::anyhow!("closed shell incidence failed"))?;
     let census = detect_solid_surface_signatures_with_index(entities, &index);
@@ -1511,12 +1452,12 @@ fn recovers_native_conical_frustum_fixture() -> anyhow::Result<()> {
     assert_eq!(recovered_with_declared_uncertainty.len(), 1);
     assert_eq!(
         recovered_with_declared_uncertainty[0].source_tolerance_mm,
-        MAX_REVOLUTION_SOURCE_UNCERTAINTY_MM
+        NATIVE_STEP_RECOVERY_MM
     );
 
     let oversized_uncertainty = String::from_utf8_lossy(bytes).replacen(
         "LENGTH_MEASURE(1.E-07)",
-        "LENGTH_MEASURE(1.E-04)",
+        "LENGTH_MEASURE(5.E-02)",
         1,
     );
     let recovered_with_oversized_uncertainty =
@@ -1524,7 +1465,7 @@ fn recovers_native_conical_frustum_fixture() -> anyhow::Result<()> {
     assert_eq!(recovered_with_oversized_uncertainty.len(), 1);
     assert_eq!(
         recovered_with_oversized_uncertainty[0].source_tolerance_mm,
-        REVOLUTION_SOURCE_SUPPORT_TOL_MM
+        0.05
     );
 
     let tampered = String::from_utf8_lossy(bytes).replacen(
@@ -1870,7 +1811,10 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
         .find(|entity| simple_record(entity).is_some_and(|r| r.name == "MANIFOLD_SOLID_BREP"))
         .map(entity_id)
         .ok_or_else(|| anyhow::anyhow!("missing source solid"))?;
-    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+    let source_tolerance =
+        crate::source_accuracy::declared_source_uncertainty_by_representation_item(
+            entities, &index,
+        )
         .get(&solid_id)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("missing declared source tolerance"))?;
@@ -1889,9 +1833,12 @@ fn manufacturer_radial_slot_cubic_plane_deviation_bracket() -> anyhow::Result<()
         }
         let surface_id = brep::face_surface(face_id, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing surface"))?;
-        let brep::SurfaceSupport::Plane(plane) =
-            brep::surface_support(surface_id, entities, &index)
-        else {
+        let brep::SurfaceSupport::Plane(plane) = brep::surface_support(
+            surface_id,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             continue;
         };
         let origin = Point3::new(plane.origin_mm[0], plane.origin_mm[1], plane.origin_mm[2]);
@@ -1936,7 +1883,10 @@ fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> a
     };
     let entities = &section.entities;
     let index = build_index(entities);
-    let source_tolerance = source_tolerance_by_representation_item(entities, &index)
+    let source_tolerance =
+        crate::source_accuracy::declared_source_uncertainty_by_representation_item(
+            entities, &index,
+        )
         .get(&15385)
         .copied()
         .ok_or_else(|| anyhow::anyhow!("source representation tolerance missing"))?;
@@ -1960,8 +1910,12 @@ fn manufacturer_radial_slot_cubics_depart_from_their_own_conical_carriers() -> a
         );
         let surface_id = brep::face_surface(cone_face_id, entities, &index)
             .ok_or_else(|| anyhow::anyhow!("missing authored conical surface"))?;
-        let brep::SurfaceSupport::Cone(cone) = brep::surface_support(surface_id, entities, &index)
-        else {
+        let brep::SurfaceSupport::Cone(cone) = brep::surface_support(
+            surface_id,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             anyhow::bail!("incident source face is not a cone");
         };
         let origin = Point3::new(

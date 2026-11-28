@@ -18,11 +18,11 @@ use crate::solid_extrusions::{
     source_cap_extrusion_proposal_at_station,
 };
 use anyhow::Result;
-use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_core::tolerance::{DEFAULT_STEP_RECOVERY_TOLERANCES, NATIVE_STEP_RECOVERY_MM};
 use std::collections::{HashMap, HashSet};
 use step_p21::ast::EntityInstance;
 
-const LENGTH: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const LENGTH: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIRECTION: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 
 struct BendGroup<'a> {

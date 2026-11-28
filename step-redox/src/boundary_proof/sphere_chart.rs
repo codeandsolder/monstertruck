@@ -101,7 +101,12 @@ fn aligned_chart(
     let mut parallels = Vec::new();
     let mut meridians = Vec::new();
     for (&edge, &circle) in circles {
-        if !super::bounded::circle_on_sphere(circle, sphere.center_mm, sphere.radius_mm) {
+        if !super::bounded::circle_on_sphere(
+            circle,
+            sphere.center_mm,
+            sphere.radius_mm,
+            super::ANALYTIC_BOUNDARY_PROOF_TOL_MM,
+        ) {
             return None;
         }
         let offset = norm(sub(circle.center_mm, sphere.center_mm));
@@ -316,7 +321,12 @@ fn plan_chart(
     let placement =
         named_entity_parameters(original_placement_id, "AXIS2_PLACEMENT_3D", entities, index)?;
     let center_id = entity_ref_value(placement.get(1)?)?;
-    let SurfaceSupport::Sphere(sphere) = brep::surface_support(surface_id, entities, index) else {
+    let SurfaceSupport::Sphere(sphere) = brep::surface_support(
+        surface_id,
+        entities,
+        index,
+        monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+    ) else {
         return None;
     };
     let circles = circles_for_faces(&faces, entities, index)?;
@@ -629,8 +639,12 @@ mod geodesic_regressions {
             assert!(plan.change.latitude_edge_ids.is_empty());
             assert!(plan.change.meridian_edge_ids.is_empty());
             assert_eq!(plan.change.geodesic_edge_ids.len(), 3);
-            let SurfaceSupport::Sphere(sphere) = brep::surface_support(surface, entities, &index)
-            else {
+            let SurfaceSupport::Sphere(sphere) = brep::surface_support(
+                surface,
+                entities,
+                &index,
+                monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+            ) else {
                 anyhow::bail!("sphere carrier not found");
             };
             let circles = circles_for_faces(&[face], entities, &index)
@@ -650,9 +664,12 @@ mod geodesic_regressions {
             assert_eq!(change.geodesic_edge_ids.len(), 3);
             assert_eq!(revised.len(), entities.len() + 3);
             let revised_index = build_index(&revised);
-            let SurfaceSupport::Sphere(recharted) =
-                brep::surface_support(surface, &revised, &revised_index)
-            else {
+            let SurfaceSupport::Sphere(recharted) = brep::surface_support(
+                surface,
+                &revised,
+                &revised_index,
+                monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+            ) else {
                 anyhow::bail!("recharted surface missing");
             };
             assert_eq!(sphere.center_mm, recharted.center_mm);
@@ -675,7 +692,12 @@ mod geodesic_regressions {
         let source = ParsedStepSource::parse(DRAFTED_ROUND)?.exchange;
         let entities = &source.data[0].entities;
         let index = build_index(entities);
-        let SurfaceSupport::Sphere(sphere) = brep::surface_support(2999, entities, &index) else {
+        let SurfaceSupport::Sphere(sphere) = brep::surface_support(
+            2999,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             anyhow::bail!("source sphere missing");
         };
         let face = 2316;
@@ -711,8 +733,12 @@ mod geodesic_regressions {
         let entities = &source.data[0].entities;
         let index = build_index(entities);
         let surface = 2999;
-        let SurfaceSupport::Sphere(sphere) = brep::surface_support(surface, entities, &index)
-        else {
+        let SurfaceSupport::Sphere(sphere) = brep::surface_support(
+            surface,
+            entities,
+            &index,
+            monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM,
+        ) else {
             anyhow::bail!("source sphere missing");
         };
         let circles =

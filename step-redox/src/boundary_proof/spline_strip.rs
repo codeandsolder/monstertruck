@@ -2,9 +2,9 @@
 //! matching endpoint pairs establishes a curved edge. Retain complete positive-
 //! weight rational Bernstein control nets, ordered spans, and actual trims.
 use super::{
-    ANALYTIC_BOUNDARY_PROOF_TOL_MM as TOL, BSplineSupport, CellWitnesses, CurveSupport,
-    DIRECTION_Q, EdgeGeometry, OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded,
-    dequantize_scalar, dequantize_vector, point_key,
+    BSplineSupport, BoundaryProofContext, CurveSupport, DIRECTION_Q, EdgeGeometry,
+    OrientedSupportKey, POINT_Q_MM, PointKey, SupportLocusKey, bounded, dequantize_scalar,
+    dequantize_vector, point_key,
 };
 use crate::{
     brep,
@@ -143,7 +143,7 @@ fn certified_bspline_extraction_error_mm(spline: &BSplineSupport) -> Option<f64>
 /// squares of two transverse coordinate polynomials would be constant,
 /// forcing both to be constant and the patch to have rank at most one.
 /// For a plane, every Bernstein control point must be coplanar.
-fn nonplanar_polynomial_profiles(profiles: &[BSplineSupport; 2]) -> bool {
+fn nonplanar_polynomial_profiles(profiles: &[BSplineSupport; 2], tolerance_mm: f64) -> bool {
     if profiles.iter().any(|profile| {
         profile.weights.as_ref().is_some_and(|weights| {
             weights.first().is_none_or(|first| {
@@ -173,11 +173,11 @@ fn nonplanar_polynomial_profiles(profiles: &[BSplineSupport; 2]) -> bool {
             .chain(second)
             .map(|p| [p.x / p.w, p.y / p.w, p.z / p.w])
             .collect::<Vec<_>>();
-        nonplanar_control_net(&points)
+        nonplanar_control_net(&points, tolerance_mm)
     })
 }
 
-fn nonplanar_control_net(points: &[[f64; 3]]) -> bool {
+fn nonplanar_control_net(points: &[[f64; 3]], tolerance_mm: f64) -> bool {
     let Some(&origin) = points.first() else {
         return false;
     };
@@ -200,7 +200,7 @@ fn nonplanar_control_net(points: &[[f64; 3]]) -> bool {
     // Reserve the existing source proof length for each control point.
     // Differences can have twice that error. Bound all terms of the
     // perturbed scalar triple product, including arithmetic roundoff.
-    let e = 2. * TOL;
+    let e = 2. * tolerance_mm;
     let (na, nb) = (norm(a), norm(b));
     vectors.iter().any(|&c| {
         let nc = norm(c);
@@ -220,17 +220,18 @@ pub(super) fn has_nonplanar_polynomial_patch(
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> bool {
     crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index).is_some_and(
         |(profiles, _)| {
-            nonplanar_polynomial_profiles(&profiles)
+            nonplanar_polynomial_profiles(&profiles, tolerance_mm)
                 && oriented_key(
                     face_id,
                     surface_id,
                     forward,
                     entities,
                     index,
-                    &mut CellWitnesses::default(),
+                    &mut BoundaryProofContext::new(tolerance_mm),
                 )
                 .is_some()
         },
@@ -333,7 +334,7 @@ fn monotone_profile(key: &SplineCurveKey, direction: [f64; 3]) -> bool {
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), d| {
                 (lo.min(d), hi.max(d))
             });
-        minimum >= 0. && maximum > TOL
+        minimum >= 0. && maximum > POINT_Q_MM
     })
 }
 
@@ -341,8 +342,9 @@ type DirectedProfile = (SplineCurveKey, bool);
 
 fn translated_geometry(
     profiles: &[BSplineSupport; 2],
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<([DirectedProfile; 2], [f64; 3], [f64; 3])> {
+    let tolerance_mm = cells.tolerance_mm();
     let [first, second] = profiles;
     if first.degree != second.degree
         || first.knots != second.knots
@@ -364,12 +366,12 @@ fn translated_geometry(
         *second.control_points_mm.first()?,
         *first.control_points_mm.first()?,
     );
-    let axis = normalize(delta, TOL)?;
+    let axis = normalize(delta, POINT_Q_MM)?;
     if first
         .control_points_mm
         .iter()
         .zip(&second.control_points_mm)
-        .any(|(&a, &b)| distance(sub(b, a), delta) > TOL)
+        .any(|(&a, &b)| distance(sub(b, a), delta) > tolerance_mm)
     {
         return None;
     }
@@ -393,12 +395,12 @@ fn translated_geometry(
 
 fn translated_profiles(
     profiles: &[BSplineSupport; 2],
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<[DirectedProfile; 2]> {
     let (keys, axis, chord) = translated_geometry(profiles, cells)?;
     [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], chord]
         .into_iter()
-        .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), TOL))
+        .filter_map(|e| normalize(sub(e, mul(axis, dot(axis, e))), 0.0))
         .flat_map(|d| [d, mul(d, -1.)])
         .any(|d| keys.iter().all(|(key, _)| monotone_profile(key, d)))
         .then_some(keys)
@@ -409,7 +411,7 @@ fn translated_profiles(
 /// span pair separated, rather than weakening the monotonicity inequalities.
 fn embedded_translated_profiles(
     profiles: &[BSplineSupport; 2],
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<[DirectedProfile; 2]> {
     translated_profiles(profiles, cells).or_else(|| {
         let (keys, axis, _) = translated_geometry(profiles, cells)?;
@@ -425,6 +427,7 @@ fn embedded_translated_profiles(
 fn curve_matches_edge(
     spline: &BSplineSupport,
     edge: &EdgeGeometry,
+    tolerance_mm: f64,
 ) -> Option<(CurveEvidence, [PointKey; 2])> {
     let evidence = curve_evidence(spline)?;
     let actual = if edge.parameter_forward == evidence.forward {
@@ -441,8 +444,9 @@ fn curve_matches_edge(
     }
     let expected_keys = evidence.key.ends()?;
     let bound = |point: PointKey, end: [f64; 3]| {
-        decode(point)
-            .is_some_and(|point| distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= TOL)
+        decode(point).is_some_and(|point| {
+            distance(point, end) + POINT_Q_MM * 3.0_f64.sqrt() / 2. <= tolerance_mm
+        })
     };
     if actual[0] == actual[1] || !bound(actual[0], expected[0]) || !bound(actual[1], expected[1]) {
         return None;
@@ -462,29 +466,29 @@ pub(super) struct ProfilePiece {
     pub interval: [ProfilePosition; 2],
 }
 
-fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
+fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry, tolerance_mm: f64) -> Option<()> {
     let [a, b] = parent.map(decode);
     let (a, b) = (a?, b?);
     let delta = sub(b, a);
-    let direction = normalize(delta, TOL)?;
+    let direction = normalize(delta, POINT_Q_MM)?;
     let [start, end] = [decode(edge.start)?, decode(edge.end)?];
     let line = brep::LineSupport {
         origin_mm: a,
         direction,
     };
-    if !bounded::on_line(start, line) || !bounded::on_line(end, line) {
+    if !bounded::on_line(start, line, tolerance_mm) || !bounded::on_line(end, line, tolerance_mm) {
         return None;
     }
     let lo = dot(sub(start, a), direction);
     let hi = dot(sub(end, a), direction);
-    if lo < -TOL || hi > crate::math3::norm(delta) + TOL || lo >= hi {
+    if lo < -tolerance_mm || hi > crate::math3::norm(delta) + tolerance_mm || lo >= hi {
         return None;
     }
     match &edge.support {
         CurveSupport::Line(line) => {
             let directed = dot(sub(end, start), line.direction);
-            (bounded::on_line(start, *line)
-                && bounded::on_line(end, *line)
+            (bounded::on_line(start, *line, tolerance_mm)
+                && bounded::on_line(end, *line, tolerance_mm)
                 && (directed > 0.) == edge.parameter_forward)
                 .then_some(())
         }
@@ -494,12 +498,12 @@ fn generator_piece(parent: [PointKey; 2], edge: &EdgeGeometry) -> Option<()> {
                 &rational,
                 Point3::new(start[0], start[1], start[2]),
                 Point3::new(end[0], end[1], end[2]),
-                TOL,
+                tolerance_mm,
             ) != SegmentLocus::WithinTolerance
             {
                 return None;
             }
-            let (evidence, ends) = curve_matches_edge(spline, edge)?;
+            let (evidence, ends) = curve_matches_edge(spline, edge, tolerance_mm)?;
             let direction = if ends[0] == edge.start {
                 direction
             } else {
@@ -519,6 +523,7 @@ fn full_trim(
     profiles: &[SplineCurveKey; 2],
     forward: bool,
     loops: &[brep::FaceLoop],
+    tolerance_mm: f64,
 ) -> Option<()> {
     let [boundary] = loops else {
         return None;
@@ -551,7 +556,9 @@ fn full_trim(
         let matching_generators = generators
             .iter()
             .enumerate()
-            .filter_map(|(i, &generator)| generator_piece(generator, &geometry).map(|()| i))
+            .filter_map(|(i, &generator)| {
+                generator_piece(generator, &geometry, tolerance_mm).map(|()| i)
+            })
             .collect::<Vec<_>>();
         match matching_generators.as_slice() {
             [i] => {
@@ -564,12 +571,12 @@ fn full_trim(
         let CurveSupport::BSpline(spline) = &geometry.support else {
             return None;
         };
-        let (key, actual) = curve_matches_edge(spline, &geometry)?;
+        let (key, actual) = curve_matches_edge(spline, &geometry, tolerance_mm)?;
         let matches = profiles
             .iter()
             .enumerate()
             .filter_map(|(i, parent)| {
-                let interval = profile_piece(parent, &key, actual)?;
+                let interval = profile_piece(parent, &key, actual, tolerance_mm)?;
                 let mut directed = interval.map(|position| position.point);
                 if !cap_forward[i] {
                     directed.reverse();
@@ -596,7 +603,7 @@ fn canonical_strip(
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<([SplineCurveKey; 2], bool)> {
     let (profiles, swapped) =
         crate::surface_recovery::boundary_strip_profiles(surface_id, entities, index)?;
@@ -618,14 +625,16 @@ pub(super) fn oriented_key(
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
-    cells: &mut CellWitnesses,
+    cells: &mut BoundaryProofContext,
 ) -> Option<OrientedSupportKey> {
+    let tolerance_mm = cells.tolerance_mm();
     let (profiles, outward_positive) =
         canonical_strip(surface_id, forward, entities, index, cells)?;
     full_trim(
         &profiles,
         outward_positive,
         &brep::face_loops(face_id, entities, index)?,
+        tolerance_mm,
     )?;
     Some(OrientedSupportKey::SplineStrip {
         strip: Box::new(SplineStripKey { profiles }),
@@ -643,24 +652,29 @@ pub(super) fn reversed_face_sense_is_proven(
     forward: bool,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> bool {
     let Some((profiles, outward_positive)) = canonical_strip(
         surface_id,
         forward,
         entities,
         index,
-        &mut CellWitnesses::default(),
+        &mut BoundaryProofContext::new(tolerance_mm),
     ) else {
         return false;
     };
     let Some(loops) = brep::face_loops(face_id, entities, index) else {
         return false;
     };
-    full_trim(&profiles, outward_positive, &loops).is_none()
-        && full_trim(&profiles, !outward_positive, &loops).is_some()
+    full_trim(&profiles, outward_positive, &loops, tolerance_mm).is_none()
+        && full_trim(&profiles, !outward_positive, &loops, tolerance_mm).is_some()
 }
 
-pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey) -> bool {
+pub(super) fn line_on_strip(
+    line: brep::LineSupport,
+    strip: &SplineStripKey,
+    tolerance_mm: f64,
+) -> bool {
     let Some([a, b]) = strip.profiles[0].ends() else {
         return false;
     };
@@ -669,7 +683,7 @@ pub(super) fn line_on_strip(line: brep::LineSupport, strip: &SplineStripKey) -> 
     };
     [[a, c], [b, d]].into_iter().any(|ends| {
         ends.into_iter()
-            .all(|p| decode(p).is_some_and(|p| bounded::on_line(p, line)))
+            .all(|p| decode(p).is_some_and(|p| bounded::on_line(p, line, tolerance_mm)))
     })
 }
 
@@ -677,6 +691,7 @@ pub(super) fn certified_edge(
     edge: &EdgeGeometry,
     spline: &BSplineSupport,
     loci: &[SupportLocusKey; 2],
+    tolerance_mm: f64,
 ) -> Option<ProfilePiece> {
     if !loci
         .iter()
@@ -684,7 +699,7 @@ pub(super) fn certified_edge(
     {
         return None;
     }
-    let (key, actual) = curve_matches_edge(spline, edge)?;
+    let (key, actual) = curve_matches_edge(spline, edge, tolerance_mm)?;
     let mut selected: Option<ProfilePiece> = None;
     for locus in loci {
         match locus {
@@ -695,7 +710,7 @@ pub(super) fn certified_edge(
                     .filter_map(|parent| {
                         Some(ProfilePiece {
                             profile: Box::new(parent.clone()),
-                            interval: profile_piece(parent, &key, actual)?,
+                            interval: profile_piece(parent, &key, actual, tolerance_mm)?,
                         })
                     })
                     .collect::<Vec<_>>();
@@ -715,7 +730,7 @@ pub(super) fn certified_edge(
                 if spline
                     .control_points_mm
                     .iter()
-                    .any(|&p| (dot(p, normal) - offset).abs() > TOL)
+                    .any(|&p| (dot(p, normal) - offset).abs() > tolerance_mm)
                 {
                     return None;
                 }
@@ -774,15 +789,24 @@ mod tests {
     #[test]
     fn polynomial_exclusion_requires_a_single_nonplanar_full_span() {
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(nonplanar_polynomial_profiles(&profiles));
+        assert!(nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         // Different common weights in the two sweep rows only rechart v.
         profiles[0].weights = Some(vec![1.; 4]);
         profiles[1].weights = Some(vec![2.; 4]);
-        assert!(nonplanar_polynomial_profiles(&profiles));
+        assert!(nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
         // A rational arc is not ruled out by polynomial algebra.
         profiles[0].weights = Some(vec![1., 0.8, 0.8, 1.]);
         profiles[1].weights = Some(vec![2., 1.6, 1.6, 2.]);
-        assert!(!nonplanar_polynomial_profiles(&profiles));
+        assert!(!nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
 
         // A bent piecewise-linear profile has a nonplanar complete
         // control net but each individual swept span is a plane.
@@ -792,7 +816,10 @@ mod tests {
             knots: vec![0., 0., 0.5, 1., 1.],
             weights: None,
         };
-        assert!(!nonplanar_polynomial_profiles(&[bent(0.), bent(1.)]));
+        assert!(!nonplanar_polynomial_profiles(
+            &[bent(0.), bent(1.)],
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
 
         // A degree-elevated line remains planar.
         let mut profiles = [profile(0.), profile(0.01)];
@@ -801,7 +828,10 @@ mod tests {
                 point[1] = 0.;
             }
         }
-        assert!(!nonplanar_polynomial_profiles(&profiles));
+        assert!(!nonplanar_polynomial_profiles(
+            &profiles,
+            crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+        ));
     }
 
     #[test]
@@ -834,20 +864,20 @@ mod tests {
     #[test]
     fn strip_requires_translated_positive_weight_monotone_profiles() {
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_some());
         profiles[0].weights = Some(vec![1., 2., 2., 1.]);
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_some());
         profiles[1].weights = Some(vec![2., 4., 3., 2.]);
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_none());
         profiles[1].weights = Some(vec![2., 4., 4., 2.]);
         profiles[1].control_points_mm[1][2] += 0.001;
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_none());
         for p in &mut profiles {
             p.control_points_mm[1] = [2., 0., p.control_points_mm[0][2]];
             p.control_points_mm[2] = [-1., 0., p.control_points_mm[0][2]];
         }
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_none());
     }
 
     #[test]
@@ -867,12 +897,12 @@ mod tests {
             weights: None,
         };
         let mut profiles = [profile(0.), profile(0.01)];
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_some());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_some());
         for p in &mut profiles {
             p.control_points_mm[1][1] = -0.0001;
             p.control_points_mm[5][1] = 1.0001;
         }
-        assert!(translated_profiles(&profiles, &mut CellWitnesses::default()).is_none());
+        assert!(translated_profiles(&profiles, &mut BoundaryProofContext::default()).is_none());
     }
 
     fn edge(
@@ -926,7 +956,15 @@ mod tests {
                 edge(c, a, line(a), false, 4),
             ],
         };
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_some());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_some()
+        );
         let unpartitioned = boundary.clone();
         let midpoint = [b[0], b[1], f64::midpoint(b[2], d[2])];
         boundary.edges.splice(
@@ -936,19 +974,67 @@ mod tests {
                 edge(midpoint, d, line(b), true, 5),
             ],
         );
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_some());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_some()
+        );
         boundary.edges[2].start_mm = b;
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary = unpartitioned;
-        assert!(full_trim(&keys, false, std::slice::from_ref(&boundary)).is_none());
-        assert!(full_trim(&keys, true, &[boundary.clone(), boundary.clone()]).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                false,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                &[boundary.clone(), boundary.clone()],
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary.edges[0].parameter_forward = false;
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         boundary.edges[0].parameter_forward = true;
         let mut changed = low;
         changed.control_points_mm[1][1] += 0.01;
         boundary.edges[0].support = CurveSupport::BSpline(changed);
-        assert!(full_trim(&keys, true, std::slice::from_ref(&boundary)).is_none());
+        assert!(
+            full_trim(
+                &keys,
+                true,
+                std::slice::from_ref(&boundary),
+                crate::boundary_proof::TEST_BOUNDARY_TOL_MM
+            )
+            .is_none()
+        );
         Ok(())
     }
 }

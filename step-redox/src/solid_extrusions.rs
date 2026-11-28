@@ -14,6 +14,8 @@ pub use crate::profile_curves::RecoveredProfileCurve;
 use crate::reduced_brep::{ReducedFace, ReducedSolid};
 use crate::step_graph::{build_index, entity_id, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+#[cfg(test)]
+use monstertruck_core::tolerance::NATIVE_STEP_RECOVERY_MM;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
@@ -25,13 +27,17 @@ mod signed_cap_pairs;
 pub(crate) use signed_cap_pairs::detect_signed_cap_pairs_for_solid_with_index;
 pub use signed_cap_pairs::{CapInterval, SignedCapPairProposal, detect_signed_cap_pairs};
 
-const GEOM_TOL_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_geometry_mm;
+const NUMERICAL_GEOMETRY_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm;
+#[cfg(test)]
+const GEOM_TOL_MM: f64 = NATIVE_STEP_RECOVERY_MM;
 const DIR_TOL: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_direction;
 const ANGLE_TOL_RAD: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.solid_extrusion_angle_rad;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RecoveredSolidExtrusion {
     pub solid_id: u64,
+    /// Effective physical accuracy of the original source.
+    pub source_tolerance_mm: f64,
     pub cap_face_ids: [u64; 2],
     pub side_face_ids: Vec<u64>,
     /// Canonical outer profile loop. Kept as the historical field for single-loop API/JSON compatibility.
@@ -70,6 +76,7 @@ impl RecoveredSolidExtrusion {
 #[derive(Debug, Clone)]
 struct FaceInfo {
     id: u64,
+    tolerance_mm: f64,
     surface: SurfaceSupport,
     surface_forward: bool,
     loops: Vec<brep::FaceLoop>,
@@ -162,6 +169,7 @@ pub(crate) fn discover_extrusion_core_candidates(
 #[derive(Debug, Clone)]
 pub(crate) struct RecoveredSourceCapExtrusion {
     pub solid_id: u64,
+    pub source_tolerance_mm: f64,
     pub cap_face_id: u64,
     pub profile_curves: Vec<RecoveredProfileCurve>,
     pub inner_profile_loops: Vec<Vec<RecoveredProfileCurve>>,
@@ -203,7 +211,8 @@ fn source_cap_generator_station(
                     };
                     let delta = sub(other, at);
                     let height = dot(delta, inward);
-                    if height > GEOM_TOL_MM && norm(sub(delta, mul(inward, height))) <= GEOM_TOL_MM
+                    if height > NUMERICAL_GEOMETRY_MM
+                        && norm(sub(delta, mul(inward, height))) <= cap.tolerance_mm
                     {
                         heights.push(height);
                     }
@@ -216,7 +225,7 @@ fn source_cap_generator_station(
     // One accidental line-edge is insufficient evidence of a material core.
     (heights
         .iter()
-        .filter(|value| (**value - height).abs() <= GEOM_TOL_MM)
+        .filter(|value| (**value - height).abs() <= cap.tolerance_mm)
         .count()
         >= 2)
         .then_some(height)
@@ -231,14 +240,17 @@ pub(crate) fn source_cap_loops_in_frame(
     axes: [[f64; 3]; 3],
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> Option<Vec<Vec<RecoveredProfileCurve>>> {
-    let face = face_info(face_id, entities, index)?;
+    let face = face_info(face_id, entities, index, tolerance_mm)?;
     let [x, y, z] = axes;
     let roles = cap_loop_roles(&face, z)?;
     face.loops
         .iter()
         .zip(roles)
-        .map(|(loop_, outer)| canonical_profile_loop(&loop_.edges, origin, x, y, z, outer))
+        .map(|(loop_, outer)| {
+            canonical_profile_loop(&loop_.edges, origin, x, y, z, outer, face.tolerance_mm)
+        })
         .collect()
 }
 
@@ -255,10 +267,13 @@ pub(crate) fn source_cap_extrusion_proposal_at_station(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<RecoveredSourceCapExtrusion> {
-    if !height_mm.is_finite() || height_mm <= GEOM_TOL_MM {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
+    if !height_mm.is_finite() || height_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
-    let cap = face_info(cap_face_id, entities, index)?;
+    let cap = face_info(cap_face_id, entities, index, tolerance_mm)?;
     let SurfaceSupport::Plane(plane) = cap.surface else {
         return None;
     };
@@ -272,6 +287,7 @@ pub(crate) fn source_cap_extrusion_proposal_at_station(
     let profile = canonical_profile(&cap, z_axis, &roles)?;
     Some(RecoveredSourceCapExtrusion {
         solid_id,
+        source_tolerance_mm: cap.tolerance_mm,
         cap_face_id,
         profile_curves: profile.curves,
         inner_profile_loops: profile.inner_loops,
@@ -293,12 +309,14 @@ pub(crate) fn partial_source_cap_extrusion_candidates_with_index(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSourceCapExtrusion> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return Vec::new();
     };
     let faces = face_ids
         .into_iter()
-        .filter_map(|id| face_info(id, entities, index))
+        .filter_map(|id| face_info(id, entities, index, tolerance_mm))
         .collect::<Vec<_>>();
     let mut edge_faces = HashMap::<u64, Vec<usize>>::new();
     for (face_index, face) in faces.iter().enumerate() {
@@ -447,7 +465,7 @@ pub(crate) fn recover_treatment_healed_extrusion_core_from_cap_faces_with_index(
     let mut faces = Vec::new();
     let mut unreadable_planes = Vec::<PlaneSupport>::new();
     for face in reduced.faces() {
-        if let Some(face) = face_info_from_reduced(face) {
+        if let Some(face) = face_info_from_reduced(face, reduced.recovery_tolerance_mm()) {
             faces.push(face);
         } else if let SurfaceSupport::Plane(plane) = face.surface {
             unreadable_planes.push(plane);
@@ -469,6 +487,7 @@ pub(crate) fn recover_treatment_healed_extrusion_core_from_cap_faces_with_index(
     Some(TreatmentHealedExtrusionCoreCandidate {
         core: RecoveredSolidExtrusion {
             solid_id,
+            source_tolerance_mm: pair.bottom.tolerance_mm,
             cap_face_ids: [pair.bottom.id, pair.top.id],
             side_face_ids: Vec::new(),
             profile_curves: profile.curves,
@@ -492,7 +511,7 @@ fn unreadable_parallel_plane_may_intervene(pair: &CapPairProof<'_>, plane: Plane
         return false;
     }
     let offset = dot(pair.z_axis, sub(plane.origin_mm, bottom_plane.origin_mm));
-    offset > GEOM_TOL_MM && offset < pair.height_mm - GEOM_TOL_MM
+    offset > NUMERICAL_GEOMETRY_MM && offset < pair.height_mm - NUMERICAL_GEOMETRY_MM
 }
 
 /// Both native and STEP-backed recognition consume the same canonical
@@ -504,7 +523,7 @@ fn normalize_extrusion_loops(mut loops: Vec<brep::FaceLoop>) -> Vec<brep::FaceLo
                 spline,
                 edge.start_mm,
                 edge.end_mm,
-                GEOM_TOL_MM,
+                NUMERICAL_GEOMETRY_MM,
             )
         {
             edge.support = CurveSupport::Line(line);
@@ -513,7 +532,7 @@ fn normalize_extrusion_loops(mut loops: Vec<brep::FaceLoop>) -> Vec<brep::FaceLo
     loops
 }
 
-fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
+fn face_info_from_reduced(face: &ReducedFace, tolerance_mm: f64) -> Option<FaceInfo> {
     if matches!(face.surface, SurfaceSupport::Other { .. })
         || face.loops.is_empty()
         || face.loops.iter().any(|loop_| {
@@ -533,6 +552,7 @@ fn face_info_from_reduced(face: &ReducedFace) -> Option<FaceInfo> {
         .collect();
     Some(FaceInfo {
         id: face.id,
+        tolerance_mm,
         surface: face.surface.clone(),
         surface_forward: face.surface_forward,
         loops,
@@ -550,12 +570,14 @@ fn open_cap_side_extrusion_candidates(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidExtrusion> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let Some(source_face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return Vec::new();
     };
     let Some(faces) = source_face_ids
         .into_iter()
-        .map(|id| face_info(id, entities, index))
+        .map(|id| face_info(id, entities, index, tolerance_mm))
         .collect::<Option<Vec<_>>>()
     else {
         return Vec::new();
@@ -603,10 +625,12 @@ fn cap_side_generator_length(
             let Some(other) = other else { continue };
             let delta = sub(other, source_point);
             let height = dot(delta, inward);
-            if height <= GEOM_TOL_MM || norm(sub(delta, mul(inward, height))) > GEOM_TOL_MM {
+            if height <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+                || norm(sub(delta, mul(inward, height))) > cap.tolerance_mm
+            {
                 continue;
             }
-            if connector.is_some_and(|old: f64| (old - height).abs() > GEOM_TOL_MM) {
+            if connector.is_some_and(|old: f64| (old - height).abs() > cap.tolerance_mm) {
                 return None;
             }
             connector = Some(height);
@@ -652,7 +676,7 @@ fn open_cap_side_extrusion_candidate(
             return None;
         };
         if dot(normal, side_plane.normal).abs() > DIR_TOL
-            || !edge_lies_on_plane(edge, side_plane)
+            || !edge_lies_on_plane(edge, side_plane, cap.tolerance_mm)
             || !face_lies_on_plane(side, side_plane)
         {
             return None;
@@ -671,7 +695,7 @@ fn open_cap_side_extrusion_candidate(
     let first_height = *lengths.first()?;
     if lengths
         .iter()
-        .any(|height| (height - first_height).abs() > GEOM_TOL_MM)
+        .any(|height| (height - first_height).abs() > cap.tolerance_mm)
     {
         return None;
     }
@@ -686,7 +710,7 @@ fn open_cap_side_extrusion_candidate(
             return false;
         }
         let height = dot(sub(other.origin_mm, cap_plane.origin_mm), inward);
-        (height - first_height).abs() <= GEOM_TOL_MM && face_lies_on_plane(f, other)
+        (height - first_height).abs() <= cap.tolerance_mm && face_lies_on_plane(f, other)
     });
     let bottom = matching_bottom_faces.next()?;
     if matching_bottom_faces.next().is_some() {
@@ -699,6 +723,7 @@ fn open_cap_side_extrusion_candidate(
     side_face_ids.sort_unstable();
     Some(RecoveredSolidExtrusion {
         solid_id,
+        source_tolerance_mm: cap.tolerance_mm,
         cap_face_ids: [bottom.id, cap.id],
         side_face_ids,
         profile_curves: profile.curves,
@@ -734,13 +759,15 @@ pub(crate) fn discard_boundary_penetrating_extrusion_cores(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidExtrusion> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return candidates;
     };
     let mut seen_edges = HashSet::new();
     let mut witness_points = Vec::<[f64; 3]>::new();
     for face_id in face_ids {
-        let Some(face) = face_info(face_id, entities, index) else {
+        let Some(face) = face_info(face_id, entities, index, tolerance_mm) else {
             continue;
         };
         for edge in face.loop_edges {
@@ -775,16 +802,19 @@ pub(crate) fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec
             })
             .into(),
         CurveSupport::Circle(circle) => {
-            let Some(start) = circle_angle_3d(edge.start_mm, *circle) else {
+            let Some(start) = circle_angle_3d(edge.start_mm, *circle, NUMERICAL_GEOMETRY_MM) else {
                 return Vec::new();
             };
-            let Some(sweep) = circle_edge_sweep(edge, *circle) else {
+            let Some(sweep) = circle_edge_sweep(edge, *circle, NUMERICAL_GEOMETRY_MM) else {
                 return Vec::new();
             };
             let Some(y_axis) = normalize(cross(circle.normal, circle.x_direction)) else {
                 return Vec::new();
             };
-            if !sweep.is_finite() || sweep.abs() <= DIR_TOL || circle.radius_mm <= GEOM_TOL_MM {
+            if !sweep.is_finite()
+                || sweep.abs() <= DIR_TOL
+                || circle.radius_mm <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+            {
                 return Vec::new();
             }
             FRACTIONS
@@ -810,10 +840,10 @@ pub(crate) fn source_boundary_edge_witness_points(edge: &OrientedEdgeUse) -> Vec
             let Some(last) = crate::boundary_proof::evaluate_bspline(spline, end) else {
                 return Vec::new();
             };
-            let endpoints_match = (distance(first, edge.start_mm) <= GEOM_TOL_MM
-                && distance(last, edge.end_mm) <= GEOM_TOL_MM)
-                || (distance(first, edge.end_mm) <= GEOM_TOL_MM
-                    && distance(last, edge.start_mm) <= GEOM_TOL_MM);
+            let endpoints_match = (distance(first, edge.start_mm) <= NUMERICAL_GEOMETRY_MM
+                && distance(last, edge.end_mm) <= NUMERICAL_GEOMETRY_MM)
+                || (distance(first, edge.end_mm) <= NUMERICAL_GEOMETRY_MM
+                    && distance(last, edge.start_mm) <= NUMERICAL_GEOMETRY_MM);
             if !endpoints_match {
                 return Vec::new();
             }
@@ -837,7 +867,7 @@ fn core_strictly_contains_source_boundary_point(
 ) -> bool {
     // Strict geometric contradiction requires separation from *all* core
     // boundary faces, not numerical equality on a common cap or cavity wall.
-    let margin = 4.0 * GEOM_TOL_MM;
+    let margin = 4.0 * core.source_tolerance_mm;
     let relative = sub(point, core.origin_mm);
     let depth = dot(relative, core.z_axis);
     if depth <= margin || depth >= core.height_mm - margin {
@@ -852,14 +882,18 @@ fn core_strictly_contains_source_boundary_point(
         .all(|hole| strict_profile_contains(hole, local, margin) == Some(false))
 }
 
-fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
+fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2], tolerance_mm: f64) -> bool {
     match curve {
         RecoveredProfileCurve::Line {
             start_mm, end_mm, ..
         } => {
             let delta = sub2(*end_mm, *start_mm);
             let length2 = dot2(delta, delta);
-            if length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+            if length2
+                <= DEFAULT_STEP_RECOVERY_TOLERANCES
+                    .numerical_geometry_mm
+                    .powi(2)
+            {
                 return false;
             }
             let t = (dot2(sub2(point, *start_mm), delta) / length2).clamp(0.0, 1.0);
@@ -869,7 +903,7 @@ fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
                     t.mul_add(delta[0], start_mm[0]),
                     t.mul_add(delta[1], start_mm[1]),
                 ],
-            ) <= GEOM_TOL_MM
+            ) <= tolerance_mm
         }
         RecoveredProfileCurve::CircleArc {
             center_mm,
@@ -879,12 +913,12 @@ fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
             ..
         } => {
             let d = sub2(point, *center_mm);
-            (d[0].hypot(d[1]) - radius_mm).abs() <= GEOM_TOL_MM
+            (d[0].hypot(d[1]) - radius_mm).abs() <= tolerance_mm
                 && angle_on_arc(
                     d[1].atan2(d[0]),
                     *start_angle_rad,
                     *end_angle_rad,
-                    GEOM_TOL_MM / radius_mm,
+                    tolerance_mm / radius_mm,
                 )
         }
         _ => false,
@@ -894,18 +928,21 @@ fn point_on_curve(curve: &RecoveredProfileCurve, point: [f64; 2]) -> bool {
 pub(crate) fn cap_contains(cap: &RecoveredSourceCapExtrusion, point: [f64; 3]) -> bool {
     let relative = sub(point, cap.origin_mm);
     let z = dot(relative, cap.z_axis);
-    if z < -GEOM_TOL_MM || z > cap.height_mm + GEOM_TOL_MM {
+    if z < -cap.source_tolerance_mm || z > cap.height_mm + cap.source_tolerance_mm {
         return false;
     }
     let p = [dot(relative, cap.x_axis), dot(relative, cap.y_axis)];
     let within = |ring: &[RecoveredProfileCurve]| {
-        ring.iter().any(|curve| point_on_curve(curve, p))
-            || profile_contains_with_rotated_ray(ring, p, GEOM_TOL_MM) == Some(true)
+        ring.iter()
+            .any(|curve| point_on_curve(curve, p, cap.source_tolerance_mm))
+            || profile_contains_with_rotated_ray(ring, p, cap.source_tolerance_mm) == Some(true)
     };
     within(&cap.profile_curves)
         && cap.inner_profile_loops.iter().all(|ring| {
-            ring.iter().any(|curve| point_on_curve(curve, p))
-                || profile_contains_with_rotated_ray(ring, p, GEOM_TOL_MM) == Some(false)
+            ring.iter()
+                .any(|curve| point_on_curve(curve, p, cap.source_tolerance_mm))
+                || profile_contains_with_rotated_ray(ring, p, cap.source_tolerance_mm)
+                    == Some(false)
         })
 }
 
@@ -1034,7 +1071,12 @@ pub(crate) fn strict_profile_contains(
             } => {
                 let edge = sub2(*b, *a);
                 let length2 = dot2(edge, edge);
-                if !length2.is_finite() || length2 <= GEOM_TOL_MM * GEOM_TOL_MM {
+                if !length2.is_finite()
+                    || length2
+                        <= DEFAULT_STEP_RECOVERY_TOLERANCES
+                            .numerical_geometry_mm
+                            .powi(2)
+                {
                     return None;
                 }
                 let t = (dot2(sub2(point, *a), edge) / length2).clamp(0.0, 1.0);
@@ -1060,7 +1102,9 @@ pub(crate) fn strict_profile_contains(
                 end_angle_rad: end,
                 ..
             } => {
-                if *radius <= GEOM_TOL_MM || !radius.is_finite() {
+                if *radius <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+                    || !radius.is_finite()
+                {
                     return None;
                 }
                 crossings +=
@@ -1159,13 +1203,15 @@ fn extrusion_core_candidates_for_solid(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Vec<RecoveredSolidExtrusion> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let Some(face_ids) = brep::solid_face_ids(solid_id, entities, index) else {
         return Vec::new();
     };
     let Some(faces) = face_ids
         .iter()
         .copied()
-        .map(|face_id| face_info(face_id, entities, index))
+        .map(|face_id| face_info(face_id, entities, index, tolerance_mm))
         .collect::<Option<Vec<_>>>()
     else {
         return Vec::new();
@@ -1216,6 +1262,7 @@ fn extrusion_core_candidate(
     let profile = canonical_profile(pair.bottom, pair.z_axis, &pair.bottom_loop_roles)?;
     Some(RecoveredSolidExtrusion {
         solid_id,
+        source_tolerance_mm: pair.bottom.tolerance_mm,
         cap_face_ids: [pair.bottom.id, pair.top.id],
         side_face_ids: Vec::new(),
         profile_curves: profile.curves,
@@ -1251,11 +1298,13 @@ fn detect_one_solid(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<RecoveredSolidExtrusion> {
+    let tolerance_mm =
+        crate::source_accuracy::source_recovery_tolerance_mm(solid_id, entities, index);
     let face_ids = brep::solid_face_ids(solid_id, entities, index)?;
     let faces = face_ids
         .iter()
         .copied()
-        .map(|face_id| face_info(face_id, entities, index))
+        .map(|face_id| face_info(face_id, entities, index, tolerance_mm))
         .collect::<Option<Vec<_>>>()?;
     detect_one_solid_from_faces(solid_id, &faces)
 }
@@ -1265,7 +1314,7 @@ pub(crate) fn detect_solid_extrusion_from_reduced(
 ) -> Option<RecoveredSolidExtrusion> {
     let faces = solid
         .faces()
-        .map(face_info_from_reduced)
+        .map(|face| face_info_from_reduced(face, solid.recovery_tolerance_mm()))
         .collect::<Option<Vec<_>>>()?;
     detect_one_solid_from_faces(solid.solid_id(), &faces)
 }
@@ -1348,6 +1397,7 @@ fn cap_pair_candidate(
 
     Some(RecoveredSolidExtrusion {
         solid_id,
+        source_tolerance_mm: pair.bottom.tolerance_mm,
         cap_face_ids: [pair.bottom.id, pair.top.id],
         side_face_ids: side_proof
             .side_indices
@@ -1387,7 +1437,9 @@ fn ordered_cap_pair(
 
     let z_axis = canonical_direction(first_plane.normal);
     let separation = dot(z_axis, second_plane.origin_mm) - dot(z_axis, first_plane.origin_mm);
-    if !separation.is_finite() || separation.abs() <= GEOM_TOL_MM {
+    if !separation.is_finite()
+        || separation.abs() <= DEFAULT_STEP_RECOVERY_TOLERANCES.numerical_geometry_mm
+    {
         return None;
     }
     let (bottom_index, top_index, height_mm) = if separation > 0.0 {
@@ -1469,9 +1521,13 @@ fn prove_translated_caps(pair: &CapPairProof<'_>) -> Option<f64> {
             .iter()
             .filter(|top_edge| !used_top_edges.contains(&top_edge.edge_id))
             .filter_map(|top_edge| {
-                let residual =
-                    translated_profile_edge_residual(bottom_edge, top_edge, pair.extrusion)?;
-                (residual <= GEOM_TOL_MM).then_some((top_edge.edge_id, residual))
+                let residual = translated_profile_edge_residual(
+                    bottom_edge,
+                    top_edge,
+                    pair.extrusion,
+                    pair.bottom.tolerance_mm,
+                )?;
+                (residual <= pair.bottom.tolerance_mm).then_some((top_edge.edge_id, residual))
             })
             .collect::<Vec<_>>();
         let [(top_edge_id, residual)] = matches.as_slice() else {
@@ -1512,7 +1568,7 @@ fn has_intervening_translated_boundary(pair: &CapPairProof<'_>, faces: &[FaceInf
         }
 
         let offset = dot(pair.z_axis, sub(plane.origin_mm, bottom_plane.origin_mm));
-        if offset <= GEOM_TOL_MM || offset >= pair.height_mm - GEOM_TOL_MM {
+        if offset <= NUMERICAL_GEOMETRY_MM || offset >= pair.height_mm - NUMERICAL_GEOMETRY_MM {
             return false;
         }
         if face.loops.len() != pair.bottom.loops.len()
@@ -1545,7 +1601,7 @@ fn prove_extrusion_sides(
     faces: &[FaceInfo],
     edge_faces: &HashMap<u64, Vec<usize>>,
 ) -> Option<SideProof> {
-    if pair.max_residual_mm > GEOM_TOL_MM {
+    if pair.max_residual_mm > pair.bottom.tolerance_mm {
         return None;
     }
     let bottom_edges = pair
@@ -1632,7 +1688,7 @@ fn cap_loop_roles(face: &FaceInfo, z_axis: [f64; 3]) -> Option<Vec<bool>> {
     // when the geometry itself proves one unambiguous outer loop.
     let loops = projected_cap_loops(face, z_axis)?;
     convex_polygon_outer_roles(&loops)
-        .or_else(|| loop_containment::prove_loop_roles(&loops, GEOM_TOL_MM))
+        .or_else(|| loop_containment::prove_loop_roles(&loops, NUMERICAL_GEOMETRY_MM))
 }
 
 /// Recover the outer bound of an unlabelled planar face without assuming
@@ -1642,7 +1698,12 @@ pub(crate) fn unlabelled_planar_outer_bound(
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
 ) -> Option<u64> {
-    let face = face_info(face_id, entities, index)?;
+    let face = face_info(
+        face_id,
+        entities,
+        index,
+        crate::source_accuracy::source_face_recovery_tolerance_mm(face_id, entities, index),
+    )?;
     let SurfaceSupport::Plane(plane) = face.surface else {
         return None;
     };
@@ -1657,7 +1718,7 @@ pub(crate) fn unlabelled_planar_outer_bound(
     let outward = mul(plane.normal, if face.surface_forward { 1.0 } else { -1.0 });
     let curves = projected_cap_loops(&face, outward)?;
     let roles = convex_polygon_outer_roles(&curves)
-        .or_else(|| loop_containment::prove_loop_roles(&curves, GEOM_TOL_MM))?;
+        .or_else(|| loop_containment::prove_loop_roles(&curves, NUMERICAL_GEOMETRY_MM))?;
     face.loops
         .iter()
         .zip(roles)
@@ -1676,7 +1737,16 @@ fn projected_cap_loops(
             loop_
                 .edges
                 .iter()
-                .map(|edge| recovered_profile_curve(edge, origin_mm, x_axis, y_axis, z_axis))
+                .map(|edge| {
+                    recovered_profile_curve(
+                        edge,
+                        origin_mm,
+                        x_axis,
+                        y_axis,
+                        z_axis,
+                        face.tolerance_mm,
+                    )
+                })
                 .collect::<Option<Vec<_>>>()
         })
         .collect()
@@ -1733,14 +1803,14 @@ fn convex_line_polygon(curves: &[RecoveredProfileCurve]) -> Option<(Vec<[f64; 2]
             return None;
         };
         let next_start = curves[(index + 1) % curves.len()].start_point()?;
-        if distance2(*end_mm, next_start) > GEOM_TOL_MM {
+        if distance2(*end_mm, next_start) > NUMERICAL_GEOMETRY_MM {
             return None;
         }
         points.push(*start_mm);
     }
 
     let area = signed_area_curves(curves);
-    if !area.is_finite() || area.abs() <= GEOM_TOL_MM * GEOM_TOL_MM {
+    if !area.is_finite() || area.abs() <= NUMERICAL_GEOMETRY_MM * NUMERICAL_GEOMETRY_MM {
         return None;
     }
     let orientation = area.signum();
@@ -1795,7 +1865,7 @@ fn point_inside_convex_polygon(point: [f64; 2], polygon: &[[f64; 2]], orientatio
         let Some(direction) = normalize2(edge, DIR_TOL) else {
             return false;
         };
-        orientation * cross2(direction, sub2(point, a)) > GEOM_TOL_MM
+        orientation * cross2(direction, sub2(point, a)) > NUMERICAL_GEOMETRY_MM
     })
 }
 
@@ -1813,7 +1883,7 @@ fn circle_inside_convex_polygon(
             let Some(direction) = normalize2(edge, DIR_TOL) else {
                 return false;
             };
-            orientation.mul_add(cross2(direction, sub2(center, a)), -radius) > GEOM_TOL_MM
+            orientation.mul_add(cross2(direction, sub2(center, a)), -radius) > NUMERICAL_GEOMETRY_MM
         })
 }
 
@@ -1865,10 +1935,10 @@ fn loop_conservative_bbox(curves: &[RecoveredProfileCurve]) -> Option<([f64; 2],
 }
 
 fn bbox_disjoint(first: ([f64; 2], [f64; 2]), second: ([f64; 2], [f64; 2])) -> bool {
-    first.1[0] + GEOM_TOL_MM < second.0[0]
-        || second.1[0] + GEOM_TOL_MM < first.0[0]
-        || first.1[1] + GEOM_TOL_MM < second.0[1]
-        || second.1[1] + GEOM_TOL_MM < first.0[1]
+    first.1[0] + NUMERICAL_GEOMETRY_MM < second.0[0]
+        || second.1[0] + NUMERICAL_GEOMETRY_MM < first.0[0]
+        || first.1[1] + NUMERICAL_GEOMETRY_MM < second.0[1]
+        || second.1[1] + NUMERICAL_GEOMETRY_MM < first.0[1]
 }
 
 fn profile_axes(z_axis: [f64; 3]) -> Option<([f64; 3], [f64; 3])> {
@@ -1943,9 +2013,10 @@ fn face_info(
     face_id: u64,
     entities: &[EntityInstance],
     index: &HashMap<u64, usize>,
+    tolerance_mm: f64,
 ) -> Option<FaceInfo> {
     let surface_id = brep::face_surface(face_id, entities, index)?;
-    let surface = brep::surface_support(surface_id, entities, index);
+    let surface = brep::surface_support(surface_id, entities, index, tolerance_mm);
     if matches!(surface, SurfaceSupport::Other { .. }) {
         return None;
     }
@@ -1975,6 +2046,7 @@ fn face_info(
 
     Some(FaceInfo {
         id: face_id,
+        tolerance_mm,
         surface,
         surface_forward,
         loops,
@@ -1985,25 +2057,25 @@ fn face_info(
 fn face_lies_on_plane(face: &FaceInfo, plane: PlaneSupport) -> bool {
     face.loop_edges
         .iter()
-        .all(|edge| edge_lies_on_plane(edge, plane))
+        .all(|edge| edge_lies_on_plane(edge, plane, face.tolerance_mm))
 }
 
-fn edge_lies_on_plane(edge: &OrientedEdgeUse, plane: PlaneSupport) -> bool {
-    if point_plane_distance(edge.start_mm, plane) > GEOM_TOL_MM
-        || point_plane_distance(edge.end_mm, plane) > GEOM_TOL_MM
+fn edge_lies_on_plane(edge: &OrientedEdgeUse, plane: PlaneSupport, tolerance_mm: f64) -> bool {
+    if point_plane_distance(edge.start_mm, plane) > tolerance_mm
+        || point_plane_distance(edge.end_mm, plane) > tolerance_mm
     {
         return false;
     }
     match &edge.support {
         CurveSupport::Line(_) => true,
         CurveSupport::Circle(circle) => {
-            point_plane_distance(circle.center_mm, plane) <= GEOM_TOL_MM
+            point_plane_distance(circle.center_mm, plane) <= tolerance_mm
                 && parallel(circle.normal, plane.normal)
         }
         CurveSupport::BSpline(spline) => spline
             .control_points_mm
             .iter()
-            .all(|&point| point_plane_distance(point, plane) <= GEOM_TOL_MM),
+            .all(|&point| point_plane_distance(point, plane) <= tolerance_mm),
         CurveSupport::Other { .. } => false,
     }
 }
@@ -2012,6 +2084,7 @@ fn translated_profile_edge_residual(
     bottom: &OrientedEdgeUse,
     top: &OrientedEdgeUse,
     extrusion: [f64; 3],
+    tolerance_mm: f64,
 ) -> Option<f64> {
     let endpoint_residual = translated_endpoints_residual(bottom, top, extrusion);
     match (&bottom.support, &top.support) {
@@ -2020,11 +2093,11 @@ fn translated_profile_edge_residual(
             if !parallel(bottom_circle.normal, top_circle.normal) {
                 return None;
             }
-            if (bottom_circle.radius_mm - top_circle.radius_mm).abs() > GEOM_TOL_MM {
+            if (bottom_circle.radius_mm - top_circle.radius_mm).abs() > tolerance_mm {
                 return None;
             }
-            let bottom_sweep = circle_edge_sweep(bottom, *bottom_circle)?;
-            let top_sweep = circle_edge_sweep(top, *top_circle)?;
+            let bottom_sweep = circle_edge_sweep(bottom, *bottom_circle, tolerance_mm)?;
+            let top_sweep = circle_edge_sweep(top, *top_circle, tolerance_mm)?;
             if (bottom_sweep.abs() - top_sweep.abs()).abs() > ANGLE_TOL_RAD {
                 return None;
             }
@@ -2161,17 +2234,17 @@ fn side_support_residual(
             // Prove the side directly from its plane instead of requiring a
             // LINE entity spelling.
             (dot(z_axis, plane.normal).abs() <= DIR_TOL
-                && edge_lies_on_plane(profile_edge, *plane)
+                && edge_lies_on_plane(profile_edge, *plane, side.tolerance_mm)
                 && side
                     .loop_edges
                     .iter()
-                    .all(|edge| edge_lies_on_plane(edge, *plane)))
+                    .all(|edge| edge_lies_on_plane(edge, *plane, side.tolerance_mm)))
             .then_some(plane.max_residual_mm)
         }
         (CurveSupport::Circle(circle), SurfaceSupport::Cylinder(cylinder)) => {
             if !parallel(circle.normal, z_axis)
                 || !parallel(cylinder.axis, z_axis)
-                || (circle.radius_mm - cylinder.radius_mm).abs() > GEOM_TOL_MM
+                || (circle.radius_mm - cylinder.radius_mm).abs() > side.tolerance_mm
             {
                 return None;
             }
@@ -2181,7 +2254,7 @@ fn side_support_residual(
                 cylinder.axis,
             )
             .max((circle.radius_mm - cylinder.radius_mm).abs());
-            (residual <= GEOM_TOL_MM).then_some(residual)
+            (residual <= side.tolerance_mm).then_some(residual)
         }
         (_, SurfaceSupport::SplineExtrusion(surface)) => {
             // The side topology already proves one boundary edge from each
@@ -2198,7 +2271,7 @@ fn side_support_residual(
             let axis = normalize(extrusion)?;
             let surface_axis = normalize(surface.extrusion_mm)?;
             let sweep_residual = norm(cross(axis, surface_axis)) * norm(extrusion);
-            (sweep_residual <= GEOM_TOL_MM && surface.max_residual_mm <= GEOM_TOL_MM)
+            (sweep_residual <= side.tolerance_mm && surface.max_residual_mm <= side.tolerance_mm)
                 .then_some(sweep_residual.max(surface.max_residual_mm))
         }
         _ => None,
@@ -2224,7 +2297,15 @@ fn canonical_profile(
     }
     let (x_axis, y_axis) = profile_axes(z_axis)?;
     let origin_mm = canonical_outer_origin(outer, x_axis, y_axis, z_axis)?;
-    let curves = canonical_profile_loop(&outer.edges, origin_mm, x_axis, y_axis, z_axis, true)?;
+    let curves = canonical_profile_loop(
+        &outer.edges,
+        origin_mm,
+        x_axis,
+        y_axis,
+        z_axis,
+        true,
+        cap.tolerance_mm,
+    )?;
 
     Some(CanonicalProfile {
         origin_mm,
@@ -2253,14 +2334,30 @@ fn canonical_multi_loop_profile(
     let (x_axis, y_axis) = profile_axes(z_axis)?;
     let origin_mm = canonical_outer_origin(outer, x_axis, y_axis, z_axis)?;
 
-    let curves = canonical_profile_loop(&outer.edges, origin_mm, x_axis, y_axis, z_axis, true)?;
+    let curves = canonical_profile_loop(
+        &outer.edges,
+        origin_mm,
+        x_axis,
+        y_axis,
+        z_axis,
+        true,
+        cap.tolerance_mm,
+    )?;
     let mut inner_loops = cap
         .loops
         .iter()
         .zip(loop_roles.iter().copied())
         .filter(|(_, outer)| !*outer)
         .map(|(loop_, _)| {
-            canonical_profile_loop(&loop_.edges, origin_mm, x_axis, y_axis, z_axis, false)
+            canonical_profile_loop(
+                &loop_.edges,
+                origin_mm,
+                x_axis,
+                y_axis,
+                z_axis,
+                false,
+                cap.tolerance_mm,
+            )
         })
         .collect::<Option<Vec<_>>>()?;
     inner_loops.sort_by(|first, second| profile_loop_order(first, second));
@@ -2281,7 +2378,7 @@ fn canonical_outer_origin(
 ) -> Option<[f64; 3]> {
     if outer.edges.len() == 1
         && let CurveSupport::Circle(circle) = &outer.edges[0].support
-        && distance(outer.edges[0].start_mm, outer.edges[0].end_mm) <= GEOM_TOL_MM
+        && distance(outer.edges[0].start_mm, outer.edges[0].end_mm) <= NUMERICAL_GEOMETRY_MM
         && parallel(circle.normal, z_axis)
     {
         return Some(circle.center_mm);
@@ -2305,7 +2402,7 @@ fn raw_loop_is_continuous(edges: &[OrientedEdgeUse]) -> bool {
         && edges.iter().enumerate().all(|(index, current)| {
             let next = &edges[(index + 1) % edges.len()];
             current.end_vertex == next.start_vertex
-                && distance(current.end_mm, next.start_mm) <= GEOM_TOL_MM
+                && distance(current.end_mm, next.start_mm) <= NUMERICAL_GEOMETRY_MM
         })
 }
 
@@ -2316,13 +2413,14 @@ fn canonical_profile_loop(
     y_axis: [f64; 3],
     z_axis: [f64; 3],
     outer: bool,
+    tolerance_mm: f64,
 ) -> Option<Vec<RecoveredProfileCurve>> {
     if !raw_loop_is_continuous(edges) {
         return None;
     }
     let mut curves = edges
         .iter()
-        .map(|edge| recovered_profile_curve(edge, origin_mm, x_axis, y_axis, z_axis))
+        .map(|edge| recovered_profile_curve(edge, origin_mm, x_axis, y_axis, z_axis, tolerance_mm))
         .collect::<Option<Vec<_>>>()?;
 
     if !curves.iter().any(RecoveredProfileCurve::is_spline) {
@@ -2380,7 +2478,7 @@ fn canonical_profile_loop(
         .map(|curve| Some((curve.start_point()?, curve.end_point()?)))
         .collect::<Option<Vec<_>>>()?;
     if endpoints.iter().enumerate().any(|(index, (_, end))| {
-        distance2(*end, endpoints[(index + 1) % endpoints.len()].0) > GEOM_TOL_MM
+        distance2(*end, endpoints[(index + 1) % endpoints.len()].0) > tolerance_mm
     }) {
         return None;
     }
@@ -2435,6 +2533,7 @@ pub(crate) fn recovered_profile_curve(
     x_axis: [f64; 3],
     y_axis: [f64; 3],
     z_axis: [f64; 3],
+    tolerance_mm: f64,
 ) -> Option<RecoveredProfileCurve> {
     let start_mm = project2(edge.start_mm, origin_mm, x_axis, y_axis);
     let end_mm = project2(edge.end_mm, origin_mm, x_axis, y_axis);
@@ -2456,7 +2555,7 @@ pub(crate) fn recovered_profile_curve(
             } else {
                 !edge.parameter_forward
             };
-            let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+            let closed = edge.start_vertex == edge.end_vertex;
             let sweep = directional_sweep(start_angle, end_angle, increasing, closed);
             Some(RecoveredProfileCurve::CircleArc {
                 source_edge_ids: vec![edge.edge_id],
@@ -2474,8 +2573,8 @@ pub(crate) fn recovered_profile_curve(
             };
             let support_start = *oriented.control_points_mm.first()?;
             let support_end = *oriented.control_points_mm.last()?;
-            if distance(support_start, edge.start_mm) > GEOM_TOL_MM
-                || distance(support_end, edge.end_mm) > GEOM_TOL_MM
+            if distance(support_start, edge.start_mm) > tolerance_mm
+                || distance(support_end, edge.end_mm) > tolerance_mm
             {
                 return None;
             }
@@ -2566,7 +2665,7 @@ fn merge_profile_curves(
     first: &RecoveredProfileCurve,
     second: &RecoveredProfileCurve,
 ) -> Option<RecoveredProfileCurve> {
-    if distance2(first.end_point()?, second.start_point()?) > GEOM_TOL_MM {
+    if distance2(first.end_point()?, second.start_point()?) > NUMERICAL_GEOMETRY_MM {
         return None;
     }
 
@@ -2612,8 +2711,8 @@ fn merge_profile_curves(
                 end_angle_rad: second_end,
             },
         ) => {
-            if distance2(*first_center, *second_center) > GEOM_TOL_MM
-                || (first_radius - second_radius).abs() > GEOM_TOL_MM
+            if distance2(*first_center, *second_center) > NUMERICAL_GEOMETRY_MM
+                || (first_radius - second_radius).abs() > NUMERICAL_GEOMETRY_MM
             {
                 return None;
             }
@@ -2645,10 +2744,14 @@ fn merged_source_ids(first: &[u64], second: &[u64]) -> Vec<u64> {
     ids
 }
 
-fn circle_edge_sweep(edge: &OrientedEdgeUse, circle: CircleSupport) -> Option<f64> {
-    let start = circle_angle_3d(edge.start_mm, circle)?;
-    let end = circle_angle_3d(edge.end_mm, circle)?;
-    let closed = distance(edge.start_mm, edge.end_mm) <= GEOM_TOL_MM;
+fn circle_edge_sweep(
+    edge: &OrientedEdgeUse,
+    circle: CircleSupport,
+    tolerance_mm: f64,
+) -> Option<f64> {
+    let start = circle_angle_3d(edge.start_mm, circle, tolerance_mm)?;
+    let end = circle_angle_3d(edge.end_mm, circle, tolerance_mm)?;
+    let closed = edge.start_vertex == edge.end_vertex;
     Some(directional_sweep(
         start,
         end,
@@ -2668,14 +2771,14 @@ fn directional_sweep(start: f64, end: f64, increasing: bool, closed: bool) -> f6
     }
 }
 
-fn circle_angle_3d(point: [f64; 3], circle: CircleSupport) -> Option<f64> {
+fn circle_angle_3d(point: [f64; 3], circle: CircleSupport, tolerance_mm: f64) -> Option<f64> {
     let y_direction = normalize(cross(circle.normal, circle.x_direction))?;
     let relative = sub(point, circle.center_mm);
-    if dot(relative, circle.normal).abs() > GEOM_TOL_MM {
+    if dot(relative, circle.normal).abs() > tolerance_mm {
         return None;
     }
     let radial = norm(relative);
-    if (radial - circle.radius_mm).abs() > GEOM_TOL_MM {
+    if (radial - circle.radius_mm).abs() > tolerance_mm {
         return None;
     }
     Some(dot(relative, y_direction).atan2(dot(relative, circle.x_direction)))
@@ -2768,6 +2871,27 @@ fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, DIR_TOL)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_source_accuracy_survives_reduced_extrusion_and_lowering() -> anyhow::Result<()> {
+        let source = include_str!("../validation/fixtures/native_body_corpus_box.step");
+        let source = source.replace("LENGTH_MEASURE(1.E-07)", "LENGTH_MEASURE(5.E-02)");
+        let exchange = step_p21::parser::parse(&source)?;
+        let entities = &exchange.data[0].entities;
+        let index = build_index(entities);
+        let solid = ReducedSolid::from_step(15, entities, &index)
+            .ok_or_else(|| anyhow::anyhow!("source box"))?;
+        assert_eq!(solid.recovery_tolerance_mm(), 0.05);
+        assert_eq!(solid.clone().recovery_tolerance_mm(), 0.05);
+        let extrusions = detect_solid_extrusions(entities);
+        let extrusion = extrusions
+            .iter()
+            .find(|candidate| candidate.solid_id == 15)
+            .ok_or_else(|| anyhow::anyhow!("source box extrusion"))?;
+        assert_eq!(extrusion.source_tolerance_mm, 0.05);
+        crate::cad_recovery::recover_solid_extrusion_fragment(extrusion)?;
+        Ok(())
+    }
 
     #[test]
     fn real_hooked_tube_proposes_top_cap_with_attached_partial_bottom() -> anyhow::Result<()> {
@@ -3004,6 +3128,7 @@ mod tests {
         };
         FaceInfo {
             id,
+            tolerance_mm: NATIVE_STEP_RECOVERY_MM,
             surface: SurfaceSupport::Plane(PlaneSupport {
                 origin_mm: [0.0, 0.0, z],
                 normal: [0.0, 0.0, 1.0],
@@ -3070,7 +3195,7 @@ mod tests {
         let mut top = line_edge(2, 21, 20, [2.0, 0.0, 3.0], [0.0, 0.0, 3.0]);
         top.parameter_forward = false;
         assert_eq!(
-            translated_profile_edge_residual(&bottom, &top, [0.0, 0.0, 3.0]),
+            translated_profile_edge_residual(&bottom, &top, [0.0, 0.0, 3.0], GEOM_TOL_MM,),
             Some(0.0)
         );
     }
@@ -3094,12 +3219,12 @@ mod tests {
         });
         top.parameter_forward = false;
         assert!(
-            translated_profile_edge_residual(&bottom, &top, extrusion)
+            translated_profile_edge_residual(&bottom, &top, extrusion, GEOM_TOL_MM,)
                 .is_some_and(|residual| residual <= GEOM_TOL_MM)
         );
         top.parameter_forward = true;
         assert!(
-            translated_profile_edge_residual(&bottom, &top, extrusion)
+            translated_profile_edge_residual(&bottom, &top, extrusion, GEOM_TOL_MM,)
                 .is_none_or(|residual| residual > GEOM_TOL_MM)
         );
         let CurveSupport::Circle(circle) = &mut top.support else {
@@ -3107,7 +3232,7 @@ mod tests {
         };
         circle.normal = [0., 0., -1.];
         assert!(
-            translated_profile_edge_residual(&bottom, &top, extrusion)
+            translated_profile_edge_residual(&bottom, &top, extrusion, GEOM_TOL_MM,)
                 .is_some_and(|residual| residual <= GEOM_TOL_MM)
         );
         Ok(())
