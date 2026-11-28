@@ -179,7 +179,7 @@ fn output_obj(polyshells: &[MeshedCShell], path: &Path, condition_check: bool) -
 }
 
 fn output_vtk(polyshells: Vec<MeshedCShell>, path: &Path) -> Result<()> {
-    use vtkio::model::{ByteOrder, DataSet, Vtk};
+    use vtkio::model::{ByteOrder, DataSet, Version, Vtk};
 
     let mut pieces = Vec::new();
     for CompressedShell {
@@ -219,7 +219,7 @@ fn output_vtk(polyshells: Vec<MeshedCShell>, path: &Path) -> Result<()> {
     }
 
     let vtk = Vtk {
-        version: (1, 0).into(),
+        version: Version::new_xml(1, 0),
         title: String::new(),
         byte_order: ByteOrder::LittleEndian,
         file_path: None,
@@ -236,7 +236,7 @@ fn output_vtk(polyshells: Vec<MeshedCShell>, path: &Path) -> Result<()> {
 fn output_vtk_edge(polyshells: Vec<MeshedCShell>, path: &Path) -> Result<()> {
     use vtkio::model::{
         Attributes, ByteOrder, CellType, Cells, DataSet, IOBuffer, Piece, UnstructuredGridPiece,
-        VertexNumbers, Vtk,
+        Version, VertexNumbers, Vtk,
     };
 
     let mut pieces = Vec::new();
@@ -266,7 +266,7 @@ fn output_vtk_edge(polyshells: Vec<MeshedCShell>, path: &Path) -> Result<()> {
     }
 
     let vtk = Vtk {
-        version: (1, 0).into(),
+        version: Version::new_xml(1, 0),
         title: String::new(),
         byte_order: ByteOrder::LittleEndian,
         file_path: None,
