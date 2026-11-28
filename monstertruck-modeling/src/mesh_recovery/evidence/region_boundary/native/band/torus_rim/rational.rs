@@ -24,7 +24,14 @@ const MAX_PIECES: usize = 8192;
 const MAX_DEPTH: usize = 16;
 
 #[derive(Clone, Copy)]
+enum Chart {
+    Revolution,
+    Orthographic { hemisphere: bool },
+}
+
+#[derive(Clone, Copy)]
 struct Frame {
+    chart: Chart,
     center: Point3,
     basis: [Vector3; 3],
     major: Option<f64>,
@@ -56,6 +63,7 @@ impl Frame {
         };
         let (u, v) = super::super::normal_basis(axis);
         Some(Self {
+            chart: Chart::Revolution,
             center,
             basis: [u, v, axis],
             major,
@@ -66,7 +74,11 @@ impl Frame {
             height_resolution,
         })
     }
-    const fn periodic_height(self) -> bool { self.major.is_some() }
+    const fn periodic(self, axis: usize) -> bool {
+        matches!(self.chart, Chart::Revolution)
+            && (axis == 0 || matches!(self.major, Some(major) if major > crate::KERNEL_EPSILON))
+    }
+    const fn periodic_height(self) -> bool { self.periodic(1) }
     const fn tolerance(self, axis: usize) -> f64 {
         if axis == 0 {
             self.resolution
@@ -75,7 +87,7 @@ impl Frame {
         }
     }
     fn unwrap(self, axis: usize, value: Interval, reference: f64) -> Interval {
-        if axis == 0 || self.periodic_height() {
+        if self.periodic(axis) {
             near(value, reference)
         } else {
             value
@@ -101,6 +113,9 @@ impl Frame {
     fn endpoint(self, control: Control) -> Option<[Interval; 2]> {
         let [x, y, z, w] = control;
         let [x, y, z] = [x.div(w)?, y.div(w)?, z.div(w)?];
+        if matches!(self.chart, Chart::Orthographic { .. }) {
+            return Some(self.orient([x, y]));
+        }
         let rho = x.square().add(y.square()).sqrt()?;
         let height = match self.major {
             Some(major) => angle(rho.sub(Interval::point(major)), z)?,
@@ -132,6 +147,14 @@ impl Frame {
         let [x, y, z] = [cartesian(0)?, cartesian(1)?, cartesian(2)?];
         let rate = |i: usize, p: Interval| derivative(i)?.sub(p.mul(weight_rate)).div(weight);
         let [dx, dy, dz] = [rate(0, x)?, rate(1, y)?, rate(2, z)?];
+        if let Chart::Orthographic { hemisphere } = self.chart {
+            // Positive weights and a strictly positive axial control hull
+            // prove that this entire span is on the chosen spherical sheet.
+            if hemisphere && z.lo <= self.height_resolution {
+                return None;
+            }
+            return Some(self.orient([dx, dy]));
+        }
         let radius_squared = x.square().add(y.square());
         let radius = radius_squared.sqrt()?;
         if radius.lo <= self.resolution {
@@ -180,9 +203,11 @@ impl Piece {
         edge: usize,
     ) -> Option<Self> {
         let rates = frame.rates(&controls.values)?;
-        if rates.iter().enumerate().any(|(i, r)| {
-            !r.finite() || ((i == 0 || frame.periodic_height()) && r.magnitude() >= PI * 0.5)
-        }) || !rates.iter().any(|r| r.directed())
+        if rates
+            .iter()
+            .enumerate()
+            .any(|(i, r)| !r.finite() || (frame.periodic(i) && r.magnitude() >= PI * 0.5))
+            || !rates.iter().any(|r| r.directed())
         {
             return None;
         }

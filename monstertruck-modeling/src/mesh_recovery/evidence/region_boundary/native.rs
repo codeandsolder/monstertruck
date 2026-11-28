@@ -1695,6 +1695,163 @@ mod tests {
     }
 
     #[test]
+    fn finite_cone_apex_domain_excludes_omitted_sector() -> Result<(), Box<dyn std::error::Error>> {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vector3::unit_z();
+        let (u, v) = normal_basis(axis);
+        let point = |angle: f64, z: f64| origin + (u * angle.cos() + v * angle.sin() + axis) * z;
+        let points = [
+            origin,
+            point(PI * 0.5, 1.0),
+            point(0.0, 1.0),
+            point(PI, 0.8),
+            point(PI + 0.2, 0.7),
+            point(PI + 0.1, 0.5),
+        ];
+        let carrier = SurfaceCarrier::LinearRevolution {
+            origin,
+            axis,
+            radius_at_origin: 0.0,
+            slope: 1.0,
+        };
+        let verts = points.map(builder::vertex);
+        let wire = Wire::from(vec![
+            builder::line(&verts[0], &verts[1]),
+            native_circle_edge(
+                &verts[1],
+                &verts[2],
+                origin + axis,
+                axis,
+                1.0,
+                -PI * 0.5,
+                native_options().intersection_tolerance,
+            )?,
+            builder::line(&verts[2], &verts[0]),
+        ]);
+        assert_missing_projected_sector(points, carrier, wire)
+    }
+
+    fn assert_missing_projected_sector(
+        points: [Point3; 6],
+        carrier: SurfaceCarrier,
+        wire: Wire,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = PolygonMesh::new(
+            StandardAttributes {
+                positions: points.to_vec(),
+                ..Default::default()
+            },
+            Faces::from_iter([vec![0, 1, 2], vec![3, 4, 5]]),
+        )?;
+        let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
+        let supports = evidence.source_planar_support.clone();
+        let (surface, outward) = native_surface(
+            carrier,
+            &evidence,
+            &supports,
+            &evidence.positions,
+            native_options(),
+        )?;
+        let graph = SharedTrimGraph {
+            trims: Vec::new(),
+            regions: Vec::new(),
+            ambiguous_edges: Vec::new(),
+            limited_paths: 0,
+        };
+        let face = Face::new(vec![wire], surface.clone())?;
+        assert!(face.is_geometric_consistent());
+        let context = band::BandContext {
+            carrier,
+            surface: &surface,
+            outward,
+            evidence: &evidence,
+            supports: &supports,
+            positions: &evidence.positions,
+            graph: &graph,
+            lifted_deviations: &[],
+            options: native_options(),
+        };
+        let faces = [face];
+        let witness =
+            band::missing_source_vertex(&context, &faces, 0.05).ok_or("missing source sector")?;
+        assert!(
+            points[3..]
+                .iter()
+                .any(|&p| (evidence.positions[witness] - p).magnitude() < 1e-8)
+        );
+        assert!(
+            band::missing_source_vertex(
+                &band::BandContext {
+                    supports: &supports[..1],
+                    ..context
+                },
+                &faces,
+                0.05
+            )
+            .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finite_sphere_pole_domain_excludes_omitted_sector() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vector3::unit_z();
+        let (u, v) = normal_basis(axis);
+        let point = |angle: f64, latitude: f64| {
+            origin + (u * angle.cos() + v * angle.sin()) * latitude.cos() + axis * latitude.sin()
+        };
+        let latitude = PI / 3.0;
+        let points = [
+            origin + axis,
+            point(0.0, latitude),
+            point(PI * 0.5, latitude),
+            point(PI, latitude),
+            point(PI + 0.2, latitude),
+            point(PI + 0.1, latitude + 0.1),
+        ];
+        let carrier = SurfaceCarrier::CircularRevolution {
+            axial_center: origin,
+            axis,
+            radial_center: 0.0,
+            profile_radius: 1.0,
+        };
+        let verts = points.map(builder::vertex);
+        let tol = native_options().intersection_tolerance;
+        let wire = Wire::from(vec![
+            native_circle_edge(
+                &verts[0],
+                &verts[1],
+                origin,
+                v,
+                1.0,
+                PI * 0.5 - latitude,
+                tol,
+            )?,
+            native_circle_edge(
+                &verts[1],
+                &verts[2],
+                origin + axis * latitude.sin(),
+                axis,
+                latitude.cos(),
+                PI * 0.5,
+                tol,
+            )?,
+            native_circle_edge(
+                &verts[2],
+                &verts[0],
+                origin,
+                u,
+                1.0,
+                PI * 0.5 - latitude,
+                tol,
+            )?,
+        ]);
+        assert_missing_projected_sector(points, carrier, wire)
+    }
+
+    #[test]
     fn native_cube_owns_each_shared_edge_once() -> Result<(), Box<dyn std::error::Error>> {
         let positions = vec![
             Point3::new(0.0, 0.0, 0.0),

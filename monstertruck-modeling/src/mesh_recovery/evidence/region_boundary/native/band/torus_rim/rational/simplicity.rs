@@ -121,9 +121,18 @@ struct Image {
     interval: Interval,
 }
 
-fn sweep_images(pieces: &[Piece]) -> Vec<Image> {
+fn sweep_images(frame: Frame, pieces: &[Piece]) -> Vec<Image> {
     let mut images = Vec::with_capacity(3 * pieces.len());
     for (piece, p) in pieces.iter().enumerate() {
+        if !frame.periodic(0) {
+            images.push(Image {
+                piece,
+                shift: 0.0,
+                base: true,
+                interval: p.bounds[0],
+            });
+            continue;
+        }
         let period = (p.bounds[0].mid() / TAU).floor();
         for image in [-1.0, 0.0, 1.0] {
             let shift = (image - period) * TAU;
@@ -203,7 +212,7 @@ pub(super) fn cycle(frame: Frame, pieces: &[Piece], winding: bool) -> Result<(),
     if winding && pieces.iter().all(|p| p.rates[0].lo > 0.0) {
         return Ok(());
     }
-    sweep(frame, sweep_images(pieces), |i, j, shift| {
+    sweep(frame, sweep_images(frame, pieces), |i, j, shift| {
         let [a, b] = [&pieces[i], &pieces[j]];
         let adjacent = junction(i, j, pieces.len(), shift, if winding { -TAU } else { 0.0 });
         Some((a, b, [a.edge.min(b.edge), a.edge.max(b.edge)], adjacent))
@@ -218,9 +227,9 @@ pub(super) fn disjoint_cycles(
     a: &[Piece],
     b: &[Piece],
 ) -> Result<(), Vec<[usize; 2]>> {
-    let mut images = sweep_images(a);
+    let mut images = sweep_images(frame, a);
     let offset = a.len();
-    images.extend(sweep_images(b).into_iter().map(|mut image| {
+    images.extend(sweep_images(frame, b).into_iter().map(|mut image| {
         image.piece += offset;
         image
     }));

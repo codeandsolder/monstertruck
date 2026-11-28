@@ -3,6 +3,7 @@ use crate::{BsplineCurve, KnotVector, Vector4};
 
 fn frame() -> Frame {
     Frame {
+        chart: Chart::Revolution,
         center: Point3::new(0.0, 0.0, 0.0),
         basis: [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()],
         major: Some(3.0),
