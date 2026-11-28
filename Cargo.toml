@@ -42,7 +42,6 @@ anyhow = "1"
 array-macro = "2"
 bytemuck = { version = "1", features = ["derive"] }
 cgmath = { version = "0.18", features = ["serde"] }
-chrono = { version = "0.4", features = ["wasmbind"] }
 jiff = { version = "0.2.46", default-features = false, features = ["std", "js"] }
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.8", features = ["html_reports"] }

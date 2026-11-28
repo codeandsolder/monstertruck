@@ -64,17 +64,26 @@ fn decoded_step<T>(
 ///
 /// Returns the decoder's loss notes beside the document, so that a caller
 /// measuring the reader sees what it dropped as well as what it kept.
+///
+/// # Errors
+/// Returns a decode error if the stream cannot be read or decoded under the default policy.
 pub fn decode_to_ir_reported(reader: &mut dyn ReadSeek) -> Result<(CadIr, Vec<DecoderLoss>)> {
     decoded_step(reader, |ir, losses| Ok((ir.clone(), losses)))
 }
 
 /// Decode a STEP stream to cadmpeg's intermediate representation, discarding
 /// the decoder's loss notes. See [`decode_to_ir_reported`] to keep them.
+///
+/// # Errors
+/// Returns a decode error if the stream cannot be read or decoded under the default policy.
 pub fn decode_to_ir(reader: &mut dyn ReadSeek) -> Result<CadIr> {
     decode_to_ir_reported(reader).map(|(ir, _losses)| ir)
 }
 
 /// Decode a STEP file to cadmpeg's intermediate representation.
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or a decode error when decoding fails.
 pub fn decode_file_to_ir(path: impl AsRef<std::path::Path>) -> Result<CadIr> {
     let mut file = std::fs::File::open(path)?;
     decode_to_ir(&mut file)
@@ -85,11 +94,17 @@ pub fn decode_file_to_ir(path: impl AsRef<std::path::Path>) -> Result<CadIr> {
 /// The counterpart of [`crate::iges::from_reader`]: bodies that convert,
 /// bodies that did not (each named), and the decoder's own loss notes. Prefer
 /// this to [`from_reader`] whenever a partial model is better than none.
+///
+/// # Errors
+/// Returns an error for failed decoding, an empty document, or a document-level conversion failure.
 pub fn import_from_reader(reader: &mut dyn ReadSeek) -> Result<Import> {
     decoded_step(reader, |ir, losses| import_reported(ir, FORMAT, losses))
 }
 
 /// Read a STEP file through cadmpeg, keeping every body that converts.
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or an import error from the stream.
 pub fn import_from_path(path: impl AsRef<std::path::Path>) -> Result<Import> {
     let mut file = std::fs::File::open(path)?;
     import_from_reader(&mut file)
@@ -100,11 +115,17 @@ pub fn import_from_path(path: impl AsRef<std::path::Path>) -> Result<Import> {
 /// The strict reading: any body that cannot be represented fails the call.
 /// Strict about bodies only -- the decoder's loss notes do not fail it, and a
 /// `Vec` has nowhere to report them; use [`import_from_reader`] to see them.
+///
+/// # Errors
+/// Returns an error for failed decoding, an empty document, or any body or document conversion failure.
 pub fn from_reader(reader: &mut dyn ReadSeek) -> Result<Vec<ImportedBody>> {
     decoded_step(reader, |ir, _losses| to_bodies(ir, FORMAT))
 }
 
 /// Read bodies from a STEP file, through cadmpeg rather than [`crate::step`].
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or a strict import error from the stream.
 pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Vec<ImportedBody>> {
     let mut file = std::fs::File::open(path)?;
     from_reader(&mut file)

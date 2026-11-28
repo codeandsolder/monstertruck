@@ -20,13 +20,13 @@ use monstertruck_modeling::{InnerSpace, Matrix4, Point3, Vector3};
 ///
 /// cadmpeg normalises lengths to millimetres on decode, so there is no unit
 /// factor to apply here -- see the module note on [`crate::cadmpeg`].
-pub(super) fn point(value: &IrPoint3) -> Point3 { Point3::new(value.x, value.y, value.z) }
+pub(super) const fn point(value: &IrPoint3) -> Point3 { Point3::new(value.x, value.y, value.z) }
 
 /// An admitted (finite) intermediate-representation point.
 pub(super) fn finite_point(value: FinitePoint3) -> Point3 { point(&value.get()) }
 
 /// A direction as monstertruck spells it, not yet normalised.
-pub(super) fn vector(value: &IrVector3) -> Vector3 { Vector3::new(value.x, value.y, value.z) }
+pub(super) const fn vector(value: &IrVector3) -> Vector3 { Vector3::new(value.x, value.y, value.z) }
 
 /// A row-major intermediate-representation transform as a column-major
 /// [`Matrix4`].

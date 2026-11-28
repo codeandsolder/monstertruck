@@ -99,7 +99,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn malformed(&self, detail: String) -> Error {
+    const fn malformed(&self, detail: String) -> Error {
         Error::MalformedGeometry {
             format: self.format,
             detail,
@@ -187,9 +187,11 @@ pub(super) fn import(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Imp
             }
         };
         for instance in instances {
-            let label = || match &instance.occurrence {
-                Some(occurrence) => format!("{} at occurrence {occurrence}", body.id),
-                None => body.id.to_string(),
+            let label = || {
+                instance.occurrence.as_ref().map_or_else(
+                    || body.id.to_string(),
+                    |occurrence| format!("{} at occurrence {occurrence}", body.id),
+                )
             };
             match instance.transform {
                 Ok(None) => bodies.push(converted.clone()),
@@ -368,7 +370,7 @@ const SCALED: &str = "scaled";
 ///
 /// An occurrence with a per-axis `scale` other than one is NOT placed: the
 /// representation does not say whether the scale applies before or after the
-/// occurrence's transform, and AssemblyGraph's own composition ignores it. A
+/// occurrence's transform, and `AssemblyGraph`'s own composition ignores it. A
 /// guess would put the part at the wrong size, so it is refused by name. So is
 /// every occurrence below it, whose placement composes through it.
 fn world_of<'a>(
@@ -380,7 +382,11 @@ fn world_of<'a>(
         return known.clone();
     }
     let resolved = (|| {
-        if occurrence.scale.iter().any(|axis| axis.get() != 1.0) {
+        if occurrence
+            .scale
+            .iter()
+            .any(|axis| axis.get().to_bits() != 1.0_f64.to_bits())
+        {
             return Err(SCALED.to_owned());
         }
         let parent = match &occurrence.parent {
@@ -403,7 +409,7 @@ fn world_of<'a>(
 }
 
 /// The body kind as a stable, greppable word for a refusal summary.
-fn body_kind_name(kind: BodyKind) -> &'static str {
+const fn body_kind_name(kind: BodyKind) -> &'static str {
     match kind {
         BodyKind::Solid => "solid",
         BodyKind::Sheet => "sheet",
@@ -539,4 +545,23 @@ fn place_shell(
         }
     }
     Ok(())
+}
+
+// The effective spline domain is a property of the original knot sequence.
+// Clamping requires *exact* repeated knots, not approximately coincident
+// parameters. Partial ordering treats signed zeros alike and rejects NaNs.
+fn knot_domain(
+    knots: &monstertruck_geometry::prelude::KnotVector,
+    count: usize,
+    degree: usize,
+) -> (f64, f64, (bool, bool)) {
+    use std::cmp::Ordering;
+    let (low, high) = (knots[degree], knots[count]);
+    let front = knots[..=degree]
+        .iter()
+        .all(|knot| knot.partial_cmp(&low) == Some(Ordering::Equal));
+    let back = knots[count..]
+        .iter()
+        .all(|knot| knot.partial_cmp(&high) == Some(Ordering::Equal));
+    (low, high, (front, back))
 }

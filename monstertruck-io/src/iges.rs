@@ -72,6 +72,9 @@ fn decoded_iges<T>(
 ///
 /// Bodies with no monstertruck equivalent are named in [`Import::refused`]
 /// rather than dropped or allowed to fail the whole file.
+///
+/// # Errors
+/// Returns an error for failed decoding, an empty document, or a document-level conversion failure.
 pub fn from_reader(reader: &mut dyn ReadSeek) -> Result<Import> {
     decoded_iges(reader, DecodePolicy::default(), |ir, losses| {
         import_reported(ir, FORMAT, losses)
@@ -79,6 +82,9 @@ pub fn from_reader(reader: &mut dyn ReadSeek) -> Result<Import> {
 }
 
 /// Read an IGES file, keeping every body that converts.
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or an import error from the stream.
 pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Import> {
     let mut file = std::fs::File::open(path)?;
     from_reader(&mut file)
@@ -92,6 +98,9 @@ pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Import> {
 /// Strict about BODIES only. The decoder's loss notes do not fail this call --
 /// nearly every real file carries informational ones -- and a `Vec` has nowhere
 /// to report them, so a caller that needs them uses [`from_reader`].
+///
+/// # Errors
+/// Returns an error for failed decoding, an empty document, or any body or document conversion failure.
 pub fn all_bodies_from_reader(reader: &mut dyn ReadSeek) -> Result<Vec<ImportedBody>> {
     decoded_iges(reader, DecodePolicy::default(), |ir, _losses| {
         to_bodies(ir, FORMAT)
@@ -99,6 +108,9 @@ pub fn all_bodies_from_reader(reader: &mut dyn ReadSeek) -> Result<Vec<ImportedB
 }
 
 /// Read an IGES file, failing if any body cannot be represented.
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or a strict import error from the stream.
 pub fn all_bodies_from_path(path: impl AsRef<std::path::Path>) -> Result<Vec<ImportedBody>> {
     let mut file = std::fs::File::open(path)?;
     all_bodies_from_reader(&mut file)
@@ -109,6 +121,9 @@ pub fn all_bodies_from_path(path: impl AsRef<std::path::Path>) -> Result<Vec<Imp
 /// Reach for this to refuse pathological input early rather than grind through it:
 /// a decode that crosses the ceiling fails as [`crate::Error::Decode`], which is
 /// catchable. It is NOT a memory guarantee -- see the module note.
+///
+/// # Errors
+/// Returns an error for failed decoding (including resource-limit violations), an empty document, or a document-level conversion failure.
 pub fn from_reader_with_policy(reader: &mut dyn ReadSeek, policy: DecodePolicy) -> Result<Import> {
     decoded_iges(reader, policy, |ir, losses| {
         import_reported(ir, FORMAT, losses)
@@ -116,6 +131,9 @@ pub fn from_reader_with_policy(reader: &mut dyn ReadSeek, policy: DecodePolicy) 
 }
 
 /// Read an IGES file under an explicit resource ceiling.
+///
+/// # Errors
+/// Returns an I/O error when opening the file fails, or an import error under the specified policy.
 pub fn from_path_with_policy(
     path: impl AsRef<std::path::Path>,
     policy: DecodePolicy,

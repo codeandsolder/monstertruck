@@ -179,7 +179,7 @@ pub enum LossSeverity {
 }
 
 impl LossSeverity {
-    fn of(severity: cadmpeg_ir::report::Severity) -> Self {
+    const fn of(severity: cadmpeg_ir::report::Severity) -> Self {
         use cadmpeg_ir::report::Severity;
         match severity {
             Severity::Info => Self::Info,
@@ -207,9 +207,11 @@ impl Import {
     /// Distinct from a file that held no geometry, which is
     /// [`Error::NoGeometry`]: this means bodies were present and none of them
     /// could be represented.
-    pub fn is_empty(&self) -> bool { self.bodies.is_empty() }
+    #[must_use = "Reports whether any body converted."]
+    pub const fn is_empty(&self) -> bool { self.bodies.is_empty() }
 
     /// How many bodies the file held, converted or not, counted per instance.
+    #[must_use = "Reports the total number of body instances."]
     pub fn total(&self) -> usize {
         self.bodies.len()
             + self
@@ -227,6 +229,7 @@ impl Import {
     }
 
     /// A one-line summary fit for a log line or a warning.
+    #[must_use = "Returns a description of the import outcome."]
     pub fn summary(&self) -> String {
         let losses = match self.losses.len() {
             0 => String::new(),
@@ -235,7 +238,7 @@ impl Import {
         if self.refused.is_empty() {
             return format!("{} bodies, all converted{losses}", self.bodies.len());
         }
-        let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+        let mut kinds = std::collections::BTreeMap::<&str, usize>::new();
         for refusal in &self.refused {
             *kinds.entry(refusal.kind).or_insert(0) += refusal.instances;
         }
@@ -313,6 +316,9 @@ pub(crate) fn import_reported(
 /// Document-level problems still fail: a dangling reference means the decoded
 /// graph is not closed, and converting the closed part of it would hand back a
 /// body with a hole in it.
+///
+/// # Errors
+/// Returns an error for an empty document or a document-level conversion failure. Individual body refusals are returned in the import report.
 pub fn import(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Import> {
     if ir.model.bodies.is_empty() {
         return Err(Error::NoGeometry { format });
@@ -336,30 +342,12 @@ pub fn import(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Import> {
 /// this crate cannot represent fails the whole call and names itself. See the
 /// note on `convert` for why silently returning fewer bodies than the file holds
 /// is the outcome worth failing to avoid.
+///
+/// # Errors
+/// Returns an error for an empty document, any body refusal, or a document-level conversion failure.
 pub fn to_bodies(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Vec<ImportedBody>> {
     if ir.model.bodies.is_empty() {
         return Err(Error::NoGeometry { format });
     }
     convert::convert(ir, format)
-}
-
-/// Read solids only, discarding sheet bodies.
-///
-/// # Deprecated
-///
-/// Prefer [`to_bodies`]. This signature cannot express what IGES actually
-/// returns -- mostly sheets -- so it would silently hand back an empty list for
-/// files that are full of geometry.
-#[deprecated(
-    since = "0.4.0",
-    note = "cannot represent sheet bodies, which is most IGES content; use `to_bodies`"
-)]
-pub fn to_solids(ir: &cadmpeg_ir::CadIr, format: &'static str) -> Result<Vec<ImportedSolid>> {
-    Ok(to_bodies(ir, format)?
-        .into_iter()
-        .filter_map(|body| match body {
-            ImportedBody::Solid(solid) => Some(solid),
-            ImportedBody::Sheet(_) => None,
-        })
-        .collect())
 }
