@@ -221,6 +221,7 @@ fn angular_coverage(
 }
 
 /// Candidate circle from well-separated points of an authored spline.
+///
 /// This is NOT a geometric certificate. Callers must certify full-domain
 /// incidence and, when needed, angular coverage before accepting it.
 #[derive(Clone, Copy, Debug)]
