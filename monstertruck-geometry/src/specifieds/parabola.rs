@@ -1,7 +1,8 @@
 use super::{
     CurveParameter, EuclideanSpace, HashGen, MetricSpace, Origin, ParameterDivision1D,
     ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo, solver,
+    SearchParameterHint1D, Tolerance, UnitParabola, Vector2, Vector3, Zero, algo,
+    monic_cubic_roots,
 };
 #[cfg(test)]
 use crate::prelude::assert_near;
@@ -74,7 +75,7 @@ impl SearchNearestParameter<CurveParameter> for UnitParabola<Point2> {
     ) -> Option<f64> {
         let p = 2.0 - pt.x;
         let q = -pt.y;
-        solver::pre_solve_cubic(p, q)
+        monic_cubic_roots([0.0, p, q])?
             .into_iter()
             .filter_map(|x| if x.im.so_small() { Some(x.re) } else { None })
             .min_by(|s, t| {

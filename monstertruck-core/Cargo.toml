@@ -15,7 +15,7 @@ rkyv = ["dep:rkyv"]
 
 [dependencies]
 cgmath = { workspace = true }
-matext4cgmath = { workspace = true }
+nalgebra = { workspace = true }
 rkyv = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }

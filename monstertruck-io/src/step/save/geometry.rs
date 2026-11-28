@@ -985,16 +985,17 @@ where C: StepLength + Transformed<Matrix4> + StepFormat
     fn fmt(&self, idx: usize, f: &mut Formatter<'_>) -> Result {
         let surface = self.entity();
         let transform = self.transform();
-        let Some((k, a, _)) = transform.iwasawa_decomposition() else {
+        let Some((k, a)) = monstertruck_core::numerical::affine_qr4((*transform).into()) else {
             f.write_str("Transform is not regular")?;
             return ERR;
         };
-        if !a[0][0].near(&a[1][1]) || !a[1][1].near(&a[2][2]) {
+        if !a[(0, 0)].near(&a[(1, 1)]) || !a[(1, 1)].near(&a[(2, 2)]) {
             f.write_str("Transform contains non-uniform scale.")?;
             return ERR;
         }
         let curve = surface.entity_curve().transformed(*transform);
-        let axis = k.transform_vector(surface.axis());
+        let orthogonal = Matrix4::from(<[[f64; 4]; 4]>::from(k));
+        let axis = orthogonal.transform_vector(surface.axis());
         let origin = transform.transform_point(surface.origin());
         let surface = RevolutionSurface::by_revolution(curve, origin, axis);
         StepFormat::fmt(&surface, idx, f)

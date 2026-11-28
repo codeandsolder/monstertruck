@@ -6,7 +6,7 @@
 use super::{
     CurveParameter, EuclideanSpace, HashGen, KERNEL_EPSILON, MetricSpace, Origin,
     ParameterDivision1D, ParametricCurve, Point2, Point3, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, UnitHyperbola, Vector2, Vector3, algo, solver,
+    SearchParameterHint1D, UnitHyperbola, Vector2, Vector3, algo, monic_quartic_roots,
 };
 
 impl<P> UnitHyperbola<P> {
@@ -144,7 +144,7 @@ impl SearchNearestParameter<CurveParameter> for UnitHyperbola<Point2> {
         let b = p.x.mul_add(-p.x, p.y * p.y) / 4.0 + 1.0;
         let c = -p.y;
         let d = p.y * p.y / 4.0;
-        let y = solver::solve_quartic(a, b, c, d)
+        let y = monic_quartic_roots([a, b, c, d])?
             .into_iter()
             .filter_map(|z| if z.im.so_small() { Some(z.re) } else { None })
             .min_by(|s, t| {

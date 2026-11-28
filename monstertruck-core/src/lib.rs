@@ -42,6 +42,8 @@ pub use id::{StableId, StableIdAllocator, StableIdExhausted};
 /// User-facing geometry accuracy contracts.
 pub mod geometry_policy;
 pub mod newton;
+/// Small dense numerical problems implemented by nalgebra.
+pub mod numerical;
 /// Scalar trait hierarchy for scalar-generic kernel infrastructure.
 pub mod scalar;
 /// Setting Tolerance
@@ -49,9 +51,10 @@ pub mod tolerance;
 
 pub use crate::cgmath_extend_traits::*;
 pub use crate::derivatives::*;
+pub use crate::numerical::{affine_qr3, affine_qr4, monic_cubic_roots, monic_quartic_roots};
+pub use cgmath;
 pub use cgmath::prelude::*;
 pub use cgmath::{Deg, Rad, frustum, ortho, perspective};
-pub use matext4cgmath::*;
 
 macro_rules! f64_type {
     ($typename: ident) => {

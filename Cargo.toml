@@ -56,7 +56,7 @@ image = { version = "0.25", default-features = false }
 itertools = "0.15"
 js-sys = "0.3"
 log = "0.4"
-matext4cgmath = "0.1"
+nalgebra = { version = "0.35", default-features = false, features = ["std", "serde-serialize"] }
 num-traits = "0.2"
 naga = { version = "30", features = ["wgsl-in"] }
 parking_lot = "0.13"
