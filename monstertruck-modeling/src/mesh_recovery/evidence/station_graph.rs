@@ -263,10 +263,11 @@ impl<'a> MeridianStationGraph<'a> {
 
     /// Detect original planar groups which hide independently sampled
     /// rotational intervals. This is a refinement request, not a surface
-    /// assignment. Only split a mixed group when its original polygons
-    /// supply a repeated transition or link independently repeated stations.
+    /// assignment. Isolate only those original facets which supply a
+    /// repeated transition or link independently repeated stations. Other
+    /// connected planar regions remain intact.
     #[must_use = "a refinement preserves source polygons and planar alternatives"]
-    pub fn mixed_support_refinements(&self) -> Vec<usize> {
+    pub fn mixed_support_refinement_facets(&self) -> Vec<usize> {
         let mut pairs = BTreeMap::<[usize; 2], Vec<(usize, usize)>>::new();
         let repeated_stations = self
             .transitions
@@ -309,7 +310,7 @@ impl<'a> MeridianStationGraph<'a> {
             if pair.iter().all(|id| repeated_stations.contains(id))
                 && self.bridge_has_independent_profile(pair)
             {
-                split.extend(parents);
+                split.extend(members.iter().map(|&(_, polygon)| polygon));
                 continue;
             }
             let mut observed = parents.clone();
@@ -344,7 +345,7 @@ impl<'a> MeridianStationGraph<'a> {
                 self.options.max_linear_relative_chord_error,
                 self.options.vertex_tolerance,
             );
-            for (parent, polygon) in members {
+            for (_, polygon) in members {
                 let Some(vertices) = self.evidence.source_polygon_vertices(polygon) else {
                     continue;
                 };
@@ -357,7 +358,7 @@ impl<'a> MeridianStationGraph<'a> {
                             .is_some_and(|r| r.upper_bound <= tolerance)
                     })
                 {
-                    split.insert(parent);
+                    split.insert(polygon);
                 }
             }
         }
