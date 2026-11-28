@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn rounded_rectangle_builds_exact_line_arc_cycle() -> anyhow::Result<()> {
-        let tori = vec![
+        let tori = [
             TorusBend {
                 center_mm: [0.0, 0.0, 0.0],
                 axis: [0.0, 0.0, 1.0],
@@ -774,7 +774,7 @@ mod tests {
                 face_ids: Vec::new(),
             },
         ];
-        let cylinders = vec![
+        let cylinders = [
             CylinderRun {
                 origin_mm: [0.0, -0.25, 0.0],
                 direction: [1.0, 0.0, 0.0],
