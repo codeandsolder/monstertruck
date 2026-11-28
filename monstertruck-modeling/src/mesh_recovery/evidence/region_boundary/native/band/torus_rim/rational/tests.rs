@@ -107,14 +107,15 @@ fn interval_extraction_covers_nonclamped_knots_and_tiny_active_spans()
             Vector4::new(-2.0, 4.0, 0.0, 1.0),
         ],
     )?;
-    let certified = controls::spans(&curve).ok_or("interval spans")?;
+    let certified = proof_interval_bezier_spans(&curve).ok_or("interval spans")?;
     let ordinary = monstertruck_geometry::proof_bezier_spans(&curve).ok_or("ordinary spans")?;
     assert_eq!(certified.len(), 4);
     for (bounds, approximate) in certified.iter().zip(ordinary) {
         for (enclosure, coefficient) in bounds.values.iter().zip(approximate.controls) {
             for (bound, value) in enclosure.iter().zip(coefficient) {
                 assert!(
-                    bound.contains(value) || bound.sub(Interval::point(value)).magnitude() < 1e-12
+                    bound.contains(value)
+                        || bound.minus(Interval::point(value)).magnitude() < 1e-12
                 );
             }
         }
@@ -172,7 +173,7 @@ fn linear_chart_does_not_wrap_axial_coordinates() {
     .expect("regular long generator");
     assert!(
         piece.end[1]
-            .sub(Interval::point(1.0 + 2.0 * TAU))
+            .minus(Interval::point(1.0 + 2.0 * TAU))
             .magnitude()
             < 1e-9
     );

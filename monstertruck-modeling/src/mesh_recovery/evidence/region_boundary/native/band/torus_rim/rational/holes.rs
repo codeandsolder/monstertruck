@@ -7,7 +7,7 @@ fn signed_area(pieces: &[super::Piece], origin: f64) -> Interval {
     // parameter is normalized to [0,1], so its rate bounds integrate
     // directly. The translation by origin improves cancellation.
     pieces.iter().fold(Interval::point(0.0), |sum, p| {
-        sum.add(p.bounds[0].sub(Interval::point(origin)).mul(p.rates[1]))
+        sum.plus(p.bounds[0].minus(Interval::point(origin)).times(p.rates[1]))
     })
 }
 
@@ -66,7 +66,7 @@ pub(in super::super::super) fn hole_bounds(
     let start = [uv[axis], lower + (uv[1 - axis] - lower).rem_euclid(TAU)].map(Interval::point);
     let (pieces, end) = lift_cycle(frame, rim, start)?;
     let resolution = frame.resolution;
-    if (0..2).any(|i| end[i].sub(start[i]).magnitude() > resolution) {
+    if (0..2).any(|i| end[i].minus(start[i]).magnitude() > resolution) {
         return Err(Rejection::Winding);
     }
     let bounds = pieces

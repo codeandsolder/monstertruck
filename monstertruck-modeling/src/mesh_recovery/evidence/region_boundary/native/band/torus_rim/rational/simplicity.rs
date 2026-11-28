@@ -1,5 +1,6 @@
 //! Periodic simple-cycle proof on actual rational chart enclosures.
-use super::{Frame, Piece, interval::Interval};
+use super::{Frame, Piece};
+use monstertruck_geometry::proof_interval::Interval;
 use std::f64::consts::TAU;
 
 #[derive(Clone, Copy)]
@@ -21,10 +22,10 @@ fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, frame
         Junction::StartEnd => (b, a, -shift),
     };
     if left.end[0]
-        .sub(right.start[0].add(Interval::point(offset)))
+        .minus(right.start[0].plus(Interval::point(offset)))
         .magnitude()
         > frame.resolution
-        || left.end[1].sub(right.start[1]).magnitude() > frame.height_resolution
+        || left.end[1].minus(right.start[1]).magnitude() > frame.height_resolution
     {
         return false;
     }
@@ -39,7 +40,7 @@ fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, frame
     let d = [a[0] + b[0], a[1] + b[1]];
     [left, right]
         .iter()
-        .all(|p| p.rates[0].scale(d[0]).add(p.rates[1].scale(d[1])).lo > 0.0)
+        .all(|p| p.rates[0].scale(d[0]).plus(p.rates[1].scale(d[1])).lo > 0.0)
 }
 
 fn disjoint(
@@ -131,7 +132,7 @@ fn sweep_images(pieces: &[Piece]) -> Vec<Image> {
                 piece,
                 shift,
                 base: image == 0.0,
-                interval: p.bounds[0].add(Interval::point(shift)),
+                interval: p.bounds[0].plus(Interval::point(shift)),
             });
         }
     }

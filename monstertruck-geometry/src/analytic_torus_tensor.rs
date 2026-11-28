@@ -28,6 +28,8 @@ pub struct ToroidalTensorChart {
     pub outward: bool,
 }
 
+mod orientation;
+
 struct TensorProfiles {
     major: BsplineCurve<Vector4>,
     minor: BsplineCurve<Vector4>,
@@ -150,6 +152,7 @@ fn certify_major_first(
     let profiles = TensorProfiles::new(net)?;
     let (chart, boundary_radius) = profiles.candidate(tolerance)?;
     prove_tensor(net, &profiles, chart, boundary_radius, tolerance)?;
+    orientation::certify_orientation(net, chart)?;
     Some(chart)
 }
 
@@ -230,6 +233,53 @@ mod tests {
         points[1][1] *= 1.01;
         let weighted = BsplineSurface::new_unchecked(scaled.knot_vectors().clone(), points);
         assert!(certified_toroidal_tensor(&weighted, TOL).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn narrow_fold_is_rejected_even_within_the_tensor_position_budget() -> anyhow::Result<()> {
+        let net = example().ok_or_else(|| anyhow::anyhow!("torus construction failed"))?;
+        let chart = certified_toroidal_tensor(&net, TOL)
+            .ok_or_else(|| anyhow::anyhow!("original tensor not certified"))?;
+        // Split the first quadratic rational arc with exact de Casteljau
+        // geometry, preserving a very narrow positive knot interval.
+        assert_eq!(net.udegree(), 2);
+        let t = 1.0e-9;
+        let points = net.control_points();
+        let blend = |a: &[Vector4], b: &[Vector4]| {
+            a.iter()
+                .zip(b)
+                .map(|(&a, &b)| a * (1.0 - t) + b * t)
+                .collect::<Vec<_>>()
+        };
+        let near = blend(&points[0], &points[1]);
+        let far = blend(&points[1], &points[2]);
+        let middle = blend(&near, &far);
+        let mut controls = vec![points[0].clone(), near, middle, far];
+        controls.extend_from_slice(&points[2..]);
+        let mut knots = net.knot_vector_u().as_ref().to_vec();
+        let split = knots[0] + t * (knots[3] - knots[0]);
+        knots.splice(3..3, [split, split]);
+        let knots = (KnotVector::from(knots), net.knot_vector_v().clone());
+        let regular = BsplineSurface::new_unchecked(knots.clone(), controls.clone());
+        assert!(certified_toroidal_tensor(&regular, TOL).is_some());
+        // Reverse the first u tangent at an interior meridian knot without
+        // changing either boundary circle or any weight. The displacement
+        // is smaller than the global positional proof budget.
+        let tangent = chart.axis.cross(chart.radial);
+        let delta = tangent * (-2.0e-8 * controls[1][2].w);
+        controls[1][2].x += delta.x;
+        controls[1][2].y += delta.y;
+        controls[1][2].z += delta.z;
+        let folded = BsplineSurface::new_unchecked(knots, controls);
+        let profiles = TensorProfiles::new(&folded)
+            .ok_or_else(|| anyhow::anyhow!("folded profiles missing"))?;
+        let (candidate, radius) = profiles
+            .candidate(TOL)
+            .ok_or_else(|| anyhow::anyhow!("folded boundary circles changed"))?;
+        assert!(prove_tensor(&folded, &profiles, candidate, radius, TOL).is_some());
+        assert!(orientation::certify_orientation(&folded, candidate).is_none());
+        assert!(certified_toroidal_tensor(&folded, TOL).is_none());
         Ok(())
     }
 }

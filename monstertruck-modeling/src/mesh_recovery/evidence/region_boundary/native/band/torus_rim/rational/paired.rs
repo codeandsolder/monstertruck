@@ -37,8 +37,12 @@ impl LiftedRim {
         .ok_or(Rejection::Invalid)?;
         let start = [uv[frame.varying], uv[1 - frame.varying]].map(Interval::point);
         let (pieces, end) = lift_cycle(frame, &rim.edges, start)?;
-        if end[0].sub(start[0]).sub(Interval::point(TAU)).magnitude() > frame.resolution
-            || end[1].sub(start[1]).magnitude() > frame.height_resolution
+        if end[0]
+            .minus(start[0])
+            .minus(Interval::point(TAU))
+            .magnitude()
+            > frame.resolution
+            || end[1].minus(start[1]).magnitude() > frame.height_resolution
         {
             return Err(Rejection::Winding);
         }
@@ -59,11 +63,11 @@ impl LiftedRim {
 
     fn shift_height(&mut self, shift: f64) {
         let shift = Interval::point(shift);
-        self.height = self.height.add(shift);
+        self.height = self.height.plus(shift);
         for piece in &mut self.pieces {
-            piece.start[1] = piece.start[1].add(shift);
-            piece.end[1] = piece.end[1].add(shift);
-            piece.bounds[1] = piece.bounds[1].add(shift);
+            piece.start[1] = piece.start[1].plus(shift);
+            piece.end[1] = piece.end[1].plus(shift);
+            piece.bounds[1] = piece.bounds[1].plus(shift);
         }
     }
 

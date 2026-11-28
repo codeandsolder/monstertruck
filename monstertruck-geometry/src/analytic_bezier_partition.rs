@@ -31,38 +31,30 @@ fn finite_homogeneous(point: Vector4) -> bool {
 // `total_cmp` is useful for sorting IEEE-754 inputs but treats -0.0
 // and +0.0 as different. They are the same mathematical knot value, while
 // any two distinct finite nonzero floats must remain different spans.
-fn same_algebraic_knot(left: f64, right: f64) -> bool {
+pub fn same_algebraic_knot(left: f64, right: f64) -> bool {
     left.total_cmp(&right).is_eq() || (left.abs().to_bits() == 0 && right.abs().to_bits() == 0)
 }
 
-/// Extract the full active domain into exactly partitioned Bernstein pieces.
-///
-/// None indicates invalid knot/control layout, impossible multiplicity,
-/// arithmetic overflow/underflow, or exceeded explicit proof-work budget.
-/// This numerical step requires a separate arithmetic error bound when used
-/// to certify geometric tolerances.
-pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezierSpan>> {
-    let points = curve.control_points();
-    let knots = curve.knot_vector();
-    let count = points.len();
+// A single validated layout and blossom recurrence for ordinary and
+// outward-rounded coefficient arithmetic. A surface uses the same recurrence
+// successively along both axes, including every positive knot interval.
+fn span_layout(knots: &[f64], count: usize) -> Option<(usize, Vec<usize>)> {
     if count < 2 || knots.len() <= count + 1 {
         return None;
     }
     let degree = knots.len().checked_sub(count + 1)?;
-    if degree == 0 || degree >= count || degree > MAX_PROOF_DEGREE {
-        return None;
-    }
-    if !points.iter().copied().all(finite_homogeneous)
+    if degree == 0
+        || degree >= count
+        || degree > MAX_PROOF_DEGREE
         || !knots.iter().all(|knot| knot.is_finite())
-        || !knots.iter().zip(knots.iter().skip(1)).all(|(a, b)| a <= b)
+        || !knots.windows(2).all(|pair| pair[0] <= pair[1])
         || knots[degree] >= knots[count]
     {
         return None;
     }
-    // Only genuinely equal knots contribute to multiplicity.
     let mut multiplicity = 1_usize;
-    for (left, right) in knots.iter().zip(knots.iter().skip(1)) {
-        if same_algebraic_knot(*left, *right) {
+    for pair in knots.windows(2) {
+        if same_algebraic_knot(pair[0], pair[1]) {
             multiplicity += 1;
             if multiplicity > degree + 1 {
                 return None;
@@ -71,46 +63,90 @@ pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezi
             multiplicity = 1;
         }
     }
-
-    let nonempty = (degree..count)
-        .filter(|&index| knots[index] < knots[index + 1])
-        .count();
-    if nonempty == 0 || nonempty > MAX_PROOF_SPANS {
-        return None;
-    }
+    let indices: Vec<_> = (degree..count)
+        .filter(|&i| knots[i] < knots[i + 1])
+        .collect();
     let steps_per_span = degree
         .checked_mul(degree + 1)?
         .checked_mul(degree + 1)?
         .checked_div(2)?;
-    if nonempty.checked_mul(steps_per_span)? > MAX_BLOSSOM_STEPS {
+    if indices.is_empty()
+        || indices.len() > MAX_PROOF_SPANS
+        || indices.len().checked_mul(steps_per_span)? > MAX_BLOSSOM_STEPS
+        || !same_algebraic_knot(knots[*indices.first()?], knots[degree])
+        || !same_algebraic_knot(knots[*indices.last()? + 1], knots[count])
+        || indices
+            .windows(2)
+            .any(|pair| !same_algebraic_knot(knots[pair[0] + 1], knots[pair[1]]))
+    {
         return None;
     }
+    Some((degree, indices))
+}
 
-    let mut spans = Vec::with_capacity(nonempty);
-    for index in degree..count {
-        let start = knots[index];
-        let end = knots[index + 1];
-        if start >= end {
-            continue;
+fn blossom<T: Copy>(
+    points: &[T],
+    knots: &[f64],
+    index: usize,
+    degree: usize,
+    blend: impl Fn(T, T, f64, f64, f64) -> Option<T>,
+) -> Option<Vec<T>> {
+    let start = knots[index];
+    let end = knots[index + 1];
+    let source = &points[index - degree..=index];
+    // A clamped Bézier chain already has the desired coefficients. This also
+    // preserves their exact floating representation in interval proofs.
+    if (0..degree).all(|i| {
+        same_algebraic_knot(knots[index - i], start)
+            && same_algebraic_knot(knots[index + 1 + i], end)
+    }) {
+        return Some(source.to_vec());
+    }
+    let mut controls = Vec::with_capacity(degree + 1);
+    for right_repeats in 0..=degree {
+        let mut values = source.to_vec();
+        for round in 1..=degree {
+            let parameter = if round <= degree - right_repeats {
+                start
+            } else {
+                end
+            };
+            for local in (round..=degree).rev() {
+                let left = knots[index - degree + local];
+                let right = knots[index + 1 + local - round];
+                values[local] = blend(values[local - 1], values[local], parameter, left, right)?;
+            }
         }
-        let source = &points[index - degree..=index];
-        let mut controls = Vec::with_capacity(degree + 1);
-        for right_repeats in 0..=degree {
-            let mut values = source.to_vec();
-            // Blossom: degree-right_repeats arguments at start and the
-            // remaining arguments at end. Every knot denominator brackets
-            // this positive interval and therefore is strictly positive.
-            for round in 1..=degree {
-                let parameter = if round <= degree - right_repeats {
-                    start
-                } else {
-                    end
-                };
-                for local in (round..=degree).rev() {
-                    let left_knot = knots[index - degree + local];
-                    let right_knot = knots[index + 1 + local - round];
-                    let width = right_knot - left_knot;
-                    let numerator = parameter - left_knot;
+        controls.push(values[degree]);
+    }
+    Some(controls)
+}
+
+/// Extract the full active domain into exactly partitioned Bernstein pieces.
+///
+/// None indicates invalid knot/control layout, impossible multiplicity,
+/// arithmetic overflow/underflow, or exceeded explicit proof-work budget.
+/// This numerical step requires a separate arithmetic error bound when used
+/// to certify geometric tolerances.
+#[must_use = "all active spans must be available before a whole-domain proof"]
+pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezierSpan>> {
+    let points = curve.control_points();
+    let knots = curve.knot_vector().as_ref();
+    if !points.iter().copied().all(finite_homogeneous) {
+        return None;
+    }
+    let (degree, indices) = span_layout(knots, points.len())?;
+    indices
+        .into_iter()
+        .map(|index| {
+            let controls = blossom(
+                points,
+                knots,
+                index,
+                degree,
+                |a, b, parameter, left, right| {
+                    let width = right - left;
+                    let numerator = parameter - left;
                     if !width.is_finite() || width <= 0.0 || !numerator.is_finite() {
                         return None;
                     }
@@ -118,35 +154,174 @@ pub fn proof_bezier_spans(curve: &BsplineCurve<Vector4>) -> Option<Vec<ProofBezi
                     if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
                         return None;
                     }
-                    values[local] = values[local - 1] * (1.0 - alpha) + values[local] * alpha;
-                    if !finite_homogeneous(values[local]) {
-                        return None;
-                    }
-                }
+                    let value = a * (1.0 - alpha) + b * alpha;
+                    finite_homogeneous(value).then_some(value)
+                },
+            )?;
+            Some(ProofBezierSpan {
+                start: knots[index],
+                end: knots[index + 1],
+                controls: controls.into_iter().map(|v| [v.x, v.y, v.z, v.w]).collect(),
+            })
+        })
+        .collect()
+}
+
+use crate::proof_interval::Interval;
+
+/// Four outward-rounded homogeneous Cartesian coefficients (X, Y, Z, W).
+pub type IntervalControl = [Interval; 4];
+
+/// Bernstein coefficient enclosures on one positive original knot interval.
+#[derive(Clone, Debug)]
+pub struct IntervalBezierSpan {
+    /// Bernstein controls in parameter order.
+    pub values: Vec<IntervalControl>,
+    /// Original parameter interval.
+    pub parameter: [f64; 2],
+}
+
+impl IntervalBezierSpan {
+    /// Subdivide at the exact local midpoint by outward-rounded de Casteljau.
+    #[must_use = "both subspans together enclose the complete original span"]
+    pub fn split(&self) -> Option<[Self; 2]> {
+        let mut work = self.values.clone();
+        let mut first = vec![*work.first()?];
+        let mut last = vec![*work.last()?];
+        for count in (1..work.len()).rev() {
+            for i in 0..count {
+                work[i] = std::array::from_fn(|k| work[i][k].plus(work[i + 1][k]).scale(0.5));
             }
-            let value = values[degree];
-            controls.push([value.x, value.y, value.z, value.w]);
+            first.push(work[0]);
+            last.push(work[count - 1]);
         }
-        spans.push(ProofBezierSpan {
-            start,
-            end,
-            controls,
-        });
+        last.reverse();
+        let middle = self.parameter[0].midpoint(self.parameter[1]);
+        Some([
+            Self {
+                values: first,
+                parameter: [self.parameter[0], middle],
+            },
+            Self {
+                values: last,
+                parameter: [middle, self.parameter[1]],
+            },
+        ])
     }
-    // A certificate must never omit an active knot interval, however short.
-    if spans
-        .first()
-        .is_none_or(|span| !same_algebraic_knot(span.start, knots[degree]))
-        || spans
-            .last()
-            .is_none_or(|span| !same_algebraic_knot(span.end, knots[count]))
-        || spans
-            .windows(2)
-            .any(|pair| !same_algebraic_knot(pair[0].end, pair[1].start))
+}
+
+pub fn interval_bezier_spans(
+    points: &[IntervalControl],
+    knots: &[f64],
+) -> Option<Vec<IntervalBezierSpan>> {
+    if !points
+        .iter()
+        .all(|p| p.iter().all(|v| v.finite()) && p[3].lo > 0.0)
     {
         return None;
     }
-    Some(spans)
+    let (degree, indices) = span_layout(knots, points.len())?;
+    indices
+        .into_iter()
+        .map(|index| {
+            let values = blossom(
+                points,
+                knots,
+                index,
+                degree,
+                |a, b, parameter, left, right| {
+                    let left = Interval::point(left);
+                    let alpha = Interval::point(parameter)
+                        .minus(left)
+                        .checked_div(Interval::point(right).minus(left))?
+                        .intersection(Interval::range(0.0, 1.0))?;
+                    Some(std::array::from_fn(|i| {
+                        let hull = a[i].union(b[i]);
+                        a[i].plus(b[i].minus(a[i]).times(alpha))
+                            .intersection(hull)
+                            .unwrap_or(hull)
+                    }))
+                },
+            )?;
+            Some(IntervalBezierSpan {
+                values,
+                parameter: [knots[index], knots[index + 1]],
+            })
+        })
+        .collect()
+}
+
+/// Enclose every active Bézier span of the actual homogeneous curve.
+#[must_use = "the interval proof requires all active spans"]
+pub fn proof_interval_bezier_spans(
+    curve: &BsplineCurve<Vector4>,
+) -> Option<Vec<IntervalBezierSpan>> {
+    let points: Vec<_> = curve
+        .control_points()
+        .iter()
+        .map(|v| [v.x, v.y, v.z, v.w].map(Interval::point))
+        .collect();
+    interval_bezier_spans(&points, curve.knot_vector().as_ref())
+}
+
+/// Positive rational control-hull bounds shared by curve and surface proofs.
+#[derive(Clone, Copy, Debug)]
+pub struct RationalControlBounds {
+    weight: Interval,
+    /// Cartesian coordinate hull of the complete Bernstein domain.
+    pub position: [Interval; 3],
+}
+
+impl RationalControlBounds {
+    /// Bound a positive rational control net without evaluating samples.
+    #[must_use = "unresolved rational bounds cannot certify a chart"]
+    pub fn from_controls<'a>(
+        controls: impl IntoIterator<Item = &'a IntervalControl>,
+    ) -> Option<Self> {
+        let mut controls = controls.into_iter();
+        let first = controls.next()?;
+        let mut weight = first[3];
+        let mut position = [
+            first[0].checked_div(weight)?,
+            first[1].checked_div(weight)?,
+            first[2].checked_div(weight)?,
+        ];
+        for p in controls {
+            weight = weight.union(p[3]);
+            for i in 0..3 {
+                position[i] = position[i].union(p[i].checked_div(p[3])?);
+            }
+        }
+        (weight.lo > 0.0 && weight.finite()).then_some(Self { weight, position })
+    }
+
+    /// Bound a Cartesian derivative from adjacent homogeneous coefficients.
+    ///
+    /// The derivative uses the local unit Bernstein parameter. A positive
+    /// original knot-span width changes the scale, never its orientation.
+    #[must_use = "the entire derivative enclosure is needed for orientation proofs"]
+    pub fn derivative<'a>(
+        self,
+        pairs: impl IntoIterator<Item = (&'a IntervalControl, &'a IntervalControl)>,
+        degree: usize,
+    ) -> Option<[Interval; 3]> {
+        let degree = f64::from(u32::try_from(degree).ok()?);
+        let mut derivative = pairs
+            .into_iter()
+            .map(|(a, b)| std::array::from_fn::<_, 4, _>(|i| b[i].minus(a[i]).scale(degree)));
+        let mut bounds = derivative.next()?;
+        for p in derivative {
+            for i in 0..4 {
+                bounds[i] = bounds[i].union(p[i]);
+            }
+        }
+        let rate = |i: usize| {
+            bounds[i]
+                .minus(self.position[i].times(bounds[3]))
+                .checked_div(self.weight)
+        };
+        Some([rate(0)?, rate(1)?, rate(2)?])
+    }
 }
 
 #[cfg(test)]

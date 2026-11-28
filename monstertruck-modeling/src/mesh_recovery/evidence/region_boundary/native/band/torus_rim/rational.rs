@@ -1,10 +1,8 @@
 //! Continuous certificate for the actual rational native rim, including
 //! polynomial approximations of regular analytic intersection branches.
 //! No tensor-circle assumption is made for a general section spline.
-mod controls;
 mod holes;
 pub(in super::super) use holes::hole_bounds;
-mod interval;
 mod paired;
 mod simplicity;
 #[cfg(test)]
@@ -13,9 +11,11 @@ mod tests;
 use super::{BandContext, Ring, signed_delta};
 use crate::mesh_recovery::SurfaceCarrier;
 use crate::{Edge, InnerSpace, ParametricCurve, Point3, Vector3};
-use controls::{Control, Controls};
-use interval::{Interval, angle};
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
+use monstertruck_geometry::proof_interval::{Interval, angular_enclosure};
+use monstertruck_geometry::{
+    IntervalBezierSpan as Controls, IntervalControl as Control, proof_interval_bezier_spans,
+};
 use std::f64::consts::{PI, TAU};
 
 const MAX_PIECES: usize = 8192;
@@ -81,12 +81,12 @@ impl Frame {
     }
     fn local(self, value: Control) -> Control {
         let centered: [Interval; 3] =
-            std::array::from_fn(|i| value[i].sub(value[3].scale(self.center[i])));
+            std::array::from_fn(|i| value[i].minus(value[3].scale(self.center[i])));
         let mut result = value;
         for (i, basis) in self.basis.iter().enumerate() {
             result[i] = (0..3)
                 .map(|j| centered[j].scale(basis[j]))
-                .fold(Interval::point(0.0), Interval::add);
+                .fold(Interval::point(0.0), Interval::plus);
         }
         result
     }
@@ -98,55 +98,38 @@ impl Frame {
     }
     fn endpoint(self, control: Control) -> Option<[Interval; 2]> {
         let [x, y, z, w] = control;
-        let [x, y, z] = [x.div(w)?, y.div(w)?, z.div(w)?];
-        let rho = x.square().add(y.square()).sqrt()?;
+        let [x, y, z] = [x.checked_div(w)?, y.checked_div(w)?, z.checked_div(w)?];
+        let rho = x.square().plus(y.square()).sqrt()?;
         let height = match self.major {
-            Some(major) => angle(rho.sub(Interval::point(major)), z)?,
+            Some(major) => angular_enclosure(rho.minus(Interval::point(major)), z)?,
             None => z,
         };
-        Some(self.orient([angle(x, y)?, height]))
+        Some(self.orient([angular_enclosure(x, y)?, height]))
     }
     fn rates(self, controls: &[Control]) -> Option<[Interval; 2]> {
-        let hull = |i: usize| controls.iter().map(|p| p[i]).reduce(Interval::union);
-        let weight = hull(3)?;
-        if weight.lo <= 0.0 {
-            return None;
-        }
-        let degree = crate::usize_to_f64(controls.len() - 1);
-        let derivative = |i: usize| {
-            controls
-                .windows(2)
-                .map(|p| p[1][i].sub(p[0][i]).scale(degree))
-                .reduce(Interval::union)
-        };
-        let weight_rate = derivative(3)?;
-        let cartesian = |i: usize| -> Option<Interval> {
-            let mut bounds = controls.first()?.get(i)?.div(controls.first()?[3])?;
-            for point in &controls[1..] {
-                bounds = bounds.union(point[i].div(point[3])?);
-            }
-            Some(bounds)
-        };
-        let [x, y, z] = [cartesian(0)?, cartesian(1)?, cartesian(2)?];
-        let rate = |i: usize, p: Interval| derivative(i)?.sub(p.mul(weight_rate)).div(weight);
-        let [dx, dy, dz] = [rate(0, x)?, rate(1, y)?, rate(2, z)?];
-        let radius_squared = x.square().add(y.square());
+        let bounds = monstertruck_geometry::RationalControlBounds::from_controls(controls)?;
+        let [x, y, z] = bounds.position;
+        let [dx, dy, dz] = bounds.derivative(
+            controls.windows(2).map(|p| (&p[0], &p[1])),
+            controls.len() - 1,
+        )?;
+        let radius_squared = x.square().plus(y.square());
         let radius = radius_squared.sqrt()?;
         if radius.lo <= self.resolution {
             return None;
         }
-        let angular_rate = x.mul(dy).sub(y.mul(dx)).div(radius_squared)?;
+        let angular_rate = x.times(dy).minus(y.times(dx)).checked_div(radius_squared)?;
         let height_rate = if let Some(major) = self.major {
-            let radial_rate = x.mul(dx).add(y.mul(dy)).div(radius)?;
-            let profile_radial = radius.sub(Interval::point(major));
-            let meridian2 = profile_radial.square().add(z.square());
+            let radial_rate = x.times(dx).plus(y.times(dy)).checked_div(radius)?;
+            let profile_radial = radius.minus(Interval::point(major));
+            let meridian2 = profile_radial.square().plus(z.square());
             if meridian2.lo <= self.resolution * self.resolution {
                 return None;
             }
             profile_radial
-                .mul(dz)
-                .sub(z.mul(radial_rate))
-                .div(meridian2)?
+                .times(dz)
+                .minus(z.times(radial_rate))
+                .checked_div(meridian2)?
         } else {
             dz
         };
@@ -158,7 +141,7 @@ impl Frame {
 // uses absolute angular lifts rather than summing approximate increments.
 fn near(angle: Interval, reference: f64) -> Interval {
     let shift = ((reference - angle.mid()) / TAU).round() * TAU;
-    angle.add(Interval::point(shift))
+    angle.plus(Interval::point(shift))
 }
 
 struct Piece {
@@ -186,14 +169,14 @@ impl Piece {
         }
         let raw_start = frame.endpoint(*controls.values.first()?)?;
         let start = std::array::from_fn(|i| frame.unwrap(i, raw_start[i], reference[i].mid()));
-        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.tolerance(i)) {
+        if (0..2).any(|i| start[i].minus(reference[i]).magnitude() > frame.tolerance(i)) {
             return None;
         }
         let raw_end = frame.endpoint(*controls.values.last()?)?;
         let end = std::array::from_fn(|i| frame.unwrap(i, raw_end[i], start[i].mid()));
         let extent = |i: usize| {
             let step = Interval::point(0.0).union(rates[i]);
-            start[i].add(step).intersection(end[i].sub(step))
+            start[i].plus(step).intersection(end[i].minus(step))
         };
         let bounds = [extent(0)?, extent(1)?];
         Some(Self {
@@ -206,10 +189,10 @@ impl Piece {
         })
     }
     fn shifted_bounds(&self, shift: f64) -> [Interval; 2] {
-        [self.bounds[0].add(Interval::point(shift)), self.bounds[1]]
+        [self.bounds[0].plus(Interval::point(shift)), self.bounds[1]]
     }
     fn split(&self, frame: Frame) -> Option<[Self; 2]> {
-        let [a, b] = self.controls.split();
+        let [a, b] = self.controls.split()?;
         let first = Self::new(frame, a, self.start, self.edge)?;
         let second = Self::new(frame, b, first.end, self.edge)?;
         Some([first, second])
@@ -240,7 +223,7 @@ fn append(
     if depth == 0 {
         return None;
     }
-    let [a, b] = controls.split();
+    let [a, b] = controls.split()?;
     let mid = append(frame, &a, reference, edge, depth - 1, pieces)?;
     append(frame, &b, mid, edge, depth - 1, pieces)
 }
@@ -256,7 +239,7 @@ fn unique_cut(pieces: &[Piece], index: usize, angle: f64, resolution: f64) -> bo
             return true;
         }
         let phase = near(Interval::point(angle), p.bounds[0].mid());
-        p.bounds[0].sub(phase).lo > resolution || p.bounds[0].sub(phase).hi < -resolution
+        p.bounds[0].minus(phase).lo > resolution || p.bounds[0].minus(phase).hi < -resolution
     })
 }
 
@@ -282,7 +265,7 @@ fn lift_cycle(
             .oriented_curve()
             .try_into_homogeneous_bspline_curve()
             .ok_or(Rejection::Span(edge_id))?;
-        for mut span in controls::spans(&curve).ok_or(Rejection::Span(edge_id))? {
+        for mut span in proof_interval_bezier_spans(&curve).ok_or(Rejection::Span(edge_id))? {
             for control in &mut span.values {
                 *control = frame.local(*control);
             }
@@ -311,18 +294,18 @@ pub(super) fn prove(
     let (pieces, reference) = lift_cycle(frame, rim, first)?;
     let resolution = frame.resolution;
     if reference[0]
-        .sub(first[0])
-        .sub(Interval::point(TAU))
+        .minus(first[0])
+        .minus(Interval::point(TAU))
         .magnitude()
         > resolution
-        || reference[1].sub(first[1]).magnitude() > resolution
+        || reference[1].minus(first[1]).magnitude() > resolution
     {
         return Err(Rejection::Winding);
     }
     let height_origin = side * ring.fixed;
     let mut extent = 0.0_f64;
     for piece in &pieces {
-        let height = piece.bounds[1].sub(Interval::point(height_origin));
+        let height = piece.bounds[1].minus(Interval::point(height_origin));
         if height.lo <= resolution || height.hi >= TAU - resolution {
             return Err(Rejection::Ring(piece.edge));
         }
