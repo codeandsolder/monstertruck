@@ -290,8 +290,7 @@ impl Source {
         let coplanar = |id: usize| {
             let face = &self.polygons[id];
             face.iter().all(|&v| coords[v][2].abs() <= KERNEL_EPSILON)
-                && planar::area_twice(projected, face) > 0.0
-                && planar::simple(projected, face)
+                && planar::orientation(projected, face) == Some(true)
         };
         if !seeds.iter().all(|&id| coplanar(id)) {
             return None;
@@ -326,7 +325,8 @@ struct Footprint {
     floor: Vec<usize>,
     wall: Vec<usize>,
     ring: Vec<usize>,
-    contacts: BTreeSet<usize>,
+    mouth_by_floor: BTreeMap<usize, usize>,
+    prism_cells: Vec<Vec<usize>>,
 }
 
 impl Footprint {
@@ -375,25 +375,15 @@ impl Footprint {
             });
         if floor.is_empty()
             || wall.is_empty()
-            || !floor.iter().all(|&id| {
-                planar::area_twice(projected, &source.polygons[id]) > 0.0
-                    && planar::simple(projected, &source.polygons[id])
-            })
+            || !floor
+                .iter()
+                .all(|&id| planar::orientation(projected, &source.polygons[id]) == Some(true))
         {
             return None;
         }
         let loops = planar::boundary(floor.iter().map(|&id| source.polygons[id].as_slice()))?;
         let [ring]: [Vec<usize>; 1] = loops.try_into().ok()?;
-        if !planar::simple(projected, &ring) || planar::area_twice(projected, &ring) <= 0.0 {
-            return None;
-        }
-        let sides = planar::edges(&ring).collect::<Vec<_>>();
-        // Convex floor coverage allows a direct local Hausdorff bound via
-        // projection onto the unchanged floor. Collinear samples survive.
-        if sides.iter().any(|&(a, b)| {
-            ring.iter()
-                .any(|&id| planar::turn(projected[a], projected[b], projected[id]) < 0.0)
-        }) {
+        if planar::orientation(projected, &ring) != Some(true) {
             return None;
         }
         let boundary = ring.iter().copied().collect::<FxHashSet<_>>();
@@ -404,26 +394,73 @@ impl Footprint {
         }) {
             return None;
         }
-        // All observed floor facets must lie inside the convex domain.
-        // Consistent oriented incidence and one simple boundary then prove
-        // the complete filled planar chain independently of triangulation.
-        if floor
-            .iter()
-            .flat_map(|&id| &source.polygons[id])
-            .any(|&id| {
-                sides
-                    .iter()
-                    .any(|&(a, b)| planar::turn(projected[a], projected[b], projected[id]) < 0.0)
+        // Align only the proof's projected mouth samples to their unique
+        // observed floor correspondences. The original points themselves
+        // are never moved. Charge the matching residual to the local bound.
+        let mut mouth_by_floor = BTreeMap::new();
+        let mut canonical = projected.to_vec();
+        for &v in &contacts {
+            let p = projected[v];
+            let mut matches = ring.iter().copied().filter(|&id| {
+                (projected[id][0] - p[0]).hypot(projected[id][1] - p[1]) <= KERNEL_EPSILON
+            });
+            let id = matches.next()?;
+            if matches.next().is_some() || mouth_by_floor.insert(id, v).is_some() {
+                return None;
+            }
+            canonical[v] = projected[id];
+        }
+        let sides = planar::edges(&ring).collect::<Vec<_>>();
+        let convex = sides.iter().enumerate().all(|(i, &(a, b))| {
+            planar::turn(
+                projected[a],
+                projected[b],
+                projected[sides[(i + 1) % sides.len()].1],
+            ) >= 0.0
+        });
+        let covered = if convex {
+            floor
+                .iter()
+                .flat_map(|&id| &source.polygons[id])
+                .all(|&id| {
+                    sides.iter().all(|&(a, b)| {
+                        planar::turn(projected[a], projected[b], projected[id]) >= 0.0
+                    })
+                })
+        } else {
+            // Concave floors are also admissible. Certify the full
+            // projection of each old wall facet (including the fan
+            // diagonals), not merely its sampled vertices.
+            floor.iter().chain(&wall).all(|&id| {
+                let face = &source.polygons[id];
+                let inside = |a: usize, b: usize| {
+                    planar::segment_in_disk(projected, &ring, canonical[a], canonical[b])
+                };
+                planar::edges(face).all(|(a, b)| inside(a, b))
+                    && face.iter().skip(2).all(|&b| inside(face[0], b))
             })
-        {
+        };
+        if !covered {
             return None;
         }
+        // The consistently oriented floor polygons have precisely this
+        // simple boundary, so their filled planar chain covers the disk.
+        // Decompose nonconvex prisms for the unrelated-geometry exclusion.
+        let prism_cells = if convex {
+            vec![ring.clone()]
+        } else {
+            planar::triangulate(projected, std::slice::from_ref(&ring))?
+                .into_iter()
+                .map(|p| p.to_vec())
+                .collect()
+        };
         Some(Self {
             depth,
             floor,
             wall,
             ring,
-            contacts,
+            mouth_by_floor,
+            prism_cells,
         })
     }
 
@@ -433,17 +470,11 @@ impl Footprint {
         frame: Frame,
         positions: &mut Vec<Point3>,
     ) -> Option<Vec<usize>> {
-        let mut used = BTreeSet::new();
         let mut mouth = Vec::with_capacity(self.ring.len());
         for &id in &self.ring {
             let p = frame.lift(source.positions[id]);
-            let mut matches = self
-                .contacts
-                .iter()
-                .copied()
-                .filter(|&v| (source.positions[v] - p).magnitude() <= KERNEL_EPSILON);
-            let vertex = if let Some(v) = matches.next() {
-                if matches.next().is_some() || !used.insert(v) {
+            let vertex = if let Some(&v) = self.mouth_by_floor.get(&id) {
+                if (source.positions[v] - p).magnitude() > KERNEL_EPSILON {
                     return None;
                 }
                 v
@@ -454,7 +485,7 @@ impl Footprint {
             };
             mouth.push(vertex);
         }
-        (used == self.contacts).then_some(mouth)
+        Some(mouth)
     }
 }
 
@@ -505,13 +536,9 @@ impl Source {
         if self.polygons.iter().enumerate().any(|(id, polygon)| {
             self.owner[id] != pair.inner
                 && !cap_set.contains(&id)
-                && prism::intersects(
-                    &coords,
-                    polygon,
-                    &projected,
-                    &footprint.ring,
-                    footprint.depth,
-                )
+                && footprint.prism_cells.iter().any(|cell| {
+                    prism::intersects(&coords, polygon, &projected, cell, footprint.depth)
+                })
         }) {
             return None;
         }
@@ -552,7 +579,7 @@ impl Source {
                 .iter()
                 .filter(|(_, origin)| match origin {
                     AperturePolygonOrigin::Source(id) => {
-                        matches!(self.owner[*id],o if o==pair.outer || o==pair.inner)
+                        self.owner[*id] == pair.outer || self.owner[*id] == pair.inner
                     }
                     _ => true,
                 })
@@ -620,7 +647,7 @@ fn assemble(
 /// opposite-oriented contact pair. A candidate is not committed to the
 /// original source. Reserve its deviation before later analytic recovery.
 ///
-/// This recognizes a fully observed convex planar floor with two-level
+/// This recognizes a fully observed simple planar floor with two-level
 /// sidewall evidence and a collapsed mouth, not arbitrary missing patches.
 /// The source chord allowance must be finite and positive.
 ///

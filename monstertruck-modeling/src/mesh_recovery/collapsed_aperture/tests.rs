@@ -186,3 +186,32 @@ fn planar_candidate_preserves_multiple_holes_and_concave_boundary() -> Result<()
     assert!((area - 54.0).abs() < 1e-12);
     Ok(())
 }
+
+#[test]
+fn concave_disk_segments_must_not_cross_the_missing_region() {
+    let points = [
+        [0., 0.],
+        [4., 0.],
+        [4., 4.],
+        [3., 4.],
+        [3., 1.],
+        [1., 1.],
+        [1., 4.],
+        [0., 4.],
+    ];
+    let ring = (0..points.len()).collect::<Vec<_>>();
+    assert!(planar::segment_in_disk(&points, &ring, [1., 1.], [3., 1.]));
+    assert!(planar::segment_in_disk(
+        &points,
+        &ring,
+        [0.5, 0.5],
+        [3.5, 0.5]
+    ));
+    assert!(!planar::segment_in_disk(
+        &points,
+        &ring,
+        [0.5, 3.],
+        [3.5, 3.]
+    ));
+    assert!(!planar::segment_in_disk(&points, &ring, [1., 4.], [3., 1.]));
+}

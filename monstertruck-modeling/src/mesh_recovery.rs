@@ -73,6 +73,7 @@ pub use cylinder::{CylinderRecoveryOptions, RecoveredCylinder, recover_cylindric
 pub use through_hole::{RecoveredCylindricalThroughHole, recover_cylindrical_through_hole};
 mod evidence;
 mod planar_domain;
+mod planar_predicates;
 pub use planar_domain::{PlanarDomainCertificate, certify_projected_planar_domain};
 mod planar_fans;
 pub use planar_fans::{PlanarFanOptions, PlanarFanSimplification, simplify_planar_fan_shell};

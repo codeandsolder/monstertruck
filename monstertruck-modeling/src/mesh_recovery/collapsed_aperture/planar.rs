@@ -1,13 +1,14 @@
 //! Constrained triangulation of planar domains with unchanged boundary IDs.
 //! Reject intersecting, touching or incompletely recovered constraint loops.
-use super::super::{edge_key, trace_oriented_boundary_cycles};
+use super::super::{edge_key, planar_predicates, trace_oriented_boundary_cycles};
 use robust::{Coord, orient2d};
 use rustc_hash::FxHashMap;
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
 
+const fn coord([x, y]: [f64; 2]) -> Coord<f64> { Coord { x, y } }
+
 pub(super) fn turn(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
-    let point = |[x, y]| Coord { x, y };
-    orient2d(point(a), point(b), point(c))
+    orient2d(coord(a), coord(b), coord(c))
 }
 
 pub(super) fn edges(ring: &[usize]) -> impl Iterator<Item = (usize, usize)> + '_ {
@@ -16,6 +17,7 @@ pub(super) fn edges(ring: &[usize]) -> impl Iterator<Item = (usize, usize)> + '_
         .zip(ring.iter().copied().cycle().skip(1))
 }
 
+#[cfg(test)]
 pub(super) fn area_twice(points: &[[f64; 2]], ring: &[usize]) -> f64 {
     let p = points[ring[0]];
     edges(ring)
@@ -24,33 +26,15 @@ pub(super) fn area_twice(points: &[[f64; 2]], ring: &[usize]) -> f64 {
 }
 
 fn on_segment(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> bool {
-    turn(a, b, p) == 0.0 && (0..2).all(|i| p[i] >= a[i].min(b[i]) && p[i] <= a[i].max(b[i]))
+    planar_predicates::on_segment(coord(a), coord(b), coord(p))
 }
 
 fn intersects(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
-    let s = [turn(a, b, c), turn(a, b, d), turn(c, d, a), turn(c, d, b)];
-    s.iter().any(|v| !v.is_finite())
-        || ((s[0] > 0.0 && s[1] < 0.0 || s[0] < 0.0 && s[1] > 0.0)
-            && (s[2] > 0.0 && s[3] < 0.0 || s[2] < 0.0 && s[3] > 0.0))
-        || on_segment(a, b, c)
-        || on_segment(a, b, d)
-        || on_segment(c, d, a)
-        || on_segment(c, d, b)
+    planar_predicates::intersects(coord(a), coord(b), coord(c), coord(d))
 }
 
-pub(super) fn simple(points: &[[f64; 2]], ring: &[usize]) -> bool {
-    let sides = edges(ring).collect::<Vec<_>>();
-    sides.len() >= 3
-        && sides.iter().enumerate().all(|(i, &(a, b))| {
-            let c = sides[(i + 1) % sides.len()].1;
-            a != b
-                && !on_segment(points[a], points[b], points[c])
-                && !on_segment(points[b], points[c], points[a])
-                && sides.iter().enumerate().skip(i + 2).all(|(j, &(c, d))| {
-                    (i == 0 && j + 1 == sides.len())
-                        || !intersects(points[a], points[b], points[c], points[d])
-                })
-        })
+pub(super) fn orientation(points: &[[f64; 2]], ring: &[usize]) -> Option<bool> {
+    planar_predicates::polygon_sign(ring, |id| coord(points[id]))
 }
 
 fn winding(points: &[[f64; 2]], ring: &[usize], p: [f64; 2]) -> Option<i32> {
@@ -85,21 +69,73 @@ pub(super) fn disjoint(points: &[[f64; 2]], a: &[usize], b: &[usize]) -> bool {
 }
 
 pub(super) fn valid_domain(points: &[[f64; 2]], loops: &[Vec<usize>]) -> bool {
-    let Some(outer) = loops.iter().find(|r| area_twice(points, r) > 0.0) else {
+    let Some(orientations) = loops
+        .iter()
+        .map(|r| orientation(points, r))
+        .collect::<Option<Vec<_>>>()
+    else {
         return false;
     };
-    loops.iter().all(|r| {
-        simple(points, r)
-            && (std::ptr::eq(r, outer)
-                || (area_twice(points, r) < 0.0 && winding(points, outer, points[r[0]]) == Some(1)))
-    }) && loops.iter().enumerate().all(|(i, r)| {
-        loops.iter().skip(i + 1).all(|s| {
-            disjoint(points, r, s)
-                && (std::ptr::eq(r, outer)
-                    || std::ptr::eq(s, outer)
-                    || (winding(points, r, points[s[0]]) == Some(0)
-                        && winding(points, s, points[r[0]]) == Some(0)))
+    let mut positive = orientations
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &s)| s.then_some(i));
+    let Some(outer) = positive.next() else {
+        return false;
+    };
+    if positive.next().is_some() {
+        return false;
+    }
+    loops
+        .iter()
+        .enumerate()
+        .all(|(i, r)| i == outer || winding(points, &loops[outer], points[r[0]]) == Some(1))
+        && loops.iter().enumerate().all(|(i, r)| {
+            loops.iter().enumerate().skip(i + 1).all(|(j, s)| {
+                disjoint(points, r, s)
+                    && (i == outer
+                        || j == outer
+                        || (winding(points, r, points[s[0]]) == Some(0)
+                            && winding(points, s, points[r[0]]) == Some(0)))
+            })
         })
+}
+
+// For a simple disk, a segment with no proper boundary crossing can still
+// exit through a reflex corner. Split at every exactly incident ring vertex
+// and test each interval. Boundary-following intervals remain admissible.
+pub(super) fn segment_in_disk(
+    points: &[[f64; 2]],
+    ring: &[usize],
+    a: [f64; 2],
+    b: [f64; 2],
+) -> bool {
+    let contains = |p| matches!(winding(points, ring, p), Some(1) | None);
+    if !contains(a) || !contains(b) {
+        return false;
+    }
+    let delta = [b[0] - a[0], b[1] - a[1]];
+    let axis = usize::from(delta[1].abs() > delta[0].abs());
+    if delta[axis] == 0.0 {
+        return true;
+    }
+    let mut cuts = vec![a, b];
+    for (i, j) in edges(ring) {
+        let [c, d] = [points[i], points[j]];
+        if planar_predicates::proper_crossing(coord(a), coord(b), coord(c), coord(d)) {
+            return false;
+        }
+        if on_segment(a, b, c) {
+            cuts.push(c);
+        }
+    }
+    cuts.sort_by(|x, y| x[axis].total_cmp(&y[axis]));
+    cuts.dedup_by(|x, y| (x[axis] - y[axis]).abs() == 0.0);
+    cuts.windows(2).all(|pair| {
+        let [a, b] = [pair[0], pair[1]];
+        edges(ring).any(|(i, j)| {
+            on_segment(points[i], points[j], a) && on_segment(points[i], points[j], b)
+        }) || contains([a[0].midpoint(b[0]), a[1].midpoint(b[1])])
     })
 }
 

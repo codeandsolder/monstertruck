@@ -68,6 +68,24 @@ pub(super) fn intersects(
     {
         return false;
     }
+    if (0..2).any(|axis| {
+        let lo = ring
+            .iter()
+            .map(|&id| points[id][axis])
+            .fold(f64::INFINITY, f64::min);
+        let hi = ring
+            .iter()
+            .map(|&id| points[id][axis])
+            .fold(f64::NEG_INFINITY, f64::max);
+        polygon
+            .iter()
+            .all(|&id| coords[id][axis] < lo - KERNEL_EPSILON)
+            || polygon
+                .iter()
+                .all(|&id| coords[id][axis] > hi + KERNEL_EPSILON)
+    }) {
+        return false;
+    }
     rest.windows(2).any(|p| {
         triangle(
             [coords[first], coords[p[0]], coords[p[1]]],
