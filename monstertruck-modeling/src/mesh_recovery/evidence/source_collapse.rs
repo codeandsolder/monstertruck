@@ -176,7 +176,7 @@ mod tests {
                 [1, 2, 3],
             ]),
         )?;
-        let recovered = recover_analytic_mesh(&mesh, Default::default())?;
+        let recovered = recover_analytic_mesh(&mesh, &Default::default())?;
         let provenance = &recovered.evidence.provenance;
         assert_eq!(provenance.original_polygon_count, 6);
         assert_eq!(provenance.original_polygon_ids, [0, 2, 3, 4, 5]);

@@ -266,7 +266,7 @@ fn try_fit(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
     regions: &[usize],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     context: &mut JointFitContext,
     method: JointFitMethod,
 ) -> Result<Result<JointFitReport, JointFitRejection>, AnalyticRecoveryError> {
@@ -373,7 +373,7 @@ fn try_fit(
 pub(super) fn repair(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     frozen: Option<&FrozenSourceFit>,
 ) -> Result<(Vec<JointFitReport>, Vec<JointFitAttempt>), AnalyticRecoveryError> {
     let mut reports = Vec::new();

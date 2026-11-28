@@ -30,7 +30,7 @@ use carrier_alternatives::CarrierAlternatives;
 use native_selection::{PartitionAlternative, select_native};
 
 /// Shared policy for evidence, surface recognition and native assembly.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AnalyticRecoveryOptions {
     /// Source incidence and planar-support discovery.
     pub evidence: EvidenceOptions,
@@ -108,7 +108,7 @@ impl Default for AnalyticRecoveryOptions {
 }
 
 impl AnalyticRecoveryOptions {
-    fn validate(self) -> Result<(), AnalyticRecoveryError> {
+    fn validate(&self) -> Result<(), AnalyticRecoveryError> {
         let positive = [
             self.relative_surface_tolerance,
             self.axis_relative_resolution,
@@ -141,7 +141,7 @@ impl AnalyticRecoveryOptions {
     }
 
     fn source_chord_violation(
-        self,
+        &self,
         boundary: &RegionBoundaryIndex<'_>,
         partition: &SurfaceRegionPartition,
     ) -> Option<usize> {
@@ -153,7 +153,7 @@ impl AnalyticRecoveryOptions {
     /// accuracy as surface recognition. Kernel intersection accuracy is
     /// separately limited by the kernel's numerical resolution.
     #[must_use = "the returned options define source trim acceptance"]
-    pub fn trim_options(self, evidence: &MeshEvidence) -> SharedTrimOptions {
+    pub fn trim_options(&self, evidence: &MeshEvidence) -> SharedTrimOptions {
         let extent = evidence.positions.first().map_or(0.0, |&reference| {
             evidence
                 .positions
@@ -406,7 +406,7 @@ pub fn discover_analytic_regions(
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
     tracks: &[CurvatureTrack],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<AnalyticRegionDiscovery, AnalyticRecoveryError> {
     options.validate()?;
     if evidence.source_planar_support.is_empty()
@@ -467,7 +467,7 @@ pub fn discover_analytic_regions(
 fn refine_and_discover(
     evidence: &MeshEvidence,
     axes: &[PlacedAxis],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<(MeshEvidence, Vec<SupportRefinementPass>, CandidateDiscovery), AnalyticRecoveryError> {
     let mut active = evidence.clone();
     let mut passes = Vec::new();
@@ -530,7 +530,7 @@ fn refine_and_discover(
 /// Invalid options, inconsistent partition or native construction inputs.
 pub fn construct_analytic_recovery(
     discovered: AnalyticRegionDiscovery,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let AnalyticRegionDiscovery {
@@ -631,7 +631,7 @@ pub(in crate::mesh_recovery) struct NativeAssembly {
 fn assemble_native(
     evidence: &MeshEvidence,
     partition: SurfaceRegionPartition,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<NativeAssembly, AnalyticRecoveryError> {
     let boundary = RegionBoundaryIndex::new(evidence)?;
     let trim = options.trim_options(evidence);
@@ -682,7 +682,7 @@ fn assemble_native(
 /// Invalid source geometry, options or inconsistent partition data.
 pub fn recover_analytic_mesh(
     mesh: &PolygonMesh,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let evidence = analyze_mesh_evidence(mesh, options.evidence)?;
@@ -694,7 +694,7 @@ pub fn recover_analytic_mesh(
 /// Invalid options or source references.
 pub fn recover_analytic_evidence(
     evidence: &MeshEvidence,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let normalization = if options.normalize_coincident_sheets {
@@ -743,7 +743,7 @@ fn independent_axes(
     evidence: &MeshEvidence,
     spatial: &[Option<SpatialTrackEvidence>],
     local_tracks: &[CurvatureTrack],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Vec<PlacedAxis> {
     let Some(&reference) = evidence.positions.first() else {
         return Vec::new();
@@ -806,7 +806,7 @@ fn independent_axes(
 fn extend_with_circle_axes(
     evidence: &MeshEvidence,
     axes: &mut Vec<PlacedAxis>,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> (Option<CircleAxisSummary>, Vec<SourceCircleObservation>) {
     let mut circle_summary = None;
     let mut circles = Vec::new();
@@ -859,7 +859,7 @@ fn extend_with_circle_axes(
 fn graph_options(
     evidence: &MeshEvidence,
     placed: &PlacedAxis,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> MeridianGraphOptions {
     let extent = evidence
         .positions
@@ -880,7 +880,7 @@ fn graph_options(
 fn curved_proposal<'a>(
     boundary: &RegionBoundaryIndex<'a>,
     candidate: &StationMeridianCandidate,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Option<SurfaceRegionProposal<'a>> {
     let scale = candidate.fit.geometric_scale();
     boundary.measure_surface_region(
@@ -998,7 +998,7 @@ fn choose_partition(
     candidates: &CandidateDiscovery,
     grown: &[CurvatureGrowthHypothesis],
     circles: &[SourceCircleObservation],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<ProposalSelection, AnalyticRecoveryError> {
     let absolute_tolerance = options.trim_options(evidence).absolute_tolerance;
     let (mut proposals, expanded) =
@@ -1121,7 +1121,7 @@ fn append_station_linear_proposals<'a, 'b>(
 fn circular_proposals<'a>(
     boundary: &RegionBoundaryIndex<'a>,
     candidates: &[StationMeridianCandidate],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     absolute_tolerance: f64,
 ) -> (
     Vec<SurfaceRegionProposal<'a>>,
@@ -1156,7 +1156,7 @@ fn append_rim_proposals<'a>(
     evidence: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'a>,
     circles: &[SourceCircleObservation],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     absolute_tolerance: f64,
     proposals: &mut Vec<SurfaceRegionProposal<'a>>,
 ) -> Vec<SelectedSurfaceProposal> {
@@ -1187,7 +1187,7 @@ fn measure_growth_proposals<'a>(
     planar_baseline: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'a>,
     grown: &[CurvatureGrowthHypothesis],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Vec<SurfaceRegionProposal<'a>> {
     let mut proposals = Vec::new();
     for candidate in grown {
@@ -1261,7 +1261,7 @@ mod tests {
                 [3, 0, 4, 7],
             ]),
         )?;
-        let recovered = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
         let shell = recovered.complete_shell().ok_or("complete cube")?;
         assert_eq!(shell.shell_condition(), ShellCondition::Closed);
         assert_eq!(shell.len(), 6);
@@ -1310,11 +1310,11 @@ mod tests {
     fn declared_source_chord_budget_discriminates_cocircular_planar_prism()
     -> Result<(), Box<dyn std::error::Error>> {
         let mesh = sampled_prism(8)?;
-        let unbounded = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        let unbounded = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
         assert_eq!(unbounded.discovery.selected.len(), 1);
         let bounded = recover_analytic_mesh(
             &mesh,
-            AnalyticRecoveryOptions {
+            &AnalyticRecoveryOptions {
                 source_chord_budget: Some(0.01),
                 ..Default::default()
             },
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(shell.len(), 10);
         let cylinder = recover_analytic_mesh(
             &sampled_cylinder_mesh()?,
-            AnalyticRecoveryOptions {
+            &AnalyticRecoveryOptions {
                 // Unit radius, 32 sides: sagitta is 1-cos(pi/32), about 0.004815.
                 source_chord_budget: Some(0.005),
                 ..Default::default()
@@ -1341,7 +1341,7 @@ mod tests {
     #[test]
     fn recovers_sampled_cylinder_without_supplied_axis() -> Result<(), Box<dyn std::error::Error>> {
         let mesh = sampled_cylinder_mesh()?;
-        let recovered = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
         let shell = recovered.complete_shell().ok_or("complete cylinder")?;
         assert_eq!(shell.shell_condition(), ShellCondition::Closed);
         assert_eq!(shell.len(), 4);

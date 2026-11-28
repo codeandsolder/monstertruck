@@ -331,7 +331,7 @@ fn benchmark(
             evidence_seconds,
         ));
     }
-    let recovery = recover_analytic_evidence(&evidence, options)?;
+    let recovery = recover_analytic_evidence(&evidence, &options)?;
     let partition = &recovery.reconciled.partition;
     let regions = region_summary(&recovery)?;
     let canceled_sheets = recovery

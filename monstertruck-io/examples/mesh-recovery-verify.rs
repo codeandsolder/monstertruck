@@ -214,7 +214,7 @@ fn verify(path: &Path, args: &Args) -> Result<Value> {
     let mesh = obj::read(BufReader::new(File::open(path)?)).context("read OBJ")?;
     let result = recover_analytic_mesh(
         &mesh,
-        AnalyticRecoveryOptions {
+        &AnalyticRecoveryOptions {
             max_planar_displacement: args.max_planar_displacement,
             max_reconstruction_adjustment: args.max_reconstruction_adjustment,
             source_position_uncertainty: args.source_position_uncertainty,

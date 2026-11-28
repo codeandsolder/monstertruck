@@ -99,7 +99,7 @@ pub(super) fn attempt(
     expanded: &PartitionAlternative,
     raw: &NativeAssembly,
     baseline: &NativeAssembly,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<Option<TrialResult>, AnalyticRecoveryError> {
     if options.max_joint_fit_trials == 0
         || options.max_reconstruction_adjustment == 0.0
@@ -187,7 +187,7 @@ fn fit_partition(
     raw: &NativeAssembly,
     partition: &SurfaceRegionPartition,
     regions: &BTreeSet<usize>,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<Result<(NativeAssembly, OwnershipTrial), JointFitAttempt>, AnalyticRecoveryError> {
     let policy = JointFitOptions {
         maximum_adjustment: options.max_reconstruction_adjustment,

@@ -246,7 +246,7 @@ pub(super) fn select_native(
     mut core: PartitionAlternative,
     mut expanded: PartitionAlternative,
     alternatives: &CarrierAlternatives,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<NativeSelection, AnalyticRecoveryError> {
     let mut core_assembly = assemble_native(evidence, core.partition.clone(), options)?;
     let mut expanded_assembly = assemble_native(evidence, expanded.partition.clone(), options)?;
@@ -331,7 +331,7 @@ fn select_raw(
     expanded: &PartitionAlternative,
     core_assembly: &super::NativeAssembly,
     expanded_assembly: &super::NativeAssembly,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RawDecision, AnalyticRecoveryError> {
     let groups = affected_groups(evidence, core, expanded);
     let core_scores = group_coverage(evidence, &core.partition, &core_assembly.native, &groups);

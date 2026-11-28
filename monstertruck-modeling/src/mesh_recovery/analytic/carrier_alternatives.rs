@@ -70,7 +70,7 @@ impl CarrierAlternatives {
         evidence: &MeshEvidence,
         alternative: &mut PartitionAlternative,
         assembly: &mut NativeAssembly,
-        options: AnalyticRecoveryOptions,
+        options: &AnalyticRecoveryOptions,
     ) -> Result<CarrierTrials, AnalyticRecoveryError> {
         let mut result = CarrierTrials::default();
         if self.by_support.is_empty() || options.max_carrier_trials == 0 {
@@ -221,7 +221,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let recovered = recover_analytic_mesh(
             &sampled_cylinder_mesh()?,
-            AnalyticRecoveryOptions::default(),
+            &AnalyticRecoveryOptions::default(),
         )?;
         let supports = &recovered.discovery.selected[0].supports;
         let mut buckets = GeometryBuckets::default();
@@ -251,7 +251,7 @@ mod tests {
     fn native_contacts_discriminate_same_ownership_carriers()
     -> Result<(), Box<dyn std::error::Error>> {
         let options = AnalyticRecoveryOptions::default();
-        let recovered = recover_analytic_mesh(&sampled_cylinder_mesh()?, options)?;
+        let recovered = recover_analytic_mesh(&sampled_cylinder_mesh()?, &options)?;
         let evidence = &recovered.evidence;
         let supports = &recovered.discovery.selected[0].supports;
         let boundary = RegionBoundaryIndex::new(evidence)?;
@@ -273,18 +273,18 @@ mod tests {
             selected: vec![SelectedSurfaceProposal::from_measured(&proposals[0])],
             partition,
         };
-        let mut assembly = assemble_native(evidence, alternative.partition.clone(), options)?;
+        let mut assembly = assemble_native(evidence, alternative.partition.clone(), &options)?;
         assert!(native_complete_shell(&assembly.trims, &assembly.native).is_none());
         let alternatives = CarrierAlternatives::new(&proposals);
-        let mut disabled = options;
+        let mut disabled = options.clone();
         disabled.max_carrier_trials = 0;
         assert_eq!(
             alternatives
-                .repair(evidence, &mut alternative, &mut assembly, disabled)?
+                .repair(evidence, &mut alternative, &mut assembly, &disabled)?
                 .trials,
             0
         );
-        let trials = alternatives.repair(evidence, &mut alternative, &mut assembly, options)?;
+        let trials = alternatives.repair(evidence, &mut alternative, &mut assembly, &options)?;
         assert_eq!(trials.trials, 1);
         assert_eq!(trials.accepted, 1);
         assert_eq!(alternative.partition.selected_proposals, vec![1]);

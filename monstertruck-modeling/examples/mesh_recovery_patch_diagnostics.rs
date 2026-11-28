@@ -811,7 +811,7 @@ fn main() -> Result<()> {
     if !carrier_trials {
         options.max_carrier_trials = 0;
     }
-    let recovery = recover_analytic_mesh(&mesh, options)?;
+    let recovery = recover_analytic_mesh(&mesh, &options)?;
     let recovery_seconds = start.elapsed().as_secs_f64();
     let budget = SurfaceRegionBudget { vertex, chord };
     let report = match mode {

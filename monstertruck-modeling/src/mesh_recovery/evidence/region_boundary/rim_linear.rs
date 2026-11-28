@@ -1346,7 +1346,7 @@ mod tests {
             .ok_or("missing apex-inclusive cone")?;
         assert!(p.independently_tested_profile());
         assert!(p.relative_chord_bound() < 1.0);
-        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
+        let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, &Default::default())?;
         let shell = recovered
             .complete_shell()
             .ok_or("missing complete cone cap")?;
