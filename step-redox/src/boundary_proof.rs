@@ -2,6 +2,11 @@ use crate::brep::{self, BSplineSupport, CurveSupport, SplineExtrusionSupport, Su
 use crate::math3::{add, cross, distance, dot, mul, norm, normalize, sub};
 use crate::step_graph::{build_index, entity_ref_value, simple_record};
 use monstertruck_core::tolerance::DEFAULT_STEP_RECOVERY_TOLERANCES;
+use monstertruck_geometry::{
+    analytic_carrier::AnalyticSupport,
+    analytic_curve_incidence::{CurveIncidence, certify_nurbs_curve_on_support},
+    prelude::{Point3, Vector3},
+};
 use num_traits::ToPrimitive;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -10,8 +15,6 @@ use step_p21::ast::{EntityInstance, Parameter};
 const POINT_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_point_quant_mm;
 const DIRECTION_Q: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_direction_quant;
 const SCALAR_Q_MM: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.boundary_scalar_quant_mm;
-const BINOMIAL_2: [f64; 3] = [1.0, 2.0, 1.0];
-const BINOMIAL_4: [f64; 5] = [1.0, 4.0, 6.0, 4.0, 1.0];
 pub(crate) const ANALYTIC_BOUNDARY_PROOF_TOL_MM: f64 = 4.0 * SCALAR_Q_MM;
 
 mod bounded;
@@ -1649,15 +1652,9 @@ fn spline_extrusion_cylinder_key(
     })
 }
 
-/// Prove that a quadratic rational B-spline lies on one circle whose plane is
-/// normal to `axis`.
-///
-/// Each non-empty knot span of a degree-2 homogeneous B-spline is one
-/// quadratic polynomial. Three homogeneous evaluations therefore recover its
-/// complete Bernstein representation, after which both
-/// `dot(P - C W, axis) = 0` and
-/// `|P - C W|^2 - r^2 W^2 = 0` are polynomial identities. Bounding every
-/// Bernstein coefficient is a bound over the whole span, not a sample test.
+/// Certify incidence on the intersection of a sphere and its central plane.
+/// The kernel bounds the homogeneous Bernstein residual on every knot span,
+/// including degree-elevated and multi-span circular profiles.
 fn certify_rational_bspline_circle(
     spline: &BSplineSupport,
     center: [f64; 3],
@@ -1665,164 +1662,34 @@ fn certify_rational_bspline_circle(
     radius: f64,
     tolerance_mm: f64,
 ) -> Option<bool> {
-    if spline.degree != 2
-        || !radius.is_finite()
+    if !radius.is_finite()
         || radius <= tolerance_mm
         || !tolerance_mm.is_finite()
         || tolerance_mm <= 0.0
     {
         return Some(false);
     }
-    let (domain_start, domain_end) = bspline_domain(spline)?;
-    let mut span_count = 0usize;
-
-    for knots in spline.knots.windows(2) {
-        let start = knots[0];
-        let end = knots[1];
-        if end <= start || end <= domain_start || start >= domain_end {
-            continue;
-        }
-        if start < domain_start || end > domain_end {
-            return Some(false);
-        }
-
-        let middle = f64::midpoint(start, end);
-        let h0 = evaluate_homogeneous_bspline(spline, start)?;
-        let hm = evaluate_homogeneous_bspline(spline, middle)?;
-        let h2 = evaluate_homogeneous_bspline(spline, end)?;
-        let h1 = std::array::from_fn(|coordinate| {
-            f64::midpoint(h0[coordinate], h2[coordinate]).mul_add(-1.0, 2.0 * hm[coordinate])
-        });
-        let controls = [h0, h1, h2];
-        if controls.iter().flatten().any(|value| !value.is_finite())
-            || controls.iter().any(|control| control[3] <= 0.0)
-        {
-            return Some(false);
-        }
-
-        let min_weight = controls
-            .iter()
-            .map(|control| control[3])
-            .fold(f64::INFINITY, f64::min);
-        let centered = controls.map(|control| {
-            [
-                center[0].mul_add(-control[3], control[0]),
-                center[1].mul_add(-control[3], control[1]),
-                center[2].mul_add(-control[3], control[2]),
-            ]
-        });
-
-        let axial_bound = tolerance_mm * min_weight;
-        if centered
-            .iter()
-            .any(|point| dot(*point, axis).abs() > axial_bound)
-        {
-            return Some(false);
-        }
-
-        let mut circle_coefficients = [0.0_f64; 5];
-        for first in 0..3 {
-            for second in 0..3 {
-                let degree = first + second;
-                let factor = BINOMIAL_2[first] * BINOMIAL_2[second] / BINOMIAL_4[degree];
-                let radial_dot = dot(centered[first], centered[second]);
-                let weight_product = controls[first][3] * controls[second][3];
-                let residual = (radius * radius).mul_add(-weight_product, radial_dot);
-                circle_coefficients[degree] = factor.mul_add(residual, circle_coefficients[degree]);
-            }
-        }
-
-        let radial_bound = tolerance_mm.mul_add(tolerance_mm, 2.0 * radius * tolerance_mm)
-            * min_weight
-            * min_weight;
-        if circle_coefficients
-            .iter()
-            .any(|coefficient| coefficient.abs() > radial_bound)
-        {
-            return Some(false);
-        }
-
-        span_count += 1;
-    }
-
-    Some(span_count != 0)
+    let curve = spline.rational_curve()?;
+    let center = Point3::new(center[0], center[1], center[2]);
+    let axis = normalize(axis, 0.0)?;
+    let normal = Vector3::new(axis[0], axis[1], axis[2]);
+    Some(
+        [
+            AnalyticSupport::Plane {
+                origin: center,
+                normal,
+            },
+            AnalyticSupport::Sphere { center, radius },
+        ]
+        .into_iter()
+        .all(|support| {
+            certify_nurbs_curve_on_support(&curve, support, tolerance_mm) == CurveIncidence::Proven
+        }),
+    )
 }
 
-fn evaluate_homogeneous_bspline(spline: &BSplineSupport, parameter: f64) -> Option<[f64; 4]> {
-    let control_count = spline.control_points_mm.len();
-    let (domain_start, domain_end) = bspline_domain(spline)?;
-    if !parameter.is_finite() || parameter < domain_start || parameter > domain_end {
-        return None;
-    }
-
-    let weights = match &spline.weights {
-        Some(weights) if weights.len() == control_count => weights.clone(),
-        Some(_) => return None,
-        None => vec![1.0; control_count],
-    };
-    if weights
-        .iter()
-        .any(|weight| !weight.is_finite() || *weight <= 0.0)
-    {
-        return None;
-    }
-    if parameter >= domain_end {
-        let point = *spline.control_points_mm.last()?;
-        let weight = *weights.last()?;
-        return Some([
-            point[0] * weight,
-            point[1] * weight,
-            point[2] * weight,
-            weight,
-        ]);
-    }
-
-    let mut basis = vec![0.0; control_count + spline.degree];
-    for (index, basis_value) in basis.iter_mut().enumerate().take(control_count) {
-        if spline.knots[index] <= parameter && parameter < spline.knots[index + 1] {
-            *basis_value = 1.0;
-        }
-    }
-    for degree in 1..=spline.degree {
-        let mut next = vec![0.0; basis.len()];
-        for index in 0..control_count {
-            let left_denominator = spline.knots[index + degree] - spline.knots[index];
-            let left = if left_denominator.abs() > f64::EPSILON {
-                (parameter - spline.knots[index]) / left_denominator * basis[index]
-            } else {
-                0.0
-            };
-            let right_denominator = spline.knots[index + degree + 1] - spline.knots[index + 1];
-            let right = if right_denominator.abs() > f64::EPSILON {
-                (spline.knots[index + degree + 1] - parameter) / right_denominator
-                    * basis[index + 1]
-            } else {
-                0.0
-            };
-            next[index] = left + right;
-        }
-        basis = next;
-    }
-
-    let mut homogeneous = [0.0_f64; 4];
-    for ((point, weight), basis) in spline
-        .control_points_mm
-        .iter()
-        .zip(&weights)
-        .zip(&basis[..control_count])
-    {
-        let coefficient = weight * basis;
-        for coordinate in 0..3 {
-            homogeneous[coordinate] =
-                coefficient.mul_add(point[coordinate], homogeneous[coordinate]);
-        }
-        homogeneous[3] += coefficient;
-    }
-    homogeneous
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(homogeneous)
-}
+#[cfg(test)]
+mod elevated_circle_tests;
 
 pub(crate) fn bspline_domain(spline: &BSplineSupport) -> Option<(f64, f64)> {
     let control_count = spline.control_points_mm.len();

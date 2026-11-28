@@ -1,6 +1,6 @@
 #[cfg(feature = "cad-kernel-monstertruck")]
 mod precision_rechart;
-use crate::math3::{cross, distance, dot, norm, normalize as normalize3, sub};
+use crate::math3::{cross, distance, dot, norm, normalize as normalize3, scale, sub};
 use crate::step_entities::{
     cartesian_point, entity_ref, finite_numeric_list as numeric_parameter_list,
     integer_value as integer, number, push_simple,
@@ -21,7 +21,6 @@ use step_p21::ast::{EntityInstance, Parameter, Record, SubSuperRecord};
 // let sub-1e-5 mm differences prevent semantic recovery; parameter/weight
 // checks remain stricter where they affect the actual STEP parameterization.
 const GEOMETRY_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_geometry_mm;
-const WEIGHT_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_weight_relative;
 const PARAMETER_TOLERANCE: f64 = DEFAULT_STEP_RECOVERY_TOLERANCES.surface_parameter;
 
 #[derive(Debug, Default, Clone)]
@@ -303,12 +302,6 @@ fn parse_complex_rational_surface(subsuper: &SubSuperRecord) -> Option<ParsedSur
         return None;
     }
 
-    // Keep the transform parameterization-preserving for existing p-curves.
-    // With degree 1, two V poles, clamped multiplicities (2,2), and knots
-    // exactly spanning [0,1], the STEP B-spline surface is
-    // S(u,v) = C(u) + v * D, exactly the native extrusion parameterization.
-    // A different knot interval would describe the same locus but a different
-    // V parameter mapping and would require rewriting every trimming p-curve.
     let Parameter::List(rational_params) = &rational.parameter else {
         return None;
     };
@@ -401,54 +394,44 @@ fn detect_v_extrusion(
     // S(u,v) = profile(u) + v*D. U-sweep recovery would swap the
     // surface parameters and was observed to change how OCCT rebuilds
     // trims/pcurves even when the surface locus itself is exact.
-    if surface.v_degree != 1
-        || !is_not_true(&surface.v_closed)
-        || !canonical_unit_linear_v(&surface.v_multiplicities, &surface.v_knots)?
+    if !is_not_true(&surface.v_closed)
         || surface.control_points.len() < 2
-        || surface.control_points.iter().any(|row| row.len() != 2)
+        || !geometry_tolerance_mm.is_finite()
+        || geometry_tolerance_mm < 0.0
     {
         return None;
     }
 
-    if !geometry_tolerance_mm.is_finite() || geometry_tolerance_mm < 0.0 {
-        return None;
-    }
-    let mut shared_delta = None;
-    let mut max_residual_mm = 0.0_f64;
-    let mut profile_points = Vec::with_capacity(surface.control_points.len());
-    let mut profile_weights = surface
+    let columns = surface.control_points.first()?.len();
+    let coordinates = unit_affine_v_coordinates(surface, columns)?;
+    // Validate the profile as well: the tensor-product identity assumes
+    // valid nonnegative partition-of-unity basis functions in both axes.
+    normalized_expanded_knots(
+        surface.u_degree,
+        surface.control_points.len(),
+        &integer_parameter_list(&surface.u_multiplicities)?,
+        &numeric_parameter_list(&surface.u_knots)?,
+    )?;
+
+    let pole = |row: usize, column: usize| {
+        let point = cartesian_point(surface.control_points[row][column], entities, index)?;
+        let weight = match &surface.weights {
+            Some(weights) => number(&weights[row][column])?,
+            None => 1.0,
+        };
+        Some((point, weight))
+    };
+    let (extrusion, max_residual_mm) = certify_affine_sweep(
+        surface.control_points.len(),
+        &coordinates,
+        pole,
+        geometry_tolerance_mm,
+    )?;
+    let profile_points = surface.control_points.iter().map(|row| row[0]).collect();
+    let profile_weights = surface
         .weights
         .as_ref()
-        .map(|_| Vec::with_capacity(surface.control_points.len()));
-
-    for (row_idx, point_row) in surface.control_points.iter().enumerate() {
-        let p0 = cartesian_point(point_row[0], entities, index)?;
-        let p1 = cartesian_point(point_row[1], entities, index)?;
-        let delta = sub(p1, p0);
-        if norm(delta) <= geometry_tolerance_mm {
-            return None;
-        }
-        if let Some(expected) = shared_delta {
-            let residual = distance(delta, expected);
-            if residual > geometry_tolerance_mm {
-                return None;
-            }
-            max_residual_mm = max_residual_mm.max(residual);
-        } else {
-            shared_delta = Some(delta);
-        }
-
-        if let Some(weights) = &surface.weights {
-            let weight_row = weights.get(row_idx)?;
-            let w0 = number(weight_row.first()?)?;
-            let w1 = number(weight_row.get(1)?)?;
-            if !w0.is_finite() || !w1.is_finite() || (w1 - w0).abs() > WEIGHT_TOLERANCE {
-                return None;
-            }
-            profile_weights.as_mut()?.push(weight_row[0].clone());
-        }
-        profile_points.push(point_row[0]);
-    }
+        .map(|rows| rows.iter().map(|row| row[0].clone()).collect());
 
     let old_points = surface.control_points.iter().flatten().copied().collect();
     Some(Candidate {
@@ -462,7 +445,7 @@ fn detect_v_extrusion(
         u_multiplicities: surface.u_multiplicities.clone(),
         u_knots: surface.u_knots.clone(),
         knot_spec: surface.knot_spec.clone(),
-        extrusion: shared_delta?,
+        extrusion,
         max_residual_mm,
         old_points,
     })
@@ -736,6 +719,9 @@ fn normalized_expanded_knots(
         || multiplicities.first().copied()? != order
         || multiplicities.last().copied()? != order
         || total_multiplicity != expected_knots
+        || multiplicities[1..multiplicities.len() - 1]
+            .iter()
+            .any(|&multiplicity| multiplicity > degree)
         || knot_values.windows(2).any(|pair| pair[0] >= pair[1])
     {
         return None;
@@ -905,30 +891,123 @@ fn targeted_inbound_counts(
     out
 }
 
-fn canonical_unit_linear_v(multiplicities: &Parameter, knots: &Parameter) -> Option<bool> {
-    let Parameter::List(multiplicities) = multiplicities else {
-        return Some(false);
-    };
-    let Parameter::List(knots) = knots else {
-        return Some(false);
-    };
-    if multiplicities.len() != 2 || knots.len() != 2 {
-        return Some(false);
+/// Greville abscissae are the unique B-spline coefficients of the
+/// identity function on a clamped, nondegenerate knot interval. Retain the
+/// unit chart so the native STEP extrusion has the same parameter order.
+fn unit_affine_v_coordinates(surface: &ParsedSurface, columns: usize) -> Option<Vec<f64>> {
+    let multiplicities = integer_parameter_list(&surface.v_multiplicities)?;
+    let knots = numeric_parameter_list(&surface.v_knots)?;
+    let start = *knots.first()?;
+    let end = *knots.last()?;
+    if start.abs() > PARAMETER_TOLERANCE || (end - 1.0).abs() > PARAMETER_TOLERANCE {
+        return None;
     }
-    if integer(&multiplicities[0])? != 2 || integer(&multiplicities[1])? != 2 {
-        return Some(false);
-    }
-    let v0 = number(&knots[0])?;
-    let v1 = number(&knots[1])?;
+    let expanded = normalized_expanded_knots(surface.v_degree, columns, &multiplicities, &knots)?;
     Some(
-        v0.is_finite()
-            && v1.is_finite()
-            && v0.abs() <= PARAMETER_TOLERANCE
-            && (v1 - 1.0).abs() <= PARAMETER_TOLERANCE,
+        affine_sweep_coordinates(surface.v_degree, columns, &expanded)?
+            .into_iter()
+            .map(|coordinate| coordinate.mul_add(end - start, start))
+            .collect(),
     )
 }
 
+/// The normalized Greville abscissae are the coefficients of the affine
+/// sweep parameter on a clamped, nondegenerate knot vector. No evaluation
+/// or tessellation of the represented surface is needed.
+pub(crate) fn affine_sweep_coordinates(
+    degree: usize,
+    count: usize,
+    knots: &[f64],
+) -> Option<Vec<f64>> {
+    let order = degree.checked_add(1)?;
+    if degree == 0
+        || count < order
+        || knots.len() != count.checked_add(order)?
+        || knots.iter().any(|knot| !knot.is_finite())
+        || knots.windows(2).any(|pair| pair[0] > pair[1])
+    {
+        return None;
+    }
+    let start = knots[0];
+    let end = knots[count];
+    let span = end - start;
+    if !span.is_finite()
+        || span <= 0.0
+        || knots[..order]
+            .iter()
+            .any(|knot| knot.to_bits() != start.to_bits())
+        || knots[count..]
+            .iter()
+            .any(|knot| knot.to_bits() != end.to_bits())
+        || knots[order..count]
+            .iter()
+            .any(|knot| *knot <= start || *knot >= end)
+        || knots[order..count]
+            .windows(order)
+            .any(|run| run[0].to_bits() == run[degree].to_bits())
+    {
+        return None;
+    }
+    let degree_f64 = f64::from(u32::try_from(degree).ok()?);
+    Some(
+        (0..count)
+            .map(|i| {
+                knots[i + 1..=i + degree]
+                    .iter()
+                    .map(|knot| (knot - start) / span)
+                    .sum::<f64>()
+                    / degree_f64
+            })
+            .collect(),
+    )
+}
+
+/// Certify the complete affine sweep control net for both parsed STEP and
+/// imported native surfaces. Positive weights constant along the sweep
+/// cancel its basis in the rational denominator. By partition of unity,
+/// the largest Euclidean control residual bounds the entire surface error.
+pub(crate) fn certify_affine_sweep(
+    rows: usize,
+    coordinates: &[f64],
+    pole: impl Fn(usize, usize) -> Option<([f64; 3], f64)>,
+    tolerance: f64,
+) -> Option<([f64; 3], f64)> {
+    if rows < 2 || coordinates.len() < 2 || !tolerance.is_finite() || tolerance < 0.0 {
+        return None;
+    }
+    let last = coordinates.len() - 1;
+    let (first_point, _) = pole(0, 0)?;
+    let (last_point, _) = pole(0, last)?;
+    let extrusion = sub(last_point, first_point);
+    let length = norm(extrusion);
+    if !length.is_finite() || length <= tolerance {
+        return None;
+    }
+    let mut max_residual = 0.0_f64;
+    for row in 0..rows {
+        let (origin, weight) = pole(row, 0)?;
+        if !weight.is_finite() || weight <= 0.0 {
+            return None;
+        }
+        for (column, &coordinate) in coordinates.iter().enumerate() {
+            let (point, current_weight) = pole(row, column)?;
+            if current_weight.to_bits() != weight.to_bits() {
+                return None;
+            }
+            let residual = distance(sub(point, origin), scale(extrusion, coordinate));
+            if !residual.is_finite() || residual > tolerance {
+                return None;
+            }
+            max_residual = max_residual.max(residual);
+        }
+    }
+    Some((extrusion, max_residual))
+}
+
 fn normalize(vector: [f64; 3]) -> Option<[f64; 3]> { normalize3(vector, 0.0) }
+
+#[cfg(test)]
+mod affine_tests;
 
 #[cfg(test)]
 mod tests {

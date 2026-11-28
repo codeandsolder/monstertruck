@@ -308,6 +308,7 @@ mod monstertruck_adapter {
     use crate::reduced_brep::{ReducedFace, ReducedSolid};
     use crate::step_document::StepSection;
     use crate::step_graph;
+    use crate::surface_recovery::{affine_sweep_coordinates, certify_affine_sweep};
     use anyhow::{Context, Result};
     use monstertruck_geometry::analytic_carrier::{AnalyticCarrier, AnalyticSupport};
     use monstertruck_geometry::analytic_line_segment::{
@@ -682,97 +683,94 @@ mod monstertruck_adapter {
         })
     }
 
-    /// Recognize exact ruled spline surfaces independently of which parameter
-    /// runs along the profile. The native B-rep lets us transpose this *view*
-    /// without modifying STEP parameter curves or their trims.
+    /// Recognize affine spline sweeps along either native parameter axis.
+    /// A transposed carrier view reverses the sweep direction to retain the
+    /// original U x V face orientation, without editing any source trims.
     fn native_spline_extrusion(net: &BsplineSurface<Vector4>) -> Option<SplineExtrusionSupport> {
         let control = net.control_points();
-        let (profile_degree, profile_knots, sweep_knots, rows) = if net.vdegree() == 1
-            && net.udegree() > 0
-            && control.len() >= 2
-            && control.iter().all(|row| row.len() == 2)
-        {
-            (
-                net.udegree(),
-                net.knot_vector_u(),
-                net.knot_vector_v(),
-                control
-                    .iter()
-                    .map(|row| [row[0], row[1]])
-                    .collect::<Vec<_>>(),
-            )
-        } else if net.udegree() == 1
-            && net.vdegree() > 0
-            && control.len() == 2
-            && control[0].len() >= 2
-            && control[0].len() == control[1].len()
-        {
-            (
-                net.vdegree(),
-                net.knot_vector_v(),
-                net.knot_vector_u(),
-                (0..control[0].len())
-                    .map(|index| [control[0][index], control[1][index]])
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            return None;
-        };
-        if sweep_knots.len() != 4
-            || !sweep_knots.iter().all(|knot| knot.is_finite())
-            || (sweep_knots[0] - sweep_knots[1]).abs() > 1.0e-12
-            || (sweep_knots[2] - sweep_knots[3]).abs() > 1.0e-12
-            || sweep_knots[1] >= sweep_knots[2]
-            || profile_knots.iter().any(|knot| !knot.is_finite())
-        {
+        let rows = control.len();
+        let columns = control.first()?.len();
+        if control.iter().any(|row| row.len() != columns) {
             return None;
         }
-        let mut profile_points = Vec::with_capacity(rows.len());
-        let mut profile_weights = Vec::with_capacity(rows.len());
-        let mut sweep = None::<Vector3>;
-        let mut max_residual_mm = 0.0_f64;
-        for [first, last] in rows {
-            if ![first.w, last.w].into_iter().all(f64::is_finite)
-                || first.w <= 0.0
-                || last.w <= 0.0
-                || (first.w - last.w).abs() > 1.0e-12 * first.w.abs().max(last.w.abs())
+        [false, true].into_iter().find_map(|swapped| {
+            let (
+                profile_degree,
+                profile_knots,
+                profile_count,
+                sweep_degree,
+                sweep_knots,
+                sweep_count,
+            ) = if swapped {
+                (
+                    net.vdegree(),
+                    net.knot_vector_v(),
+                    columns,
+                    net.udegree(),
+                    net.knot_vector_u(),
+                    rows,
+                )
+            } else {
+                (
+                    net.udegree(),
+                    net.knot_vector_u(),
+                    rows,
+                    net.vdegree(),
+                    net.knot_vector_v(),
+                    columns,
+                )
+            };
+            let sweep_knots = sweep_knots.iter().copied().collect::<Vec<_>>();
+            let coordinates = affine_sweep_coordinates(sweep_degree, sweep_count, &sweep_knots)?;
+            let profile_knots = profile_knots.iter().copied().collect::<Vec<_>>();
+            if profile_degree == 0
+                || profile_degree >= profile_count
+                || profile_knots.len()
+                    != profile_count.checked_add(profile_degree)?.checked_add(1)?
+                || profile_knots.iter().any(|knot| !knot.is_finite())
+                || profile_knots.windows(2).any(|pair| pair[0] > pair[1])
+                || profile_knots[profile_degree] >= profile_knots[profile_count]
             {
                 return None;
             }
-            let p0 = native_net_point(first)?;
-            let p1 = native_net_point(last)?;
-            let delta = p1 - p0;
-            let length = delta.magnitude();
-            if !length.is_finite() || length <= 1.0e-7 {
-                return None;
-            }
-            if let Some(expected) = sweep {
-                let residual = (delta - expected).magnitude();
-                if residual > 1.0e-7 {
-                    return None;
+            let raw_pole = |row: usize, column: usize| {
+                if swapped {
+                    control[column][row]
+                } else {
+                    control[row][column]
                 }
-                max_residual_mm = max_residual_mm.max(residual);
-            } else {
-                sweep = Some(delta);
+            };
+            let pole = |row, column| {
+                let raw = raw_pole(row, column);
+                let point = native_net_point(raw)?;
+                Some(([point.x, point.y, point.z], raw.w))
+            };
+            let (mut extrusion_mm, max_residual_mm) =
+                certify_affine_sweep(profile_count, &coordinates, pole, 1.0e-7)?;
+            let profile_column = if swapped { sweep_count - 1 } else { 0 };
+            if swapped {
+                extrusion_mm = extrusion_mm.map(|component| -component);
             }
-            profile_points.push([p0.x, p0.y, p0.z]);
-            profile_weights.push(first.w);
-        }
-        let normalized_weights = native_spline_weights(&profile_weights)?;
-        let weights = normalized_weights
-            .iter()
-            .any(|weight| (weight - 1.0).abs() > 1.0e-12)
-            .then_some(normalized_weights);
-        let delta = sweep?;
-        Some(SplineExtrusionSupport {
-            profile: brep::BSplineSupport {
-                degree: profile_degree,
-                control_points_mm: profile_points,
-                knots: profile_knots.iter().copied().collect(),
-                weights,
-            },
-            extrusion_mm: [delta.x, delta.y, delta.z],
-            max_residual_mm,
+            let (control_points_mm, profile_weights): (Vec<_>, Vec<_>) = (0..profile_count)
+                .map(|row| pole(row, profile_column))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .unzip();
+            let normalized_weights = native_spline_weights(&profile_weights)?;
+            let weights = normalized_weights
+                .iter()
+                .any(|weight| weight.to_bits() != 1.0_f64.to_bits())
+                .then_some(normalized_weights);
+            Some(SplineExtrusionSupport {
+                profile: brep::BSplineSupport {
+                    degree: profile_degree,
+                    control_points_mm,
+                    knots: profile_knots,
+                    weights,
+                },
+                extrusion_mm,
+                max_residual_mm,
+            })
         })
     }
 
@@ -1638,6 +1636,9 @@ mod monstertruck_adapter {
             }
         }
     }
+
+    #[cfg(test)]
+    mod affine_tests;
 
     #[cfg(test)]
     mod tests {
