@@ -353,14 +353,14 @@ impl Frame {
         // A strict common angular direction for all control vectors and
         // derivative controls proves azimuth monotonicity on the full cubic.
         let derivatives = std::array::from_fn::<_, 3, _>(|i| radial[i + 1] - radial[i]);
-        let scale = radial.iter().map(|p| p.norm()).fold(1.0_f64, f64::max);
+        let scale = radial.iter().map(Vector3::norm).fold(1.0_f64, f64::max);
         let margin = 128.0 * f64::EPSILON * scale * scale;
         let (middle, _) = self.direction(start.midpoint(end));
         radial.iter().all(|r| {
             r.dot(&middle) > tolerance && {
                 derivatives
                     .iter()
-                    .all(|d| sign * self.first.axis.dot(&r.cross(&*d)) > margin)
+                    .all(|d| sign * self.first.axis.dot(&r.cross(d)) > margin)
             }
         })
     }

@@ -415,7 +415,7 @@ impl Frame {
                 let radial_dot = Range::from_values(
                     local
                         .iter()
-                        .flat_map(|(_, r)| derivative.iter().map(move |(_, dr)| r.dot(&*dr))),
+                        .flat_map(|(_, r)| derivative.iter().map(move |(_, dr)| r.dot(dr))),
                 );
                 let progress = rho.mul(q).mul(dz).add(z.mul(radial_dot).neg());
                 branch.strict_sign(positive) && progress.strict_sign(forward)
@@ -429,7 +429,7 @@ impl Frame {
                 let progress = Range::from_values(local.iter().flat_map(|(_, r)| {
                     derivative
                         .iter()
-                        .map(move |(_, dr)| self.axis.dot(&r.cross(&*dr)))
+                        .map(move |(_, dr)| self.axis.dot(&r.cross(dr)))
                 }));
                 branch.strict_sign(positive) && progress.strict_sign(forward)
             }

@@ -23,7 +23,7 @@ pub use face_normal::FaceNormal;
 
 /// Truncate coordinates to signed grid indices, rejecting nonfinite or overflowing values.
 #[cfg(any(feature = "filters", all(feature = "vtk", not(target_arch = "wasm32"))))]
-pub(crate) fn checked_grid_coordinates<const N: usize>(coordinates: [f64; N]) -> Option<[i64; N]> {
+pub fn checked_grid_coordinates<const N: usize>(coordinates: [f64; N]) -> Option<[i64; N]> {
     use num_traits::ToPrimitive as _;
     let mut result = [0; N];
     for (out, value) in result.iter_mut().zip(coordinates) {

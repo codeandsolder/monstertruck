@@ -64,12 +64,12 @@ fn fit_sphere(points: &[Point3], ids: &[usize]) -> Option<SphereSeed> {
         .iter()
         .map(|&id| points[id] - origin)
         .collect::<Vec<_>>();
-    let scale = local.iter().map(|p| p.norm()).fold(0.0_f64, f64::max);
+    let scale = local.iter().map(Vector3::norm).fold(0.0_f64, f64::max);
     if scale <= 0.0 || !scale.is_finite() {
         return None;
     }
     let local = local.into_iter().map(|p| p / scale).collect::<Vec<_>>();
-    let mean_squared = local.iter().map(|p| p.norm_squared()).sum::<f64>() / count;
+    let mean_squared = local.iter().map(Vector3::norm_squared).sum::<f64>() / count;
     let rhs = local
         .iter()
         .map(|p| 0.5 * (p.norm_squared() - mean_squared))

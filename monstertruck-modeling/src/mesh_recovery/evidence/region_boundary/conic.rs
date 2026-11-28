@@ -102,14 +102,14 @@ impl ContactConicEvidence {
         else {
             return Vec::new();
         };
-        let cross = first_axis.cross(&*second_axis);
+        let cross = first_axis.cross(second_axis);
         let denominator = cross.norm_squared();
         if denominator <= 64.0 * f64::EPSILON {
             return Vec::new();
         }
         let delta = second_origin - first_origin;
-        let first_axial = delta.cross(&*second_axis).dot(&cross) / denominator;
-        let second_axial = delta.cross(&*first_axis).dot(&cross) / denominator;
+        let first_axial = delta.cross(second_axis).dot(&cross) / denominator;
+        let second_axial = delta.cross(first_axis).dot(&cross) / denominator;
         let left = first_origin + first_axis * first_axial;
         let right = second_origin + second_axis * second_axial;
         let radius = first_slope.mul_add(first_axial, *first_radius);
