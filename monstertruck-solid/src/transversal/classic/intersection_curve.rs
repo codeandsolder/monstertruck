@@ -843,7 +843,11 @@ where
                 .or_else(|| ic.surface1().search_nearest_parameter(point, None, 100))?;
             let q0 = ic.surface0().evaluate(p0.0, p0.1);
             let q1 = ic.surface1().evaluate(p1.0, p1.1);
-            Some((q0.midpoint(q1), p0.into(), p1.into()))
+            Some((
+                q0.midpoint(q1),
+                Point2::new(p0.0, p0.1),
+                Point2::new(p1.0, p1.1),
+            ))
         })
     };
     // The original rescanning algorithm discarded the exact UV solution at

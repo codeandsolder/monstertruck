@@ -28,12 +28,12 @@ where
 {
     let hint = hint.map(|uv| (uv.x, uv.y));
     if let Some(parameter) = surface.search_parameter(point, hint, 100) {
-        return Some(parameter.into());
+        return Some(Point2::new(parameter.0, parameter.1));
     }
 
     let accept_nearest = |parameter: (f64, f64)| {
         let projected = surface.evaluate(parameter.0, parameter.1);
-        (projected.distance2(point).sqrt() <= tol).then(|| parameter.into())
+        (projected.distance2(point).sqrt() <= tol).then(|| Point2::new(parameter.0, parameter.1))
     };
 
     if let Some(parameter) = surface.search_nearest_parameter(point, hint, 100)
@@ -44,7 +44,7 @@ where
 
     if hint.is_some() {
         if let Some(parameter) = surface.search_parameter(point, None, 100) {
-            return Some(parameter.into());
+            return Some(Point2::new(parameter.0, parameter.1));
         }
         if let Some(parameter) = surface.search_nearest_parameter(point, None, 100)
             && let Some(parameter) = accept_nearest(parameter)

@@ -31,7 +31,7 @@ fn nurbs_sphere() {
         for j in 0..=10 {
             let u = f64::from(i) / N as f64;
             let v = f64::from(j) / N as f64;
-            let p = surface.evaluate(u, v).to_vec();
+            let p = surface.evaluate(u, v).coords;
             assert_near!(p.norm(), 1.0);
             let uder = surface.derivative_u(u, v);
             assert!(p.dot(&uder).so_small());

@@ -244,7 +244,7 @@ pub struct RenderObject {
 }
 
 /// setting of camera
-#[derive(Clone, Copy, Debug, PartialEq, derive_more::From)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ProjectionMethod {
     /// perspective projection
     Perspective {

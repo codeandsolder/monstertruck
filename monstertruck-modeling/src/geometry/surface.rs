@@ -12,7 +12,7 @@ use super::{
     ToSameGeometry, Tolerance, Torus, Transformed, TryIntoAnalyticSurfaceKind,
     TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
 };
-use crate::SquareLinearMap;
+use monstertruck_core::math::{Rotation3, Unit};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::analytic_carrier::{
     AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,

@@ -58,7 +58,7 @@ proptest! {
         prop_assert_near!(bsp.back(), arc.back());
         for i in 0..=10 {
             let t = f64::from(i) / 10.0;
-            let p = bsp.evaluate(t).to_vec();
+            let p = bsp.evaluate(t).coords;
             let der = bsp.derivative(t);
             prop_assert_near!(p.norm_squared(), 1.0);
             prop_assert!(der.dot(&p).so_small());

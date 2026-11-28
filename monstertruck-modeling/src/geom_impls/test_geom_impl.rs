@@ -7,6 +7,7 @@ use super::*;
 use crate::{
     BoundedCurve, KERNEL_EPSILON, MetricSpace, ParametricCurve, Tolerance, prop_assert_near,
 };
+use monstertruck_core::math::Unit;
 use proptest::*;
 
 fn pole_to_normal(pole: [f64; 2]) -> Vector3 {

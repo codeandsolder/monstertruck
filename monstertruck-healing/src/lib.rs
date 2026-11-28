@@ -669,8 +669,10 @@ where
                 .or_else(|| surface.search_parameter(point, None, 100))
                 .or_else(|| surface.search_nearest_parameter(point, hint, 100))
                 .or_else(|| surface.search_nearest_parameter(point, None, 100))
-                .map(Point2::from)
-                .and_then(|uv| normalize_surface_parameter(surface, uv, hint.map(Point2::from)))
+                .map(|(u, v)| Point2::new(u, v))
+                .and_then(|uv| {
+                    normalize_surface_parameter(surface, uv, hint.map(|(u, v)| Point2::new(u, v)))
+                })
         };
         let points = edge
             .curve
@@ -732,8 +734,10 @@ where
             .or_else(|| surface.search_parameter(point, None, 100))
             .or_else(|| surface.search_nearest_parameter(point, hint, 100))
             .or_else(|| surface.search_nearest_parameter(point, None, 100))
-            .map(Point2::from)
-            .and_then(|uv| normalize_surface_parameter(surface, uv, hint.map(Point2::from)))
+            .map(|(u, v)| Point2::new(u, v))
+            .and_then(|uv| {
+                normalize_surface_parameter(surface, uv, hint.map(|(u, v)| Point2::new(u, v)))
+            })
     };
     let Some(uv0) = point_to_uv(edge.curve.front(), None) else {
         if debug_reattach {

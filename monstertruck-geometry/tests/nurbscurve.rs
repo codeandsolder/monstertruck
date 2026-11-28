@@ -14,7 +14,7 @@ fn nurbs_circle() {
     const N: usize = 10;
     for i in 0..=N {
         let t = i as f64 / N as f64;
-        let p = curve.evaluate(t).to_vec();
+        let p = curve.evaluate(t).coords;
         assert_near!(p.norm(), 1.0);
         let der = curve.derivative(t);
         assert!(p.dot(&der).so_small());

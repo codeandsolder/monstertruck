@@ -23,7 +23,7 @@ impl ParametricCurve for Segment {
     type Vector = Vector3;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         match n {
-            0 => self.evaluate(t).to_vec(),
+            0 => self.evaluate(t).coords,
             1 => self.derivative(t),
             _ => Vector3::zero(),
         }

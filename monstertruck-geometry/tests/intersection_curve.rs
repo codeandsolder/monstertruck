@@ -38,7 +38,7 @@ proptest! {
         let z = f64::midpoint(1.0, f64::sqrt(3.0));
         let lead_circle = Processor::with_transform(
             UnitCircle::<Point3>::new(),
-            Matrix4::new_translation(&z * Vector3::z()),
+            Matrix4::new_translation(&(z * Vector3::z())),
         );
         let curve = IntersectionCurve::new(cylinder0, cylinder1, lead_circle);
 
