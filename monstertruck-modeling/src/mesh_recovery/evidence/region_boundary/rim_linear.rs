@@ -1,7 +1,7 @@
 //! Locally grow affine radial profiles from independently observed source
 //! circles, including irregular end trims and zero-radius cone tips.
 
-use super::super::super::sample_fit::normal_basis;
+use super::super::super::{carrier_identity::append_distinct_proposals, sample_fit::normal_basis};
 use super::super::{SourceCircleObservation, StationLinearCandidate};
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
@@ -380,12 +380,11 @@ impl<'a> LocalGrowth<'a> {
         })
     }
 
-    fn proposal(
+    fn seed_profile(
         &self,
-        index: &RegionBoundaryIndex<'a>,
         circle: &SourceCircleObservation,
         seed: usize,
-    ) -> Option<SurfaceRegionProposal<'a>> {
+    ) -> Option<(Profile, usize, f64)> {
         let mut profile = Profile {
             origin: circle.center,
             axis: circle.normal,
@@ -408,6 +407,16 @@ impl<'a> LocalGrowth<'a> {
             return None;
         }
         profile.slope = (radial.magnitude() - circle.radius) / z;
+        Some((profile, slope_sample, tolerance))
+    }
+
+    fn proposal(
+        &self,
+        index: &RegionBoundaryIndex<'a>,
+        circle: &SourceCircleObservation,
+        seed: usize,
+        (profile, slope_sample, tolerance): (Profile, usize, f64),
+    ) -> Option<SurfaceRegionProposal<'a>> {
         let supports = self.grow(profile, seed, tolerance);
         if supports.len() < 2 {
             return None;
@@ -689,22 +698,47 @@ impl<'a> RegionBoundaryIndex<'a> {
         let Some(growth) = LocalGrowth::new(self, options) else {
             return Vec::new();
         };
-        let mut proposals = Vec::new();
-        let mut seen = BTreeSet::new();
+        let Some(&reference) = self.evidence.positions.first() else {
+            return Vec::new();
+        };
+        let extent = self
+            .evidence
+            .positions
+            .iter()
+            .map(|&point| (point - reference).magnitude())
+            .fold(0.0_f64, f64::max);
+        let identity_tolerance = options.absolute_tolerance.min(crate::KERNEL_EPSILON * 0.1);
+        let mut candidates = Vec::new();
         for circle in circles {
-            let mut completed = BTreeSet::new();
+            let mut completed = Vec::<(f64, Vec<usize>)>::new();
+            // The same circle fixes all parameters except slope. Bound
+            // profile differences over the entire possible growth domain,
+            // not just the seed support, before skipping another seed.
+            let axial_extent = (reference - circle.center).dot(circle.normal).abs() + extent;
             for seed in growth.seeds(circle) {
-                if completed.contains(&seed) {
+                let Some(parameters) = growth.seed_profile(circle, seed) else {
+                    continue;
+                };
+                let slope = parameters.0.slope;
+                if completed.iter().any(|(previous, supports)| {
+                    supports.binary_search(&seed).is_ok()
+                        && (previous - slope).abs() * axial_extent <= identity_tolerance
+                }) {
                     continue;
                 }
-                if let Some(proposal) = growth.proposal(self, circle, seed) {
-                    completed.extend(proposal.supports().iter().copied());
-                    if seen.insert(proposal.supports().to_vec()) {
-                        proposals.push(proposal);
-                    }
+                if let Some(proposal) = growth.proposal(self, circle, seed, parameters) {
+                    completed.push((slope, proposal.supports().to_vec()));
+                    candidates.push(proposal);
                 }
             }
         }
+        let mut proposals = Vec::new();
+        append_distinct_proposals(
+            self.evidence,
+            candidates,
+            identity_tolerance,
+            &mut proposals,
+        );
         proposals
     }
 }

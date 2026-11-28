@@ -3,6 +3,7 @@
 //! ownership at one junction changes the shared trim constraints on all
 //! incident regions. Neither alternative changes original source ownership.
 
+use super::carrier_alternatives::CarrierAlternatives;
 use super::{
     AnalyticRecoveryError, AnalyticRecoveryOptions, MeshEvidence, NativeTrimGraph,
     RegionBoundaryIndex, SelectedSurfaceProposal, SurfaceCarrier, SurfaceRegionPartition,
@@ -218,6 +219,8 @@ pub(super) struct NativeSelection {
     pub assembly: super::NativeAssembly,
     pub compared_neighborhoods: usize,
     pub expanded_neighborhoods: usize,
+    pub carrier_trials: usize,
+    pub carrier_acceptances: usize,
     pub ownership: Option<OwnershipTrial>,
     pub ownership_rejection: Option<super::JointFitAttempt>,
     pub pending_ownership: Option<super::NativeAssembly>,
@@ -240,12 +243,18 @@ struct RawDecision {
 /// allowing new native failures or invalidating previously successful supports.
 pub(super) fn select_native(
     evidence: &MeshEvidence,
-    core: PartitionAlternative,
-    expanded: PartitionAlternative,
+    mut core: PartitionAlternative,
+    mut expanded: PartitionAlternative,
+    alternatives: &CarrierAlternatives,
     options: AnalyticRecoveryOptions,
 ) -> Result<NativeSelection, AnalyticRecoveryError> {
-    let core_assembly = assemble_native(evidence, core.partition.clone(), options)?;
-    let expanded_assembly = assemble_native(evidence, expanded.partition.clone(), options)?;
+    let mut core_assembly = assemble_native(evidence, core.partition.clone(), options)?;
+    let mut expanded_assembly = assemble_native(evidence, expanded.partition.clone(), options)?;
+    let core_trials = alternatives.repair(evidence, &mut core, &mut core_assembly, options)?;
+    let expanded_trials =
+        alternatives.repair(evidence, &mut expanded, &mut expanded_assembly, options)?;
+    let carrier_trials = core_trials.trials + expanded_trials.trials;
+    let carrier_acceptances = core_trials.accepted + expanded_trials.accepted;
     let decision = select_raw(
         evidence,
         &core,
@@ -277,6 +286,8 @@ pub(super) fn select_native(
                     assembly,
                     compared_neighborhoods: decision.compared_neighborhoods,
                     expanded_neighborhoods: decision.compared_neighborhoods,
+                    carrier_trials,
+                    carrier_acceptances,
                     ownership: Some(fit),
                     ownership_rejection: None,
                     pending_ownership: None,
@@ -298,10 +309,20 @@ pub(super) fn select_native(
         assembly,
         compared_neighborhoods: decision.compared_neighborhoods,
         expanded_neighborhoods: decision.expanded_neighborhoods,
+        carrier_trials,
+        carrier_acceptances,
         ownership: None,
         ownership_rejection,
         pending_ownership,
     })
+}
+
+pub(super) fn accept_repair(
+    evidence: &MeshEvidence,
+    baseline: &super::NativeAssembly,
+    candidate: &super::NativeAssembly,
+) -> Result<usize, super::JointFitRejection> {
+    ownership::accept(evidence, baseline, candidate)
 }
 
 fn select_raw(

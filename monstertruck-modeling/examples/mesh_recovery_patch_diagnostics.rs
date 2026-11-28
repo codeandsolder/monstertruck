@@ -770,7 +770,8 @@ fn main() -> Result<()> {
     }
     let mut arguments = args.collect::<Vec<_>>();
     let simplify = arguments.iter().any(|arg| arg == "--simplify-planar-fans");
-    arguments.retain(|arg| arg != "--simplify-planar-fans");
+    let carrier_trials = !arguments.iter().any(|arg| arg == "--no-carrier-trials");
+    arguments.retain(|arg| arg != "--simplify-planar-fans" && arg != "--no-carrier-trials");
     let mut args = arguments.into_iter();
     let read_budget = |arg: Option<std::ffi::OsString>| -> Result<f64> {
         arg.context("expected explicit approximation budget")?
@@ -799,11 +800,15 @@ fn main() -> Result<()> {
             && vertex >= 0.0
             && chord.is_finite()
             && chord > 0.0,
-        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans]; replay: --replay-supports MAX_POLYGONS ID,ID,..."
+        "usage: mesh_recovery_patch_diagnostics OBJ VERTEX_BUDGET CHORD_BUDGET [SHELL_JSON] [--release-conflicts|--resolve-crossings|--release-unresolved MAX_POLYGONS] [--simplify-planar-fans] [--no-carrier-trials]; replay: --replay-supports MAX_POLYGONS ID,ID,..."
     );
     let start = Instant::now();
     let mesh = obj::read(BufReader::new(File::open(&path)?))?;
-    let recovery = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+    let mut options = AnalyticRecoveryOptions::default();
+    if !carrier_trials {
+        options.max_carrier_trials = 0;
+    }
+    let recovery = recover_analytic_mesh(&mesh, options)?;
     let recovery_seconds = start.elapsed().as_secs_f64();
     let budget = SurfaceRegionBudget { vertex, chord };
     let report = match mode {
@@ -832,7 +837,7 @@ fn main() -> Result<()> {
     };
     println!(
         "{}",
-        json!({"source":path,"recovery_seconds":recovery_seconds,"vertex_budget":budget.vertex,"chord_budget":budget.chord,"hybrid":report})
+        json!({"source":path,"recovery_seconds":recovery_seconds,"carrier_alternative_trials":recovery.discovery.carrier_alternative_trials,"carrier_alternative_acceptances":recovery.discovery.carrier_alternative_acceptances,"vertex_budget":budget.vertex,"chord_budget":budget.chord,"hybrid":report})
     );
     Ok(())
 }

@@ -362,16 +362,14 @@ impl<'a> RegionBoundaryIndex<'a> {
         let parent_by_support = planar_parents(self.evidence, planar_baseline)
             .ok_or(RegionBoundaryError::InvalidEvidence)?;
         let count = self.evidence.planar_supports.len();
-        let mut by_support = vec![Vec::new(); count];
-        for (id, proposal) in proposals.iter().enumerate() {
+        for proposal in proposals {
             if !std::ptr::eq(proposal.evidence, self.evidence) {
                 return Err(RegionBoundaryError::InvalidEvidence);
             }
             for &support in &proposal.supports {
-                by_support
-                    .get_mut(support)
-                    .ok_or(RegionBoundaryError::InvalidSupport(support))?
-                    .push(id);
+                if support >= count {
+                    return Err(RegionBoundaryError::InvalidSupport(support));
+                }
             }
         }
         let mut order = (0..proposals.len()).collect::<Vec<_>>();
@@ -391,6 +389,19 @@ impl<'a> RegionBoundaryIndex<'a> {
                 })
                 .then(a.cmp(&b))
         });
+        // Ownership optimization depends on membership and independent
+        // profile evidence, not on the number of geometrically distinct
+        // carriers on that membership. The highest-ranked representative
+        // dominates the identical conflicts and score of other variants.
+        // Keep their original proposal IDs available to native feedback.
+        let mut represented = std::collections::BTreeSet::new();
+        order.retain(|&id| represented.insert(proposals[id].supports.as_slice()));
+        let mut by_support = vec![Vec::new(); count];
+        for &id in &order {
+            for &support in &proposals[id].supports {
+                by_support[support].push(id);
+            }
+        }
         let mut components = overlap_components(proposals, &by_support, &order);
         let mut selected = Vec::new();
         let mut exact_components = 0;
