@@ -9,7 +9,10 @@ use super::{
     measure_circular_meridian,
 };
 use crate::{InnerSpace, Point3, Vector3};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    ops::Range,
+};
 
 /// Projected sample and fitting budgets, in original mesh units.
 #[derive(Clone, Copy, Debug)]
@@ -56,8 +59,8 @@ pub struct MeridianStation {
     pub axial: f64,
     /// Mean distance from the index axis.
     pub radius: f64,
-    /// Canonical original source-position IDs, never synthetic points.
-    pub vertices: Vec<usize>,
+    // Range into one graph-wide contiguous original vertex list.
+    vertices: Range<usize>,
     /// Observed nonparallel azimuth displacement, in length units.
     pub transverse_span: f64,
 }
@@ -128,8 +131,8 @@ pub struct StationMeridianDiscovery {
     pub candidates: Vec<StationMeridianCandidate>,
 }
 
-struct SupportSamples {
-    vertices: Vec<usize>,
+struct SupportSamples<'a> {
+    vertices: &'a [usize],
     stations: Vec<usize>,
 }
 
@@ -146,8 +149,9 @@ pub struct MeridianStationGraph<'a> {
     samples: Vec<(f64, f64)>,
     stations: Vec<MeridianStation>,
     station_by_vertex: Vec<usize>,
+    station_vertices: Vec<usize>,
     transitions: Vec<MeridianTransition>,
-    supports: Vec<SupportSamples>,
+    supports: Vec<SupportSamples<'a>>,
     supports_by_station: Vec<Vec<usize>>,
     adjacency: Vec<Vec<usize>>,
 }
@@ -215,7 +219,8 @@ impl<'a> MeridianStationGraph<'a> {
         {
             return Some((count, None));
         }
-        let (stations, station_by_vertex) = index_stations(evidence, origin, axis, clusters);
+        let (stations, station_by_vertex, station_vertices) =
+            index_stations(evidence, origin, axis, clusters);
         if skip_unsampled
             && stations
                 .iter()
@@ -245,6 +250,7 @@ impl<'a> MeridianStationGraph<'a> {
                 samples,
                 stations,
                 station_by_vertex,
+                station_vertices,
                 transitions,
                 supports,
                 supports_by_station,
@@ -256,6 +262,13 @@ impl<'a> MeridianStationGraph<'a> {
     /// All source stations, including unresolved singleton observations.
     #[must_use = "stations include their original source vertices"]
     pub fn stations(&self) -> &[MeridianStation] { &self.stations }
+
+    /// Original canonical vertex IDs within the requested station.
+    #[must_use = "the returned samples preserve source provenance"]
+    pub fn station_vertices(&self, id: usize) -> Option<&[usize]> {
+        self.station_vertices
+            .get(self.stations.get(id)?.vertices.clone())
+    }
 
     /// Observed two-station intervals, including intervals without redundancy.
     #[must_use = "transition evidence must be retained"]
@@ -284,17 +297,11 @@ impl<'a> MeridianStationGraph<'a> {
                 let Some(vertices) = self.evidence.source_polygon_vertices(polygon) else {
                     continue;
                 };
-                let mut stations = vertices
-                    .iter()
-                    .map(|&vertex| self.station_by_vertex[vertex])
-                    .collect::<Vec<_>>();
-                stations.sort_unstable();
-                stations.dedup();
-                if let [a, b] = stations.as_slice()
-                    && station_is_sampled(&self.stations[*a], self.options.station_resolution)
-                    && station_is_sampled(&self.stations[*b], self.options.station_resolution)
+                if let Some([a, b]) = two_station_ids(vertices, &self.station_by_vertex)
+                    && station_is_sampled(&self.stations[a], self.options.station_resolution)
+                    && station_is_sampled(&self.stations[b], self.options.station_resolution)
                 {
-                    pairs.entry([*a, *b]).or_default().push((id, polygon));
+                    pairs.entry([a, b]).or_default().push((id, polygon));
                 }
             }
         }
@@ -849,7 +856,7 @@ impl<'a> MeridianStationGraph<'a> {
         let mut min_r = f64::INFINITY;
         let mut max_error = 0.0_f64;
         for &id in &supports {
-            for &vertex in &self.supports[id].vertices {
+            for &vertex in self.supports[id].vertices {
                 let (z, r) = self.samples[vertex];
                 min_z = min_z.min(z);
                 max_z = max_z.max(z);
@@ -928,64 +935,88 @@ impl Profile {
     }
 }
 
+// A mixed support polygon must occupy exactly two distinct stations.
+// Stop as soon as a third occurs; no per-polygon allocation or sorting.
+fn two_station_ids(vertices: &[usize], by_vertex: &[usize]) -> Option<[usize; 2]> {
+    let a = by_vertex[*vertices.first()?];
+    let mut b = None;
+    for &vertex in &vertices[1..] {
+        let id = by_vertex[vertex];
+        if id == a {
+            continue;
+        }
+        if b.is_some_and(|previous| previous != id) {
+            return None;
+        }
+        b = Some(id);
+    }
+    let b = b?;
+    Some([a.min(b), a.max(b)])
+}
+
 fn index_stations(
     evidence: &MeshEvidence,
     origin: Point3,
     axis: Vector3,
     clusters: MeridianClusters,
-) -> (Vec<MeridianStation>, Vec<usize>) {
+) -> (Vec<MeridianStation>, Vec<usize>, Vec<usize>) {
     let mut by_vertex = vec![0; evidence.positions.len()];
     let stations = clusters
         .clusters
         .into_iter()
         .enumerate()
         .map(|(id, cluster)| {
-            let members = &clusters.order[cluster.members];
-            let first = evidence.positions[members[0]] - origin;
-            let transverse = first - axis * first.dot(axis);
-            let length = transverse.magnitude();
+            let members = &clusters.order[cluster.members.clone()];
+            // Singleton clusters have exactly zero observed transverse span.
+            // Avoid repeating the cross product of a vector with itself.
             let mut span = 0.0_f64;
+            if members.len() > 1 {
+                let first = evidence.positions[members[0]] - origin;
+                let transverse = first - axis * first.dot(axis);
+                let length = transverse.magnitude();
+                if length > 0.0 {
+                    let direction = transverse / length;
+                    for &vertex in members {
+                        let delta = evidence.positions[vertex] - origin;
+                        span = span.max(
+                            (delta - axis * delta.dot(axis))
+                                .cross(direction)
+                                .magnitude(),
+                        );
+                    }
+                }
+            }
             for &vertex in members {
                 by_vertex[vertex] = id;
-                let delta = evidence.positions[vertex] - origin;
-                if length > 0.0 {
-                    span = span.max(
-                        (delta - axis * delta.dot(axis))
-                            .cross(transverse / length)
-                            .magnitude(),
-                    );
-                }
             }
             MeridianStation {
                 axial: cluster.center.0,
                 radius: cluster.center.1,
-                vertices: members.to_vec(),
+                vertices: cluster.members,
                 transverse_span: span,
             }
         })
         .collect();
-    (stations, by_vertex)
+    (stations, by_vertex, clusters.order)
 }
 
-fn index_supports(
-    evidence: &MeshEvidence,
+fn index_supports<'a>(
+    evidence: &'a MeshEvidence,
     by_vertex: &[usize],
     station_count: usize,
-) -> Option<(Vec<SupportSamples>, Vec<Vec<usize>>)> {
+) -> Option<(Vec<SupportSamples<'a>>, Vec<Vec<usize>>)> {
     let mut by_station = vec![Vec::new(); station_count];
     let mut supports = Vec::with_capacity(evidence.planar_supports.len());
     for (id, support) in evidence.planar_supports.iter().enumerate() {
-        let mut vertices = Vec::new();
-        for &polygon in &support.source_face_indices {
-            vertices.extend_from_slice(evidence.source_polygon_vertices(polygon)?);
-        }
-        vertices.sort_unstable();
-        vertices.dedup();
-        let mut stations = vertices.iter().map(|&v| by_vertex[v]).collect::<Vec<_>>();
+        let vertices = support.source_vertices();
+        let mut stations = vertices
+            .iter()
+            .map(|&v| by_vertex.get(v).copied())
+            .collect::<Option<Vec<_>>>()?;
         stations.sort_unstable();
         stations.dedup();
         for &station in &stations {
-            by_station[station].push(id);
+            by_station.get_mut(station)?.push(id);
         }
         supports.push(SupportSamples { vertices, stations });
     }
@@ -995,7 +1026,7 @@ fn index_supports(
 fn build_transitions(
     evidence: &MeshEvidence,
     stations: &[MeridianStation],
-    supports: &[SupportSamples],
+    supports: &[SupportSamples<'_>],
     options: MeridianGraphOptions,
 ) -> Vec<MeridianTransition> {
     let mut pairs = BTreeMap::<[usize; 2], Vec<usize>>::new();

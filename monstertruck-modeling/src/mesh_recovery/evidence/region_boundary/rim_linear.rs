@@ -197,25 +197,14 @@ pub(in crate::mesh_recovery) struct RimLinearOptions {
 
 struct LocalGrowth<'a> {
     evidence: &'a MeshEvidence,
-    support_vertices: Vec<Vec<usize>>,
     // Source edges incident to a vertex, with their original support uses.
     ring_edges: Vec<Vec<(usize, usize)>>,
     options: RimLinearOptions,
 }
 
 impl<'a> LocalGrowth<'a> {
-    fn new(index: &RegionBoundaryIndex<'a>, options: RimLinearOptions) -> Option<Self> {
+    fn new(index: &RegionBoundaryIndex<'a>, options: RimLinearOptions) -> Self {
         let evidence = index.evidence;
-        let mut support_vertices = Vec::with_capacity(evidence.planar_supports.len());
-        for support in &evidence.planar_supports {
-            let mut vertices = Vec::new();
-            for &polygon in &support.source_face_indices {
-                vertices.extend_from_slice(evidence.source_polygon_vertices(polygon)?);
-            }
-            vertices.sort_unstable();
-            vertices.dedup();
-            support_vertices.push(vertices);
-        }
         let mut ring_edges = vec![Vec::new(); evidence.positions.len()];
         for (&[a, b], uses) in &index.incidence {
             if uses.len() > 2 || (uses.len() == 2 && uses[0].1 == uses[1].1) {
@@ -227,12 +216,11 @@ impl<'a> LocalGrowth<'a> {
                 ring_edges[b].push((a, support));
             }
         }
-        Some(Self {
+        Self {
             evidence,
-            support_vertices,
             ring_edges,
             options,
-        })
+        }
     }
 
     fn seeds(&self, circle: &SourceCircleObservation) -> BTreeSet<usize> {
@@ -249,7 +237,7 @@ impl<'a> LocalGrowth<'a> {
 
     fn orientation(&self, profile: Profile, id: usize, tolerance: f64) -> Option<bool> {
         let support = &self.evidence.planar_supports[id];
-        let ids = &self.support_vertices[id];
+        let ids = support.source_vertices();
         let mut low = f64::INFINITY;
         let mut high = f64::NEG_INFINITY;
         for &vertex in ids {
@@ -335,7 +323,7 @@ impl<'a> LocalGrowth<'a> {
     // The placed profile is fixed independently; its affine generator
     // bounds every convex combination of the original vertices.
     fn unresolved_ruling(&self, profile: Profile, support: usize, tolerance: f64) -> bool {
-        let ids = &self.support_vertices[support];
+        let ids = self.evidence.planar_supports[support].source_vertices();
         let tolerance = tolerance.min(crate::KERNEL_EPSILON);
         let Some((_, radial)) = ids
             .iter()
@@ -428,25 +416,29 @@ impl<'a> LocalGrowth<'a> {
     // at the same azimuth (or the independently fitted cone apex).
     fn has_ruling(&self, profile: Profile, supports: &[usize], tolerance: f64) -> bool {
         supports.iter().any(|&support| {
-            self.support_vertices[support].iter().any(|&id| {
-                self.ring_edges[id].iter().any(|&(other, owner)| {
-                    if owner != support || id >= other {
-                        return false;
-                    }
-                    let (za, va) = profile.sample(self.evidence.positions[id]);
-                    let (zb, vb) = profile.sample(self.evidence.positions[other]);
-                    if (za - zb).abs() <= tolerance {
-                        return false;
-                    }
-                    let ra = va.magnitude();
-                    let rb = vb.magnitude();
-                    if ra.min(rb) <= tolerance {
-                        return profile.expected(if ra < rb { za } else { zb }).abs() <= tolerance;
-                    }
-                    // Test azimuth in length units at the larger radius.
-                    (va / ra - vb / rb).magnitude() * ra.max(rb) <= tolerance
+            self.evidence.planar_supports[support]
+                .source_vertices()
+                .iter()
+                .any(|&id| {
+                    self.ring_edges[id].iter().any(|&(other, owner)| {
+                        if owner != support || id >= other {
+                            return false;
+                        }
+                        let (za, va) = profile.sample(self.evidence.positions[id]);
+                        let (zb, vb) = profile.sample(self.evidence.positions[other]);
+                        if (za - zb).abs() <= tolerance {
+                            return false;
+                        }
+                        let ra = va.magnitude();
+                        let rb = vb.magnitude();
+                        if ra.min(rb) <= tolerance {
+                            return profile.expected(if ra < rb { za } else { zb }).abs()
+                                <= tolerance;
+                        }
+                        // Test azimuth in length units at the larger radius.
+                        (va / ra - vb / rb).magnitude() * ra.max(rb) <= tolerance
+                    })
                 })
-            })
         })
     }
 
@@ -465,13 +457,16 @@ impl<'a> LocalGrowth<'a> {
             .options
             .absolute_tolerance
             .min(self.options.relative_tolerance * circle.radius);
-        let &slope_sample = self.support_vertices[seed].iter().max_by(|&&a, &&b| {
-            profile
-                .sample(self.evidence.positions[a])
-                .0
-                .abs()
-                .total_cmp(&profile.sample(self.evidence.positions[b]).0.abs())
-        })?;
+        let &slope_sample = self.evidence.planar_supports[seed]
+            .source_vertices()
+            .iter()
+            .max_by(|&&a, &&b| {
+                profile
+                    .sample(self.evidence.positions[a])
+                    .0
+                    .abs()
+                    .total_cmp(&profile.sample(self.evidence.positions[b]).0.abs())
+            })?;
         let (z, radial) = profile.sample(self.evidence.positions[slope_sample]);
         if z.abs() <= tolerance {
             return None;
@@ -502,7 +497,12 @@ impl<'a> LocalGrowth<'a> {
         }
         let ids = supports
             .iter()
-            .flat_map(|&id| self.support_vertices[id].iter().copied())
+            .flat_map(|&id| {
+                self.evidence.planar_supports[id]
+                    .source_vertices()
+                    .iter()
+                    .copied()
+            })
             .collect::<BTreeSet<_>>();
         // The sampled circle must occur as a connected source arc inside
         // this carrier's ownership, including legitimate interior sections.
@@ -716,9 +716,7 @@ impl<'a> RegionBoundaryIndex<'a> {
         if candidates.is_empty() {
             return Vec::new();
         }
-        let Some(growth) = LocalGrowth::new(self, options) else {
-            return Vec::new();
-        };
+        let growth = LocalGrowth::new(self, options);
         candidates
             .iter()
             .filter_map(|candidate| {
@@ -727,7 +725,7 @@ impl<'a> RegionBoundaryIndex<'a> {
                 let (low, high, radius) = candidate
                     .supports
                     .iter()
-                    .flat_map(|&id| &growth.support_vertices[id])
+                    .flat_map(|&id| growth.evidence.planar_supports[id].source_vertices())
                     .map(|&id| profile.sample(self.evidence.positions[id]))
                     .fold(
                         (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY),
@@ -765,9 +763,7 @@ impl<'a> RegionBoundaryIndex<'a> {
         circles: &[SourceCircleObservation],
         options: RimLinearOptions,
     ) -> Vec<SurfaceRegionProposal<'a>> {
-        let Some(growth) = LocalGrowth::new(self, options) else {
-            return Vec::new();
-        };
+        let growth = LocalGrowth::new(self, options);
         let Some(&reference) = self.evidence.positions.first() else {
             return Vec::new();
         };
@@ -1102,7 +1098,7 @@ mod tests {
             let mesh = cone_with_ruling_sliver(offset)?;
             let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
             let index = RegionBoundaryIndex::new(&evidence)?;
-            let growth = LocalGrowth::new(&index, options()).ok_or("local growth")?;
+            let growth = LocalGrowth::new(&index, options());
             let profile = Profile {
                 origin: Point3::new(0.0, 0.0, 0.0),
                 axis: Vector3::new(0.0, 0.0, 1.0),
@@ -1241,7 +1237,7 @@ mod tests {
         assert!(axis.cross(Vector3::unit_z()).magnitude() < 1e-9);
         assert!((slope.abs() - 0.2).abs() < 1e-9);
         let profile = Profile::from_carrier(proposal.carrier()).ok_or("profile")?;
-        let growth = LocalGrowth::new(&index, options()).ok_or("growth")?;
+        let growth = LocalGrowth::new(&index, options());
         assert!(!growth.has_ruling(profile, proposal.supports(), 1e-8));
         Ok(())
     }
