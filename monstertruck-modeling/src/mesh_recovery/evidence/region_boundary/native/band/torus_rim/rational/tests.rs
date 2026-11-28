@@ -56,7 +56,7 @@ fn actual_curve_cycle_proves_backtracking_and_rejects_crossing() {
         [TAU, 1.0],
     ];
     let pieces = polygonal_rim(&simple).expect("regular chart pieces");
-    assert!(simplicity::cycle(frame(), &pieces).is_ok());
+    assert!(simplicity::cycle(frame(), &pieces, true).is_ok());
     // Proper crossing in the lifted chart, with the same total winding.
     let crossed = [
         [0.0, 1.0],
@@ -70,7 +70,16 @@ fn actual_curve_cycle_proves_backtracking_and_rejects_crossing() {
         [TAU, 1.0],
     ];
     let pieces = polygonal_rim(&crossed).expect("regular chart pieces");
-    assert!(simplicity::cycle(frame(), &pieces).is_err());
+    assert!(simplicity::cycle(frame(), &pieces, true).is_err());
+}
+
+#[test]
+fn contractible_crossing_reports_original_edge_pair() {
+    let crossed = [[0.2, 0.2], [0.8, 0.8], [0.2, 0.8], [0.8, 0.2], [0.2, 0.2]];
+    let pieces = polygonal_rim(&crossed).expect("regular chart pieces");
+    let pairs =
+        simplicity::cycle(frame(), &pieces, false).expect_err("non-simple contractible loop");
+    assert!(pairs.contains(&[0, 2]));
 }
 
 #[test]

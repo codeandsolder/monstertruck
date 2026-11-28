@@ -16,7 +16,7 @@ use std::{
     collections::BTreeMap,
     f64::consts::{PI, TAU},
 };
-mod rational;
+pub(super) mod rational;
 mod simplicity;
 
 #[derive(Clone, Copy, Debug)]
@@ -96,7 +96,7 @@ fn simple_cycle(paths: &[RimPath], resolution: f64) -> bool {
 // A full meridional winding requires a ring torus. An azimuthal
 // annulus may also occupy a regular positive-radius part of a horn or
 // spindle torus, provided the entire meridian interval excludes poles.
-fn regular_radial_band(
+pub(super) fn regular_radial_band(
     major: f64,
     minor: f64,
     varying: usize,
@@ -440,16 +440,7 @@ impl BandContext<'_> {
             extent,
             self.options.intersection_tolerance,
         ) || !self.covers_band(1 - ring.axis, lower, extent)
-            || !self.supports.iter().all(|&support| {
-                self.evidence.planar_supports[support]
-                    .source_face_indices
-                    .iter()
-                    .all(|&polygon| {
-                        self.evidence
-                            .source_polygon_vertices(polygon)
-                            .is_some_and(|ids| self.oriented_chart_polygon_area(ids).is_some())
-                    })
-            })
+            || !self.source_chart_positive()
         {
             obstacles.push(super::NativeChartObstacle::Coverage);
             return None;
@@ -462,7 +453,7 @@ impl BandContext<'_> {
     }
 }
 
-fn chart_obstacles(
+pub(super) fn chart_obstacles(
     error: rational::Rejection,
     sources: &[(usize, usize)],
 ) -> Vec<super::NativeChartObstacle> {

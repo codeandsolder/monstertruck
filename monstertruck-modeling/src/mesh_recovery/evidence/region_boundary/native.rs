@@ -1707,9 +1707,7 @@ mod tests {
         );
         Ok(())
     }
-    #[test]
-    fn spindle_band_at_meridian_extremum_has_regular_shared_chart_seams()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn spindle_band_fixture(holes: bool) -> Result<NativeTrimGraph, Box<dyn std::error::Error>> {
         let origin = Point3::new(41.4274, -8.2296, 3.8608);
         let major = 0.0762_f64;
         let minor = 0.1778_f64;
@@ -1728,6 +1726,9 @@ mod tests {
         let mut polygons = Vec::new();
         for j in 0..stations - 1 {
             for i in 0..n {
+                if holes && (2..4).contains(&j) && ((4..8).contains(&i) || (20..24).contains(&i)) {
+                    continue;
+                }
                 let [a, b, c, d] = [
                     j * n + i,
                     j * n + (i + 1) % n,
@@ -1754,13 +1755,24 @@ mod tests {
             radial_center: major,
             profile_radius: minor,
         };
-        let native = native_for_carrier(&evidence, &supports, carrier, 0.01)?;
+        native_for_carrier(&evidence, &supports, carrier, 0.01)
+    }
+
+    fn assert_spindle_band(holes: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let native = spindle_band_fixture(holes)?;
         assert_eq!(native.regions.len(), 1);
         let region = &native.regions[0];
         assert!(!region.requires_chart_cut);
         assert_eq!(region.chart_seams, 2);
         let faces = region.faces.as_ref().map_err(|err| *err)?;
         assert_eq!(faces.len(), 2);
+        assert_eq!(
+            faces
+                .iter()
+                .map(|face| face.boundaries().len())
+                .sum::<usize>(),
+            if holes { 4 } else { 2 }
+        );
         let shell = faces.iter().cloned().collect::<crate::Shell>();
         assert_eq!(
             shell.shell_condition(),
@@ -1768,6 +1780,18 @@ mod tests {
         );
         assert!(shell.is_geometric_consistent());
         Ok(())
+    }
+
+    #[test]
+    fn spindle_band_at_meridian_extremum_has_regular_shared_chart_seams()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_spindle_band(false)
+    }
+
+    #[test]
+    fn spindle_band_with_two_holes_preserves_all_boundary_wires()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_spindle_band(true)
     }
 
     #[test]

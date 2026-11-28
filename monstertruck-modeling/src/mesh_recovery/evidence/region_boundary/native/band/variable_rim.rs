@@ -306,10 +306,7 @@ impl BandContext<'_> {
         };
         let seams = seams.try_into().ok()?;
         commit_rings(changed, trims);
-        Some(BandPlan {
-            vertices: [a, b],
-            seams,
-        })
+        Some(BandPlan::unperforated([a, b], seams))
     }
     fn rim_cuts(&self, rim: &[Edge], proofs: &[RimEdge]) -> Option<[([f64; 2], Point3); 2]> {
         // Prefer existing native junctions with advancing azimuth on both
