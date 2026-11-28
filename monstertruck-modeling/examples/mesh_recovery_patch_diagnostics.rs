@@ -13,7 +13,6 @@ use monstertruck_modeling::mesh_recovery::{
     RegionPatchOptions, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionPartition,
     recover_analytic_mesh, recover_native_mesh,
 };
-use monstertruck_topology::shell::ShellCondition;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -541,7 +540,7 @@ fn export_shell(shell: Option<&Shell>, output: Option<&Path>) -> Result<bool> {
 fn refined_report(
     refined: &monstertruck_modeling::mesh_recovery::RefinedHybridRecovery,
     shell: Option<&Shell>,
-    planar_simplification: Value,
+    planar_simplification: &Value,
 ) -> Value {
     let pending_charts = pending_chart_diagnostics(refined);
     let result = &refined.recovery;
@@ -567,7 +566,7 @@ fn refined_result(
     let simplification = simplify_report(&mut refined.recovery, simplify);
     let shell = refined.recovery.complete_shell();
     (
-        refined_report(&refined, shell.as_ref(), simplification),
+        refined_report(&refined, shell.as_ref(), &simplification),
         shell,
     )
 }
@@ -678,7 +677,7 @@ fn component_report(part: &NativeComponentReport<'_>, simplify: bool) -> Value {
             let mut report = refined_report(
                 &search.refined,
                 part.shell,
-                simplification_report(part.simplification, simplify),
+                &simplification_report(part.simplification, simplify),
             );
             report["seed_supports"] = json!(search.seed_supports);
             report["released_polygons"] = json!(search.released_polygons);
