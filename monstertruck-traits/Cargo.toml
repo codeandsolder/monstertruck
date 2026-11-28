@@ -23,4 +23,3 @@ monstertruck-derive = { workspace = true, optional = true }
 getrandom = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }

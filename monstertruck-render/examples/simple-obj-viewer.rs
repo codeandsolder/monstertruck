@@ -29,7 +29,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 mod app;
-use app::{App, AppResult, ControlFlow, async_trait};
+use app::{App, AppResult, ControlFlow};
 
 const TEAPOT_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -152,7 +152,6 @@ impl MyApp {
     }
 }
 
-#[async_trait(?Send)]
 impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;

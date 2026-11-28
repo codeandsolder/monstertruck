@@ -71,8 +71,7 @@ cadmpeg-core = { version = "0.6", optional = true }
 cadmpeg-ir = { version = "0.6", features = ["examples"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
-image = { workspace = true }
-itertools = { workspace = true }
+image = { workspace = true, features = ["png"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
 # The `vtk` feature pulls in `vtkio` so the `step-to-mesh` example can emit
