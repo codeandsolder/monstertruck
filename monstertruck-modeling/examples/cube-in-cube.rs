@@ -1,6 +1,6 @@
 //! An example of the solid with several boundaries
 
-use monstertruck_modeling::{AffinePoint, Point3, Solid, Vector3, builder};
+use monstertruck_modeling::{Point3, Solid, Vector3, builder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v = builder::vertex(Point3::origin());

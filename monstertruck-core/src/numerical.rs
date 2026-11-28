@@ -6,7 +6,7 @@ pub type QrFactors<const N: usize> = (SMatrix<f64, N, N>, SMatrix<f64, N, N>);
 
 /// Factor a finite full-rank homogeneous transform into orthogonal and
 /// upper-triangular factors with positive diagonal scales.
-#[must_use]
+#[must_use = "the factors describe the transform and None indicates a failed decomposition"]
 pub fn affine_qr<const N: usize>(matrix: SMatrix<f64, N, N>) -> Option<QrFactors<N>>
 where Const<N>: DimMin<Const<N>, Output = Const<N>> {
     if !matrix.iter().all(|v| v.is_finite()) {
@@ -20,7 +20,7 @@ where Const<N>: DimMin<Const<N>, Output = Const<N>> {
 /// Complex roots of `x³ + a x² + b x + c`, obtained from a
 /// scaled companion matrix. Callers select real roots according to their
 /// numerical tolerance.
-#[must_use]
+#[must_use = "the returned roots or failure determine the curve projection candidates"]
 pub fn monic_cubic_roots([a, b, c]: [f64; 3]) -> Option<[nalgebra::Complex<f64>; 3]> {
     let scale = a.abs().max(b.abs().sqrt()).max(c.abs().cbrt());
     if ![a, b, c, scale].iter().all(|v| v.is_finite()) {
@@ -45,7 +45,7 @@ pub fn monic_cubic_roots([a, b, c]: [f64; 3]) -> Option<[nalgebra::Complex<f64>;
 }
 
 /// Roots of `x⁴ + a x³ + b x² + c x + d`, obtained from a scaled companion matrix.
-#[must_use]
+#[must_use = "the returned roots or failure determine the curve projection candidates"]
 pub fn monic_quartic_roots([a, b, c, d]: [f64; 4]) -> Option<[nalgebra::Complex<f64>; 4]> {
     let scale = a
         .abs()

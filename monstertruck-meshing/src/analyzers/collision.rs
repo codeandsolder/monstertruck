@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::AffinePoint;
 use super::active_sweep::ActiveSweep;
 use super::{
     BoundingBox, KERNEL_EPSILON_SQUARED, MetricSpace, Origin, Point3, PolygonMesh, StandardVertex,

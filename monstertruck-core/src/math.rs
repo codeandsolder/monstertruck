@@ -26,23 +26,23 @@ f64_type!(
 
 /// Unsigned angle between two 3D directions in radians.
 /// Using atan2 retains angular resolution near parallel and antiparallel directions.
-#[must_use]
+#[must_use = "the returned angle is used for geometric orientation tests"]
 pub fn angle_between(a: Vector3, b: Vector3) -> f64 { a.cross(&b).norm().atan2(a.dot(&b)) }
 
 /// Derivative of the unit normal along a specified parameter direction.
 /// Both tangents and their directional derivatives must be expressed in the same frame.
-#[must_use]
+#[must_use = "the returned derivative is used in differential geometry"]
 pub fn surface_normal_derivative([du, dv]: [Vector3; 2], [ddu, ddv]: [Vector3; 2]) -> Vector3 {
     let cross = du.cross(&dv);
     let derivative = ddu.cross(&dv) + du.cross(&ddv);
     let magnitude = cross.norm();
     let magnitude_derivative = cross.dot(&derivative) / magnitude;
-    (derivative * magnitude - cross * magnitude_derivative) / (magnitude * magnitude)
+    (derivative * magnitude - cross * magnitude_derivative) / magnitude.powi(2)
 }
 
 /// Circumcenter of three noncollinear points, obtained from their 2D Gram system.
 /// The result is undefined for a collinear or repeated triple.
-#[must_use]
+#[must_use = "the returned point is the center of the circumcircle"]
 pub fn circumcenter(first: Point3, second: Point3, third: Point3) -> Point3 {
     let (a, b) = (second - first, third - first);
     let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
@@ -53,9 +53,11 @@ pub fn circumcenter(first: Point3, second: Point3, third: Point3) -> Point3 {
 }
 
 /// Tangent sphere center and contact points for two oriented planes, constrained
-/// to a third plane through `section`. Surface normals must be unit vectors.
+/// to a third plane through the supplied point.
+///
+/// Surface normals must be unit vectors.
 /// A negative signed radius selects the opposite contact side.
-#[must_use]
+#[must_use = "the returned center and contacts must be used to construct the fillet"]
 pub fn tangent_sphere_contacts(
     (point, section_normal): (Point3, Vector3),
     [(point0, normal0), (point1, normal1)]: [(Point3, Vector3); 2],
@@ -76,7 +78,7 @@ pub fn tangent_sphere_contacts(
 }
 
 /// Arbitrary angular derivative of Rodrigues' rotation matrix about a fixed unit axis.
-#[must_use]
+#[must_use = "the returned matrix is the angular derivative of the rotation"]
 pub fn axis_angle_derivative(n: usize, axis: Vector3, angle: f64) -> Matrix3 {
     let (s, c) = f64::sin_cos(angle);
     let (s, c) = match n % 4 {
@@ -111,12 +113,12 @@ pub trait KernelScalar: RealField + Copy {
     fn neg_infinity() -> Self;
 }
 impl KernelScalar for f32 {
-    fn infinity() -> Self { f32::INFINITY }
-    fn neg_infinity() -> Self { f32::NEG_INFINITY }
+    fn infinity() -> Self { Self::INFINITY }
+    fn neg_infinity() -> Self { Self::NEG_INFINITY }
 }
 impl KernelScalar for f64 {
-    fn infinity() -> Self { f64::INFINITY }
-    fn neg_infinity() -> Self { f64::NEG_INFINITY }
+    fn infinity() -> Self { Self::INFINITY }
+    fn neg_infinity() -> Self { Self::NEG_INFINITY }
 }
 
 /// Finite-dimensional linear vector used in differentiation and interpolation.
@@ -168,10 +170,11 @@ pub trait InnerProduct: LinearVector + MetricSpace<Metric = Self::Scalar> {
     /// Euclidean norm.
     fn norm(&self) -> Self::Scalar { self.norm_squared().sqrt() }
     /// Unit vector in the same direction; undefined for zero length.
+    #[must_use = "the returned vector is normalized without modifying the input"]
     fn normalize(&self) -> Self { *self / self.norm() }
 }
 impl<S: KernelScalar, const D: usize> InnerProduct for SVector<S, D> {
-    fn dot(&self, other: &Self) -> S { SVector::dot(self, other) }
+    fn dot(&self, other: &Self) -> S { Self::dot(self, other) }
 }
 
 /// Point of an affine space. Subtracting points yields a displacement, not a point.
@@ -196,23 +199,28 @@ pub trait AffinePoint:
     /// Coordinates relative to the origin.
     fn position_vector(self) -> Self::Diff;
     /// Midpoint along the affine segment.
+    #[must_use = "the returned point is the segment midpoint"]
     fn midpoint(self, other: Self) -> Self {
-        self + (other - self) / (Self::Scalar::one() + Self::Scalar::one())
+        let one = Self::Scalar::one();
+        let two = one + one;
+        self + (other - self) / two
     }
 }
 impl<S: KernelScalar, const D: usize> AffinePoint for Point<S, D> {
     type Scalar = S;
     type Diff = SVector<S, D>;
-    fn origin() -> Self { Point::origin() }
-    fn from_coordinates(vector: Self::Diff) -> Self { Point::from(vector) }
+    fn origin() -> Self { Self::origin() }
+    fn from_coordinates(vector: Self::Diff) -> Self { Self::from(vector) }
     fn position_vector(self) -> Self::Diff { self.coords }
 }
 
 /// Componentwise arithmetic required by polynomial and attribute interpolation.
 pub trait ComponentWise<Rhs = Self>: Sized {
     /// Product of matching coordinate components.
+    #[must_use = "the result contains the products of corresponding coordinates"]
     fn component_product(self, rhs: Rhs) -> Self;
     /// Sum of matching coordinate components.
+    #[must_use = "the result contains the sums of corresponding coordinates"]
     fn component_sum(self, rhs: Rhs) -> Self;
 }
 impl<S: KernelScalar, const D: usize> ComponentWise for SVector<S, D> {
@@ -221,9 +229,9 @@ impl<S: KernelScalar, const D: usize> ComponentWise for SVector<S, D> {
 }
 impl<S: KernelScalar, const D: usize> ComponentWise for Point<S, D> {
     fn component_product(self, rhs: Self) -> Self {
-        Point::from(self.coords.component_mul(&rhs.coords))
+        Self::from(self.coords.component_mul(&rhs.coords))
     }
-    fn component_sum(self, rhs: Self) -> Self { Point::from(self.coords + rhs.coords) }
+    fn component_sum(self, rhs: Self) -> Self { Self::from(self.coords + rhs.coords) }
 }
 
 /// Square linear mapping contract for generic transformed geometry.
@@ -233,6 +241,7 @@ pub trait SquareLinearMap: Copy + One {
     /// Determinant of the linear mapping.
     fn determinant(&self) -> Self::Scalar;
     /// Transposed mapping.
+    #[must_use = "the original mapping remains unchanged"]
     fn transpose(&self) -> Self;
 }
 macro_rules! square_map {

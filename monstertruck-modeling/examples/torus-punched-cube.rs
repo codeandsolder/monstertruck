@@ -3,8 +3,7 @@
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
 use monstertruck_modeling::{
-    AffinePoint, Face, ParametricSurface3D, Point3, Result, Shell, Solid, Tolerance, Vector3, Wire,
-    builder,
+    Face, ParametricSurface3D, Point3, Result, Shell, Solid, Tolerance, Vector3, Wire, builder,
 };
 use std::f64::consts::PI;
 
@@ -33,7 +32,7 @@ fn torus_shell() -> Result<Shell> {
         &w,
         Point3::origin(),
         Vector3::z(),
-        builder::SweepAngle::Partial((PI / 2.0)),
+        builder::SweepAngle::Partial(PI / 2.0),
         1,
     )
 }

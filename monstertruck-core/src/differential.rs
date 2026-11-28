@@ -514,7 +514,7 @@ fn multi_rational_derivatives_into<V, A0, A1>(
                 let (evals, ders) = (evals[i].as_mut(), ders[m - i].as_ref());
                 for j in 0..=n {
                     let (c0_s, c1_s) = (scalar_from_u128(c0 as u128), scalar_from_u128(c1 as u128));
-                    sum = sum + evals[j] * (ders[n - j].weight() * c0_s * c1_s);
+                    sum += evals[j] * (ders[n - j].weight() * c0_s * c1_s);
                     c1 = c1 * (n - j) / (j + 1);
                 }
                 c0 = c0 * (m - i) / (i + 1);

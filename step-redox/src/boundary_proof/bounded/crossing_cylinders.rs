@@ -181,8 +181,7 @@ mod tests {
     use crate::brep::CurveSupport;
     use anyhow::{Context, Result, bail};
     use monstertruck_geometry::{
-        analytic_cylinder_intersection::CylinderIntersectionArc,
-        prelude::{InnerProduct, Vector3},
+        analytic_cylinder_intersection::CylinderIntersectionArc, prelude::Vector3,
     };
     use std::f64::consts::PI;
 

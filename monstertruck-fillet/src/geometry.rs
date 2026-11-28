@@ -90,7 +90,7 @@ proptest::proptest! {
         const N: usize = 10;
         for i in 0..=N {
             let t = i as f64 / N as f64;
-            let p = uc.evaluate(t).to_vec();
+            let p = uc.evaluate(t).coords;
             let v = uc.derivative(t);
             prop_assert_near!(p.norm_squared(), 1.0, "{w0} {w1} {p:?} {angle}");
             prop_assert!(p.z.so_small2());

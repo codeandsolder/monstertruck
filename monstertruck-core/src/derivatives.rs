@@ -387,7 +387,7 @@ impl<V: LinearVector> std::ops::Mul<V::Scalar> for CurveDerivatives<V> {
     fn mul(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
         for value in &mut array {
-            *value = *value * rhs;
+            *value *= rhs;
         }
         Self {
             array,
@@ -401,7 +401,7 @@ impl<V: LinearVector> std::ops::Div<V::Scalar> for CurveDerivatives<V> {
     fn div(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
         for value in &mut array {
-            *value = *value / rhs;
+            *value /= rhs;
         }
         Self {
             array,
@@ -647,7 +647,7 @@ impl<V> SurfaceDerivatives<V> {
                         // SAFETY: `c0` and `c1` are small binomial coefficients.
                         let (c0_s, c1_s) =
                             (scalar_from_u128(c0 as u128), scalar_from_u128(c1 as u128));
-                        sum = sum + evals[j] * (ders[n - j].weight() * c0_s * c1_s);
+                        sum += evals[j] * (ders[n - j].weight() * c0_s * c1_s);
                         c1 = c1 * (n - j) / (j + 1);
                     }
                     c0 = c0 * (m - i) / (i + 1);
@@ -718,7 +718,7 @@ impl<V> SurfaceDerivatives<V> {
             for idx in iter {
                 let idx = &idx[..len];
                 let mult = scalar_from_u128(multiplicity(idx));
-                sum = sum + tensor(self, curve_ders, idx) * mult;
+                sum += tensor(self, curve_ders, idx) * mult;
             }
         }
         Some(sum)
@@ -1016,7 +1016,7 @@ impl<V: LinearVector> std::ops::Mul<V::Scalar> for SurfaceDerivatives<V> {
     type Output = Self;
     fn mul(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().flatten().for_each(|a| *a = *a * rhs);
+        array.iter_mut().flatten().for_each(|a| *a *= rhs);
         Self {
             array,
             max_order: self.max_order,
@@ -1028,7 +1028,7 @@ impl<V: LinearVector> std::ops::Div<V::Scalar> for SurfaceDerivatives<V> {
     type Output = Self;
     fn div(self, rhs: V::Scalar) -> Self::Output {
         let mut array = self.array;
-        array.iter_mut().flatten().for_each(|a| *a = *a / rhs);
+        array.iter_mut().flatten().for_each(|a| *a /= rhs);
         Self {
             array,
             max_order: self.max_order,

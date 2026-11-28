@@ -5,9 +5,9 @@
 
 use super::split_closed_faces;
 use monstertruck_geometry::prelude::{
-    AffinePoint, BoundedCurve, Cut, Line, Matrix4, ParameterBoundary2D, ParameterCurve,
-    ParameterDivision1D, ParametricCurve, Point2, Point3, Processor, RevolutionSurface,
-    SearchNearestParameterD1, SearchParameter, Transformed, TrimmedCurve, UnitCircle, Vector3,
+    BoundedCurve, Cut, Line, Matrix4, ParameterBoundary2D, ParameterCurve, ParameterDivision1D,
+    ParametricCurve, Point2, Point3, Processor, RevolutionSurface, SearchNearestParameterD1,
+    SearchParameter, Transformed, TrimmedCurve, UnitCircle, Vector3,
 };
 use monstertruck_topology::{
     Shell, StableId,

@@ -4,9 +4,6 @@ use super::{
 };
 use std::f64::consts::PI;
 
-#[cfg(test)]
-use crate::AffinePoint;
-
 /// Splitting the faces into several clusters.
 pub trait Splitting {
     /// Creates a sub mesh by the face indices.
