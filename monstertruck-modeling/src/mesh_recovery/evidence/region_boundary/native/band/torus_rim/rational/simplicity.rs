@@ -20,12 +20,7 @@ fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, frame
         Junction::EndStart => (a, b, shift),
         Junction::StartEnd => (b, a, -shift),
     };
-    if left.end[0]
-        .sub(right.start[0].add(Interval::point(offset)))
-        .magnitude()
-        > frame.resolution
-        || left.end[1].sub(right.start[1]).magnitude() > frame.height_resolution
-    {
+    if !frame.junction(left.end, right.start, offset) {
         return false;
     }
     let normalized = |p: &Piece| {
@@ -200,7 +195,15 @@ pub(super) fn cycle(frame: Frame, pieces: &[Piece], winding: bool) -> Result<(),
     // The caller has already certified a continuous winding-one lift.
     // Strict monotonicity in its periodic coordinate alone proves a
     // simple cycle, without requiring quadratic pair comparisons.
-    if winding && pieces.iter().all(|p| p.rates[0].lo > 0.0) {
+    if winding
+        && pieces.iter().all(|p| {
+            p.rates[0].lo > 0.0
+                && (0..2).all(|i| {
+                    p.start[i].width() <= frame.tolerance(i)
+                        && p.end[i].width() <= frame.tolerance(i)
+                })
+        })
+    {
         return Ok(());
     }
     sweep(frame, sweep_images(pieces), |i, j, shift| {

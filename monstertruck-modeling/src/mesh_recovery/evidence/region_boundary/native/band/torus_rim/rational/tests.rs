@@ -178,3 +178,49 @@ fn linear_chart_does_not_wrap_axial_coordinates() {
     );
     assert!(piece.bounds[1].width() >= 2.0 * TAU);
 }
+
+#[test]
+fn shared_chart_junction_encloses_physical_endpoint_discrepancy()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::{Curve, Line, builder};
+    let f = frame();
+    let points = [[0.0, 0.3], [0.2, 0.3], [0.2, 0.6], [0.0, 0.6]];
+    let on_torus = |uv| {
+        let [x, y, z] = torus(uv);
+        Point3::new(x, y, z)
+    };
+    let vertices = points.map(|uv| builder::vertex(on_torus(uv)));
+    // Two endpoint locations are offset within the already allowed
+    // kernel incidence, but exceed the angular rank resolution.
+    let mut edges = Vec::new();
+    for i in 0..vertices.len() {
+        let j = (i + 1) % vertices.len();
+        let delta = Vector3::new(0.0, 0.0, 0.2 * crate::KERNEL_EPSILON);
+        let curve = Curve::Line(Line(
+            vertices[i].point() + delta,
+            vertices[j].point() - delta,
+        ));
+        edges.push(Edge::new(&vertices[i], &vertices[j], curve)?);
+    }
+    let start = points[0].map(Interval::point);
+    let (pieces, end) = lift_cycle(f, &edges, start).map_err(|_| "chart lift")?;
+    assert!(f.junction(end, start, 0.0));
+    assert!(simplicity::cycle(f, &pieces, false).is_ok());
+    // Refuse to treat distinct topology as a common junction.
+    let mut disconnected = edges.clone();
+    let duplicate = builder::vertex(vertices[0].point());
+    disconnected[0] = builder::line(&duplicate, &vertices[1]);
+    assert!(matches!(
+        lift_cycle(f, &disconnected, start),
+        Err(Rejection::Invalid)
+    ));
+    let mut control = control(torus(points[0]));
+    assert!(
+        enclose_endpoint(
+            &mut control,
+            vertices[0].point() + Vector3::unit_z() * 2.0 * crate::KERNEL_EPSILON
+        )
+        .is_none()
+    );
+    Ok(())
+}
