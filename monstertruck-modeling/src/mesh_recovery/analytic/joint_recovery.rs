@@ -266,7 +266,7 @@ fn try_fit(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
     regions: &[usize],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     context: &mut JointFitContext,
     method: JointFitMethod,
 ) -> Result<Result<JointFitReport, JointFitRejection>, AnalyticRecoveryError> {
@@ -286,6 +286,9 @@ fn try_fit(
         return Ok(Err(JointFitRejection::Unchanged));
     }
     let boundary = RegionBoundaryIndex::new(evidence)?;
+    if let Some(support) = options.source_chord_violation(&boundary, &candidate.partition) {
+        return Ok(Err(JointFitRejection::SourceChordBudget(support)));
+    }
     let trim = options.trim_options(evidence);
     if !can_improve_trims(assembly, &candidate, regions, trim) {
         return Ok(Err(JointFitRejection::TrimPreflight));
@@ -370,7 +373,7 @@ fn try_fit(
 pub(super) fn repair(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     frozen: Option<&FrozenSourceFit>,
 ) -> Result<(Vec<JointFitReport>, Vec<JointFitAttempt>), AnalyticRecoveryError> {
     let mut reports = Vec::new();

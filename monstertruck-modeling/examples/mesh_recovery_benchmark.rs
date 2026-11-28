@@ -331,7 +331,7 @@ fn benchmark(
             evidence_seconds,
         ));
     }
-    let recovery = recover_analytic_evidence(&evidence, options)?;
+    let recovery = recover_analytic_evidence(&evidence, &options)?;
     let partition = &recovery.reconciled.partition;
     let regions = region_summary(&recovery)?;
     let canceled_sheets = recovery
@@ -387,6 +387,8 @@ fn benchmark(
         "expanded_circular_proposals":recovery.discovery.expanded_circular_proposals,"expanded_linear_proposals":recovery.discovery.expanded_linear_proposals,
         "compared_native_neighborhoods":recovery.discovery.compared_native_neighborhoods,
         "expanded_native_neighborhoods":recovery.discovery.expanded_native_neighborhoods,
+        "carrier_alternative_trials":recovery.discovery.carrier_alternative_trials,
+        "carrier_alternative_acceptances":recovery.discovery.carrier_alternative_acceptances,
         "shell_condition":complete.as_ref().map(|shell|format!("{:?}",shell.shell_condition())),
         "shell_components":complete.as_ref().map(|shell|shell.connected_components().len()),
     });

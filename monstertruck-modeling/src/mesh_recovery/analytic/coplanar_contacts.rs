@@ -139,7 +139,7 @@ pub(super) fn valid_regions(assembly: &NativeAssembly) -> BTreeSet<usize> {
 pub(super) fn repair(
     evidence: &MeshEvidence,
     assembly: &mut NativeAssembly,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<Vec<CoplanarSupportReassignment>, AnalyticRecoveryError> {
     let trim = options.trim_options(evidence);
     let native_options = NativeTrimOptions {
@@ -158,6 +158,9 @@ pub(super) fn repair(
     }
     let index = RegionBoundaryIndex::new(evidence)?;
     let partition = index.repartition_connected(&labels, |label| original.carriers[label])?;
+    if options.source_chord_violation(&index, &partition).is_some() {
+        return Ok(Vec::new());
+    }
     let trims = index.assemble_shared_trims(&partition, &assembly.reconciled.positions, trim)?;
     let native = index.construct_native_trims(
         &partition,
@@ -290,10 +293,10 @@ mod tests {
                 })
             }
         })?;
-        let mut assembly = super::super::assemble_native(&evidence, partition, options)?;
+        let mut assembly = super::super::assemble_native(&evidence, partition, &options)?;
         assert!(!failed_edges(&assembly).is_empty());
         let original_positions = assembly.reconciled.positions.clone();
-        let corrections = repair(&evidence, &mut assembly, options)?;
+        let corrections = repair(&evidence, &mut assembly, &options)?;
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrections[0].support, wrong);
         assert_eq!(assembly.reconciled.positions, original_positions);

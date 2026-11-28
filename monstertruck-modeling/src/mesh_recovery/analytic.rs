@@ -17,17 +17,20 @@ use super::{
 use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 mod coplanar_contacts;
 pub use coplanar_contacts::CoplanarSupportReassignment;
 mod joint_recovery;
 pub use super::evidence::{JointFitMethod, JointFitRejection};
 pub use joint_recovery::{JointFitAttempt, JointFitReport};
+mod carrier_alternatives;
 mod native_selection;
+use super::carrier_identity::{GeometryBuckets, append_distinct_proposals};
+use carrier_alternatives::CarrierAlternatives;
 use native_selection::{PartitionAlternative, select_native};
 
 /// Shared policy for evidence, surface recognition and native assembly.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AnalyticRecoveryOptions {
     /// Source incidence and planar-support discovery.
     pub evidence: EvidenceOptions,
@@ -47,6 +50,11 @@ pub struct AnalyticRecoveryOptions {
     pub max_linear_relative_chord_error: f64,
     /// Maximum continuous source chord error relative to circular profile scale.
     pub max_circular_relative_chord_error: f64,
+    /// Known absolute source chord/filled-facet deviation allowance, in model
+    /// units. Intersected with feature-relative recognition allowances. It
+    /// is not a kernel tolerance or a claim about the trimmed-face domain.
+    /// None means no declared source deflection is available.
+    pub source_chord_budget: Option<f64>,
     /// Search-node budget per overlapping region proposal component.
     pub max_partition_search_nodes: usize,
     /// Maximum source intervals tested by mixed-trim segmentation.
@@ -59,6 +67,8 @@ pub struct AnalyticRecoveryOptions {
     pub source_position_uncertainty: f64,
     /// Maximum failed-contact neighborhood transactions to consider.
     pub max_joint_fit_trials: usize,
+    /// Maximum alternative-carrier native assembly trials per starting partition.
+    pub max_carrier_trials: usize,
     /// Maximum source displacement for planar reconciliation, in source
     /// coordinate units. Zero disables geometric planar reconciliation.
     pub max_planar_displacement: f64,
@@ -83,11 +93,13 @@ impl Default for AnalyticRecoveryOptions {
             max_linear_relative_chord_error: 0.25,
             // A quarter-turn circular chord has this relative sagitta.
             max_circular_relative_chord_error: 1.0 - std::f64::consts::FRAC_1_SQRT_2,
+            source_chord_budget: None,
             max_partition_search_nodes: 100_000,
             max_trim_interval_edges: 128,
             max_reconstruction_adjustment: 0.01,
             source_position_uncertainty: 0.0,
             max_joint_fit_trials: 8,
+            max_carrier_trials: 8,
             max_planar_displacement: 0.0,
             max_planar_normal_angle: 0.01,
             normalize_coincident_sheets: false,
@@ -96,7 +108,7 @@ impl Default for AnalyticRecoveryOptions {
 }
 
 impl AnalyticRecoveryOptions {
-    fn validate(self) -> Result<(), AnalyticRecoveryError> {
+    fn validate(&self) -> Result<(), AnalyticRecoveryError> {
         let positive = [
             self.relative_surface_tolerance,
             self.axis_relative_resolution,
@@ -108,6 +120,9 @@ impl AnalyticRecoveryOptions {
         if positive
             .iter()
             .any(|v| !v.is_finite() || *v <= 0.0 || *v >= 1.0)
+            || self
+                .source_chord_budget
+                .is_some_and(|budget| !budget.is_finite() || budget <= 0.0)
             || !self.max_reconstruction_adjustment.is_finite()
             || self.max_reconstruction_adjustment < 0.0
             || !self.source_position_uncertainty.is_finite()
@@ -125,11 +140,20 @@ impl AnalyticRecoveryOptions {
         Ok(())
     }
 
+    fn source_chord_violation(
+        &self,
+        boundary: &RegionBoundaryIndex<'_>,
+        partition: &SurfaceRegionPartition,
+    ) -> Option<usize> {
+        self.source_chord_budget
+            .and_then(|budget| boundary.source_chord_violation(partition, budget))
+    }
+
     /// Shared trim budget derived from the same source extent and relative
     /// accuracy as surface recognition. Kernel intersection accuracy is
     /// separately limited by the kernel's numerical resolution.
     #[must_use = "the returned options define source trim acceptance"]
-    pub fn trim_options(self, evidence: &MeshEvidence) -> SharedTrimOptions {
+    pub fn trim_options(&self, evidence: &MeshEvidence) -> SharedTrimOptions {
         let extent = evidence.positions.first().map_or(0.0, |&reference| {
             evidence
                 .positions
@@ -151,6 +175,10 @@ pub enum AnalyticRecoveryError {
     /// Invalid numerical options or inconsistent supplied discovery evidence.
     #[error("invalid analytic recovery options or source references")]
     InvalidOptions,
+    /// The original source support cannot be certified against the declared
+    /// filled-facet approximation allowance after partition construction.
+    #[error("source support {0} exceeds its declared chord budget")]
+    SourceChordBudget(usize),
     /// Invalid source geometry.
     #[error(transparent)]
     Source(#[from] MeshRecoveryError),
@@ -272,6 +300,10 @@ pub struct AnalyticDiscoveryStats {
     pub compared_native_neighborhoods: usize,
     /// Neighborhoods using the expanded analytic candidate set.
     pub expanded_native_neighborhoods: usize,
+    /// Native transactions testing geometrically distinct carriers on identical supports.
+    pub carrier_alternative_trials: usize,
+    /// Alternative carrier transactions that repaired native geometry.
+    pub carrier_alternative_acceptances: usize,
     /// Number of selected circular proposals.
     pub selected_curved: usize,
     /// Selected mutually nonoverlapping measured proposals.
@@ -288,6 +320,7 @@ pub struct AnalyticRegionDiscovery {
     /// Recognition evidence and diagnostics.
     pub stats: AnalyticDiscoveryStats,
     core_alternative: Option<PartitionAlternative>,
+    carrier_alternatives: CarrierAlternatives,
 }
 
 struct CandidateDiscovery {
@@ -306,6 +339,7 @@ struct ProposalSelection {
     rim_linear_proposals: usize,
     rim_linear_candidates: Vec<SelectedSurfaceProposal>,
     core_alternative: Option<PartitionAlternative>,
+    carrier_alternatives: CarrierAlternatives,
     linear_proposals: usize,
     selected_curved: usize,
 }
@@ -372,7 +406,7 @@ pub fn discover_analytic_regions(
     spatial: &[Option<SpatialTrackEvidence>],
     grown: &[CurvatureGrowthHypothesis],
     tracks: &[CurvatureTrack],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<AnalyticRegionDiscovery, AnalyticRecoveryError> {
     options.validate()?;
     if evidence.source_planar_support.is_empty()
@@ -388,7 +422,8 @@ pub fn discover_analytic_regions(
     let mut axes = independent_axes(evidence, spatial, tracks, options);
     let (circle_axes, circles) = extend_with_circle_axes(evidence, &mut axes, options);
     let (active, refinement_passes, candidates) = refine_and_discover(evidence, &axes, options)?;
-    let boundary = RegionBoundaryIndex::new(&active)?;
+    let boundary =
+        RegionBoundaryIndex::new(&active)?.with_source_chord_budget(options.source_chord_budget);
     let selection = choose_partition(
         &active,
         evidence,
@@ -415,6 +450,8 @@ pub fn discover_analytic_regions(
         rim_linear_candidates: selection.rim_linear_candidates,
         compared_native_neighborhoods: 0,
         expanded_native_neighborhoods: 0,
+        carrier_alternative_trials: 0,
+        carrier_alternative_acceptances: 0,
         selected_curved: selection.selected_curved,
         selected: selection.selected,
     };
@@ -423,13 +460,14 @@ pub fn discover_analytic_regions(
         partition: selection.partition,
         stats,
         core_alternative: selection.core_alternative,
+        carrier_alternatives: selection.carrier_alternatives,
     })
 }
 
 fn refine_and_discover(
     evidence: &MeshEvidence,
     axes: &[PlacedAxis],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<(MeshEvidence, Vec<SupportRefinementPass>, CandidateDiscovery), AnalyticRecoveryError> {
     let mut active = evidence.clone();
     let mut passes = Vec::new();
@@ -440,6 +478,10 @@ fn refine_and_discover(
         let boundary = RegionBoundaryIndex::new(&active)?;
         let mut split = BTreeSet::new();
         let mut candidates = AxisCandidates::default();
+        let coincidence_tolerance = options
+            .trim_options(&active)
+            .absolute_tolerance
+            .min(KERNEL_EPSILON * 0.1);
         for (placed, cached) in axes.iter().zip(&mut unsampled) {
             if let Some(count) = *cached {
                 if split.is_empty() {
@@ -468,7 +510,7 @@ fn refine_and_discover(
             // earlier proposals refer to obsolete support IDs and all
             // subsequent discovery is skipped until the next pass.
             if split.is_empty() {
-                candidates.discover(placed, &graph, &boundary);
+                candidates.discover(placed, &graph, &boundary, &active, coincidence_tolerance);
             }
         }
         passes.push(SupportRefinementPass {
@@ -488,7 +530,7 @@ fn refine_and_discover(
 /// Invalid options, inconsistent partition or native construction inputs.
 pub fn construct_analytic_recovery(
     discovered: AnalyticRegionDiscovery,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let AnalyticRegionDiscovery {
@@ -496,6 +538,7 @@ pub fn construct_analytic_recovery(
         partition,
         mut stats,
         core_alternative,
+        carrier_alternatives,
     } = discovered;
     let mut ownership = None;
     let mut ownership_rejection = None;
@@ -505,7 +548,9 @@ pub fn construct_analytic_recovery(
             partition,
             selected: std::mem::take(&mut stats.selected),
         };
-        let selection = select_native(&evidence, core, expanded, options)?;
+        let selection = select_native(&evidence, core, expanded, &carrier_alternatives, options)?;
+        stats.carrier_alternative_trials = selection.carrier_trials;
+        stats.carrier_alternative_acceptances = selection.carrier_acceptances;
         stats.compared_native_neighborhoods = selection.compared_neighborhoods;
         stats.expanded_native_neighborhoods = selection.expanded_neighborhoods;
         stats.selected = selection.alternative.selected;
@@ -521,7 +566,22 @@ pub fn construct_analytic_recovery(
         ownership_alternative = selection.pending_ownership;
         selection.assembly
     } else {
-        assemble_native(&evidence, partition, options)?
+        let mut alternative = PartitionAlternative {
+            partition,
+            selected: std::mem::take(&mut stats.selected),
+        };
+        let mut assembly = assemble_native(&evidence, alternative.partition.clone(), options)?;
+        let result =
+            carrier_alternatives.repair(&evidence, &mut alternative, &mut assembly, options)?;
+        stats.carrier_alternative_trials = result.trials;
+        stats.carrier_alternative_acceptances = result.accepted;
+        stats.selected = alternative.selected;
+        stats.selected_curved = stats
+            .selected
+            .iter()
+            .filter(|p| matches!(p.carrier, SurfaceCarrier::CircularRevolution { .. }))
+            .count();
+        assembly
     };
     let coplanar_reassignments = coplanar_contacts::repair(&evidence, &mut assembly, options)?;
     let (mut joint_fits, mut joint_fit_rejections) = joint_recovery::repair(
@@ -571,7 +631,7 @@ pub(in crate::mesh_recovery) struct NativeAssembly {
 fn assemble_native(
     evidence: &MeshEvidence,
     partition: SurfaceRegionPartition,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<NativeAssembly, AnalyticRecoveryError> {
     let boundary = RegionBoundaryIndex::new(evidence)?;
     let trim = options.trim_options(evidence);
@@ -595,6 +655,9 @@ fn assemble_native(
             rejected: 0,
         }
     };
+    if let Some(support) = options.source_chord_violation(&boundary, &reconciled.partition) {
+        return Err(AnalyticRecoveryError::SourceChordBudget(support));
+    }
     let trims =
         boundary.assemble_shared_trims(&reconciled.partition, &reconciled.positions, trim)?;
     let native = boundary.construct_native_trims(
@@ -619,7 +682,7 @@ fn assemble_native(
 /// Invalid source geometry, options or inconsistent partition data.
 pub fn recover_analytic_mesh(
     mesh: &PolygonMesh,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let evidence = analyze_mesh_evidence(mesh, options.evidence)?;
@@ -631,7 +694,7 @@ pub fn recover_analytic_mesh(
 /// Invalid options or source references.
 pub fn recover_analytic_evidence(
     evidence: &MeshEvidence,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<RecoveredAnalyticMesh, AnalyticRecoveryError> {
     options.validate()?;
     let normalization = if options.normalize_coincident_sheets {
@@ -680,7 +743,7 @@ fn independent_axes(
     evidence: &MeshEvidence,
     spatial: &[Option<SpatialTrackEvidence>],
     local_tracks: &[CurvatureTrack],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Vec<PlacedAxis> {
     let Some(&reference) = evidence.positions.first() else {
         return Vec::new();
@@ -743,7 +806,7 @@ fn independent_axes(
 fn extend_with_circle_axes(
     evidence: &MeshEvidence,
     axes: &mut Vec<PlacedAxis>,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> (Option<CircleAxisSummary>, Vec<SourceCircleObservation>) {
     let mut circle_summary = None;
     let mut circles = Vec::new();
@@ -796,7 +859,7 @@ fn extend_with_circle_axes(
 fn graph_options(
     evidence: &MeshEvidence,
     placed: &PlacedAxis,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> MeridianGraphOptions {
     let extent = evidence
         .positions
@@ -817,7 +880,7 @@ fn graph_options(
 fn curved_proposal<'a>(
     boundary: &RegionBoundaryIndex<'a>,
     candidate: &StationMeridianCandidate,
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Option<SurfaceRegionProposal<'a>> {
     let scale = candidate.fit.geometric_scale();
     boundary.measure_surface_region(
@@ -833,8 +896,8 @@ fn curved_proposal<'a>(
 #[derive(Default)]
 struct AxisCandidates {
     axes: Vec<AxisDiscoverySummary>,
-    circular: BTreeMap<Vec<usize>, StationMeridianCandidate>,
-    linear: BTreeMap<Vec<usize>, StationLinearCandidate>,
+    circular: GeometryBuckets<StationMeridianCandidate>,
+    linear: GeometryBuckets<StationLinearCandidate>,
 }
 
 impl AxisCandidates {
@@ -861,17 +924,13 @@ impl AxisCandidates {
         placed: &PlacedAxis,
         graph: &MeridianStationGraph<'_>,
         boundary: &RegionBoundaryIndex<'_>,
+        evidence: &MeshEvidence,
+        tolerance: f64,
     ) {
         let linear_candidates = graph.discover_linear(boundary);
         let linear_count = linear_candidates.len();
         for candidate in linear_candidates {
-            let entry = self
-                .linear
-                .entry(candidate.supports.clone())
-                .or_insert_with(|| candidate.clone());
-            if candidate.max_vertex_residual < entry.max_vertex_residual {
-                *entry = candidate;
-            }
+            self.linear.insert(candidate, evidence, tolerance);
         }
         if !placed.circular_seed {
             if linear_count > 0 {
@@ -908,18 +967,12 @@ impl AxisCandidates {
             linear_candidates: linear_count,
         });
         for candidate in found.candidates {
-            let entry = self
-                .circular
-                .entry(candidate.supports.clone())
-                .or_insert_with(|| candidate.clone());
-            if candidate.fit.max_vertex_residual < entry.fit.max_vertex_residual {
-                *entry = candidate;
-            }
+            self.circular.insert(candidate, evidence, tolerance);
         }
     }
 
     fn finish(self) -> CandidateDiscovery {
-        let mut circular = self.circular.into_values().collect::<Vec<_>>();
+        let mut circular = self.circular.into_candidates();
         circular.sort_unstable_by(|a, b| {
             b.source_polygons
                 .cmp(&a.source_polygons)
@@ -933,7 +986,7 @@ impl AxisCandidates {
         CandidateDiscovery {
             axes: self.axes,
             circular,
-            linear: self.linear.into_values().collect(),
+            linear: self.linear.into_candidates(),
         }
     }
 }
@@ -945,27 +998,26 @@ fn choose_partition(
     candidates: &CandidateDiscovery,
     grown: &[CurvatureGrowthHypothesis],
     circles: &[SourceCircleObservation],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
 ) -> Result<ProposalSelection, AnalyticRecoveryError> {
     let absolute_tolerance = options.trim_options(evidence).absolute_tolerance;
     let (mut proposals, expanded) =
         circular_proposals(boundary, &candidates.circular, options, absolute_tolerance);
-    let mut seen = BTreeSet::new();
+    let coincidence_tolerance = absolute_tolerance.min(KERNEL_EPSILON * 0.1);
     let curved_count = proposals.len();
     let measured_linear =
-        append_station_linear_proposals(boundary, &candidates.linear, &mut seen, &mut proposals);
+        append_station_linear_proposals(boundary, &candidates.linear, &mut proposals);
     let direct_linear_count = proposals.len() - curved_count;
-    append_growth_proposals(
+    let growth_proposals =
+        measure_growth_proposals(evidence, planar_baseline, boundary, grown, options);
+    append_distinct_proposals(
         evidence,
-        planar_baseline,
-        boundary,
-        grown,
-        options,
-        &mut seen,
+        growth_proposals,
+        coincidence_tolerance,
         &mut proposals,
     );
     let core_count = proposals.len();
-    append_expanded_proposals(evidence, expanded, absolute_tolerance, &mut proposals);
+    append_distinct_proposals(evidence, expanded, coincidence_tolerance, &mut proposals);
     let expanded_circular_count = proposals.len() - core_count;
     let expanded_linear = boundary.expand_station_linear_regions(
         &measured_linear,
@@ -976,14 +1028,15 @@ fn choose_partition(
             chord_fraction: options.max_linear_relative_chord_error,
         },
     );
-    append_expanded_proposals(
+    append_distinct_proposals(
         evidence,
         expanded_linear,
-        absolute_tolerance,
+        coincidence_tolerance,
         &mut proposals,
     );
     let expanded_linear_count = proposals.len() - core_count - expanded_circular_count;
     let rim_linear_candidates = append_rim_proposals(
+        evidence,
         boundary,
         circles,
         options,
@@ -1037,6 +1090,7 @@ fn choose_partition(
         rim_linear_proposals: rim_linear_count,
         rim_linear_candidates,
         core_alternative,
+        carrier_alternatives: CarrierAlternatives::new(&proposals),
         linear_proposals: proposals.len() - curved_count - expanded_circular_count,
         selected_curved,
     })
@@ -1045,7 +1099,6 @@ fn choose_partition(
 fn append_station_linear_proposals<'a, 'b>(
     boundary: &RegionBoundaryIndex<'a>,
     candidates: &'b [StationLinearCandidate],
-    seen: &mut BTreeSet<Vec<usize>>,
     proposals: &mut Vec<SurfaceRegionProposal<'a>>,
 ) -> Vec<&'b StationLinearCandidate> {
     let mut measured_linear = Vec::new();
@@ -1058,7 +1111,6 @@ fn append_station_linear_proposals<'a, 'b>(
                 chord: candidate.chord_tolerance,
             },
         ) {
-            seen.insert(candidate.supports.clone());
             measured_linear.push(candidate);
             proposals.push(proposal);
         }
@@ -1069,7 +1121,7 @@ fn append_station_linear_proposals<'a, 'b>(
 fn circular_proposals<'a>(
     boundary: &RegionBoundaryIndex<'a>,
     candidates: &[StationMeridianCandidate],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     absolute_tolerance: f64,
 ) -> (
     Vec<SurfaceRegionProposal<'a>>,
@@ -1100,47 +1152,11 @@ fn circular_proposals<'a>(
     (core, expanded)
 }
 
-fn append_expanded_proposals<'a>(
-    evidence: &MeshEvidence,
-    expanded: Vec<SurfaceRegionProposal<'a>>,
-    tolerance: f64,
-    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
-) {
-    // Identical ownership is not proof of identical fitted geometry.
-    // Keep competing carriers unless their residual functions agree
-    // throughout the actual source domain.
-    let mut seen = BTreeMap::<Vec<usize>, Vec<usize>>::new();
-    for (id, p) in proposals.iter().enumerate() {
-        seen.entry(p.supports().to_vec()).or_default().push(id);
-    }
-    for proposal in expanded {
-        let matches = seen.entry(proposal.supports().to_vec()).or_default();
-        let reference = evidence.planar_supports[proposal.supports()[0]].origin;
-        let extent = proposal
-            .supports()
-            .iter()
-            .flat_map(|&id| &evidence.planar_supports[id].source_face_indices)
-            .filter_map(|&id| evidence.source_polygon_vertices(id))
-            .flatten()
-            .map(|&id| (evidence.positions[id] - reference).magnitude())
-            .fold(0.0_f64, f64::max);
-        if matches.iter().any(|&id| {
-            proposal
-                .carrier()
-                .compare_in_ball(proposals[id].carrier(), reference, extent)
-                .is_some_and(|agreement| agreement.residual_difference_upper_bound <= tolerance)
-        }) {
-            continue;
-        }
-        matches.push(proposals.len());
-        proposals.push(proposal);
-    }
-}
-
 fn append_rim_proposals<'a>(
+    evidence: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'a>,
     circles: &[SourceCircleObservation],
-    options: AnalyticRecoveryOptions,
+    options: &AnalyticRecoveryOptions,
     absolute_tolerance: f64,
     proposals: &mut Vec<SurfaceRegionProposal<'a>>,
 ) -> Vec<SelectedSurfaceProposal> {
@@ -1153,30 +1169,27 @@ fn append_rim_proposals<'a>(
             chord_fraction: options.max_linear_relative_chord_error,
         },
     );
-    // Failed growth hypotheses must not suppress admissible rim candidates.
-    let mut seen = proposals
+    let first = proposals.len();
+    append_distinct_proposals(
+        evidence,
+        rim_candidates,
+        absolute_tolerance.min(KERNEL_EPSILON * 0.1),
+        proposals,
+    );
+    proposals[first..]
         .iter()
-        .map(|p| p.supports().to_vec())
-        .collect::<BTreeSet<_>>();
-    let mut rim_linear_candidates = Vec::new();
-    for proposal in rim_candidates {
-        if seen.insert(proposal.supports().to_vec()) {
-            rim_linear_candidates.push(SelectedSurfaceProposal::from_measured(&proposal));
-            proposals.push(proposal);
-        }
-    }
-    rim_linear_candidates
+        .map(SelectedSurfaceProposal::from_measured)
+        .collect()
 }
 
-fn append_growth_proposals<'a>(
+fn measure_growth_proposals<'a>(
     evidence: &MeshEvidence,
     planar_baseline: &MeshEvidence,
     boundary: &RegionBoundaryIndex<'a>,
     grown: &[CurvatureGrowthHypothesis],
-    options: AnalyticRecoveryOptions,
-    seen: &mut BTreeSet<Vec<usize>>,
-    proposals: &mut Vec<SurfaceRegionProposal<'a>>,
-) {
+    options: &AnalyticRecoveryOptions,
+) -> Vec<SurfaceRegionProposal<'a>> {
+    let mut proposals = Vec::new();
     for candidate in grown {
         let fit = &candidate.spatial;
         let scale = fit.mean_sample_radius.min(fit.axial_coordinate_span);
@@ -1196,9 +1209,6 @@ fn append_growth_proposals<'a>(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        if !seen.insert(supports.clone()) {
-            continue;
-        }
         let Some(carrier) = SurfaceCarrier::from_spatial_fit(fit) else {
             continue;
         };
@@ -1218,6 +1228,7 @@ fn append_growth_proposals<'a>(
             proposals.push(proposal);
         }
     }
+    proposals
 }
 
 #[cfg(test)]
@@ -1250,7 +1261,7 @@ mod tests {
                 [3, 0, 4, 7],
             ]),
         )?;
-        let recovered = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
         let shell = recovered.complete_shell().ok_or("complete cube")?;
         assert_eq!(shell.shell_condition(), ShellCondition::Closed);
         assert_eq!(shell.len(), 6);
@@ -1266,9 +1277,11 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn recovers_sampled_cylinder_without_supplied_axis() -> Result<(), Box<dyn std::error::Error>> {
-        let n = 32_usize;
+    pub(super) fn sampled_cylinder_mesh() -> Result<PolygonMesh, Box<dyn std::error::Error>> {
+        sampled_prism(32)
+    }
+
+    fn sampled_prism(n: usize) -> Result<PolygonMesh, Box<dyn std::error::Error>> {
         let mut positions = Vec::new();
         for z in [0.0, 2.0] {
             for i in 0..n {
@@ -1284,14 +1297,51 @@ mod tests {
             .collect::<Vec<_>>();
         polygons.push((0..n).rev().collect());
         polygons.push((n..2 * n).collect());
-        let mesh = PolygonMesh::new(
+        Ok(PolygonMesh::new(
             StandardAttributes {
                 positions,
                 ..Default::default()
             },
             Faces::from_iter(polygons),
+        )?)
+    }
+
+    #[test]
+    fn declared_source_chord_budget_discriminates_cocircular_planar_prism()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = sampled_prism(8)?;
+        let unbounded = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
+        assert_eq!(unbounded.discovery.selected.len(), 1);
+        let bounded = recover_analytic_mesh(
+            &mesh,
+            &AnalyticRecoveryOptions {
+                source_chord_budget: Some(0.01),
+                ..Default::default()
+            },
         )?;
-        let recovered = recover_analytic_mesh(&mesh, AnalyticRecoveryOptions::default())?;
+        assert!(bounded.discovery.selected.is_empty());
+        let shell = bounded.complete_shell().ok_or("closed original prism")?;
+        assert_eq!(shell.len(), 10);
+        let cylinder = recover_analytic_mesh(
+            &sampled_cylinder_mesh()?,
+            &AnalyticRecoveryOptions {
+                // Unit radius, 32 sides: sagitta is 1-cos(pi/32), about 0.004815.
+                source_chord_budget: Some(0.005),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(cylinder.discovery.selected.len(), 1);
+        assert_eq!(
+            cylinder.complete_shell().ok_or("bounded cylinder")?.len(),
+            4
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recovers_sampled_cylinder_without_supplied_axis() -> Result<(), Box<dyn std::error::Error>> {
+        let mesh = sampled_cylinder_mesh()?;
+        let recovered = recover_analytic_mesh(&mesh, &AnalyticRecoveryOptions::default())?;
         let shell = recovered.complete_shell().ok_or("complete cylinder")?;
         assert_eq!(shell.shell_condition(), ShellCondition::Closed);
         assert_eq!(shell.len(), 4);

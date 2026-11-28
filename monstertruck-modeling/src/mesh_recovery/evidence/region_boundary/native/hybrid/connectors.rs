@@ -251,7 +251,7 @@ mod tests {
         let native =
             index.construct_native_trims(&partition, &trims, &evidence.positions, strict)?;
         let discovery =
-            recover_analytic_evidence(&evidence, AnalyticRecoveryOptions::default())?.discovery;
+            recover_analytic_evidence(&evidence, &AnalyticRecoveryOptions::default())?.discovery;
         let reconciled = ReconciledPartition {
             partition,
             positions: evidence.positions.clone(),
