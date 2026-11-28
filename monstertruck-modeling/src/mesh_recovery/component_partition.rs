@@ -85,7 +85,9 @@ fn compact_mesh(positions: &[Point3], polygons: &[Vec<usize>], ids: &[usize]) ->
 }
 
 /// Separate independently closed source components before global carrier
-/// discovery. Exact-coordinate vertex incidence (including signed zero) is
+/// discovery.
+///
+/// Exact-coordinate vertex incidence (including signed zero) is
 /// shared with ordinary mesh recovery. No tolerance welding or CAD labels
 /// are involved. Open, nonmanifold, degenerate and zero-volume components
 /// stay in a common unresolved pool so cross-component source repair remains
