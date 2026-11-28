@@ -17,7 +17,7 @@ webgl = ["wgpu/webgl"]
 [dependencies]
 bytemuck = { workspace = true }
 derive_more = { workspace = true }
-futures-intrusive = { workspace = true }
+futures-channel = { workspace = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 monstertruck-core = { workspace = true }

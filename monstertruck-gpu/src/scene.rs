@@ -893,7 +893,7 @@ impl Scene {
         );
         queue.submit(Some(encoder.finish()));
         let buffer_slice = buffer.slice(..);
-        let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+        let (sender, receiver) = futures_channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
             // If the receiver was dropped there is nobody left to observe the map result.
             let _ = sender.send(result);
@@ -903,8 +903,8 @@ impl Scene {
             timeout: None,
         };
         device.poll(poll_type)?;
-        match receiver.receive().await {
-            Some(Ok(())) => {
+        match receiver.await {
+            Ok(Ok(())) => {
                 let mapped = buffer_slice.get_mapped_range()?;
                 if layout.padded_bytes_per_row == layout.unpadded_bytes_per_row {
                     return Ok(mapped.iter().copied().collect());
@@ -929,8 +929,8 @@ impl Scene {
                 }
                 Ok(output)
             }
-            Some(Err(error)) => Err(error.into()),
-            None => Err(GpuError::BufferMapChannelClosed),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => Err(GpuError::BufferMapChannelClosed),
         }
     }
 }
