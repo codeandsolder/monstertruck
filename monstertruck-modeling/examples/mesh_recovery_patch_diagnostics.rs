@@ -798,18 +798,7 @@ fn read_trial_mode(
         .transpose()
 }
 
-fn main() -> Result<()> {
-    let mut args = std::env::args_os().skip(1);
-    let path = PathBuf::from(args.next().context("expected OBJ path or --replay-facet")?);
-    if path.as_os_str() == "--replay-facet" {
-        let input = PathBuf::from(args.next().context("expected facet input JSON")?);
-        anyhow::ensure!(args.next().is_none(), "usage: --replay-facet INPUT_JSON");
-        return replay_facet(&input);
-    }
-    let mut arguments = args.collect::<Vec<_>>();
-    let simplify = arguments.iter().any(|arg| arg == "--simplify-planar-fans");
-    let carrier_trials = !arguments.iter().any(|arg| arg == "--no-carrier-trials");
-    arguments.retain(|arg| arg != "--simplify-planar-fans" && arg != "--no-carrier-trials");
+fn read_search_budget(arguments: &mut Vec<std::ffi::OsString>) -> Result<SearchBudget> {
     let mut search_budget = SearchBudget::default();
     if let Some(position) = arguments.iter().position(|arg| arg == "--search-budget") {
         let raw = arguments
@@ -830,6 +819,22 @@ fn main() -> Result<()> {
         );
         arguments.drain(position..=position + 1);
     }
+    Ok(search_budget)
+}
+
+fn main() -> Result<()> {
+    let mut args = std::env::args_os().skip(1);
+    let path = PathBuf::from(args.next().context("expected OBJ path or --replay-facet")?);
+    if path.as_os_str() == "--replay-facet" {
+        let input = PathBuf::from(args.next().context("expected facet input JSON")?);
+        anyhow::ensure!(args.next().is_none(), "usage: --replay-facet INPUT_JSON");
+        return replay_facet(&input);
+    }
+    let mut arguments = args.collect::<Vec<_>>();
+    let simplify = arguments.iter().any(|arg| arg == "--simplify-planar-fans");
+    let carrier_trials = !arguments.iter().any(|arg| arg == "--no-carrier-trials");
+    arguments.retain(|arg| arg != "--simplify-planar-fans" && arg != "--no-carrier-trials");
+    let search_budget = read_search_budget(&mut arguments)?;
     let mut args = arguments.into_iter();
     let read_budget = |arg: Option<std::ffi::OsString>| -> Result<f64> {
         arg.context("expected explicit approximation budget")?
