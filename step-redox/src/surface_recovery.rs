@@ -914,7 +914,7 @@ fn unit_affine_v_coordinates(surface: &ParsedSurface, columns: usize) -> Option<
 /// The normalized Greville abscissae are the coefficients of the affine
 /// sweep parameter on a clamped, nondegenerate knot vector. No evaluation
 /// or tessellation of the represented surface is needed.
-pub(crate) fn affine_sweep_coordinates(
+pub fn affine_sweep_coordinates(
     degree: usize,
     count: usize,
     knots: &[f64],
@@ -966,7 +966,7 @@ pub(crate) fn affine_sweep_coordinates(
 /// imported native surfaces. Positive weights constant along the sweep
 /// cancel its basis in the rational denominator. By partition of unity,
 /// the largest Euclidean control residual bounds the entire surface error.
-pub(crate) fn certify_affine_sweep(
+pub fn certify_affine_sweep(
     rows: usize,
     coordinates: &[f64],
     pole: impl Fn(usize, usize) -> Option<([f64; 3], f64)>,
