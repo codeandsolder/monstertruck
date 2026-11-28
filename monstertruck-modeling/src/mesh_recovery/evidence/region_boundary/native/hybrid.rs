@@ -210,6 +210,9 @@ pub enum HybridRecoveryError {
         queued_states: usize,
         /// Number of attempted full native transactions.
         trials: usize,
+        /// Original support seeds of the last attempted transaction.
+        /// Empty when no geometric transaction was reached.
+        seed_supports: Box<[usize]>,
         /// Most recent geometric rejection or missing admissible cover.
         last: Box<Self>,
     },

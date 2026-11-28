@@ -887,11 +887,13 @@ impl HybridSource<'_> {
             self.initial_cover_search(permitted_supports, &context, options)?;
         let mut last = HybridRecoveryError::NoSupportCandidate;
         let mut trials = 0;
+        let mut last_seeds = Vec::new();
         while trials < options.max_trials {
             let Some(candidate) = followup.take().or_else(|| search.next_cover()) else {
                 break;
             };
             trials += 1;
+            last_seeds.clone_from(&candidate.seeds);
             let seed_cost: usize = candidate.seeds.iter().map(|&id| search.sizes[id]).sum();
             let limit = options.refinement.max_added_polygons - seed_cost;
             match self.construct_refined_with_context(
@@ -958,6 +960,7 @@ impl HybridSource<'_> {
             states: search.states,
             queued_states: search.visited.len(),
             trials,
+            seed_supports: last_seeds.into_boxed_slice(),
             last: Box::new(last),
         })
     }
