@@ -9,7 +9,7 @@ use monstertruck_gpu::{
     BackendBufferConfig, Camera, Light, LightType, StudioConfig, WindowScene, WindowSceneDescriptor,
 };
 use monstertruck_modeling::{
-    BoundedSurface, BsplineSurface, InnerSpace, KnotVector, Matrix4, Point3, Vector3, Vector4,
+    BoundedSurface, BsplineSurface, InnerProduct, KnotVector, Matrix4, Point3, Vector3, Vector4,
 };
 use monstertruck_render::{
     CreatorCreator, InstanceCreator, PolygonInstance, PolygonState, StructuredMesh,
@@ -55,13 +55,13 @@ impl MyApp {
     }
     fn init_camera() -> Camera {
         let mut vec0 = Vector4::new(1.5, 0.0, -1.5, 0.0);
-        vec0 /= vec0.magnitude();
+        vec0 /= vec0.norm();
         let mut vec1 = Vector4::new(-0.5, 1.0, -0.5, 0.0);
-        vec1 /= vec1.magnitude();
+        vec1 /= vec1.norm();
         let mut vec2 = Vector4::new(1.0, 1.0, 1.0, 0.0);
-        vec2 /= vec2.magnitude();
+        vec2 /= vec2.norm();
         let vec3 = Vector4::new(1.5, 0.8, 1.5, 1.0);
-        let matrix = Matrix4::from_cols(vec0, vec1, vec2, vec3);
+        let matrix = Matrix4::from_columns(&[vec0, vec1, vec2, vec3]);
         Camera {
             matrix,
             ..Default::default()

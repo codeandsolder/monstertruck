@@ -1,11 +1,11 @@
 use super::{
-    Adjacency, FaceNormal, Faces, InnerSpace, MetricSpace, Point3, PolygonMesh, StandardAttributes,
-    Vector3, Vertex, nonpositive_tolerance,
+    Adjacency, FaceNormal, Faces, InnerProduct, MetricSpace, Point3, PolygonMesh,
+    StandardAttributes, Vector3, Vertex, nonpositive_tolerance,
 };
 use std::f64::consts::PI;
 
 #[cfg(test)]
-use crate::EuclideanSpace;
+use crate::AffinePoint;
 
 /// Splitting the faces into several clusters.
 pub trait Splitting {
@@ -302,14 +302,14 @@ fn is_signed_up_upper(
 fn get_angle(positions: &[Point3], face: &[Vertex], idx0: usize, idx1: usize, idx2: usize) -> f64 {
     let vec0 = positions[face[idx1].pos] - positions[face[idx0].pos];
     let vec1 = positions[face[idx2].pos] - positions[face[idx0].pos];
-    vec0.angle(vec1).0
+    monstertruck_core::angle_between(vec0, vec1)
 }
 
 fn add_weights(weights: &mut [f64], positions: &[Point3], face: &[Vertex]) {
     let area = (2..face.len()).fold(0.0, |sum, i| {
         let vec0 = positions[face[i - 1].pos] - positions[face[0].pos];
         let vec1 = positions[face[i].pos] - positions[face[0].pos];
-        sum + (vec0.cross(vec1)).magnitude() / 2.0
+        sum + (vec0.cross(&vec1)).norm() / 2.0
     }) / (crate::count_as_f64(face.len()));
     for v in face {
         weights[v.pos] += area;
@@ -333,7 +333,7 @@ fn into_components_test() {
     .into_iter()
     .collect();
     let positions = vec![Point3::origin(); 8];
-    let normals = vec![Vector3::unit_x(); 8];
+    let normals = vec![Vector3::x(); 8];
     let mesh = PolygonMesh::new(
         StandardAttributes {
             positions,

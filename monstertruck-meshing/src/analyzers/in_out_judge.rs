@@ -1,4 +1,4 @@
-use super::{InnerSpace, Matrix3, Origin, Point3, PolygonMesh, SquareMatrix, Vector3, hash};
+use super::{InnerProduct, Matrix3, Origin, Point3, PolygonMesh, SquareLinearMap, Vector3, hash};
 use crate::spatial_hierarchy::{Bounds, SpatialHierarchy};
 use derive_more::{Deref, DerefMut};
 use std::borrow::Borrow;
@@ -17,16 +17,16 @@ struct Triangle([Point3; 3]);
 
 impl Triangle {
     #[inline]
-    fn normal(self) -> Vector3 { (self[1] - self[0]).cross(self[2] - self[0]).normalize() }
+    fn normal(self) -> Vector3 { (self[1] - self[0]).cross(&(self[2] - self[0])).normalize() }
 
     fn is_crossing(self, ray: Ray) -> bool {
         let a = self[0] - self[1];
         let b = self[0] - self[2];
-        let mat = Matrix3::from_cols(a, b, ray.direction);
+        let mat = Matrix3::from_columns(&[a, b, ray.direction]);
         if mat.determinant().so_small() {
             false
         } else {
-            let Some(inv) = mat.invert() else {
+            let Some(inv) = mat.try_inverse() else {
                 return false;
             };
             let uvt = inv * (self[0] - ray.origin);
@@ -37,7 +37,7 @@ impl Triangle {
         if !self.is_crossing(ray) {
             return 0;
         }
-        let direction = self.normal().dot(ray.direction);
+        let direction = self.normal().dot(&ray.direction);
         if direction > 0.0 {
             1
         } else if direction < 0.0 {
@@ -201,8 +201,8 @@ pub trait IncludingPointInDomain {
     ///     ]),
     /// ).expect("fixture mesh is valid");
     ///
-    /// assert_eq!(simplex.signed_crossing_faces(Point3::new(0.1, 0.1, 0.1), Vector3::unit_x()), 1);
-    /// assert_eq!(simplex.signed_crossing_faces(Point3::new(-0.1, 0.1, 0.1), Vector3::unit_x()), 0);
+    /// assert_eq!(simplex.signed_crossing_faces(Point3::new(0.1, 0.1, 0.1), Vector3::x()), 1);
+    /// assert_eq!(simplex.signed_crossing_faces(Point3::new(-0.1, 0.1, 0.1), Vector3::x()), 0);
     /// ```
     fn signed_crossing_faces(&self, point: Point3, ray_direction: Vector3) -> isize;
     /// whether `point` is in a domain rounded by a closed polygon.
@@ -317,10 +317,10 @@ fn indexed_winding_matches_exhaustive_polygon_fans() {
     let index = SignedRayIndex::new(meshes.iter().map(|(mesh, forward)| (mesh, *forward)));
     assert!(index.hierarchy.is_some());
     let directions = [
-        Vector3::unit_x(),
-        -Vector3::unit_x(),
-        Vector3::unit_y(),
-        -Vector3::unit_z(),
+        Vector3::x(),
+        -Vector3::x(),
+        Vector3::y(),
+        -Vector3::z(),
         Vector3::new(1., 0.17, -0.29),
         Vector3::new(-0.75, 0.5, 0.21),
         Vector3::new(1e-300, 0., 1.),
@@ -356,7 +356,7 @@ fn indexed_winding_matches_exhaustive_polygon_fans() {
     }
     let empty = SignedRayIndex::new(std::iter::empty::<(&PolygonMesh, bool)>());
     assert_eq!(
-        empty.signed_crossing_faces(Point3::new(0., 0., 0.), Vector3::unit_x()),
+        empty.signed_crossing_faces(Point3::new(0., 0., 0.), Vector3::x()),
         0
     );
 }

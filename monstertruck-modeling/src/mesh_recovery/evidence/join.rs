@@ -5,7 +5,7 @@
 
 use super::spatial::{SpatialTrackEvidence, measure_spatial_support_set};
 use super::{CurvatureTrack, MeshEvidence, measure_curvature_spatial};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
 
 /// Evidence for whether two genuinely source-connected curvature hypotheses
@@ -70,12 +70,12 @@ pub(super) fn line_distance(
     right_axis: Vector3,
 ) -> f64 {
     let delta = right_origin - left_origin;
-    let cross = left_axis.cross(right_axis);
-    let sine = cross.magnitude();
+    let cross = left_axis.cross(&right_axis);
+    let sine = cross.norm();
     if sine < 1.0e-8 {
-        delta.cross(left_axis).magnitude()
+        delta.cross(&left_axis).norm()
     } else {
-        delta.dot(cross).abs() / sine
+        delta.dot(&cross).abs() / sine
     }
 }
 
@@ -112,8 +112,8 @@ pub fn measure_curvature_spatial_join(
     }
     let first_fit = measure_curvature_spatial(evidence, first)?;
     let second_fit = measure_curvature_spatial(evidence, second)?;
-    let cross = first.seed_axis.cross(second.seed_axis).magnitude();
-    let dot = first.seed_axis.dot(second.seed_axis);
+    let cross = first.seed_axis.cross(&second.seed_axis).norm();
+    let dot = first.seed_axis.dot(&second.seed_axis);
     let axis_angle_radians = cross.atan2(dot.abs());
     let second_axis = if dot < 0.0 {
         -second.seed_axis

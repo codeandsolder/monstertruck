@@ -97,12 +97,12 @@ fn test_edge_blend_ends_by_bezier_surface(
 
     let normal0 = surface0
         .derivative_u(t, 1.0)
-        .cross(surface0.derivative_v(t, 1.0));
+        .cross(&surface0.derivative_v(t, 1.0));
     let normal1 = surface1
         .derivative_u(t, 0.0)
-        .cross(surface1.derivative_v(t, 0.0));
-    let axis0 = surface0.derivative_u(t, 1.0).cross(normal0);
-    let axis1 = surface1.derivative_u(t, 0.0).cross(normal1);
+        .cross(&surface1.derivative_v(t, 0.0));
+    let axis0 = surface0.derivative_u(t, 1.0).cross(&normal0);
+    let axis1 = surface1.derivative_u(t, 0.0).cross(&normal1);
 
     prop_assume!(!normal0.so_small());
     prop_assume!(!normal1.so_small());
@@ -165,10 +165,10 @@ fn test_edge_blend_g1_continuity_along_rails() {
         // Compare up to orientation by aligning the blend normal's sign.
         let sn0 = pcurve0.surface().normal(u, 0.0);
         let bn0 = blend.normal(u, 0.0);
-        assert_near!(bn0 * f64::signum(bn0.dot(sn0)), sn0);
+        assert_near!(bn0 * f64::signum(bn0.dot(&sn0)), sn0);
         let sn1 = pcurve1.surface().normal(u, 0.0);
         let bn1 = blend.normal(u, 1.0);
-        assert_near!(bn1 * f64::signum(bn1.dot(sn1)), sn1);
+        assert_near!(bn1 * f64::signum(bn1.dot(&sn1)), sn1);
 
         // The cross-boundary (u-direction) tangent is continuous with the rail
         // tangent of the supporting surface at the boundary.

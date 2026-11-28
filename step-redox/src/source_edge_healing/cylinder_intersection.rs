@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use monstertruck_geometry::analytic_cylinder_intersection::{
     BoundedSourceIntersection, CylinderCarrier, CylinderIntersectionArc,
 };
-use monstertruck_geometry::prelude::{InnerSpace, NurbsCurve, Point3, Vector3, Vector4};
+use monstertruck_geometry::prelude::{InnerProduct, NurbsCurve, Point3, Vector3, Vector4};
 use serde::Serialize;
 
 #[derive(Clone, Copy)]
@@ -130,14 +130,14 @@ fn directed_vertex_residuals(
         endpoints.reverse();
     }
     let residual = [
-        (endpoints[0] - point3(topology.start, scale)).magnitude(),
-        (endpoints[1] - point3(topology.end, scale)).magnitude(),
+        (endpoints[0] - point3(topology.start, scale)).norm(),
+        (endpoints[1] - point3(topology.end, scale)).norm(),
     ];
     if !residual
         .iter()
         .all(|value| value.is_finite() && *value <= tolerance)
         || topology.start_vertex_id == topology.end_vertex_id
-        || (point3(topology.start, scale) - point3(topology.end, scale)).magnitude() <= tolerance
+        || (point3(topology.start, scale) - point3(topology.end, scale)).norm() <= tolerance
     {
         bail!("curve does not match distinct authored directed vertices");
     }

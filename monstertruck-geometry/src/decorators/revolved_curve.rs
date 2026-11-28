@@ -8,14 +8,15 @@
 )]
 
 use super::{
-    Angle, Bound, BoundedCurve, BoundedSurface, BsplineCurve, CurveParameter, Debug,
-    EuclideanSpace, INCLUDE_CURVE_TRIALS, IncludeCurve, InnerSpace, Invertible, Matrix3,
-    NurbsCurve, Origin, PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D,
-    ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3, Rad,
-    Revolution, RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
+    AffinePoint, Bound, BoundedCurve, BoundedSurface, BsplineCurve, CurveParameter, Debug,
+    INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, Matrix3, NurbsCurve, Origin,
+    PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D, ParameterRange,
+    ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point2, Point3, Revolution,
+    RevolutionSurface, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
     SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, Tolerance, Vector2, Vector3,
     Vector4, Zero, algo,
 };
+use monstertruck_core::{Rotation3, Unit};
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;
 
@@ -27,7 +28,9 @@ impl Revolution {
         }
     }
     #[inline]
-    fn rotation_matrix(self, v: f64) -> Matrix3 { Matrix3::from_axis_angle(self.axis, Rad(v)) }
+    fn rotation_matrix(self, v: f64) -> Matrix3 {
+        Rotation3::from_axis_angle(&Unit::new_unchecked(self.axis), v).into_inner()
+    }
     #[inline]
     fn invert(&mut self) { self.axis *= -1.0; }
     #[inline]
@@ -36,40 +39,40 @@ impl Revolution {
         self
     }
     #[inline]
-    fn contains(self, p: Point3) -> bool { (p - self.origin).cross(self.axis).so_small() }
+    fn contains(self, p: Point3) -> bool { (p - self.origin).cross(&self.axis).so_small() }
     #[inline]
     fn proj_point(&self, p: Point3) -> Point2 {
         let r = p - self.origin;
-        let z = r.dot(self.axis);
+        let z = r.dot(&self.axis);
         let h = r - z * self.axis;
-        Point2::new(z, h.magnitude())
+        Point2::new(z, h.norm())
     }
     #[inline]
     fn proj_vector(&self, p: Point3, v: Vector3) -> Vector2 {
         let r = self.proj_point(p).y;
-        let vz = v.dot(self.axis);
+        let vz = v.dot(&self.axis);
         let vxy = v - vz * self.axis;
-        let vq = (p - self.origin).dot(vxy) / r;
+        let vq = (p - self.origin).dot(&vxy) / r;
         Vector2::new(vz, vq)
     }
     #[inline]
     fn proj_vector2(&self, p: Point3, v: Vector3, v2: Vector3) -> Vector2 {
         let r = self.proj_point(p).y;
-        let v2z = v2.dot(self.axis);
+        let v2z = v2.dot(&self.axis);
         let v2xy = v2 - v2z * self.axis;
-        let vz = v.dot(self.axis);
+        let vz = v.dot(&self.axis);
         let vxy = v - vz * self.axis;
-        let a = (vxy.dot(vxy) + (p - self.origin).dot(v2xy)) / r;
-        let b = f64::powi((p - self.origin).dot(vxy), 2) / (r * r * r);
+        let a = (vxy.dot(&vxy) + (p - self.origin).dot(&v2xy)) / r;
+        let b = f64::powi((p - self.origin).dot(&vxy), 2) / (r * r * r);
         Vector2::new(v2z, a - b)
     }
     #[inline]
     fn proj_angle(&self, p: Point3, q: Point3) -> f64 {
         let (p, q) = (p - self.origin, q - self.origin);
-        let hp = (p - p.dot(self.axis) * self.axis).normalize();
-        let hq = (q - q.dot(self.axis) * self.axis).normalize();
-        let t = f64::acos(f64::clamp(hp.dot(hq), -1.0, 1.0));
-        if hp.cross(hq).dot(self.axis) >= 0.0 {
+        let hp = (p - p.dot(&self.axis) * self.axis).normalize();
+        let hq = (q - q.dot(&self.axis) * self.axis).normalize();
+        let t = f64::acos(f64::clamp(hp.dot(&hq), -1.0, 1.0));
+        if hp.cross(&hq).dot(&self.axis) >= 0.0 {
             t
         } else {
             2.0f64.mul_add(PI, -t)
@@ -83,14 +86,14 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
         let center = match (m, n) {
-            (0, 0) => self.origin().to_vec(),
+            (0, 0) => self.origin().position_vector(),
             _ => Vector3::zero(),
         };
         let u_part = match m {
             0 => self.curve.evaluate(u) - self.origin(),
             _ => self.curve.derivative_n(m, u),
         };
-        let v_part = from_axis_angle_derivation(n, self.axis(), Rad(v));
+        let v_part = from_axis_angle_derivation(n, self.axis(), v);
         v_part * u_part + center
     }
     #[inline]
@@ -106,7 +109,7 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     #[inline]
     fn derivative_v(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
-        let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
+        let v_part = from_axis_angle_derivation(1, self.axis(), v);
         v_part * u_part
     }
     #[inline]
@@ -116,13 +119,13 @@ impl<C: ParametricCurve3D> ParametricSurface for RevolutionSurface<C> {
     #[inline]
     fn derivative_vv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.evaluate(u) - self.origin();
-        let v_part = from_axis_angle_derivation(2, self.axis(), Rad(v));
+        let v_part = from_axis_angle_derivation(2, self.axis(), v);
         v_part * u_part
     }
     #[inline]
     fn derivative_uv(&self, u: f64, v: f64) -> Vector3 {
         let u_part = self.curve.derivative(u);
-        let v_part = from_axis_angle_derivation(1, self.axis(), Rad(v));
+        let v_part = from_axis_angle_derivation(1, self.axis(), v);
         v_part * u_part
     }
     #[inline]
@@ -144,26 +147,26 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricSurface3D for RevolutionSurf
         let (u0, u1) = self.curve.range_tuple();
         let (uder, vder) = if u.near(&u0) {
             let pt = self.curve.evaluate(u);
-            let radius = self.axis().cross(pt - self.origin());
+            let radius = self.axis().cross(&(pt - self.origin()));
             if radius.so_small() {
                 let uder = self.curve.derivative(u);
-                (uder, self.axis().cross(uder))
+                (uder, self.axis().cross(&uder))
             } else {
                 (self.derivative_u(u, v), self.derivative_v(u, v))
             }
         } else if u.near(&u1) {
             let pt = self.curve.evaluate(u);
-            let radius = self.axis().cross(pt - self.origin());
+            let radius = self.axis().cross(&(pt - self.origin()));
             if radius.so_small() {
                 let uder = self.curve.derivative(u);
-                (uder, uder.cross(self.axis()))
+                (uder, uder.cross(&self.axis()))
             } else {
                 (self.derivative_u(u, v), self.derivative_v(u, v))
             }
         } else {
             (self.derivative_u(u, v), self.derivative_v(u, v))
         };
-        uder.cross(vder).normalize()
+        uder.cross(&vder).normalize()
     }
 }
 
@@ -306,15 +309,15 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
         let axis = self.revolution.axis;
         let mut transverse = Vec::with_capacity(n + 1);
         let displacement = point - self.revolution.origin;
-        let axial0 = displacement.dot(axis);
+        let axial0 = displacement.dot(&axis);
         transverse.push(displacement - axial0 * axis);
         for (order, &factorial) in factorials.iter().enumerate().skip(1) {
             let derivative = self.curve.derivative_n(order, t);
-            let axial = derivative.dot(axis);
+            let axial = derivative.dot(&axis);
             transverse.push((derivative - axial * axis) / factorial);
         }
 
-        let axial = self.curve.derivative_n(n, t).dot(axis);
+        let axial = self.curve.derivative_n(n, t).dot(&axis);
         let Some(leading_order) = transverse.iter().position(|value| !value.so_small()) else {
             return Vector2::new(axial, 0.0);
         };
@@ -324,7 +327,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ProjectedCurve<C> {
         let mut squared = vec![0.0; radial_order + 1];
         for order in 0..=radial_order {
             squared[order] = (0..=order)
-                .map(|i| shifted[i].dot(shifted[order - i]))
+                .map(|i| shifted[i].dot(&shifted[order - i]))
                 .sum();
         }
 
@@ -362,7 +365,7 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
     #[inline]
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         match n {
-            0 => self.evaluate(t).to_vec(),
+            0 => self.evaluate(t).position_vector(),
             1 => self.derivative(t),
             2 => self.derivative_2(t),
             _ => self.derivative_n_from_jet(n, t),
@@ -378,9 +381,9 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         // by radius. At a bounded generator endpoint on the axis that derivative
         // has a finite one-sided limit even though the two-sided formula is 0/0.
         if let Some(sign) = self.fixed_endpoint_sign(t) {
-            let axial = derivative.dot(self.revolution.axis);
+            let axial = derivative.dot(&self.revolution.axis);
             let transverse = derivative - axial * self.revolution.axis;
-            return Vector2::new(axial, sign * transverse.magnitude());
+            return Vector2::new(axial, sign * transverse.norm());
         }
         self.revolution.proj_vector(point, derivative)
     }
@@ -390,19 +393,19 @@ impl<C: ParametricCurve3D + BoundedCurve> ParametricCurveTrait for ProjectedCurv
         let derivative = self.curve.derivative(t);
         let derivative_2 = self.curve.derivative_2(t);
         if let Some(sign) = self.fixed_endpoint_sign(t) {
-            let axial = derivative.dot(self.revolution.axis);
+            let axial = derivative.dot(&self.revolution.axis);
             let transverse = derivative - axial * self.revolution.axis;
-            let axial_2 = derivative_2.dot(self.revolution.axis);
+            let axial_2 = derivative_2.dot(&self.revolution.axis);
             let transverse_2 = derivative_2 - axial_2 * self.revolution.axis;
-            let transverse_speed = transverse.magnitude();
+            let transverse_speed = transverse.norm();
             let radial_2 = if transverse_speed > 0.0 {
-                sign * transverse.dot(transverse_2) / transverse_speed
+                sign * transverse.dot(&transverse_2) / transverse_speed
             } else if transverse_speed.is_nan() {
                 f64::NAN
             } else {
                 // If the transverse first derivative also vanishes, the first
                 // non-zero radial term is quadratic: |a_perp| * dt^2 / 2.
-                transverse_2.magnitude()
+                transverse_2.norm()
             };
             return Vector2::new(axial_2, radial_2);
         }
@@ -510,9 +513,9 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0)],
     /// );
-    /// let surface0 = RevolutionSurface::by_revolution(line.clone(), Point3::origin(), Vector3::unit_y());
+    /// let surface0 = RevolutionSurface::by_revolution(line.clone(), Point3::origin(), Vector3::y());
     /// assert!(surface0.is_front_fixed());
-    /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::unit_y());
+    /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::y());
     /// assert!(!surface1.is_front_fixed());
     /// ```
     #[inline]
@@ -525,9 +528,9 @@ impl<C: ParametricCurve3D + BoundedCurve> RevolutionSurface<C> {
     ///     KnotVector::bezier_knot(1),
     ///     vec![Point3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 0.0)],
     /// );
-    /// let surface0 = RevolutionSurface::by_revolution(line.clone(), Point3::origin(), Vector3::unit_y());
+    /// let surface0 = RevolutionSurface::by_revolution(line.clone(), Point3::origin(), Vector3::y());
     /// assert!(surface0.is_back_fixed());
-    /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::unit_y());
+    /// let surface1 = RevolutionSurface::by_revolution(line, Point3::new(1.0, 0.0, 0.0), Vector3::y());
     /// assert!(!surface1.is_back_fixed());
     /// ```
     #[inline]
@@ -598,7 +601,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
         let (t0, t1) = self.curve.range_tuple();
         let on_axis = move |o: Point3, normal: Vector3| {
             let op = point - o;
-            op.cross(self.revolution.axis).so_small() && op.dot(normal) >= 0.0
+            op.cross(&self.revolution.axis).so_small() && op.dot(&normal) >= 0.0
         };
         if self.is_front_fixed() && on_axis(self.curve.front(), self.normal(t0, 0.0)) {
             match hint {
@@ -759,8 +762,8 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
     }
 }
 
-fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matrix3 {
-    let (s, c) = Rad::sin_cos(angle);
+fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: f64) -> Matrix3 {
+    let (s, c) = f64::sin_cos(angle);
     let (s, c) = match n % 4 {
         0 => (s, c),
         1 => (c, -s),
@@ -774,19 +777,7 @@ fn from_axis_angle_derivation(n: usize, axis: Vector3, angle: Rad<f64>) -> Matri
 
     #[expect(clippy::deprecated_cfg_attr, reason = "rustfmt_skip is formatter-only and intentionally scoped through cfg_attr")]
     #[cfg_attr(rustfmt, rustfmt_skip)]
-    Matrix3::new(
-        (one_minus_cosine_derivative * axis.x).mul_add(axis.x, c),
-        f64::mul_add(s, axis.z, one_minus_cosine_derivative * axis.x * axis.y),
-        f64::mul_add(s, -axis.y, one_minus_cosine_derivative * axis.x * axis.z),
-
-        f64::mul_add(s, -axis.z, one_minus_cosine_derivative * axis.x * axis.y),
-        (one_minus_cosine_derivative * axis.y).mul_add(axis.y, c),
-        f64::mul_add(s, axis.x, one_minus_cosine_derivative * axis.y * axis.z),
-
-        f64::mul_add(s, axis.y, one_minus_cosine_derivative * axis.x * axis.z),
-        f64::mul_add(s, -axis.x, one_minus_cosine_derivative * axis.y * axis.z),
-        (one_minus_cosine_derivative * axis.z).mul_add(axis.z, c),
-    )
+    Matrix3::new((one_minus_cosine_derivative * axis.x).mul_add(axis.x, c), f64::mul_add(s, -axis.z, one_minus_cosine_derivative * axis.x * axis.y), f64::mul_add(s, axis.y, one_minus_cosine_derivative * axis.x * axis.z), f64::mul_add(s, axis.z, one_minus_cosine_derivative * axis.x * axis.y), (one_minus_cosine_derivative * axis.y).mul_add(axis.y, c), f64::mul_add(s, -axis.x, one_minus_cosine_derivative * axis.y * axis.z), f64::mul_add(s, -axis.y, one_minus_cosine_derivative * axis.x * axis.z), f64::mul_add(s, axis.x, one_minus_cosine_derivative * axis.y * axis.z), (one_minus_cosine_derivative * axis.z).mul_add(axis.z, c))
 }
 
 #[cfg(test)]
@@ -810,14 +801,14 @@ mod tests {
         );
         let projected = ProjectedCurve {
             curve,
-            revolution: Revolution::new(Point3::origin(), Vector3::unit_y()),
+            revolution: Revolution::new(Point3::origin(), Vector3::y()),
         };
         let t = 0.43;
         let h = 1.0e-5;
         let exact = projected.derivative_n(3, t);
         let finite_difference =
             (projected.derivative_2(t + h) - projected.derivative_2(t - h)) / (2.0 * h);
-        assert!((exact - finite_difference).magnitude() < 1.0e-4);
+        assert!((exact - finite_difference).norm() < 1.0e-4);
     }
 
     #[test]
@@ -828,7 +819,7 @@ mod tests {
         );
         let projected = ProjectedCurve {
             curve,
-            revolution: Revolution::new(Point3::origin(), Vector3::unit_z()),
+            revolution: Revolution::new(Point3::origin(), Vector3::z()),
         };
         assert_near!(projected.derivative_n(3, 0.0), Vector2::zero());
         assert_near!(projected.derivative_n(4, 0.0), Vector2::zero());

@@ -1,18 +1,18 @@
 use super::super::curve_inclusion;
 use super::{
-    Bounded, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint, Deserialize,
-    EuclideanSpace, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible, KnotVector, Matrix2,
-    Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION, ParameterDivision2D,
-    ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
+    AffinePoint, Bounded, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, ControlPoint,
+    Deserialize, GeometryTransform, HashGen, INCLUDE_CURVE_TRIALS, IncludeCurve, Invertible,
+    KnotVector, Matrix2, Matrix3, Matrix4, MetricSpace, NurbsCurve, PRESEARCH_DIVISION,
+    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Point2, Point3,
     SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, Tolerance, Transform, Transformed, Vector2, Vector3, Vector4, algo,
+    SurfaceParameterRange, Tolerance, Transformed, Vector2, Vector3, Vector4, algo,
 };
 use algo::surface::{SearchNearestParameterVector, SearchParameterVector};
 use std::ops::Mul;
 
 impl<P> ParameterDivision2D for BsplineSurface<P>
 where P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + HashGen<f64>
 {
@@ -112,7 +112,7 @@ impl<P> v2::SearchNearestParameter<v2::SurfaceParameter<f64>> for BsplineSurface
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + 'static,
@@ -134,7 +134,7 @@ impl<P> v2::SearchParameter<v2::SurfaceParameter<f64>> for BsplineSurface<P>
 where
     P: HasScalar<Scalar = f64>
         + ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + 'static
@@ -176,7 +176,7 @@ where P: ControlPoint<f64> + Bounded<Scalar = f64> + 'static
 impl<P, V> SearchParameter<SurfaceParameter> for BsplineSurface<P>
 where
     P: ControlPoint<f64, Diff = V>
-        + EuclideanSpace<Scalar = f64, Diff = V>
+        + AffinePoint<Scalar = f64, Diff = V>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + 'static
@@ -202,7 +202,7 @@ where
 impl<P> SearchNearestParameter<SurfaceParameter> for BsplineSurface<P>
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + 'static,
@@ -235,7 +235,7 @@ fn include_bspline_curve<P, C>(
 ) -> bool
 where
     P: ControlPoint<f64>
-        + EuclideanSpace<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
+        + AffinePoint<Scalar = f64, Diff = <P as ControlPoint<f64>>::Diff>
         + MetricSpace<Metric = f64>
         + Bounded<Scalar = f64>
         + 'static
@@ -335,15 +335,15 @@ impl_scalar_multi!(Vector3, f64);
 impl_mat_multi!(Vector4, Matrix4);
 impl_scalar_multi!(Vector4, f64);
 
-impl<M, P: EuclideanSpace<Scalar = f64>> Transformed<M> for BsplineSurface<P>
-where M: Transform<P>
+impl<M, P: AffinePoint<Scalar = f64>> Transformed<M> for BsplineSurface<P>
+where M: GeometryTransform<P>
 {
     #[inline]
     fn transform_by(&mut self, trans: M) {
         self.control_points
             .iter_mut()
             .flatten()
-            .for_each(|p| *p = trans.transform_point(*p));
+            .for_each(|p| *p = trans.apply_point(*p));
     }
 }
 

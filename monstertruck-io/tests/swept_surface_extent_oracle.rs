@@ -67,7 +67,7 @@ use monstertruck_io::step::load::{
     step_geometry::{
         Curve3D, StepExtrusionSurface, StepRevolutionSurface, Surface, SweepSurface,
         re_exports::{
-            EuclideanSpace, InnerSpace, ParametricCurve, ParametricSurface, ParametricSurface3D,
+            AffinePoint, InnerProduct, ParametricCurve, ParametricSurface, ParametricSurface3D,
             Point3, Vector3,
         },
     },
@@ -225,7 +225,7 @@ fn sample_curve(curve: &Curve3D, out: &mut Vec<Point3>) {
     for index in 0..=n {
         let t = t0 + (t1 - t0) * index as f64 / n as f64;
         let p = curve.evaluate(t);
-        if finite(p.to_vec()) {
+        if finite(p.position_vector()) {
             out.push(p);
         }
     }
@@ -290,7 +290,7 @@ const REFINE_ROUNDS: usize = 40;
 fn extrusion_extent(surface: &StepExtrusionSurface, samples: &[Point3]) -> Option<Extent> {
     let profile = surface.entity_curve();
     let axis = surface.extruding_vector();
-    let axis_len2 = axis.magnitude2();
+    let axis_len2 = axis.norm_squared();
     if axis_len2 <= 0.0 || !axis_len2.is_finite() {
         return None;
     }
@@ -301,10 +301,10 @@ fn extrusion_extent(surface: &StepExtrusionSurface, samples: &[Point3]) -> Optio
 
     let residual_at = |u: f64, p: Point3| {
         let c = profile.evaluate(u);
-        let v = (p - c).dot(axis) / axis_len2;
-        ((p - c) - axis * v).magnitude()
+        let v = (p - c).dot(&axis) / axis_len2;
+        ((p - c) - axis * v).norm()
     };
-    let v_at = |u: f64, p: Point3| (p - profile.evaluate(u)).dot(axis) / axis_len2;
+    let v_at = |u: f64, p: Point3| (p - profile.evaluate(u)).dot(&axis) / axis_len2;
 
     let mut ext = Extent {
         required_profile: (f64::INFINITY, f64::NEG_INFINITY),
@@ -349,8 +349,8 @@ fn revolution_extent(surface: &StepRevolutionSurface, samples: &[Point3]) -> Opt
     let cylindrical = |p: Point3| {
         let local = matrix::transform_point(&inverse, p);
         let r = local - origin;
-        let z = r.dot(axis);
-        (z, (r - axis * z).magnitude())
+        let z = r.dot(&axis);
+        (z, (r - axis * z).norm())
     };
     let residual_at = |u: f64, target: (f64, f64)| {
         let (z, r) = cylindrical_of_profile(profile, u, origin, axis);
@@ -380,8 +380,8 @@ fn revolution_extent(surface: &StepRevolutionSurface, samples: &[Point3]) -> Opt
 
 fn cylindrical_of_profile(profile: &Curve3D, u: f64, origin: Point3, axis: Vector3) -> (f64, f64) {
     let r = profile.evaluate(u) - origin;
-    let z = r.dot(axis);
-    (z, (r - axis * z).magnitude())
+    let z = r.dot(&axis);
+    (z, (r - axis * z).norm())
 }
 
 /// Model units per unit of profile parameter, as a chord-length average. Only
@@ -393,7 +393,7 @@ fn profile_profile_scale(profile: &Curve3D, u0: f64, u1: f64) -> f64 {
     for index in 1..=n {
         let u = u0 + (u1 - u0) * f64::from(index) / f64::from(n);
         let p = profile.evaluate(u);
-        length += (p - previous).magnitude();
+        length += (p - previous).norm();
         previous = p;
     }
     if u1 > u0 { length / (u1 - u0) } else { 0.0 }
@@ -429,16 +429,15 @@ fn argmin_on_span(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
     if f(mid) < best_value { mid } else { best }
 }
 
-/// Everything needed from `cgmath` comes through the STEP geometry prelude, so
-/// this test does not have to name `cgmath` (not a dev-dependency) directly.
+/// Native math types are available through the STEP geometry prelude.
 mod matrix {
     use monstertruck_io::step::load::step_geometry::re_exports::{
-        Matrix4, Point3, SquareMatrix, Transform,
+        GeometryTransform, Matrix4, Point3, SquareLinearMap,
     };
 
-    pub fn invert(matrix: &Matrix4) -> Option<Matrix4> { matrix.invert() }
+    pub fn invert(matrix: &Matrix4) -> Option<Matrix4> { matrix.try_inverse() }
 
-    pub fn transform_point(matrix: &Matrix4, p: Point3) -> Point3 { matrix.transform_point(p) }
+    pub fn transform_point(matrix: &Matrix4, p: Point3) -> Point3 { matrix.apply_point(p) }
 }
 
 // ----------------------------------------- emitted-net fidelity (not extent)
@@ -470,15 +469,15 @@ fn net_fidelity(emitted: &ModelingSurface, analytic: &Surface, pairs: &[FramePai
     for &((au, av), (eu, ev)) in pairs {
         let want = ParametricSurface::evaluate(analytic, au, av);
         let got = ParametricSurface::evaluate(emitted, eu, ev);
-        if !finite(want.to_vec()) {
+        if !finite(want.position_vector()) {
             continue;
         }
-        if !finite(got.to_vec()) {
+        if !finite(got.position_vector()) {
             out.nonfinite += 1;
             continue;
         }
         out.compared += 1;
-        out.worst_deviation = out.worst_deviation.max((want - got).magnitude());
+        out.worst_deviation = out.worst_deviation.max((want - got).norm());
     }
     out
 }
@@ -848,10 +847,10 @@ fn emitted_extrusion_net_matches_the_analytic_surface() {
     let beyond = ParametricSurface::evaluate(analytic, u0, 3.0);
     let at_one = ParametricSurface::evaluate(analytic, u0, 1.0);
     assert!(
-        (beyond - at_one).magnitude() > 1.0,
+        (beyond - at_one).norm() > 1.0,
         "the analytic extrusion did not extend past its emitted span"
     );
-    assert!(ParametricSurface3D::normal(analytic, u0, 0.5).magnitude() > 0.5);
+    assert!(ParametricSurface3D::normal(analytic, u0, 0.5).norm() > 0.5);
 }
 
 /// The transposition regression guard. Before this track, the emitted extrusion
@@ -923,7 +922,7 @@ fn extrusion_nets_are_indexed_profile_by_sweep() {
     let want = ParametricSurface::evaluate(analytic, 0.25, 0.75);
     let got = ParametricSurface::evaluate(&emitted, 0.25, 0.75);
     assert!(
-        (want - got).magnitude() < 1.0e-12,
+        (want - got).norm() < 1.0e-12,
         "transposed evaluation: analytic {want:?} vs emitted {got:?}"
     );
     let fidelity = net_fidelity(&emitted, &narrow, &fidelity_pairs(&narrow, (u0, u1)));

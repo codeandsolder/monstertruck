@@ -2,21 +2,21 @@
 //!
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
-use monstertruck_modeling::{EuclideanSpace, Point3, Result, Solid, Vector3, builder};
+use monstertruck_modeling::{AffinePoint, Point3, Result, Solid, Vector3, builder};
 
 fn modeling(radius0: f64, radius1: f64) -> Result<Solid> {
     let v = builder::vertex(Point3::new(radius0, 0.0, radius1));
     let w = builder::revolve(
         &v,
         Point3::new(radius0, 0.0, 0.0),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;
     let shell = builder::revolve(
         &w,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
         builder::SweepAngle::Closed,
         2,
     )?;

@@ -2,7 +2,7 @@
 //! contact. The carrier is fixed and its endpoint errors do not establish
 //! the uncertainty of the input.
 use super::{MeshEvidence, Point3, SurfaceCarrier, chord_uncertainty};
-use crate::{InnerSpace, KERNEL_EPSILON};
+use crate::{InnerProduct, KERNEL_EPSILON};
 
 #[derive(Clone, Copy)]
 pub(in crate::mesh_recovery) struct OwnershipGrowthOptions {
@@ -34,7 +34,7 @@ fn oriented_sign(evidence: &MeshEvidence, support: usize, carrier: SurfaceCarrie
     let plane = evidence.planar_supports.get(support)?;
     let points = polygon_points(evidence, *plane.source_face_indices.first()?)?;
     let normal = carrier.signed_constraint(center(&points)?)?.0;
-    Some(normal.dot(plane.normal) > 0.0)
+    Some(normal.dot(&plane.normal) > 0.0)
 }
 
 fn vertex_error(
@@ -82,8 +82,8 @@ fn has_meridian_extent(carrier: SurfaceCarrier, points: &[Point3], angular: f64)
     let first = *points.first()?;
     let meridian = |p: Point3| {
         let d = p - origin;
-        let z = d.dot(axis);
-        (z, (d - axis * z).magnitude())
+        let z = d.dot(&axis);
+        (z, (d - axis * z).norm())
     };
     let reference = meridian(first);
     let span = points
@@ -99,7 +99,7 @@ fn has_meridian_extent(carrier: SurfaceCarrier, points: &[Point3], angular: f64)
         .fold(0.0, f64::max);
     let source = points
         .iter()
-        .map(|&p| (p - first).magnitude())
+        .map(|&p| (p - first).norm())
         .fold(0.0, f64::max);
     Some(span > angular * source)
 }
@@ -114,14 +114,14 @@ fn normal_agrees(
 ) -> Option<bool> {
     let plane = evidence.planar_supports.get(support)?;
     let expected = carrier.signed_constraint(center(points)?)?.0;
-    let dot = expected.dot(plane.normal);
-    let deviation = expected.cross(plane.normal).magnitude().atan2(dot.abs());
+    let dot = expected.dot(&plane.normal);
+    let deviation = expected.cross(&plane.normal).norm().atan2(dot.abs());
     let span = points
         .iter()
         .filter_map(|&p| {
             carrier
                 .signed_constraint(p)
-                .map(|(n, _)| expected.cross(n).magnitude().atan2(expected.dot(n)))
+                .map(|(n, _)| expected.cross(&n).norm().atan2(expected.dot(&n)))
         })
         .fold(0.0, f64::max);
     Some(
@@ -218,7 +218,7 @@ mod tests {
         let cap = evidence.source_planar_support[2];
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -246,7 +246,7 @@ mod tests {
         );
         let wrong = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 0.8,
             slope: 0.0,
         };

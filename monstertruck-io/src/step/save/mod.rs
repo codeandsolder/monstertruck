@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
-use monstertruck_core::{cgmath64::Matrix3, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::{math::Matrix3, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_topology::compress::{
     CompressedEdge, CompressedEdgeIndex, CompressedEdgeUse, CompressedShell, CompressedSolid,
     CompressedTrimmedShell, CompressedTrimmedSolid,

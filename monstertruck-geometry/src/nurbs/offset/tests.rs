@@ -36,7 +36,7 @@ fn offset_3d_straight_line_z_normal() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0)],
     );
-    let offset = (curve_offset_3d(&line, 2.0, Vector3::unit_z(), 20)).unwrap();
+    let offset = (curve_offset_3d(&line, 2.0, Vector3::z(), 20)).unwrap();
     for i in 0..=10 {
         let u = f64::from(i) / 10.0;
         let pt = offset.evaluate(u);
@@ -94,7 +94,7 @@ fn too_few_samples_are_reported_as_errors() {
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
     );
     assert!(matches!(
-        curve_offset_3d(&line3, 1.0, Vector3::unit_z(), 3),
+        curve_offset_3d(&line3, 1.0, Vector3::z(), 3),
         Err(Error::InsufficientInputCount {
             operation: "curve_offset_3d",
             provided: 3,

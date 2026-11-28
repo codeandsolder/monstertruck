@@ -4,10 +4,10 @@
 
 use crate::{Result, errors::Error};
 use itertools::Itertools;
-use monstertruck_core::cgmath64::{
-    EuclideanSpace, InnerSpace, Matrix4, Point2, Point3, Vector2, Vector3, Zero,
-};
 use monstertruck_core::hash::HashGen;
+use monstertruck_core::math::{
+    AffinePoint, InnerProduct, Matrix4, Point2, Point3, Vector2, Vector3, Zero,
+};
 use monstertruck_geometry::prelude::*;
 
 type Wire<C> = monstertruck_topology::Wire<Point3, C>;
@@ -26,7 +26,12 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
             let p1 = curve.evaluate(f64::midpoint(t0, t1));
             [p0, p1]
         })
-        .map(|p| Point2::new(p.to_vec().dot(u_axis), p.to_vec().dot(v_axis)))
+        .map(|p| {
+            Point2::new(
+                p.position_vector().dot(&u_axis),
+                p.position_vector().dot(&v_axis),
+            )
+        })
         .collect()
 }
 
@@ -43,8 +48,10 @@ fn signed_area_2d(pts: &[Point2]) -> f64 {
 /// Centroid of 2D sample points.
 fn centroid_2d(pts: &[Point2]) -> Point2 {
     let n = crate::usize_to_f64(pts.len());
-    let sum = pts.iter().fold(Vector2::zero(), |acc, p| acc + p.to_vec());
-    Point2::from_vec(sum / n)
+    let sum = pts
+        .iter()
+        .fold(Vector2::zero(), |acc, p| acc + p.position_vector());
+    Point2::from(sum / n)
 }
 
 /// Point-in-polygon test via ray casting (winding number).
@@ -99,14 +106,16 @@ where C: ParametricCurve3D + BoundedCurve + Clone {
         return None;
     }
 
-    let center = all_pts.iter().fold(Point3::origin(), |s, p| s + p.to_vec())
+    let center = all_pts
+        .iter()
+        .fold(Point3::origin(), |s, p| s + p.position_vector())
         / crate::usize_to_f64(all_pts.len());
 
     let normal = all_pts
         .iter()
         .circular_tuple_windows()
         .fold(Vector3::zero(), |sum, (p0, p1)| {
-            sum + (p0 - center).cross(p1 - center)
+            sum + (p0 - center).cross(&(p1 - center))
         });
 
     if normal.so_small() {
@@ -124,7 +133,7 @@ fn axes_from_normal(n: Vector3) -> (Vector3, Vector3) {
     } else {
         Vector3::new(-n.z, 0.0, n.x).normalize()
     };
-    (u, n.cross(u))
+    (u, n.cross(&u))
 }
 
 /// Classifies and normalizes a set of wires for planar face construction.
@@ -264,7 +273,7 @@ where
     let outer = normalized.first().ok_or(Error::NoOuterLoop)?;
     let normal =
         compute_plane_normal(std::slice::from_ref(outer)).ok_or(Error::WireNotInOnePlane)?;
-    if normal.dot(dir) < 0.0 {
+    if normal.dot(&dir) < 0.0 {
         for wire in &mut normalized {
             *wire = wire.inverse();
         }

@@ -18,7 +18,7 @@ fn snp_test() {
     let q = p + r * Vector2::new(-p.x, p.y);
     let t = curve.search_nearest_parameter(q, None, 0).unwrap();
     let p = curve.evaluate(t);
-    let dot = curve.derivative(t).dot(q - p);
+    let dot = curve.derivative(t).dot(&(q - p));
     assert!(dot.so_small(), "{t} {dot}");
 }
 

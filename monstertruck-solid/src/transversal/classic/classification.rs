@@ -1,7 +1,7 @@
 //! Geometric inside/outside and coincident-face classification.
 
 use super::{
-    AltRegion, BooleanTolerance, EuclideanSpace, Face, InnerSpace, Invertible, MeshableShape,
+    AffinePoint, AltRegion, BooleanTolerance, Face, InnerProduct, Invertible, MeshableShape,
     MeshableSurface, MetricSpace, ParametricSurface3D, Point3, PolyShell, PolylineableCurve,
     SearchNearestParameter, SearchParameter, ShapeOpsCurve, ShapeOpsSurface, Shell, SignedRayIndex,
     SurfaceParameter, Vector3, divide_face, hash, loops_store,
@@ -65,10 +65,12 @@ where
             let a = positions[triangle[0].pos];
             let b = positions[triangle[1].pos];
             let c = positions[triangle[2].pos];
-            let area2 = (b - a).cross(c - a).magnitude();
+            let area2 = (b - a).cross(&(c - a)).norm();
             (area2.is_finite() && area2 > minimum_triangle_area).then_some((
                 area2,
-                Point3::from_vec((a.to_vec() + b.to_vec() + c.to_vec()) / 3.0),
+                Point3::from(
+                    (a.position_vector() + b.position_vector() + c.position_vector()) / 3.0,
+                ),
             ))
         })
         .collect::<Vec<_>>();
@@ -160,7 +162,7 @@ where
             return None;
         }
         let normal = surface.normal(u, v);
-        let magnitude = normal.magnitude();
+        let magnitude = normal.norm();
         if !magnitude.is_finite() || magnitude <= f64::EPSILON {
             return None;
         }
@@ -325,7 +327,7 @@ pub(super) fn planar_partition_same_facing<C: ShapeOpsCurve<S>, S: ShapeOpsSurfa
     let (rhs_u, rhs_v) = rhs
         .search_parameter(point, None, 100)
         .or_else(|| rhs.search_nearest_parameter(point, None, 100))?;
-    Some(lhs.normal(lhs_u, lhs_v).dot(rhs.normal(rhs_u, rhs_v)) > 0.0)
+    Some(lhs.normal(lhs_u, lhs_v).dot(&rhs.normal(rhs_u, rhs_v)) > 0.0)
 }
 
 #[cfg(test)]

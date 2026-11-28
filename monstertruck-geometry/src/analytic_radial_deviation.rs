@@ -61,7 +61,7 @@ fn expected_radius(
         return None;
     }
     let delta = Vector3::new(x / w - origin.x, y / w - origin.y, z / w - origin.z);
-    let axial = delta.dot(axis);
+    let axial = delta.dot(&axis);
     let radius = slope.mul_add(axial, reference_radius);
     (radius.is_finite() && radius > 0.0 && axial.is_finite()).then_some((delta, radius))
 }
@@ -74,7 +74,7 @@ fn residual(
     slope: f64,
 ) -> Option<f64> {
     let (delta, radius) = expected_radius(point, origin, axis, reference_radius, slope)?;
-    let radial = delta.cross(axis).magnitude();
+    let radial = delta.cross(&axis).norm();
     let result = (radial - radius).abs();
     result.is_finite().then_some(result)
 }
@@ -98,15 +98,15 @@ fn span_upper(
     // rho >= min(projected radius) on the entire subspan. This bound tightens
     // under subdivision, unlike rho >= 0, which leaves a factor-of-two gap.
     let first_delta = expected_radius(controls.first()?, origin, axis, reference_radius, slope)?.0;
-    let radial = first_delta.cross(axis);
-    let radial_length = radial.magnitude();
+    let radial = first_delta.cross(&axis);
+    let radial_length = radial.norm();
     let min_radial = if radial_length > 0.0 && radial_length.is_finite() {
         let direction = radial / radial_length;
         controls
             .iter()
             .try_fold(f64::INFINITY, |minimum, control| {
                 let delta = expected_radius(control, origin, axis, reference_radius, slope)?.0;
-                let projection = delta.cross(axis).dot(direction);
+                let projection = delta.cross(&axis).dot(&direction);
                 projection.is_finite().then_some(minimum.min(projection))
             })?
             .max(0.0)
@@ -146,7 +146,7 @@ fn arithmetic_margin(
         max_weight = max_weight.max(point[3]);
         let (delta, radius) = expected_radius(point, origin, axis, reference_radius, slope)?;
         min_radius = min_radius.min(radius);
-        scale = scale.max(delta.magnitude()).max(radius);
+        scale = scale.max(delta.norm()).max(radius);
     }
     let degree = crate::usize_to_f64(controls.len());
     let ratio = max_weight / min_weight;
@@ -193,8 +193,8 @@ pub fn bound_nurbs_radial_deviation(
     if ![reference_origin.x, reference_origin.y, reference_origin.z]
         .iter()
         .all(|v| v.is_finite())
-        || !axis.magnitude2().is_finite()
-        || (axis.magnitude2() - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
+        || !axis.norm_squared().is_finite()
+        || (axis.norm_squared() - 1.0).abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_curve_axis_unit
         || !reference_radius.is_finite()
         || reference_radius <= 0.0
         || !slope.is_finite()
@@ -284,29 +284,16 @@ mod tests {
                 Vector4::new(1.0, 0.0, 2.0, 1.0),
             ],
         ));
-        let bound = bound_nurbs_radial_deviation(
-            &curve,
-            Point3::origin(),
-            Vector3::unit_z(),
-            1.0,
-            0.0,
-            1e-10,
-        )
-        .expect("valid cylinder");
+        let bound =
+            bound_nurbs_radial_deviation(&curve, Point3::origin(), Vector3::z(), 1.0, 0.0, 1e-10)
+                .expect("valid cylinder");
         assert!(bound.lower <= 0.125 && bound.upper >= 0.125, "{bound:?}");
         assert!(bound.upper - bound.lower < 1e-8, "{bound:?}");
         assert_eq!(bound.radial_lower, bound.lower);
         assert_eq!(bound.radial_upper, bound.upper);
         assert!(
-            bound_nurbs_radial_deviation(
-                &curve,
-                Point3::origin(),
-                Vector3::unit_z(),
-                1.0,
-                -0.1,
-                1e-10
-            )
-            .is_none()
+            bound_nurbs_radial_deviation(&curve, Point3::origin(), Vector3::z(), 1.0, -0.1, 1e-10)
+                .is_none()
         );
     }
 
@@ -315,7 +302,7 @@ mod tests {
         let cone = bound_nurbs_radial_deviation(
             &linear_cone_generator(),
             Point3::new(0.0, 0.0, 1.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0,
             1.0,
             1.0e-9,
@@ -351,7 +338,7 @@ mod tests {
         let cone = bound_nurbs_radial_deviation(
             &bumped,
             Point3::new(0.0, 0.0, 1.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0,
             1.0,
             1.0e-10,
@@ -382,7 +369,7 @@ mod tests {
         let bounds = bound_nurbs_radial_deviation(
             &curve,
             Point3::new(0.0, 0.0, 1.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0,
             1.0,
             1.0e-9,
@@ -417,7 +404,7 @@ mod tests {
             bound_nurbs_radial_deviation(
                 &crossing,
                 Point3::new(0.0, 0.0, 0.0),
-                Vector3::unit_z(),
+                Vector3::z(),
                 0.1,
                 1.0,
                 1.0e-9,

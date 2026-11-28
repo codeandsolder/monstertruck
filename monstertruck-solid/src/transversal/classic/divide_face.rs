@@ -238,7 +238,7 @@ fn polyline_interior_candidates(poly: &PolylineCurve<Point2>) -> Vec<Point2> {
         let a = points[index];
         let b = points[(index + 1) % points.len()];
         let edge = b - a;
-        let length = edge.magnitude();
+        let length = edge.norm();
         if length <= f64::EPSILON {
             continue;
         }
@@ -351,13 +351,13 @@ where
             .flat_map(|poly| poly.0.windows(2))
             .map(|segment| {
                 let delta = segment[1] - segment[0];
-                let denom = delta.magnitude2();
+                let denom = delta.norm_squared();
                 let t = if denom > 0.0 {
-                    ((candidate - segment[0]).dot(delta) / denom).clamp(0.0, 1.0)
+                    ((candidate - segment[0]).dot(&delta) / denom).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                (candidate - (segment[0] + delta * t)).magnitude2()
+                (candidate - (segment[0] + delta * t)).norm_squared()
             })
             .fold(f64::INFINITY, f64::min)
     };
@@ -380,13 +380,13 @@ where
             .filter(|(_, uv)| {
                 chosen
                     .iter()
-                    .all(|p| (*p - *uv).magnitude2() > f64::EPSILON)
+                    .all(|p| (*p - *uv).norm_squared() > f64::EPSILON)
             })
             .max_by(|(clear0, p0), (clear1, p1)| {
                 let score = |clearance: &f64, point: &Point2| {
                     let distance = chosen
                         .iter()
-                        .map(|p| (*p - *point).magnitude2())
+                        .map(|p| (*p - *point).norm_squared())
                         .fold(f64::INFINITY, f64::min);
                     clearance.min(distance)
                 };
@@ -524,13 +524,13 @@ fn uv_boundaries_meet(lhs: &PolylineCurve<Point2>, rhs: &PolylineCurve<Point2>) 
     let cross = |a: Vector2, b: Vector2| a.x.mul_add(b.y, -(a.y * b.x));
     let near_segment = |p: Point2, a: Point2, b: Point2| {
         let ab = b - a;
-        let length2 = ab.magnitude2();
+        let length2 = ab.norm_squared();
         let t = if length2 > 0.0 {
-            ((p - a).dot(ab) / length2).clamp(0.0, 1.0)
+            ((p - a).dot(&ab) / length2).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (p - (a + ab * t)).magnitude2() <= tol2
+        (p - (a + ab * t)).norm_squared() <= tol2
     };
     (0..lhs.len()).any(|i| {
         let (a, b) = (lhs[i], lhs[(i + 1) % lhs.len()]);

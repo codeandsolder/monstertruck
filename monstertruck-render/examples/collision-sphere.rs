@@ -44,15 +44,15 @@ impl App for MyApp {
     async fn init(window: Arc<winit::window::Window>) -> AppResult<Self> {
         let sample_count = 4;
         let matrix = Matrix4::look_at_rh(
-            Point3::new(2.0, 2.0, 2.0),
-            Point3::origin(),
-            Vector3::unit_y(),
+            &Point3::new(2.0, 2.0, 2.0),
+            &Point3::origin(),
+            &Vector3::y(),
         );
         let camera = Camera {
             matrix: matrix
-                .invert()
+                .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective(Rad(std::f64::consts::PI / 4.0)),
+            method: ProjectionMethod::perspective((std::f64::consts::PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
         };
@@ -140,7 +140,7 @@ impl App for MyApp {
                     }
                     LightType::Uniform => {
                         light.position = camera.position();
-                        let strength = light.position.to_vec().magnitude();
+                        let strength = light.position.position_vector().norm();
                         light.position /= strength;
                     }
                 }
@@ -159,7 +159,7 @@ impl App for MyApp {
                     }
                     ProjectionMethod::Perspective { .. } => {
                         let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
-                        camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                        camera.matrix = Matrix4::new_translation(&trans_vec) * camera.matrix;
                     }
                 }
             }
@@ -177,11 +177,11 @@ impl App for MyApp {
             if dir2d.so_small() {
                 return Self::default_control_flow();
             }
-            let mut axis = dir2d[1] * matrix[0].truncate();
-            axis += dir2d[0] * matrix[1].truncate();
-            axis /= axis.magnitude();
-            let angle = dir2d.magnitude() * 0.01;
-            let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+            let mut axis = dir2d[1] * matrix.column(0).into_owned().spatial();
+            axis += dir2d[0] * matrix.column(1).into_owned().spatial();
+            axis /= axis.norm();
+            let angle = dir2d.norm() * 0.01;
+            let inverse_rotation = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), -angle);
             *matrix = inverse_rotation * *matrix;
         }
         self.prev_cursor = position;

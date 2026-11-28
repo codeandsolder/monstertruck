@@ -3,16 +3,16 @@
 use super::parameter_curves::{same_surface_parameterization, sampled_curve_lies_on_surface};
 use super::{
     AnalyticSurfaceKind, BoundedSurface, BsplineCurve, BsplineSurface, Curve, Deserialize,
-    ExtrusionSurface, From, Homogeneous, HomogeneousSurfaceConversion, HomotopySurface,
-    IncludeCurve, InnerSpace, Invertible, Matrix3, Matrix4, MetricSpace, NurbsCurve, NurbsSurface,
-    ParameterDivision2D, ParametricCurve, ParametricSurface, ParametricSurface3D, Plane, Point2,
-    Point3, Processor, Rad, RevolutionSurface, SearchNearestParameter, SearchParameter,
-    SearchParameterD2, SearchParameterHint2D, Serialize, Sphere, SupportsExactPatchDomains,
-    SurfaceParameter, SurfaceParameterRectangle, Tmesh, ToSameGeometry, Tolerance, Torus,
-    Transform, Transformed, TryIntoAnalyticSurfaceKind, TryIntoBsplineSurface,
-    TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
+    ExtrusionSurface, From, GeometryTransform, Homogeneous, HomogeneousSurfaceConversion,
+    HomotopySurface, IncludeCurve, InnerProduct, Invertible, Matrix3, Matrix4, MetricSpace,
+    NurbsCurve, NurbsSurface, ParameterDivision2D, ParametricCurve, ParametricSurface,
+    ParametricSurface3D, Plane, Point2, Point3, Processor, RevolutionSurface,
+    SearchNearestParameter, SearchParameter, SearchParameterD2, SearchParameterHint2D, Serialize,
+    Sphere, SupportsExactPatchDomains, SurfaceParameter, SurfaceParameterRectangle, Tmesh,
+    ToSameGeometry, Tolerance, Torus, Transformed, TryIntoAnalyticSurfaceKind,
+    TryIntoBsplineSurface, TryIntoHomogeneousBsplineSurface, Vector3, Vector4, algo, env,
 };
-use crate::SquareMatrix;
+use crate::SquareLinearMap;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use monstertruck_geometry::analytic_carrier::{
     AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,
@@ -229,7 +229,7 @@ fn revolution_surface_includes_curve(
 ) -> bool {
     // The revolution generator belongs to the processor's local chart,
     // while the incident edge is expressed in world coordinates.
-    let Some(inverse) = surface.transform().invert() else {
+    let Some(inverse) = surface.transform().try_inverse() else {
         return false;
     };
     let curve = &curve.transformed(inverse);
@@ -343,20 +343,20 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve> {
 
 fn transform_preserves_nearest_parameter(transform: &Matrix4) -> bool {
     let tol = DEFAULT_NUMERICAL_TOLERANCES.same_domain_similarity;
-    let x = Vector3::new(transform.x.x, transform.x.y, transform.x.z);
-    let y = Vector3::new(transform.y.x, transform.y.y, transform.y.z);
-    let z = Vector3::new(transform.z.x, transform.z.y, transform.z.z);
-    let scale2 = x.magnitude2();
+    let x = Vector3::new(transform[(0, 0)], transform[(1, 0)], transform[(2, 0)]);
+    let y = Vector3::new(transform[(0, 1)], transform[(1, 1)], transform[(2, 1)]);
+    let z = Vector3::new(transform[(0, 2)], transform[(1, 2)], transform[(2, 2)]);
+    let scale2 = x.norm_squared();
     scale2 > tol
-        && f64::abs(y.magnitude2() - scale2) <= tol
-        && f64::abs(z.magnitude2() - scale2) <= tol
-        && f64::abs(x.dot(y)) <= tol
-        && f64::abs(x.dot(z)) <= tol
-        && f64::abs(y.dot(z)) <= tol
-        && f64::abs(transform.x.w) <= tol
-        && f64::abs(transform.y.w) <= tol
-        && f64::abs(transform.z.w) <= tol
-        && f64::abs(transform.w.w - 1.0) <= tol
+        && f64::abs(y.norm_squared() - scale2) <= tol
+        && f64::abs(z.norm_squared() - scale2) <= tol
+        && f64::abs(x.dot(&y)) <= tol
+        && f64::abs(x.dot(&z)) <= tol
+        && f64::abs(y.dot(&z)) <= tol
+        && f64::abs(transform[(3, 0)]) <= tol
+        && f64::abs(transform[(3, 1)]) <= tol
+        && f64::abs(transform[(3, 2)]) <= tol
+        && f64::abs(transform[(3, 3)] - 1.0) <= tol
 }
 
 fn revolution_surface_nearest_parameter(
@@ -368,8 +368,8 @@ fn revolution_surface_nearest_parameter(
     if env::var("MT_BOOL_DISABLE_REVOLUTION_NEAREST_FAST_PATH").is_err()
         && transform_preserves_nearest_parameter(surface.transform())
     {
-        let inv = surface.transform().inverse_transform()?;
-        let point = inv.transform_point(point);
+        let inv = surface.transform().inverse_map()?;
+        let point = inv.apply_point(point);
         let uv = surface
             .entity()
             .search_nearest_parameter(point, hint, trials)?;
@@ -398,7 +398,7 @@ fn revolution_surface_nearest_parameter(
 ///
 /// Everything that decides the result is unchanged: the same grid nodes (`u`, `v`
 /// from the identical expressions), the identical evaluation arithmetic
-/// (`transform.transform_point(origin + rotation * (curve - origin))`), the same
+/// (`transform.apply_point(origin + rotation * (curve - origin))`), the same
 /// `distance2` metric, and the same strict-`<` first-minimum tie-break. The
 /// returned `(u, v)` -- and therefore every downstream Newton seed -- is
 /// byte-for-byte identical to the generic presearch.
@@ -444,13 +444,16 @@ fn revolution_processor_presearch_separable(
         let rotation_by_v: Vec<(f64, Matrix3)> = (0..=division)
             .map(|j| {
                 let v = node(v0, v1, j);
-                (v, Matrix3::from_axis_angle(axis, Rad(v)))
+                (
+                    v,
+                    Rotation3::from_axis_angle(&Unit::new_unchecked(axis), v).into_inner(),
+                )
             })
             .collect();
         for &(u, curve_point) in &curve_by_u {
             for &(v, rotation) in &rotation_by_v {
                 let dist = transform
-                    .transform_point(origin + rotation * (curve_point - origin))
+                    .apply_point(origin + rotation * (curve_point - origin))
                     .distance2(point);
                 if dist < min {
                     min = dist;
@@ -463,7 +466,10 @@ fn revolution_processor_presearch_separable(
         let rotation_by_u: Vec<(f64, Matrix3)> = (0..=division)
             .map(|i| {
                 let u = node(u0, u1, i);
-                (u, Matrix3::from_axis_angle(axis, Rad(u)))
+                (
+                    u,
+                    Rotation3::from_axis_angle(&Unit::new_unchecked(axis), u).into_inner(),
+                )
             })
             .collect();
         let curve_by_v: Vec<(f64, Point3)> = (0..=division)
@@ -475,7 +481,7 @@ fn revolution_processor_presearch_separable(
         for &(u, rotation) in &rotation_by_u {
             for &(v, curve_point) in &curve_by_v {
                 let dist = transform
-                    .transform_point(origin + rotation * (curve_point - origin))
+                    .apply_point(origin + rotation * (curve_point - origin))
                     .distance2(point);
                 if dist < min {
                     min = dist;
@@ -656,7 +662,7 @@ impl ToSameGeometry<Surface> for HomotopySurface<Curve, Curve> {
 impl ToSameGeometry<Surface> for ExtrusionSurface<Curve, Vector3> {
     fn to_same_geometry(&self) -> Surface {
         let vector = self.extruding_vector();
-        let translation = Matrix4::from_translation(vector);
+        let translation = Matrix4::new_translation(&vector);
         match self.entity_curve() {
             Curve::Line(line) => Plane::new(line.0, line.1, line.0 + vector).into(),
             Curve::BsplineCurve(curve0) => {
@@ -689,7 +695,7 @@ impl ToSameGeometry<Surface> for ExtrusionSurface<Curve, Vector3> {
 #[cfg(test)]
 mod revolution_presearch_tests {
     use super::*;
-    use crate::{EuclideanSpace, Line};
+    use crate::{AffinePoint, Line};
 
     #[test]
     fn separable_presearch_uses_exact_generic_grid_nodes() {
@@ -697,7 +703,7 @@ mod revolution_presearch_tests {
         let surface = Processor::new(RevolutionSurface::by_revolution(
             profile,
             Point3::origin(),
-            Vector3::unit_z(),
+            Vector3::z(),
         ));
         let ranges = ((-10.0, -3.0), (0.0, 0.0));
         let ratio = 4.0 / 5.0;
@@ -748,7 +754,7 @@ mod extrusion_same_geometry_tests {
         for (u, v) in [(0.0, 0.0), (0.25, 0.75), (0.8, 0.4), (1.0, 1.0)] {
             let expected = extrusion.evaluate(u, v);
             let actual = converted.evaluate(u, v);
-            assert!((actual - expected).magnitude() < KERNEL_EPSILON);
+            assert!((actual - expected).norm() < KERNEL_EPSILON);
         }
     }
 }
@@ -765,7 +771,7 @@ mod analytic_carrier_tests {
         let revolution = RevolutionSurface::by_revolution(
             Curve::Line(Line(first, second)),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
         );
         Surface::Revolution(Processor::new(revolution))
     }

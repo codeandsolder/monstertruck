@@ -14,7 +14,7 @@
 //!     10.1145/882262.882295.
 
 use crate::{Debug, prelude::*};
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

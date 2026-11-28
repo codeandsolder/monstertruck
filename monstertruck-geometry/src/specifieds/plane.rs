@@ -1,9 +1,10 @@
 use super::{
-    Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface, EuclideanSpace,
-    IncludeCurve, InnerSpace, Invertible, KnotVector, Line, Matrix3, NurbsCurve, Origin,
-    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Plane, Point3,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SquareMatrix, SurfaceParameter,
-    SurfaceParameterRange, ToSameGeometry, Transform3, Transformed, Vector3, Vector4, Zero,
+    AffinePoint, Bound, BoundedCurve, BoundedSurface, BsplineCurve, BsplineSurface,
+    GeometryTransform, Homogeneous, IncludeCurve, InnerProduct, Invertible, KnotVector, Line,
+    Matrix3, NurbsCurve, Origin, ParameterDivision2D, ParameterRange, ParametricSurface,
+    ParametricSurface3D, Plane, Point3, SearchNearestParameter, SearchParameter,
+    SearchParameterHint2D, SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Transformed,
+    Vector3, Vector4, Zero,
 };
 
 impl Plane {
@@ -38,11 +39,11 @@ impl Plane {
     ///     Point3::new(1.0, 0.0, 0.0),
     ///     Point3::new(0.0, 1.0, 0.0),
     /// );
-    /// assert_near!(plane.normal(), Vector3::unit_z());
+    /// assert_near!(plane.normal(), Vector3::z());
     /// ```
     #[inline]
     #[must_use = "Ignoring this result discards the normal."]
-    pub fn normal(&self) -> Vector3 { self.axis_u().cross(self.axis_v()).normalize() }
+    pub fn normal(&self) -> Vector3 { self.axis_u().cross(&self.axis_v()).normalize() }
     /// Gets the parameter of `pt` in plane's matrix.
     /// # Examples
     /// ```
@@ -67,8 +68,8 @@ impl Plane {
         let a = self.axis_u();
         let b = self.axis_v();
         let c = self.normal();
-        Matrix3::from_cols(a, b, c)
-            .invert()
+        Matrix3::from_columns(&[a, b, c])
+            .try_inverse()
             .map(|mat| mat * (pt - self.o))
     }
     /// xy-plane
@@ -109,7 +110,7 @@ impl ParametricSurface for Plane {
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
-            (0, 0) => self.evaluate(u, v).to_vec(),
+            (0, 0) => self.evaluate(u, v).position_vector(),
             (1, 0) => self.p - self.o,
             (0, 1) => self.q - self.o,
             _ => Vector3::zero(),
@@ -230,7 +231,7 @@ impl IncludeCurve<BsplineCurve<Point3>> for Plane {
         curve
             .control_points()
             .iter()
-            .all(|pt| (pt - origin).dot(normal).so_small())
+            .all(|pt| (pt - origin).dot(&normal).so_small())
     }
 }
 
@@ -239,15 +240,15 @@ impl IncludeCurve<NurbsCurve<Vector4>> for Plane {
         let origin = self.origin();
         let normal = self.normal();
         let (s, e) = (curve.front(), curve.back());
-        if !(s - origin).dot(normal).so_small() || !(e - origin).dot(normal).so_small() {
+        if !(s - origin).dot(&normal).so_small() || !(e - origin).dot(&normal).so_small() {
             return false;
         }
         curve.non_rationalized().control_points().iter().all(|pt| {
             if pt[3].so_small() {
                 true
             } else {
-                let pt = Point3::from_homogeneous(*pt);
-                (pt - origin).dot(normal).so_small()
+                let pt = (*pt).to_point();
+                (pt - origin).dot(&normal).so_small()
             }
         })
     }
@@ -260,19 +261,19 @@ impl ParameterDivision2D for Plane {
     }
 }
 
-impl<T: Transform3<Scalar = f64>> Transformed<T> for Plane {
+impl<T: GeometryTransform<Point3>> Transformed<T> for Plane {
     #[inline]
     fn transform_by(&mut self, trans: T) {
-        self.o = trans.transform_point(self.o);
-        self.p = trans.transform_point(self.p);
-        self.q = trans.transform_point(self.q);
+        self.o = trans.apply_point(self.o);
+        self.p = trans.apply_point(self.p);
+        self.q = trans.apply_point(self.q);
     }
     #[inline]
     fn transformed(&self, trans: T) -> Self {
         Self {
-            o: trans.transform_point(self.o),
-            p: trans.transform_point(self.p),
-            q: trans.transform_point(self.q),
+            o: trans.apply_point(self.o),
+            p: trans.apply_point(self.p),
+            q: trans.apply_point(self.q),
         }
     }
 }

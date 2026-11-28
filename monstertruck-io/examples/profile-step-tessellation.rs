@@ -6,7 +6,7 @@ use monstertruck_io::step::load::{
     Table,
     convert::StepCompressedTrimmedShell,
     step_geometry::{
-        BoundedCurve, Curve3D, ElementarySurface, InnerSpace, MetricSpace, ParameterBoundary2D,
+        BoundedCurve, Curve3D, ElementarySurface, InnerProduct, MetricSpace, ParameterBoundary2D,
         ParameterDivision1D, Point3, PolygonMesh, PolylineCurve, SearchNearestParameter,
         SearchParameter, Surface, SweepSurface,
     },
@@ -72,11 +72,11 @@ const fn surface_kind(surface: &Surface) -> &'static str {
 
 fn point_segment_distance(point: Point3, front: Point3, back: Point3) -> f64 {
     let segment = back - front;
-    let denom = segment.dot(segment);
+    let denom = segment.dot(&segment);
     if denom.so_small() {
         point.distance(front)
     } else {
-        let t = ((point - front).dot(segment) / denom).clamp(0.0, 1.0);
+        let t = ((point - front).dot(&segment) / denom).clamp(0.0, 1.0);
         let nearest = front + segment * t;
         point.distance(nearest)
     }

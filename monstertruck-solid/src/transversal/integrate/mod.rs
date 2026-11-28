@@ -392,7 +392,7 @@ where
     C: Transformed<Matrix4>,
     S: Transformed<Matrix4>, {
     solid.mapped(
-        |point| transform.transform_point(*point),
+        |point| transform.apply_point(*point),
         |curve| curve.transformed(transform),
         |surface| surface.transformed(transform),
     )
@@ -586,7 +586,7 @@ where
     let tol = standard_budget(policy, "clip_half_space_z")?;
     validate_tolerance(tol)?;
     let clip_to_world = world_to_clip
-        .invert()
+        .try_inverse()
         .ok_or(ShapeOpsError::NonInvertibleClipTransform)?;
     let clip_solid = transformed_solid(solid, world_to_clip);
     let bounds = solid_bounds(&clip_solid);

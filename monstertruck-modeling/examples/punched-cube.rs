@@ -3,19 +3,19 @@
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
 use monstertruck_modeling::builder::SweepAngle;
-use monstertruck_modeling::{Edge, EuclideanSpace, Point3, Rad, Solid, Vector3, Wire, builder};
+use monstertruck_modeling::{AffinePoint, Edge, Point3, Solid, Vector3, Wire, builder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
-    let edge = builder::extrude(&v, Vector3::unit_x());
-    let mut face = builder::extrude(&edge, Vector3::unit_y());
+    let edge = builder::extrude(&v, Vector3::x());
+    let mut face = builder::extrude(&edge, Vector3::y());
     let v = builder::vertex(Point3::new(0.2, 0.0, -0.5));
     let edge0 = builder::extrude(&v, Vector3::new(-0.2, 0.2, 0.0));
     let wire1 = builder::revolve(
         edge0.back(),
         Point3::origin(),
-        Vector3::unit_z(),
-        SweepAngle::Partial(Rad(std::f64::consts::PI / 2.0)),
+        Vector3::z(),
+        SweepAngle::Partial((std::f64::consts::PI / 2.0)),
         2,
     )?;
     let back_vertex = wire1
@@ -25,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut wire3 = builder::revolve(
         edge2.back(),
         Point3::origin(),
-        Vector3::unit_z(),
-        SweepAngle::Partial(Rad(std::f64::consts::PI / 2.0)),
+        Vector3::z(),
+        SweepAngle::Partial((std::f64::consts::PI / 2.0)),
         2,
     )?;
     let back_edge = wire3
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     wire.invert();
     face.add_boundary(wire)?;
-    let shape: Solid = builder::extrude(&face, Vector3::unit_z());
+    let shape: Solid = builder::extrude(&face, Vector3::z());
     let json = serde_json::to_vec_pretty(&shape)?;
     std::fs::write("punched-cube.json", json)?;
     Ok(())

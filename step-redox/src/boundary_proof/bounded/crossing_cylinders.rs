@@ -182,7 +182,7 @@ mod tests {
     use anyhow::{Context, Result, bail};
     use monstertruck_geometry::{
         analytic_cylinder_intersection::CylinderIntersectionArc,
-        prelude::{InnerSpace, Vector3},
+        prelude::{InnerProduct, Vector3},
     };
     use std::f64::consts::PI;
 
@@ -293,7 +293,7 @@ mod tests {
         // Endpoints match, but an off-carrier interior must not qualify.
         let mut leader = whole.bounded_leader(1e-9, 8192).context("leader")?.curve;
         let mid_control = leader.control_points().len() / 2;
-        *leader.control_point_mut(mid_control) += Vector3::unit_z() * 0.001;
+        *leader.control_point_mut(mid_control) += Vector3::z() * 0.001;
         let e = EdgeGeometry {
             start: arc.start,
             end: arc.end,
@@ -304,7 +304,7 @@ mod tests {
             support: CurveSupport::Other { entity_id: 1 },
         };
         assert!(certify_crossing_cylinders(&e, &NurbsCurve::from(leader), &loci).is_none());
-        assert!((end - origin).magnitude() > 0.3);
+        assert!((end - origin).norm() > 0.3);
         Ok(())
     }
 }

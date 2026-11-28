@@ -1,5 +1,5 @@
 use super::tolerance::BooleanTolerance;
-use monstertruck_core::{cgmath64::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
+use monstertruck_core::{math::MetricSpace, tolerance::DEFAULT_NUMERICAL_TOLERANCES};
 use monstertruck_traits::{BoundedCurve, CurveParameter, ParametricCurve, SearchNearestParameter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +174,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monstertruck_core::cgmath64::Point3;
+    use monstertruck_core::math::Point3;
     use monstertruck_meshing::prelude::PolylineCurve;
 
     #[test]

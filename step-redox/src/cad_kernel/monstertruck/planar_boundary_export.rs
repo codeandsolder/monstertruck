@@ -10,7 +10,7 @@ use monstertruck_geometry::{
     analytic_curve_incidence::CurveIncidence, prelude::TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_modeling::{
-    BoundedCurve, Curve, Cut, InnerSpace, Invertible, NurbsCurve, NurbsSurface, ParametricCurve,
+    BoundedCurve, Curve, Cut, InnerProduct, Invertible, NurbsCurve, NurbsSurface, ParametricCurve,
     Plane, Point3, SearchNearestParameter, SearchParameter, Surface, SurfaceCurve, Vector4, algo,
     certify_analytic_curve_on_surface,
 };
@@ -45,7 +45,7 @@ fn certified_planar_boundary_isocurve(
                         return None;
                     }
                     let p = Point3::new(point.x / point.w, point.y / point.w, point.z / point.w);
-                    let distance = normal.dot(p - planar.origin());
+                    let distance = normal.dot(&(p - planar.origin()));
                     distance.is_finite().then_some(distance)
                 })
                 .collect::<Option<Vec<_>>>()
@@ -129,7 +129,7 @@ pub(super) fn certified_planar_boundary_step_guide(
         let parameter = exact
             .search_parameter(*point, None, 160)
             .or_else(|| exact.search_nearest_parameter(*point, None, 160))?;
-        if (exact.evaluate(parameter) - *point).magnitude() > proof_tolerance {
+        if (exact.evaluate(parameter) - *point).norm() > proof_tolerance {
             return None;
         }
         positions.push(parameter);
@@ -176,8 +176,8 @@ pub(super) fn certified_planar_boundary_step_guide(
         return None;
     };
     let (s, e) = exact.range_tuple();
-    if (exact.evaluate(s) - front).magnitude() > proof_tolerance
-        || (exact.evaluate(e) - back).magnitude() > proof_tolerance
+    if (exact.evaluate(s) - front).norm() > proof_tolerance
+        || (exact.evaluate(e) - back).norm() > proof_tolerance
     {
         return None;
     }
@@ -270,7 +270,7 @@ mod tests {
             let point = exact.evaluate(t);
             assert!(point.x.abs() <= 1.0e-12);
             assert!((point.y.hypot(point.z) - 1.0).abs() <= 1.0e-12);
-            assert!((point - source.evaluate(t)).magnitude() <= 1.0e-10);
+            assert!((point - source.evaluate(t)).norm() <= 1.0e-10);
         }
         Ok(())
     }
@@ -288,8 +288,8 @@ mod tests {
         let p0 = curve.evaluate(0.0);
         let p1 = curve.evaluate(1.0);
         let middle = curve.evaluate(0.5);
-        assert!((p0 - Point3::new(0.0, 1.0, 0.0)).magnitude() < 1.0e-12);
-        assert!((p1 - Point3::new(0.0, 0.0, 1.0)).magnitude() < 1.0e-12);
+        assert!((p0 - Point3::new(0.0, 1.0, 0.0)).norm() < 1.0e-12);
+        assert!((p1 - Point3::new(0.0, 0.0, 1.0)).norm() < 1.0e-12);
         assert!(
             (middle
                 - Point3::new(
@@ -297,7 +297,7 @@ mod tests {
                     std::f64::consts::FRAC_1_SQRT_2,
                     std::f64::consts::FRAC_1_SQRT_2
                 ))
-            .magnitude()
+            .norm()
                 < 1.0e-12
         );
         // No amount of endpoint fitting can justify a second row crossing
@@ -345,7 +345,7 @@ mod tests {
                 let t = f64::from(i) / 16.0;
                 let actual = candidate.evaluate(t);
                 let expected = Point3::new(0.0, t.mul_add(-t, 1.0), t * (2.0 - t));
-                assert!((actual - expected).magnitude() <= 1.0e-12);
+                assert!((actual - expected).norm() <= 1.0e-12);
             }
             surface.swap_axes();
         }
@@ -377,8 +377,8 @@ mod tests {
         assert_eq!(exact.degree(), 2);
         let (start, end) = exact.range_tuple();
         let (leader_start, leader_end) = leader.range_tuple();
-        assert!((exact.evaluate(start) - leader.evaluate(leader_start)).magnitude() < 1.0e-10);
-        assert!((exact.evaluate(end) - leader.evaluate(leader_end)).magnitude() < 1.0e-10);
+        assert!((exact.evaluate(start) - leader.evaluate(leader_start)).norm() < 1.0e-10);
+        assert!((exact.evaluate(end) - leader.evaluate(leader_end)).norm() < 1.0e-10);
         for i in 0..=16 {
             let t = f64::from(i) / 16.0;
             let point = exact.evaluate((end - start).mul_add(t, start));

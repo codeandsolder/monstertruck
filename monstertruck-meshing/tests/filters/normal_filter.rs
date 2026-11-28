@@ -36,10 +36,10 @@ fn normalize_normals_test() {
     .expect("fixture mesh is valid");
     mesh.normalize_normals();
 
-    assert!(mesh.normals()[0].magnitude().near(&1.0));
-    assert!(!mesh.normals()[1].magnitude().near(&1.0));
-    assert!(!mesh.normals()[2].magnitude().near(&1.0));
-    assert!(mesh.normals()[3].magnitude().near(&1.0));
+    assert!(mesh.normals()[0].norm().near(&1.0));
+    assert!(!mesh.normals()[1].norm().near(&1.0));
+    assert!(!mesh.normals()[2].norm().near(&1.0));
+    assert!(mesh.normals()[3].norm().near(&1.0));
 
     let mut iter = mesh.face_iter();
     let face = iter.next().unwrap();

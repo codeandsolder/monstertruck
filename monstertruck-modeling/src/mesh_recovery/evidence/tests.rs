@@ -127,7 +127,7 @@ fn separate_nearby_parallel_lines_are_hypothesized_not_welded() {
     let grouped = evidence
         .parallel_bundles
         .iter()
-        .find(|bundle| bundle.direction.dot(Vector3::unit_x()).abs() > 0.99999)
+        .find(|bundle| bundle.direction.dot(&Vector3::x()).abs() > 0.99999)
         .expect("same horizontal direction");
     assert_eq!(grouped.placements.len(), 2);
     assert!((grouped.transverse_separation(0, 1).unwrap() - small).abs() < 1.0e-15);
@@ -146,7 +146,7 @@ fn faceted_through_hole_exposes_parallel_generatrices_without_cylinder_assumptio
     let axial = evidence
         .parallel_bundles
         .iter()
-        .find(|bundle| bundle.direction.dot(Vector3::unit_z()).abs() > 0.99999)
+        .find(|bundle| bundle.direction.dot(&Vector3::z()).abs() > 0.99999)
         .expect("faceted wall has parallel axial sample edges");
     assert!(axial.placements.len() >= 32);
     assert!(axial.placements.iter().all(|member| {
@@ -696,7 +696,7 @@ fn cylinder_wall_reveals_repeated_coherent_normal_rotation_without_primitive_fit
                 else {
                     continue;
                 };
-                let z = observation.reference_direction.dot(Vector3::unit_z()).abs();
+                let z = observation.reference_direction.dot(&Vector3::z()).abs();
                 if z < 0.99999 || !observation.coherent_rotation {
                     continue;
                 }
@@ -778,7 +778,7 @@ fn find_closed_normal_ring(mesh: &PolygonMesh, sectors: usize) -> CurvatureTrack
         .find(|track| {
             track.closed
                 && track.distinct_support_count == sectors
-                && track.seed_axis.dot(Vector3::unit_z()).abs() > 0.9999
+                && track.seed_axis.dot(&Vector3::z()).abs() > 0.9999
                 && track.normal_axis_projection_spread < 1.0e-5
         })
         .unwrap_or_else(|| panic!("no {sectors}-sector closed normal ring"));

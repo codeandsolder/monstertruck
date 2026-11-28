@@ -5,7 +5,7 @@
 use super::content_hash::content_hash64;
 use super::{
     BoundedCurve, BsplineCurve, BsplineSurface, CompressedTrimmedShell, CompressedTrimmedSolid,
-    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerSpace, KERNEL_EPSILON, KnotVector,
+    Curve, Curve2D, ExactParameterBoundary2D, HashMap, InnerProduct, KERNEL_EPSILON, KnotVector,
     Line, Matrix4, MetricSpace, NurbsCurve, NurbsSurface, ParameterCurve, ParameterDivision1D,
     ParametricCurve, ParametricCurve3D, ParametricSurface, Point2, Point3, Processor, RefCell,
     RevolutionSurface, SearchNearestParameter, SearchParameter, Shell, Solid, Surface, Tolerance,
@@ -28,11 +28,11 @@ pub(super) fn line_points(line: Line<Point2>, tolerance: f64) -> Vec<Point2> {
 
 fn point_segment_distance2_2d(point: Point2, start: Point2, end: Point2) -> f64 {
     let edge = end - start;
-    let len2 = edge.magnitude2();
+    let len2 = edge.norm_squared();
     if len2 <= KERNEL_EPSILON * KERNEL_EPSILON {
         point.distance2(start)
     } else {
-        let t = ((point - start).dot(edge) / len2).clamp(0.0, 1.0);
+        let t = ((point - start).dot(&edge) / len2).clamp(0.0, 1.0);
         point.distance2(start + edge * t)
     }
 }

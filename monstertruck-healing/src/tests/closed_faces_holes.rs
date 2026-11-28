@@ -60,11 +60,11 @@ fn test_split_closed_face_cylinder_with_hole() {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[2], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
 
-    let translate = Matrix4::from_translation(Vector3::unit_z());
-    let transform = Matrix3::from_translation(Vector2::new(0.5, PI)) * Matrix3::from_scale(0.25);
+    let translate = Matrix4::new_translation(&Vector3::z());
+    let transform = Matrix3::new_translation(&Vector2::new(0.5, PI)) * Matrix3::new_scaling(0.25);
     let edges = vec![
         CompressedEdge {
             vertices: (0, 1),
@@ -349,7 +349,7 @@ fn test_split_closed_face_cylinder_with_rotated_hole() {
     let surface = RevolutionSurface::by_revolution(
         Line(Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 0.0)),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
 
     let vertices = vec![
@@ -361,8 +361,8 @@ fn test_split_closed_face_cylinder_with_rotated_hole() {
         surface.evaluate(0.5, PI - 0.25),
     ];
 
-    let translate = Matrix4::from_translation(Vector3::unit_z());
-    let transform = Matrix3::from_translation(Vector2::new(0.5, PI)) * Matrix3::from_scale(0.25);
+    let translate = Matrix4::new_translation(&Vector3::z());
+    let transform = Matrix3::new_translation(&Vector2::new(0.5, PI)) * Matrix3::new_scaling(0.25);
     let edges = vec![
         CompressedEdge {
             vertices: (0, 1),

@@ -53,7 +53,7 @@ fn improve<const N: usize>(
         *parameter = parameter.clamp(lo, hi);
     }
     let mut gap = residual(parameters);
-    let mut error = gap.magnitude2();
+    let mut error = gap.norm_squared();
     if !error.is_finite() || !admits(parameters, error) {
         return None;
     }
@@ -85,7 +85,7 @@ fn improve<const N: usize>(
                 break;
             }
             let trial_gap = residual(trial);
-            let trial_error = trial_gap.magnitude2();
+            let trial_error = trial_gap.norm_squared();
             if trial_error < error && admits(trial, trial_error) {
                 parameters = trial;
                 gap = trial_gap;
@@ -117,8 +117,8 @@ pub(super) fn point_parameter<C: BoundedCurve<Point = Point3, Vector = Vector3>>
         |[t]| curve.evaluate(t) - point,
         |[t], residual| {
             let tangent = curve.derivative(t);
-            let norm = tangent.magnitude2();
-            (norm > 0.).then(|| [-tangent.dot(residual) / norm])
+            let norm = tangent.norm_squared();
+            (norm > 0.).then(|| [-tangent.dot(&residual) / norm])
         },
         |[t], error| branch.accepts(curve.evaluate(t), error),
     )?;
@@ -142,15 +142,15 @@ pub(super) fn crossing_parameters<C: BoundedCurve<Point = Point3, Vector = Vecto
         |[u, v], gap| {
             let a = lhs.derivative(u);
             let b = rhs.derivative(v);
-            let aa = a.magnitude2();
-            let bb = b.magnitude2();
-            let ab = -a.dot(b);
+            let aa = a.norm_squared();
+            let bb = b.norm_squared();
+            let ab = -a.dot(&b);
             let determinant = aa.mul_add(bb, -(ab * ab));
             if !determinant.is_finite() || determinant <= f64::EPSILON * aa * bb {
                 return None;
             }
-            let ga = -a.dot(gap);
-            let gb = b.dot(gap);
+            let ga = -a.dot(&gap);
+            let gb = b.dot(&gap);
             Some([
                 ga.mul_add(bb, -(gb * ab)) / determinant,
                 aa.mul_add(gb, -(ab * ga)) / determinant,
@@ -189,12 +189,12 @@ pub(super) fn curve_surface_parameters<C: ParametricCurve3D, S: ParametricSurfac
         ranges,
         |[t, u, v]| curve.evaluate(t) - surface.evaluate(u, v),
         |[t, u, v], gap| {
-            let matrix = Matrix3::from_cols(
+            let matrix = Matrix3::from_columns(&[
                 curve.derivative(t),
                 -surface.derivative_u(u, v),
                 -surface.derivative_v(u, v),
-            );
-            let update = matrix.invert()? * -gap;
+            ]);
+            let update = matrix.try_inverse()? * -gap;
             Some([update.x, update.y, update.z])
         },
         |_, _| true,
@@ -222,8 +222,8 @@ mod tests {
         );
         let seed = [1. / 3. + 1.0e-7, 1. / 3. + 8. / 81.];
         let initial = cubic.evaluate(seed[0]) - line.evaluate(seed[1]);
-        assert!(initial.magnitude() < 1.0e-6);
-        assert!(initial.magnitude() > 1.0e-8);
+        assert!(initial.norm() < 1.0e-6);
+        assert!(initial.norm() > 1.0e-8);
         let [u, v] = crossing_parameters(&cubic, &line, seed, 1.0e-6).unwrap();
         assert!((u - 1. / 3.).abs() < 1.0e-14);
         assert!(cubic.evaluate(u).distance(line.evaluate(v)) < 1.0e-14);

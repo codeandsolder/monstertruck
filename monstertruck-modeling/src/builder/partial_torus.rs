@@ -15,7 +15,7 @@ fn test_surface_orientation(surface: &Surface, sign: f64) {
     };
     let (u, v) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
     let p = surface.evaluate(u, v);
-    let q = Point3::from_vec(Vector3::new(p.x, p.y, 0.0).normalize() * 0.75);
+    let q = Point3::from(Vector3::new(p.x, p.y, 0.0).normalize() * 0.75);
     let n0 = sign * (p - q).normalize();
     let n1 = surface.normal(u, v);
     assert_near!(n0, n1)
@@ -57,7 +57,7 @@ fn partial_torus() -> Result<()> {
     let w = builder::revolve(
         &v,
         Point3::new(0.75, 0.0, 0.0),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;
@@ -66,8 +66,8 @@ fn partial_torus() -> Result<()> {
     let torus = builder::revolve(
         &face,
         Point3::origin(),
-        Vector3::unit_z(),
-        builder::SweepAngle::Partial(Rad(2.0)),
+        Vector3::z(),
+        builder::SweepAngle::Partial(2.0),
         1,
     )?;
     test_shell(&torus.boundaries()[0], 1.0);
@@ -75,8 +75,8 @@ fn partial_torus() -> Result<()> {
     let torus = builder::revolve(
         &face,
         Point3::origin(),
-        Vector3::unit_z(),
-        builder::SweepAngle::Partial(Rad(5.0)),
+        Vector3::z(),
+        builder::SweepAngle::Partial(5.0),
         2,
     )?;
     test_shell(&torus.boundaries()[0], 1.0);
@@ -84,8 +84,8 @@ fn partial_torus() -> Result<()> {
     let torus = builder::revolve(
         &face,
         Point3::origin(),
-        Vector3::unit_z(),
-        builder::SweepAngle::Partial(Rad(-2.0)),
+        Vector3::z(),
+        builder::SweepAngle::Partial(-2.0),
         1,
     )?;
     test_shell(&torus.boundaries()[0], -1.0);
@@ -93,8 +93,8 @@ fn partial_torus() -> Result<()> {
     let torus = builder::revolve(
         &face,
         Point3::origin(),
-        Vector3::unit_z(),
-        builder::SweepAngle::Partial(Rad(-5.0)),
+        Vector3::z(),
+        builder::SweepAngle::Partial(-5.0),
         2,
     )?;
     test_shell(&torus.boundaries()[0], -1.0);

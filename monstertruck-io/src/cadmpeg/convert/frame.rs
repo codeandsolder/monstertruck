@@ -14,7 +14,7 @@ use cadmpeg_ir::features::FinitePoint3;
 use cadmpeg_ir::math::{Point3 as IrPoint3, Vector3 as IrVector3};
 use cadmpeg_ir::transform::Transform as IrTransform;
 use cadmpeg_ir::units::OrthonormalFrame3;
-use monstertruck_modeling::{InnerSpace, Matrix4, Point3, Vector3};
+use monstertruck_modeling::{InnerProduct, Matrix4, Point3, Vector3};
 
 /// Coordinates as monstertruck spells them.
 ///
@@ -31,7 +31,7 @@ pub(super) fn vector(value: &IrVector3) -> Vector3 { Vector3::new(value.x, value
 /// A row-major intermediate-representation transform as a column-major
 /// [`Matrix4`].
 ///
-/// `Transform::rows()[i][j]` is row `i`, column `j`; [`Matrix4::from_cols`]
+/// `Transform::rows()[i][j]` is row `i`, column `j`; [`Matrix4::from_columns`]
 /// wants columns. Getting this backwards transposes every placement, which for a
 /// rigid motion inverts the rotation and leaves the translation in the wrong row
 /// -- so it is not the kind of mistake that shows up as a small error.
@@ -48,7 +48,7 @@ pub(super) fn matrix(value: &IrTransform) -> Matrix4 {
             rows[3][index],
         )
     };
-    Matrix4::from_cols(column(0), column(1), column(2), column(3))
+    Matrix4::from_columns(&[column(0), column(1), column(2), column(3)])
 }
 
 /// A right-handed orthonormal placement: where a carrier sits, which way its
@@ -65,7 +65,7 @@ pub(super) struct Frame {
 
 impl Frame {
     /// The third axis, completing a right-handed triple.
-    pub(super) fn co_reference(&self) -> Vector3 { self.axis.cross(self.reference) }
+    pub(super) fn co_reference(&self) -> Vector3 { self.axis.cross(&self.reference) }
 
     /// The matrix that maps the canonical frame -- x to `reference`, y to
     /// `axis x reference`, z to `axis`, origin to `origin` -- into place, with
@@ -77,12 +77,12 @@ impl Frame {
     /// stays canonical and exactly representable.
     pub(super) fn placement(&self, scale: f64) -> Matrix4 {
         let radial = self.reference * scale;
-        Matrix4::from_cols(
-            radial.extend(0.0),
-            (self.axis.cross(radial)).extend(0.0),
-            self.axis.extend(0.0),
+        Matrix4::from_columns(&[
+            radial.push(0.0),
+            (self.axis.cross(&radial)).push(0.0),
+            self.axis.push(0.0),
             self.origin.to_homogeneous(),
-        )
+        ])
     }
 }
 
@@ -104,6 +104,6 @@ pub(super) fn frame(origin: FinitePoint3, frame: &OrthonormalFrame3) -> Frame {
     Frame {
         origin: finite_point(origin),
         axis,
-        reference: (reference - axis * axis.dot(reference)).normalize(),
+        reference: (reference - axis * axis.dot(&reference)).normalize(),
     }
 }

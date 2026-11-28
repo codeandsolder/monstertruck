@@ -6,7 +6,7 @@
 
 use super::{BandContext, BandPlan, Ring, copy_rings, parameter_circle};
 use crate::mesh_recovery::{OrientedTrim, SharedTrimGeometry, SurfaceCarrier};
-use crate::{BoundedCurve, Edge, InnerSpace, NurbsCurve, ParametricCurve, Point3};
+use crate::{BoundedCurve, Edge, InnerProduct, NurbsCurve, ParametricCurve, Point3};
 use monstertruck_geometry::analytic_curve_incidence::{
     CircularArcFrame, certify_circular_arc_coverage,
 };
@@ -237,7 +237,7 @@ impl BandContext<'_> {
             }
             let a = point(span.controls.first()?);
             let b = point(span.controls.last()?);
-            if (a - previous).magnitude() > tol {
+            if (a - previous).norm() > tol {
                 return None;
             }
             result.push((
@@ -246,7 +246,7 @@ impl BandContext<'_> {
             ));
             previous = b;
         }
-        ((previous - back).magnitude() <= tol).then_some(result)
+        ((previous - back).norm() <= tol).then_some(result)
     }
 
     fn torus_cuts(

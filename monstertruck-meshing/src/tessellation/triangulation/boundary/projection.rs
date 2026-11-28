@@ -12,8 +12,8 @@
 
 use super::super::charted::TrimChart;
 use super::{
-    BoundedCurve, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
-    InnerSpace, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
+    AffinePoint, BoundedCurve, ExactParameterBoundary2D, ExactTrimBoundary2D, HashMap,
+    InnerProduct, MetricSpace, Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D,
     Point2, Point3, PolylineCurve, PreMeshableSurface, SP, SurfacePoint, Tolerance, algo, env,
     mesh, native_boundary_slack, periodic_min_difference, projection_debug_enabled,
     projection_debug_face, report_projection_failure, report_projection_outcome, resample_boundary,
@@ -767,7 +767,7 @@ impl PolyBoundaryPiece {
     fn parameter_seed_score<S: PreMeshableSurface>(surface: &S, (u, v): (f64, f64)) -> f64 {
         let uder = surface.derivative_u(u, v);
         let vder = surface.derivative_v(u, v);
-        uder.dot(uder) + vder.dot(vder)
+        uder.dot(&uder) + vder.dot(&vder)
     }
 
     /// Recover a genuine periodic pole at either bounded parameter endpoint.
@@ -1016,7 +1016,9 @@ impl PolyBoundaryPiece {
             });
         report_projection_outcome("ladder", projected.is_some());
         let mut vec = projected?;
-        let grav = vec.iter().fold(Point2::origin(), |g, p| g + p.uv.to_vec())
+        let grav = vec
+            .iter()
+            .fold(Point2::origin(), |g, p| g + p.uv.position_vector())
             / crate::count_as_f64(vec.len());
         if let (Some(up), Some((u0, _))) = (surface.period_u(), urange) {
             let quot = f64::floor((grav.x - u0) / up);
@@ -1032,7 +1034,7 @@ impl PolyBoundaryPiece {
         }
         let last = *vec.last()?;
         if !vec[0].near(&last) {
-            let Point2 { x: u0, y: v0 } = last.uv;
+            let [u0, v0] = <[f64; 2]>::from(last.uv);
             if surface.derivative_u(u0, v0).so_small() || surface.derivative_v(u0, v0).so_small() {
                 vec.push(vec[0]);
             }
@@ -1143,7 +1145,7 @@ mod numerical_projection_tests {
     fn real_periodic_cone_pole_recovery_handles_both_uv_axis_orientations() {
         let profile = Line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.5, 0.0, 2.5));
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let base = RevolutionSurface::by_revolution(profile, origin, Vector3::unit_z());
+        let base = RevolutionSurface::by_revolution(profile, origin, Vector3::z());
         let surface: Processor<_, Matrix4> = Processor::new(base);
         let pt = surface.evaluate(0.0, 0.7);
         let recovered = PolyBoundaryPiece::recover_periodic_pole(&surface, pt, (0.5, 0.7))
@@ -1170,11 +1172,8 @@ mod numerical_projection_tests {
     #[test]
     fn noncollapsing_periodic_cylinder_does_not_forge_a_pole() {
         let profile = Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0));
-        let surface = RevolutionSurface::by_revolution(
-            profile,
-            Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
-        );
+        let surface =
+            RevolutionSurface::by_revolution(profile, Point3::new(0.0, 0.0, 0.0), Vector3::z());
         let point = surface.evaluate(0.0, 0.7);
         assert!(PolyBoundaryPiece::recover_periodic_pole(&surface, point, (0.5, 0.7)).is_none());
         assert!(!sampled_periodic_collapse(

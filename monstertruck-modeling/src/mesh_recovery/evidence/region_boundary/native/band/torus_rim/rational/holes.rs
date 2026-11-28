@@ -66,7 +66,7 @@ pub(in super::super::super) fn hole_bounds(
     let start = [uv[axis], lower + (uv[1 - axis] - lower).rem_euclid(TAU)].map(Interval::point);
     let (pieces, end) = lift_cycle(frame, rim, start)?;
     let resolution = frame.resolution;
-    if (0..2).any(|i| end[i].sub(start[i]).magnitude() > resolution) {
+    if (0..2).any(|i| end[i].sub(start[i]).norm() > resolution) {
         return Err(Rejection::Winding);
     }
     let bounds = pieces

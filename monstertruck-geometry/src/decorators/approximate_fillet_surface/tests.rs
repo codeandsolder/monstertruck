@@ -12,20 +12,20 @@ fn plane_cylinder(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64
     let surface = ApproximateFilletSurface {
         knot_vec: KnotVector::bezier_knot(1),
         surface0: Plane::xy(),
-        side_control_points0: vec![(-1.0, 0.0).into(), (-1.0, 1.0).into()],
-        tangent_vecs0: vec![(f64::sqrt(2.0), 0.0).into(); 2],
+        side_control_points0: vec![[-1.0, 0.0].into(), [-1.0, 1.0].into()],
+        tangent_vecs0: vec![[f64::sqrt(2.0), 0.0].into(); 2],
         surface1: Plane::yz(),
-        side_control_points1: vec![(0.0, -1.0).into(), (1.0, -1.0).into()],
-        tangent_vecs1: vec![(-f64::sqrt(2.0), 0.0).into(); 2],
+        side_control_points1: vec![[0.0, -1.0].into(), [1.0, -1.0].into()],
+        tangent_vecs1: vec![[-f64::sqrt(2.0), 0.0].into(); 2],
         weights: vec![(1.0 + f64::sqrt(2.0)) / 3.0; 2],
     };
     let w = 1.0 / f64::sqrt(2.0);
     let nurbs_surface = NurbsSurface::new(BsplineSurface::<Vector4>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
         vec![
-            vec![(-1.0, 0.0, 0.0, 1.0).into(), (-1.0, 1.0, 0.0, 1.0).into()],
-            vec![(0.0, 0.0, 0.0, w).into(), (0.0, w, 0.0, w).into()],
-            vec![(0.0, 0.0, -1.0, 1.0).into(), (0.0, 1.0, -1.0, 1.0).into()],
+            vec![[-1.0, 0.0, 0.0, 1.0].into(), [-1.0, 1.0, 0.0, 1.0].into()],
+            vec![[0.0, 0.0, 0.0, w].into(), [0.0, w, 0.0, w].into()],
+            vec![[0.0, 0.0, -1.0, 1.0].into(), [0.0, 1.0, -1.0, 1.0].into()],
         ],
     ));
 
@@ -42,35 +42,35 @@ fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
     let surface0 = &BsplineSurface::<Point3>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
-            vec![(-1.0, 0.0, 0.0).into(), (-1.0, 0.5, 0.0).into(), (-1.0, 1.0, 0.0).into()],
-            vec![(-0.5, 0.0, 0.0).into(), (-0.5, 0.5, 1.0).into(), (-0.5, 1.0, 0.0).into()],
-            vec![(0.0, 0.0, 0.0).into(), (0.0, 0.5, 0.0).into(), (0.0, 1.0, 0.0).into()],
+            vec![[-1.0, 0.0, 0.0].into(), [-1.0, 0.5, 0.0].into(), [-1.0, 1.0, 0.0].into()],
+            vec![[-0.5, 0.0, 0.0].into(), [-0.5, 0.5, 1.0].into(), [-0.5, 1.0, 0.0].into()],
+            vec![[0.0, 0.0, 0.0].into(), [0.0, 0.5, 0.0].into(), [0.0, 1.0, 0.0].into()],
         ]
     );
     #[rustfmt::skip]
     let surface1 = &BsplineSurface::<Point3>::new_unchecked(
         (KnotVector::bezier_knot(2), KnotVector::bezier_knot(2)),
         vec![
-            vec![(0.0, 0.0, -1.0).into(), (0.0, 0.0, -0.5).into(), (0.0, 0.0, 0.0).into()],
-            vec![(0.0, 0.5, -1.0).into(), (1.0, 0.5, -0.5).into(), (0.0, 0.5, 0.0).into()],
-            vec![(0.0, 1.0, -1.0).into(), (0.0, 1.0, -0.5).into(), (0.0, 1.0, 0.0).into()],
+            vec![[0.0, 0.0, -1.0].into(), [0.0, 0.0, -0.5].into(), [0.0, 0.0, 0.0].into()],
+            vec![[0.0, 0.5, -1.0].into(), [1.0, 0.5, -0.5].into(), [0.0, 0.5, 0.0].into()],
+            vec![[0.0, 1.0, -1.0].into(), [0.0, 1.0, -0.5].into(), [0.0, 1.0, 0.0].into()],
         ]
     );
 
     let surface = ApproximateFilletSurface {
         knot_vec: KnotVector::bezier_knot(2),
         surface0,
-        side_control_points0: vec![(0.8, 0.0).into(), (0.5, 0.5).into(), (0.8, 1.0).into()],
-        tangent_vecs0: vec![(0.2, -0.1).into(), (0.4, 0.0).into(), (0.2, 0.1).into()],
+        side_control_points0: vec![[0.8, 0.0].into(), [0.5, 0.5].into(), [0.8, 1.0].into()],
+        tangent_vecs0: vec![[0.2, -0.1].into(), [0.4, 0.0].into(), [0.2, 0.1].into()],
         surface1,
-        side_control_points1: vec![(0.0, 0.8).into(), (0.5, 0.5).into(), (1.0, 0.8).into()],
-        tangent_vecs1: vec![(-0.2, -0.1).into(), (-0.4, 0.0).into(), (-0.2, 0.1).into()],
+        side_control_points1: vec![[0.0, 0.8].into(), [0.5, 0.5].into(), [1.0, 0.8].into()],
+        tangent_vecs1: vec![[-0.2, -0.1].into(), [-0.4, 0.0].into(), [-0.2, 0.1].into()],
         weights: vec![1.0, 2.0, 1.0],
     };
 
     let pt = surface.evaluate(u, v);
     let ders = surface.derivatives(3, u, v);
-    assert_near!(pt.to_vec(), ders[0][0]);
+    assert_near!(pt.position_vector(), ders[0][0]);
 
     const EPS: f64 = 1.0e-4;
 
@@ -84,7 +84,7 @@ fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
         .flatten()
         .zip(calc_uders.slice_iter().flatten());
     for (a, b) in iter {
-        prop_assert!((a - b).magnitude() < 10.0 * EPS);
+        prop_assert!((a - b).norm() < 10.0 * EPS);
     }
 
     let vpders = surface.derivatives(2, u, v + EPS);
@@ -97,7 +97,7 @@ fn test_ders(#[strategy = 0.0..=1.0] u: f64, #[strategy = 0.0..=1.0] v: f64) {
         .flatten()
         .zip(calc_vders.slice_iter().flatten());
     for (a, b) in iter {
-        prop_assert!((a - b).magnitude() < 10.0 * EPS);
+        prop_assert!((a - b).norm() < 10.0 * EPS);
     }
 
     let pt0 = surface.evaluate(0.0, v);

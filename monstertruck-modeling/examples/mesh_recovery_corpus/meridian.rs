@@ -6,7 +6,7 @@ use monstertruck_modeling::mesh_recovery::{
     CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, RegionContactGraph,
     SurfaceCarrier, measure_circular_meridian,
 };
-use monstertruck_modeling::{InnerSpace, Point3, Vector3};
+use monstertruck_modeling::{InnerProduct, Point3, Vector3};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -109,7 +109,7 @@ impl<'a> CandidateIndex<'a> {
             let Some((origin, axis)) = axis_of(carriers, left) else {
                 continue;
             };
-            let radius = (reference - origin).cross(axis).magnitude();
+            let radius = (reference - origin).cross(&axis).norm();
             if radius <= 0.0 {
                 continue;
             }
@@ -156,7 +156,7 @@ impl<'a> CandidateIndex<'a> {
         let angular = regions
             .iter()
             .filter_map(|&id| axis_of(self.carriers, id))
-            .map(|(_, other)| axis.cross(other).magnitude())
+            .map(|(_, other)| axis.cross(&other).norm())
             .fold(0.0_f64, f64::max);
         let resolution = extent * (angular + 1.0e-10);
         let fit = measure_circular_meridian(self.evidence, &supports, origin, axis, resolution)?;

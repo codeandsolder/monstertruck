@@ -251,7 +251,7 @@ fn cylindrical_cap_edge(
 ) -> Option<OrientedEdgeUse> {
     use monstertruck_geometry::{
         analytic_curve_incidence::{CircularArcFrame, certify_circular_arc_coverage},
-        prelude::{BoundedCurve, InnerSpace, ParametricCurve, Point3, Vector3},
+        prelude::{BoundedCurve, InnerProduct, ParametricCurve, Point3, Vector3},
     };
     let CurveSupport::BSpline(spline) = &edge.support else {
         return matches!(edge.support, CurveSupport::Circle(_)).then(|| edge.clone());
@@ -290,7 +290,7 @@ fn cylindrical_cap_edge(
         let parameter = (hi - lo).mul_add(fraction, lo);
         let tangent = curve.derivative(parameter);
         let radial = curve.evaluate(parameter) - center_point;
-        let angular = axis_vector.dot(radial.cross(tangent));
+        let angular = axis_vector.dot(&radial.cross(&tangent));
         (angular.is_finite() && angular != 0.0).then_some(angular.is_sign_positive())
     })?;
     let circle = CircleSupport {

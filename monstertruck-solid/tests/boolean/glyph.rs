@@ -28,7 +28,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let host = builder::transformed(
         &host,
-        Matrix4::from_translation(Vector3::new(-6.0, -6.0, 0.0)),
+        Matrix4::new_translation(&Vector3::new(-6.0, -6.0, 0.0)),
     );
     let vertices = builder::vertices([
         Point3::new(0.0, 0.0, 0.0),
@@ -303,7 +303,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let feature = builder::transformed(
         &feature,
-        Matrix4::from_translation(Vector3::new(
+        Matrix4::new_translation(&Vector3::new(
             2.8117697409035993,
             4.5510814676812847,
             0.69999,
@@ -521,7 +521,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let middle_boss = builder::transformed(
         &middle_boss,
-        Matrix4::from_translation(Vector3::new(4.185868719855022, 4.326969697886959, 0.69999)),
+        Matrix4::new_translation(&Vector3::new(4.185868719855022, 4.326969697886959, 0.69999)),
     );
     let holed_boss_wire_0_vertices = builder::vertices([
         Point3::new(0.0, 0.0, 0.0),
@@ -705,7 +705,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let holed_boss = builder::transformed(
         &holed_boss,
-        Matrix4::from_translation(Vector3::new(4.034635930926474, 4.360761830167558, 0.69999)),
+        Matrix4::new_translation(&Vector3::new(4.034635930926474, 4.360761830167558, 0.69999)),
     );
     // A disjoint thin boss can cross several already-partitioned coplanar host
     // faces. The pairwise SSI segments must share their common endpoint even
@@ -750,7 +750,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let rectilinear_boss = builder::transformed(
         &rectilinear_boss,
-        Matrix4::from_translation(Vector3::new(3.900871074992246, 4.321874884097263, 0.69999)),
+        Matrix4::new_translation(&Vector3::new(3.900871074992246, 4.321874884097263, 0.69999)),
     );
     let with_rectilinear_boss = monstertruck_solid::or(
         &with_holed_boss_only,
@@ -918,7 +918,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let curved_boss = builder::transformed(
         &curved_boss,
-        Matrix4::from_translation(Vector3::new(
+        Matrix4::new_translation(&Vector3::new(
             4.0164401673908738,
             4.7423529854549225,
             0.69999,
@@ -968,7 +968,7 @@ fn union_with_exact_step_redox_glyph_keeps_host() -> Result<()> {
     )?;
     let boss = builder::transformed(
         &boss,
-        Matrix4::from_translation(Vector3::new(3.900871074992246, 4.644511765530097, 0.69999)),
+        Matrix4::new_translation(&Vector3::new(3.900871074992246, 4.644511765530097, 0.69999)),
     );
     let before_boss = result;
     let result = monstertruck_solid::or(

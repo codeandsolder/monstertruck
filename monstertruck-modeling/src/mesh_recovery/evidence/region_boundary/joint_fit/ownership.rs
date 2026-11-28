@@ -7,7 +7,7 @@ use super::{
     Neighborhood, Point3, SurfaceCarrier, SurfaceRegionPartition, fixed_sample_position,
     plane_from_junctions, preserves_polygon_orientation, satisfies,
 };
-use crate::{InnerSpace, KERNEL_EPSILON};
+use crate::{InnerProduct, KERNEL_EPSILON};
 use std::collections::BTreeSet;
 mod growth;
 pub(in crate::mesh_recovery) use growth::{OwnershipGrowthOptions, support_claim};
@@ -122,7 +122,7 @@ fn place_junctions(
             vertex: sample.id,
             allowance: sample.allowance,
         })?;
-        let displacement = (next - source).magnitude();
+        let displacement = (next - source).norm();
         if !displacement.is_finite() || displacement > sample.allowance {
             return Err(JointFitRejection::Sample {
                 vertex: sample.id,
@@ -216,7 +216,7 @@ mod tests {
     fn endpoint_error_is_not_a_source_curvature_allowance() {
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -259,7 +259,7 @@ mod tests {
         labels[evidence.source_planar_support[1]] = side;
         let carrier = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -288,7 +288,7 @@ mod tests {
             .position(|&p| p == perturbed)
             .ok_or("source junction")?;
         let boundary = candidate.positions[id];
-        assert!((boundary - Point3::new(1.0, 0.0, 1.0)).magnitude() <= KERNEL_EPSILON * 0.01);
+        assert!((boundary - Point3::new(1.0, 0.0, 1.0)).norm() <= KERNEL_EPSILON * 0.01);
         let plane = candidate.partition.carriers[planar].ok_or("dependent plane")?;
         assert!(satisfies(
             boundary,

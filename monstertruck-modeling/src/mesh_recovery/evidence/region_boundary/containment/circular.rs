@@ -4,7 +4,7 @@
 //! checked separately; a small quartic residual alone is insufficient.
 
 use super::{CarrierResidual, residual, unit};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use std::f64::consts::{PI, TAU};
 
 #[derive(Clone, Copy)]
@@ -35,11 +35,11 @@ impl CircularProfile {
             })
     }
 
-    fn transverse(self, delta: Vector3) -> Vector3 { delta - self.axis * delta.dot(self.axis) }
+    fn transverse(self, delta: Vector3) -> Vector3 { delta - self.axis * delta.dot(&self.axis) }
 
     fn error(self, delta: Vector3) -> f64 {
-        let axial = delta.dot(self.axis);
-        let radial = self.transverse(delta).magnitude();
+        let axial = delta.dot(&self.axis);
+        let radial = self.transverse(delta).norm();
         ((radial - self.radial_center).hypot(axial) - self.profile_radius).abs()
     }
 
@@ -86,16 +86,16 @@ impl CircularProfile {
         let origin = start - self.center;
         let direction = end - start;
         let a = [
-            origin.magnitude2() + self.offset(),
-            2.0 * origin.dot(direction),
-            direction.magnitude2(),
+            origin.norm_squared() + self.offset(),
+            2.0 * origin.dot(&direction),
+            direction.norm_squared(),
         ];
         let transverse_origin = self.transverse(origin);
         let transverse_direction = self.transverse(direction);
         let radial_squared = [
-            transverse_origin.magnitude2(),
-            2.0 * transverse_origin.dot(transverse_direction),
-            transverse_direction.magnitude2(),
+            transverse_origin.norm_squared(),
+            2.0 * transverse_origin.dot(&transverse_direction),
+            transverse_direction.norm_squared(),
         ];
         let mut squared = [0.0_f64; 5];
         for (i, &left) in a.iter().enumerate() {
@@ -120,7 +120,7 @@ impl CircularProfile {
         // Each point on this finite segment lies within length/8 of one
         // of the five evaluated witnesses. Intersect the two independent
         // upper bounds, especially when the squared branch bound is loose.
-        let lipschitz = direction.magnitude().mul_add(0.125, witness);
+        let lipschitz = direction.norm().mul_add(0.125, witness);
         measured.upper_bound = measured.upper_bound.min(lipschitz).max(witness);
         Some(measured)
     }
@@ -140,21 +140,21 @@ impl CircularProfile {
                 .fold(Vector3::new(0.0, 0.0, 0.0), |sum, p| sum + p)
                 / crate::usize_to_f64(points.len());
         let radial = self.transverse(center);
-        let radial_direction = if radial.magnitude2() > 0.0 {
+        let radial_direction = if radial.norm_squared() > 0.0 {
             radial.normalize()
         } else {
             let farthest = points
                 .iter()
                 .map(|&p| self.transverse(p))
-                .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
-            if farthest.magnitude2() > 0.0 {
+                .max_by(|a, b| a.norm_squared().total_cmp(&b.norm_squared()))?;
+            if farthest.norm_squared() > 0.0 {
                 farthest.normalize()
             } else {
                 super::normal_basis(self.axis).0
             }
         };
-        let axial = center.dot(self.axis);
-        let offset = radial.magnitude() - self.radial_center;
+        let axial = center.dot(&self.axis);
+        let offset = radial.norm() - self.radial_center;
         let distance = axial.hypot(offset);
         let (direction_z, direction_r) = if distance > 0.0 {
             (axial / distance, offset / distance)
@@ -166,16 +166,16 @@ impl CircularProfile {
         let mut witnessed = self.error(center);
         let mut scale = self.radial_center.abs().max(self.profile_radius);
         for &point in points {
-            let z = point.dot(self.axis);
+            let z = point.dot(&self.axis);
             let radial = self.transverse(point);
-            let low = radial.dot(radial_direction) - self.radial_center;
-            let high = radial.magnitude() - self.radial_center;
+            let low = radial.dot(&radial_direction) - self.radial_center;
+            let high = radial.norm() - self.radial_center;
             upper = upper.max(z.hypot(low)).max(z.hypot(high));
             lower = lower.min(
                 direction_z.mul_add(z, direction_r * if direction_r >= 0.0 { low } else { high }),
             );
             witnessed = witnessed.max(self.error(point));
-            scale = scale.max(point.magnitude());
+            scale = scale.max(point.norm());
         }
         // The supporting affine expression may be negative, but the
         // actual meridian distance is always nonnegative.
@@ -204,8 +204,8 @@ impl CircularProfile {
                 .into_iter()
                 .max_by(|&(a, b, _), &(i, j, _)| {
                     (vertices[b] - vertices[a])
-                        .magnitude2()
-                        .total_cmp(&(vertices[j] - vertices[i]).magnitude2())
+                        .norm_squared()
+                        .total_cmp(&(vertices[j] - vertices[i]).norm_squared())
                 })?;
         let middle = vertices[a] + (vertices[b] - vertices[a]) * 0.5;
         let left =
@@ -279,9 +279,9 @@ impl CircularProfile {
         let origin = center - self.center;
         // For orthogonal equal-length circle basis vectors, |delta|² has
         // only constant and first harmonics, even on a tilted circle.
-        let constant = radius.mul_add(radius, origin.magnitude2()) + self.offset();
-        let cosine = 2.0 * origin.dot(basis_u);
-        let sine = 2.0 * origin.dot(basis_v);
+        let constant = radius.mul_add(radius, origin.norm_squared()) + self.offset();
+        let cosine = 2.0 * origin.dot(&basis_u);
+        let sine = 2.0 * origin.dot(&basis_v);
         let a_squared = Harmonics::square_first(constant, cosine, sine);
         let radial_squared = Harmonics::norm_squared(
             self.transverse(origin),
@@ -393,14 +393,14 @@ impl Harmonics {
     }
 
     fn norm_squared(origin: Vector3, cosine: Vector3, sine: Vector3) -> Self {
-        let cos_squared = cosine.magnitude2();
-        let sin_squared = sine.magnitude2();
+        let cos_squared = cosine.norm_squared();
+        let sin_squared = sine.norm_squared();
         Self([
-            origin.magnitude2() + cos_squared.midpoint(sin_squared),
-            2.0 * origin.dot(cosine),
-            2.0 * origin.dot(sine),
+            origin.norm_squared() + cos_squared.midpoint(sin_squared),
+            2.0 * origin.dot(&cosine),
+            2.0 * origin.dot(&sine),
             0.5 * (cos_squared - sin_squared),
-            cosine.dot(sine),
+            cosine.dot(&sine),
         ])
     }
 
@@ -428,7 +428,7 @@ mod tests {
     fn toroidal_inner_ring_perimeter_does_not_certify_filled_disk()
     -> Result<(), Box<dyn std::error::Error>> {
         let center = Point3::new(0.0, 0.0, 0.0);
-        let profile = CircularProfile::new(center, Vector3::unit_z(), 2.0, 1.0).ok_or("profile")?;
+        let profile = CircularProfile::new(center, Vector3::z(), 2.0, 1.0).ok_or("profile")?;
         let points = (0..64)
             .map(|i| {
                 let (sin, cos) = (TAU * f64::from(i) / 64.0).sin_cos();
@@ -485,31 +485,23 @@ mod tests {
     fn toroidal_parallel_and_meridian_circles_are_contained()
     -> Result<(), Box<dyn std::error::Error>> {
         let center = Point3::new(100.0, 200.0, -300.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let profile = CircularProfile::new(center, axis, 4.0, 1.5).ok_or("profile")?;
         let outer = profile
-            .circle(
-                center,
-                Vector3::unit_x() * 5.5,
-                Vector3::unit_y() * 5.5,
-                5.5,
-            )
+            .circle(center, Vector3::x() * 5.5, Vector3::y() * 5.5, 5.5)
             .ok_or("outer")?;
         assert!(outer.upper_bound < 1.0e-10);
         let cross_section = profile
             .circle(
-                center + Vector3::unit_x() * 4.0,
-                Vector3::unit_x() * 1.5,
+                center + Vector3::x() * 4.0,
+                Vector3::x() * 1.5,
                 axis * 1.5,
                 1.5,
             )
             .ok_or("meridian")?;
         assert!(cross_section.upper_bound < 1.0e-10);
         let chord = profile
-            .line(
-                center + Vector3::unit_x() * 5.5,
-                center - Vector3::unit_x() * 5.5,
-            )
+            .line(center + Vector3::x() * 5.5, center - Vector3::x() * 5.5)
             .ok_or("chord")?;
         assert!(chord.witnessed_max > 2.0);
         assert!(chord.upper_bound >= chord.witnessed_max);
@@ -520,16 +512,16 @@ mod tests {
     fn squared_profile_does_not_silently_accept_wrong_radial_branch()
     -> Result<(), Box<dyn std::error::Error>> {
         let center = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let profile = CircularProfile::new(center, axis, 1.0, 2.0).ok_or("profile")?;
         let inner_circle = profile
-            .circle(center, Vector3::unit_x(), Vector3::unit_y(), 1.0)
+            .circle(center, Vector3::x(), Vector3::y(), 1.0)
             .ok_or("wrong branch")?;
         assert!(inner_circle.witnessed_max > 1.99);
         assert!(inner_circle.upper_bound >= inner_circle.witnessed_max);
         let negative = CircularProfile::new(center, axis, -1.0, 2.0).ok_or("negative profile")?;
         let fit = negative
-            .circle(center, Vector3::unit_x(), Vector3::unit_y(), 1.0)
+            .circle(center, Vector3::x(), Vector3::y(), 1.0)
             .ok_or("right branch")?;
         assert!(fit.upper_bound < 1.0e-12);
         Ok(())

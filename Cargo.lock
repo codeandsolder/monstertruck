@@ -802,7 +802,6 @@ dependencies = [
  "approx 0.4.0",
  "mint",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -2976,17 +2975,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "katexit"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccfb0b7ce7938f84a5ecbdca5d0a991e46bc9d6d078934ad5e92c5270fe547db"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "kcl-api"
 version = "0.2.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3445,17 +3433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matext4cgmath"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6541e181de37f70f0aceb25441823a3d0efa9cc1d23f475a0d3926678949178"
-dependencies = [
- "cgmath",
- "katexit",
- "num-complex",
-]
-
-[[package]]
 name = "matrixmultiply"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3618,8 +3595,9 @@ name = "monstertruck-core"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "cgmath",
- "matext4cgmath",
+ "approx 0.5.1",
+ "nalgebra",
+ "num-traits",
  "proptest",
  "rkyv",
  "rustc-hash 2.1.3",
@@ -4039,6 +4017,7 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
+ "serde",
  "simba",
  "typenum",
 ]
@@ -4243,6 +4222,7 @@ checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "bytemuck",
  "num-traits",
+ "serde",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use monstertruck_core::cgmath64::{Homogeneous, control_point::ControlPoint};
+use monstertruck_core::math::{Homogeneous, control_point::ControlPoint};
 use monstertruck_traits::surface_continuity::{
     BoundarySide, ContinuityOrder, InvalidContinuityCapability, MAX_CONTINUITY_ORDER,
     SurfaceContinuityCapability, UnsupportedContinuityCapability,

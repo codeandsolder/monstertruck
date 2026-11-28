@@ -1,4 +1,4 @@
-use super::{EuclideanSpace, Faces, Point3, PolygonMesh, StandardVertex, Vector3, Zero};
+use super::{AffinePoint, Faces, Point3, PolygonMesh, StandardVertex, Vector3, Zero};
 use rustc_hash::FxHashMap as HashMap;
 use std::f64::consts::PI;
 

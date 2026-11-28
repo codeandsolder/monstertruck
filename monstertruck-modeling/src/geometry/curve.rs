@@ -8,8 +8,8 @@ use super::parameter_curves::{
     line_points, parameter_curve_points, same_surface_parameterization,
 };
 use super::{
-    BoundaryCurve2D, BoundaryCurveFromSamples, BoundedCurve, BoundingBox, BsplineCurve, Cut,
-    Deserialize, EuclideanSpace, ExactParameterBoundary2D, From, Homogeneous, Instant,
+    AffinePoint, BoundaryCurve2D, BoundaryCurveFromSamples, BoundedCurve, BoundingBox,
+    BsplineCurve, Cut, Deserialize, ExactParameterBoundary2D, From, Homogeneous, Instant,
     IntersectionCurve, Invertible, KnotVector, Line, Matrix3, Matrix4, NurbsCurve,
     ParameterBoundary2D, ParameterCurve, ParameterDivision1D, ParametricCurve, ParametricCurve3D,
     Point2, Point3, PolylineCurve, Processor, SearchNearestParameter, SearchNearestParameterD1,
@@ -391,7 +391,7 @@ impl Curve {
                 curve
                     .control_points()
                     .iter()
-                    .map(|pt| pt.to_vec().extend(1.0))
+                    .map(|pt| pt.position_vector().push(1.0))
                     .collect(),
             ),
             Self::NurbsCurve(curve) => curve.non_rationalized().clone(),
@@ -444,13 +444,13 @@ fn set_curve2d_endpoints(curve: &mut Curve2D, front: Point2, back: Point2) {
             if !curve.control_points().is_empty() {
                 let point = curve.control_point_mut(0);
                 let weight = point.weight();
-                *point = front.to_vec().extend(weight);
+                *point = front.position_vector().push(weight);
             }
             if curve.control_points().len() > 1 {
                 let last = curve.control_points().len() - 1;
                 let point = curve.control_point_mut(last);
                 let weight = point.weight();
-                *point = back.to_vec().extend(weight);
+                *point = back.position_vector().push(weight);
             }
         }
         Curve2D::Conic(_) => {}

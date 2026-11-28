@@ -205,7 +205,7 @@ fn seam_crossing_rational_face_consumes_every_shared_boundary_sample() {
                 .map(|pair| {
                     let a = mesh.positions()[pair[0].pos] - origin;
                     let b = mesh.positions()[pair[1].pos] - origin;
-                    a.cross(b).magnitude() * 0.5
+                    a.cross(&b).norm() * 0.5
                 })
                 .sum::<f64>()
         })

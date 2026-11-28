@@ -6,7 +6,7 @@ use super::{
     coplanar_contacts::{failed_edges, valid_regions},
 };
 use crate::{
-    InnerSpace, KERNEL_EPSILON,
+    InnerProduct, KERNEL_EPSILON,
     mesh_recovery::{
         MeshEvidence,
         evidence::{
@@ -190,7 +190,7 @@ pub(super) fn native_displacement(
             continue;
         };
         let source = evidence.positions[id];
-        let displacement = (vertex.point() - source).magnitude();
+        let displacement = (vertex.point() - source).norm();
         let allowed = if candidate.allowances[id] > 0.0 {
             maximum = maximum.max(displacement);
             candidate.allowances[id]
@@ -200,7 +200,7 @@ pub(super) fn native_displacement(
                 assembly.reconciled.positions[id],
                 monstertruck_topology::Vertex::point,
             );
-            (old - source).magnitude() + numerical_allowance
+            (old - source).norm() + numerical_allowance
         };
         if !displacement.is_finite() || displacement > allowed {
             return Err(JointFitRejection::NativeDisplacement {

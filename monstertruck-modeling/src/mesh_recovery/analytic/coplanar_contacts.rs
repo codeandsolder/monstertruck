@@ -5,7 +5,7 @@
 
 use super::{AnalyticRecoveryError, AnalyticRecoveryOptions, NativeAssembly};
 use crate::{
-    InnerSpace, KERNEL_EPSILON,
+    InnerProduct, KERNEL_EPSILON,
     mesh_recovery::{MeshEvidence, NativeTrimOptions, RegionBoundaryIndex, SurfaceCarrier},
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -42,9 +42,9 @@ fn plane_residual(
     };
     let plane = &evidence.planar_supports[support];
     let angle = normal
-        .cross(plane.normal)
-        .magnitude()
-        .atan2(normal.dot(plane.normal));
+        .cross(&plane.normal)
+        .norm()
+        .atan2(normal.dot(&plane.normal));
     if angle + plane.max_normal_angle_radians > options.angular_resolution {
         return None;
     }
@@ -52,7 +52,7 @@ fn plane_residual(
     for &polygon in &plane.source_face_indices {
         for &vertex in evidence.source_polygon_vertices(polygon)? {
             for positions in [&evidence.positions, &assembly.reconciled.positions] {
-                let distance = (positions[vertex] - origin).dot(normal).abs();
+                let distance = (positions[vertex] - origin).dot(&normal).abs();
                 if !distance.is_finite() || distance > options.intersection_tolerance {
                     return None;
                 }
@@ -265,7 +265,7 @@ mod tests {
         assert!(
             evidence.planar_supports[wrong]
                 .normal
-                .dot(evidence.planar_supports[plane].normal)
+                .dot(&evidence.planar_supports[plane].normal)
                 > 1.0 - 1.0e-12
         );
         let parent = evidence.source_planar_support[0];
@@ -278,7 +278,7 @@ mod tests {
             if label == parent {
                 Some(SurfaceCarrier::LinearRevolution {
                     origin: Point3::new(0.0, 0.0, 0.0),
-                    axis: Vector3::unit_z(),
+                    axis: Vector3::z(),
                     radius_at_origin: 1.0,
                     slope: 0.0,
                 })

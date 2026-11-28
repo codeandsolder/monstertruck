@@ -4,11 +4,11 @@
 )]
 
 use super::{
-    Bound, BoundedCurve, BoundedSurface, BsplineCurve, ElementWise, EuclideanSpace, IncludeCurve,
-    InnerSpace, KERNEL_EPSILON, MetricSpace, NurbsCurve, Origin, ParameterDivision2D,
-    ParameterRange, ParametricCurve, ParametricSurface, ParametricSurface3D, Point3,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter,
-    SurfaceParameterRange, Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
+    AffinePoint, Bound, BoundedCurve, BoundedSurface, BsplineCurve, ComponentWise, IncludeCurve,
+    KERNEL_EPSILON, MetricSpace, NurbsCurve, Origin, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, SearchNearestParameter,
+    SearchParameter, SearchParameterHint2D, Sphere, SurfaceParameter, SurfaceParameterRange,
+    Tolerance, Vector3, Vector4, Zero, nonpositive_tolerance,
 };
 use std::f64::consts::PI;
 
@@ -38,7 +38,7 @@ impl ParametricSurface for Sphere {
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let ((su, cu), (sv, cv)) = (u.sin_cos(), v.sin_cos());
         let center = match (m, n) {
-            (0, 0) => self.center().to_vec(),
+            (0, 0) => self.center().position_vector(),
             _ => Vector3::zero(),
         };
         let u_part = match m % 4 {
@@ -54,7 +54,7 @@ impl ParametricSurface for Sphere {
             2 => Vector3::new(-cv, -sv, 0.0),
             _ => Vector3::new(sv, -cv, 0.0),
         };
-        center + self.radius * u_part.mul_element_wise(v_part)
+        center + self.radius * u_part.component_product(v_part)
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 { self.center() + self.radius * self.normal(u, v) }
@@ -323,7 +323,7 @@ impl SearchParameter<SurfaceParameter> for Sphere {
     ) -> Option<(f64, f64)> {
         let hint = hint_v(hint.into());
         let radius = point - self.center;
-        if (self.radius * self.radius).near(&radius.magnitude2()) {
+        if (self.radius * self.radius).near(&radius.norm_squared()) {
             let radius = radius.normalize();
             let u = f64::acos(radius[2]);
             let sinu = f64::sqrt(radius[2].mul_add(-radius[2], 1.0));
@@ -363,7 +363,7 @@ impl SearchNearestParameter<SurfaceParameter> for Sphere {
         // `radial_vector.normalize()` would divide by zero and propagate
         // `NaN` through the rest of the routine; return an arbitrary
         // valid `(u, v)` instead.
-        if radial_vector.magnitude2().so_small() {
+        if radial_vector.norm_squared().so_small() {
             return Some((0.0, 0.0));
         }
         let radius = radial_vector.normalize();

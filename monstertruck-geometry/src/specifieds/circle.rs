@@ -1,10 +1,10 @@
 use super::{
-    Bound, BoundedCurve, BsplineCurve, CurveParameter, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
-    KnotVector, Matrix2, Matrix3, NurbsCurve, Origin, ParameterDivision1D, ParameterRange,
-    ParametricCurve, Point2, Point3, Rad, SearchNearestParameter, SearchParameter,
-    SearchParameterHint1D, ToSameGeometry, Tolerance, TrimmedCurve, UnitCircle, Vector2, Vector3,
-    Vector4, nonpositive_tolerance,
+    AffinePoint, Bound, BoundedCurve, BsplineCurve, CurveParameter, KERNEL_EPSILON, KnotVector,
+    NurbsCurve, Origin, ParameterDivision1D, ParameterRange, ParametricCurve, Point2, Point3,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, ToSameGeometry, Tolerance,
+    TrimmedCurve, UnitCircle, Vector2, Vector3, Vector4, nonpositive_tolerance,
 };
+use monstertruck_core::Rotation2;
 use std::f64::consts::TAU;
 
 impl<P> UnitCircle<P> {
@@ -27,7 +27,7 @@ impl ParametricCurve for UnitCircle<Point2> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Point2 { Point2::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Point2 { Point2::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Vector2 { self.derivative_n(1, t) }
     #[inline]
@@ -53,7 +53,7 @@ impl ParametricCurve for UnitCircle<Point3> {
         }
     }
     #[inline]
-    fn evaluate(&self, t: f64) -> Point3 { Point3::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Point3 { Point3::from(self.derivative_n(0, t)) }
     #[inline]
     fn derivative(&self, t: f64) -> Vector3 { self.derivative_n(1, t) }
     #[inline]
@@ -202,8 +202,8 @@ impl SearchNearestParameter<CurveParameter> for UnitCircle<Point2> {
         hint: H,
         _: usize,
     ) -> Option<f64> {
-        let v = pt.to_vec();
-        if v.magnitude().so_small() {
+        let v = pt.position_vector();
+        if v.norm().so_small() {
             return None;
         }
         let theta = v.y.atan2(v.x).rem_euclid(TAU);
@@ -219,8 +219,8 @@ impl SearchParameter<CurveParameter> for UnitCircle<Point2> {
         hint: H,
         _: usize,
     ) -> Option<f64> {
-        let v = pt.to_vec();
-        if !v.magnitude().near(&1.0) {
+        let v = pt.position_vector();
+        if !v.norm().near(&1.0) {
             return None;
         }
         let theta = v.y.atan2(v.x).rem_euclid(TAU);
@@ -302,7 +302,7 @@ impl ToSameGeometry<NurbsCurve<Vector3>> for TrimmedCurve<UnitCircle<Point2>> {
         let (t0, t1) = self.range_tuple();
         let angle = t1 - t0;
         let (cos2, sin2) = (f64::cos(angle / 2.0), f64::sin(angle / 2.0));
-        let rot = Matrix3::from(Matrix2::from_angle(Rad(t0)));
+        let rot = Rotation2::new(t0).to_homogeneous();
         NurbsCurve::new(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![

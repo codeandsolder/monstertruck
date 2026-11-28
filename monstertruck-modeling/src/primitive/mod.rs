@@ -81,28 +81,28 @@ where Line<Point3>: ToSameGeometry<C> {
 ///         let p = arc.evaluate(t);
 ///         let der = arc.derivative(t);
 ///         assert_near!(p.distance(origin), 5.0);
-///         assert!(der.dot(axis).so_small());
-///         assert!((p - origin).cross(der).dot(axis) > 0.0);
+///         assert!(der.dot(&axis).so_small());
+///         assert!((p - origin).cross(&der).dot(&axis) > 0.0);
 ///     }
 /// }
 /// ```
 #[must_use = "retain the circular wire when constructing a planar boundary"]
 pub fn circle<C>(start: Point3, origin: Point3, axis: Vector3, division: usize) -> Wire<Point3, C>
 where Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>: ToSameGeometry<C> {
-    let origin = origin + (start - origin).dot(axis) * axis;
+    let origin = origin + (start - origin).dot(&axis) * axis;
     let radius = start - origin;
-    let y = axis.cross(radius);
-    let mat = Matrix4::from_cols(
-        radius.extend(0.0),
-        y.extend(0.0),
-        axis.extend(0.0),
+    let y = axis.cross(&radius);
+    let mat = Matrix4::from_columns(&[
+        radius.push(0.0),
+        y.push(0.0),
+        axis.push(0.0),
         origin.to_homogeneous(),
-    );
+    ]);
 
     let make_vertices = move |i: usize| {
         let t = 2.0 * PI * crate::usize_to_f64(i) / crate::usize_to_f64(division);
         let p = Point3::new(f64::cos(t), f64::sin(t), 0.0);
-        Vertex::new(mat.transform_point(p))
+        Vertex::new(mat.apply_point(p))
     };
     let v = (0..division).map(make_vertices).collect::<Vec<_>>();
 

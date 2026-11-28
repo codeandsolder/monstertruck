@@ -8,7 +8,7 @@ use super::{
     ParameterRange, ParametricCurve, ParametricCurve2D, ParametricSurface, ParametricSurface3D,
     SurfaceDerivatives, SurfaceScalarFunction, Tolerance, Vector2, Vector3,
 };
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 
 impl<C, N> OffsetCurve<C, N> {
     /// Constructs an offset curve from an `entity` and an offset curve.
@@ -201,9 +201,9 @@ where
 
         // Cross product of the partial derivatives gives the (un-normalised) surface normal;
         // normalising and combining with the scalar field gives the offset magnitude vector.
-        let normal_derivatives = uders.combinatorial_derivatives(&vders, Vector3::cross);
+        let normal_derivatives = uders.combinatorial_derivatives(&vders, |a, b| a.cross(&b));
         let normalised_derivatives = normal_derivatives
-            .element_wise_derivatives(&normal_derivatives.absolute_derivatives(), Vector3::extend)
+            .element_wise_derivatives(&normal_derivatives.absolute_derivatives(), |a, b| a.push(b))
             .rational_derivatives();
 
         normalised_derivatives

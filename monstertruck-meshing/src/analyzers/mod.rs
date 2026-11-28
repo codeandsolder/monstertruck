@@ -1,7 +1,7 @@
 use crate::{
-    Adjacency, BoundingBox, EuclideanSpace, FaceNormal, Faces, InnerSpace, KERNEL_EPSILON,
+    Adjacency, AffinePoint, BoundingBox, FaceNormal, Faces, InnerProduct, KERNEL_EPSILON,
     KERNEL_EPSILON_SQUARED, Matrix3, MetricSpace, Origin, Point3, PolygonMesh, PolylineCurve,
-    SquareMatrix, StandardAttributes, StandardVertex, Vector3, Vector4, Vertex, hash,
+    SquareLinearMap, StandardAttributes, StandardVertex, Vector3, Vector4, Vertex, hash,
     nonpositive_tolerance,
 };
 use std::cmp::Ordering;
@@ -20,9 +20,9 @@ fn compare_sweep_coordinate(left: f64, right: f64) -> Ordering {
 
 // Shared triangle sweep bounds keep collision and point-cloud broad phases aligned.
 fn triangle_projection_interval(tri: [Point3; 3], unit: Vector3, tol: f64) -> (f64, f64) {
-    let a = tri[0].to_vec().dot(unit);
-    let b = tri[1].to_vec().dot(unit);
-    let c = tri[2].to_vec().dot(unit);
+    let a = tri[0].position_vector().dot(&unit);
+    let b = tri[1].position_vector().dot(&unit);
+    let c = tri[2].position_vector().dot(&unit);
     (
         f64::min(f64::min(a, b), c) - tol,
         f64::max(f64::max(a, b), c) + tol,

@@ -10,7 +10,7 @@ mod replay;
 pub use replay::BoundaryFacetInput;
 
 use crate::{
-    BsplineCurve, BsplineSurface, Edge, EuclideanSpace, Face, InnerSpace, KnotVector, NurbsSurface,
+    AffinePoint, BsplineCurve, BsplineSurface, Edge, Face, InnerProduct, KnotVector, NurbsSurface,
     Point3, Surface, Vector3, Vector4, Wire, builder,
 };
 use monstertruck_geometry::{
@@ -66,7 +66,7 @@ fn directed_pairs<T>(values: &[T]) -> impl Iterator<Item = (&T, &T)> {
     values.iter().zip(values.iter().cycle().skip(1))
 }
 
-fn cross(normal: Vector3, a: Vector3, b: Vector3) -> f64 { normal.dot(a.cross(b)) }
+fn cross(normal: Vector3, a: Vector3, b: Vector3) -> f64 { normal.dot(&a.cross(&b)) }
 
 // Require a convex polygon and an interior apex in its projected plane.
 // With strict adjacent ray order this partitions the plane into disjoint
@@ -74,20 +74,20 @@ fn cross(normal: Vector3, a: Vector3, b: Vector3) -> f64 { normal.dot(a.cross(b)
 fn convex_fan(points: &[Point3], apex: Point3, normal: Vector3) -> bool {
     directed_pairs(points).all(|(&a, &b)| {
         let edge = b - a;
-        let scale = edge.magnitude();
+        let scale = edge.norm();
         let allowance = 64.0 * f64::EPSILON * scale;
         scale > 0.0
-            && cross(normal, edge, apex - a) > allowance * (apex - a).magnitude()
+            && cross(normal, edge, apex - a) > allowance * (apex - a).norm()
             && points
                 .iter()
-                .all(|&p| cross(normal, edge, p - a) >= -allowance * (p - a).magnitude())
+                .all(|&p| cross(normal, edge, p - a) >= -allowance * (p - a).norm())
     })
 }
 
 fn chord_distance(point: Point3, a: Point3, b: Point3) -> f64 {
     let delta = b - a;
-    let t = ((point - a).dot(delta) / delta.magnitude2()).clamp(0.0, 1.0);
-    (point - (a + delta * t)).magnitude()
+    let t = ((point - a).dot(&delta) / delta.norm_squared()).clamp(0.0, 1.0);
+    (point - (a + delta * t)).norm()
 }
 
 fn rational_point(control: Vector4) -> Point3 {
@@ -155,16 +155,16 @@ impl Wedge {
             let roundoff = 2.0 * allowance;
             let [a, b] = angular.shared_rays;
             let [gap_a, gap_b] = angular.seam_gaps;
-            p.dot(angular.half_plane) > roundoff
-                && cross(self.normal, a, p) >= -(gap_a + roundoff) * a.magnitude()
-                && cross(self.normal, p, b) >= -(gap_b + roundoff) * b.magnitude()
+            p.dot(&angular.half_plane) > roundoff
+                && cross(self.normal, a, p) >= -(gap_a + roundoff) * a.norm()
+                && cross(self.normal, p, b) >= -(gap_b + roundoff) * b.norm()
         });
         in_wedge
             && local.windows(2).all(|pair| {
                 let derivative = pair[1] - pair[0];
-                let derivative_norm = derivative.magnitude();
+                let derivative_norm = derivative.norm();
                 local.iter().all(|&p| {
-                    let norm = p.magnitude();
+                    let norm = p.norm();
                     let uncertainty =
                         2.0_f64.mul_add(allowance, 2.0_f64.mul_add(norm, derivative_norm));
                     let error = (64.0 * f64::EPSILON * norm)
@@ -240,25 +240,23 @@ impl Wedge {
         let front = point(*spans.first()?.controls.first()?);
         let back = point(*spans.last()?.controls.last()?);
         let actual_rays = [front - self.apex, back - self.apex];
-        let seam_gaps = std::array::from_fn(|i| (actual_rays[i] - self.rays[i]).magnitude());
-        let project = |ray: Vector3| ray - self.normal * self.normal.dot(ray);
+        let seam_gaps = std::array::from_fn(|i| (actual_rays[i] - self.rays[i]).norm());
+        let project = |ray: Vector3| ray - self.normal * self.normal.dot(&ray);
         let [a, b] = actual_rays.map(project);
-        let angular_error = (64.0 * f64::EPSILON * a.magnitude()).mul_add(
-            b.magnitude(),
-            allowance * (a.magnitude() + b.magnitude() + allowance),
-        );
+        let angular_error = (64.0 * f64::EPSILON * a.norm())
+            .mul_add(b.norm(), allowance * (a.norm() + b.norm() + allowance));
         if cross(self.normal, a, b) <= angular_error {
             return None;
         }
         let shared_rays = self.rays.map(project);
-        if shared_rays.iter().any(|ray| ray.magnitude() <= allowance) {
+        if shared_rays.iter().any(|ray| ray.norm() <= allowance) {
             return None;
         }
         // A positive half-plane, plus strict angular progress, prevents
         // the curve from wrapping through the apex or leaving its actual
         // endpoint wedge. It does not depend on nearly equal seam rays.
         let half_plane = a.normalize() + b.normalize();
-        if half_plane.magnitude() <= 64.0 * f64::EPSILON {
+        if half_plane.norm() <= 64.0 * f64::EPSILON {
             return None;
         }
         let seam_deviation =
@@ -272,8 +270,8 @@ impl Wedge {
             seam_gaps,
         };
         let endpoint_bound = (front - self.source[0])
-            .magnitude()
-            .max((back - self.source[1]).magnitude())
+            .norm()
+            .max((back - self.source[1]).norm())
             + allowance;
         if endpoint_bound > self.budget {
             return None;
@@ -284,7 +282,7 @@ impl Wedge {
         for pair in spans.windows(2) {
             let left = point(*pair[0].controls.last()?);
             let right = point(*pair[1].controls.first()?);
-            if (left - right).magnitude() > allowance {
+            if (left - right).norm() > allowance {
                 return None;
             }
         }
@@ -314,7 +312,7 @@ impl Wedge {
         let controls = curve
             .control_points()
             .iter()
-            .map(|&p| vec![p, self.apex.to_vec().extend(1.0) * p.w])
+            .map(|&p| vec![p, self.apex.position_vector().push(1.0) * p.w])
             .collect();
         Some(Surface::NurbsSurface(NurbsSurface::new(
             BsplineSurface::new(
@@ -362,9 +360,9 @@ pub fn approximate_boundary_facet(
     }
     let apex = centroid(source);
     let normal = directed_pairs(source)
-        .map(|(&a, &b)| (a - apex).cross(b - apex))
+        .map(|(&a, &b)| (a - apex).cross(&(b - apex)))
         .fold(Vector3::new(0.0, 0.0, 0.0), |sum, n| sum + n);
-    let length = normal.magnitude();
+    let length = normal.norm();
     if length <= 0.0 || !length.is_finite() {
         return Err(InvalidBoundary);
     }
@@ -379,7 +377,7 @@ pub fn approximate_boundary_facet(
         || !source
             .iter()
             .zip(&native)
-            .all(|(&a, &b)| (a - b).magnitude() <= budget)
+            .all(|(&a, &b)| (a - b).norm() <= budget)
     {
         return Err(InvalidBoundary);
     }
@@ -459,7 +457,7 @@ impl FacetFan<'_> {
             let certificate = wedge.certify_curve(curve).ok_or(Uncertified)?;
             upper = upper
                 .max(certificate.deviation)
-                .max((self.native[i] - self.source[i]).magnitude());
+                .max((self.native[i] - self.source[i]).norm());
             seam_upper = seam_upper.max(certificate.seam_deviation);
             let surface = wedge.surface(curve).ok_or(NativeFace)?;
             let face = Face::new(
@@ -505,9 +503,9 @@ mod tests {
         let curve = Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
             KnotVector::bezier_knot(2),
             vec![
-                a.point().to_vec().extend(1.0),
+                a.point().position_vector().push(1.0),
                 Vector4::new(0.7, 0.0, curvature * 0.7, 0.7),
-                b.point().to_vec().extend(1.0),
+                b.point().position_vector().push(1.0),
             ],
         )?));
         Ok(vec![
@@ -527,9 +525,9 @@ mod tests {
             Curve::NurbsCurve(crate::NurbsCurve::new(BsplineCurve::new(
                 KnotVector::bezier_knot(2),
                 vec![
-                    a.point().to_vec().extend(1.0),
+                    a.point().position_vector().push(1.0),
                     Vector4::new(0.2, 0.5, 0.0, 1.0),
-                    b.point().to_vec().extend(1.0),
+                    b.point().position_vector().push(1.0),
                 ],
             )?)),
         )?;
@@ -577,7 +575,7 @@ mod tests {
             vec![
                 Vector4::new(-offset, 0.0, 0.0, 1.0),
                 Vector4::new(1.0, 0.0, 0.05, 1.0),
-                b.point().to_vec().extend(1.0),
+                b.point().position_vector().push(1.0),
             ],
         )?));
         let edges = [

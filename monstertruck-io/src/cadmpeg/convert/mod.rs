@@ -511,7 +511,7 @@ fn place_shell(
     matrix: monstertruck_modeling::Matrix4,
     context: &Context<'_>,
 ) -> Result<()> {
-    use monstertruck_modeling::{SquareMatrix, Transform as _, Transformed};
+    use monstertruck_modeling::{GeometryTransform as _, SquareLinearMap, Transformed};
     // A placement maps the surface's partials by the linear part, and
     // monstertruck's `Processor::normal` divides by the determinant, so a
     // NEGATIVE determinant flips the transformed surface's natural normal
@@ -527,7 +527,7 @@ fn place_shell(
     }
     let mirrored = determinant < 0.0;
     for vertex in &mut shell.vertices {
-        *vertex = matrix.transform_point(*vertex);
+        *vertex = matrix.apply_point(*vertex);
     }
     for edge in &mut shell.edges {
         edge.curve.transform_by(matrix);

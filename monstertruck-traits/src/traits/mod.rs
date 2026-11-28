@@ -1,6 +1,6 @@
-use monstertruck_core::cgmath64::{
-    CurveDerivatives, InnerSpace, Matrix3, Matrix4, Point2, Point3, SurfaceDerivatives, Transform,
-    Vector2, Vector3, Zero,
+use monstertruck_core::math::{
+    CurveDerivatives, GeometryTransform, InnerProduct, Matrix3, Matrix4, Point2, Point3,
+    SurfaceDerivatives, Vector2, Vector3, Zero,
 };
 use std::ops::Bound;
 
@@ -79,9 +79,9 @@ macro_rules! impl_transformed {
     ($point: ty, $matrix: ty) => {
         impl Transformed<$matrix> for $point {
             #[inline]
-            fn transform_by(&mut self, trans: $matrix) { *self = trans.transform_point(*self) }
+            fn transform_by(&mut self, trans: $matrix) { *self = trans.apply_point(*self) }
             #[inline]
-            fn transformed(&self, trans: $matrix) -> Self { trans.transform_point(*self) }
+            fn transformed(&self, trans: $matrix) -> Self { trans.apply_point(*self) }
         }
     };
 }

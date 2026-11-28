@@ -10,9 +10,9 @@
 //! a [`SnapError`] and the shell is left untouched.
 
 use super::{
-    BsplineCurve, CompressedEdge, CompressedEdgeIndex, CompressedShell,
-    DEFAULT_NUMERICAL_TOLERANCES, EuclideanSpace, HashMap, InnerSpace, MetricSpace, NurbsCurve,
-    ParametricCurve, Point3, SnapCurveEndpoints, TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
+    AffinePoint, BsplineCurve, CompressedEdge, CompressedEdgeIndex, CompressedShell,
+    DEFAULT_NUMERICAL_TOLERANCES, HashMap, InnerProduct, MetricSpace, NurbsCurve, ParametricCurve,
+    Point3, SnapCurveEndpoints, TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
 };
 use monstertruck_topology::StableId;
 use std::{collections::BTreeMap, fmt};
@@ -789,9 +789,9 @@ fn segment_bound(p: Point3, q: Point3, to: &[Point3], target: f64, remaining: &m
 
 fn distance_to_segment(point: Point3, start: Point3, end: Point3) -> f64 {
     let direction = end - start;
-    let length2 = direction.magnitude2();
+    let length2 = direction.norm_squared();
     let t = if length2 > 0.0 {
-        ((point - start).dot(direction) / length2).clamp(0.0, 1.0)
+        ((point - start).dot(&direction) / length2).clamp(0.0, 1.0)
     } else {
         0.0
     };

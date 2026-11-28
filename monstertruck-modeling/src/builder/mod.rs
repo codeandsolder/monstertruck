@@ -8,13 +8,13 @@ use crate::{
 use monstertruck_core::tolerance::KERNEL_EPSILON;
 use monstertruck_geometry::prelude::*;
 use monstertruck_topology::wire;
-const PI: Rad<f64> = Rad(std::f64::consts::PI);
+const PI: f64 = (std::f64::consts::PI);
 
 /// Sweep angle for revolve operations.
 #[derive(Debug, Clone, Copy)]
 pub enum SweepAngle {
     /// Partial revolution by the given angle.
-    Partial(Rad<f64>),
+    Partial(f64),
     /// Full 360° closed revolution.
     Closed,
 }
@@ -35,7 +35,7 @@ pub enum CompositeSweepSegment {
         /// Rotation axis. The vector is normalized internally.
         axis: Vector3,
         /// Signed rotation angle. Must be finite, non-zero, and no larger than one full turn.
-        angle: Rad<f64>,
+        angle: f64,
         /// Number of topological subdivisions for the revolution. Must be non-zero.
         division: usize,
     },
@@ -157,7 +157,7 @@ pub enum CircularArcConstraint {
 /// # const N: usize = 10;
 /// # for i in 0..=N {
 /// #       let t = curve.knot_vector()[0] + curve.knot_vector().range_length() * i as f64 / N as f64;
-/// #       assert!(curve.evaluate(t).to_vec().magnitude().near(&1.0));
+/// #       assert!(curve.evaluate(t).position_vector().norm().near(&1.0));
 /// # }
 /// # Ok(())
 /// # }
@@ -178,7 +178,7 @@ pub enum CircularArcConstraint {
 /// # const N: usize = 10;
 /// # for i in 0..=N {
 /// #       let t = curve.knot_vector()[0] + curve.knot_vector().range_length() * i as f64 / N as f64;
-/// #       assert!(curve.evaluate(t).to_vec().magnitude().near(&1.0));
+/// #       assert!(curve.evaluate(t).position_vector().norm().near(&1.0));
 /// # }
 /// # Ok(())
 /// # }
@@ -504,11 +504,11 @@ where
 ///
 /// // make a disk by attaching a plane into circle
 /// let vertex: Vertex = builder::vertex(Point3::new(1.0, 0.0, 0.0));
-/// let circle: Wire = builder::revolve(&vertex, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2)?;
+/// let circle: Wire = builder::revolve(&vertex, Point3::origin(), Vector3::y(), SweepAngle::Closed, 2)?;
 /// let disk: Face = builder::try_attach_plane(vec![circle])?;
 /// # let surface = disk.oriented_surface();
 /// # let normal = surface.normal(0.5, 0.5);
-/// # assert!(normal.near(&Vector3::unit_y()));
+/// # assert!(normal.near(&Vector3::y()));
 /// # Ok(())
 /// # }
 /// ```
@@ -594,22 +594,22 @@ pub fn transformed<T: Mapped<Matrix4>>(elem: &T, mat: Matrix4) -> T { elem.mappe
 /// Returns a translated vertex, edge, wire, face, shell or solid.
 #[inline]
 pub fn translated<T: Mapped<Matrix4>>(elem: &T, vector: Vector3) -> T {
-    transformed(elem, Matrix4::from_translation(vector))
+    transformed(elem, Matrix4::new_translation(&vector))
 }
 
 /// Returns a rotated vertex, edge, wire, face, shell or solid.
-pub fn rotated<T: Mapped<Matrix4>>(elem: &T, origin: Point3, axis: Vector3, angle: Rad<f64>) -> T {
-    let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, angle);
-    let mat2 = Matrix4::from_translation(origin.to_vec());
+pub fn rotated<T: Mapped<Matrix4>>(elem: &T, origin: Point3, axis: Vector3, angle: f64) -> T {
+    let mat0 = Matrix4::new_translation(&-origin.position_vector());
+    let mat1 = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), angle);
+    let mat2 = Matrix4::new_translation(&origin.position_vector());
     transformed(elem, mat2 * mat1 * mat0)
 }
 
 /// Returns a scaled vertex, edge, wire, face, shell or solid.
 pub fn scaled<T: Mapped<Matrix4>>(elem: &T, origin: Point3, scalars: Vector3) -> T {
-    let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_nonuniform_scale(scalars[0], scalars[1], scalars[2]);
-    let mat2 = Matrix4::from_translation(origin.to_vec());
+    let mat0 = Matrix4::new_translation(&-origin.position_vector());
+    let mat1 = Matrix4::new_nonuniform_scaling(&Vector3::new(scalars[0], scalars[1], scalars[2]));
+    let mat2 = Matrix4::new_translation(&origin.position_vector());
     transformed(elem, mat2 * mat1 * mat0)
 }
 
@@ -619,9 +619,9 @@ pub fn scaled<T: Mapped<Matrix4>>(elem: &T, origin: Point3, scalars: Vector3) ->
 /// ```
 /// use monstertruck_modeling::*;
 /// let vertex = builder::vertex(Point3::new(0.0, 0.0, 0.0));
-/// let line = builder::extrude(&vertex, Vector3::unit_x());
-/// let square = builder::extrude(&line, Vector3::unit_y());
-/// let cube: Solid = builder::extrude(&square, Vector3::unit_z());
+/// let line = builder::extrude(&vertex, Vector3::x());
+/// let square = builder::extrude(&line, Vector3::y());
+/// let cube: Solid = builder::extrude(&square, Vector3::z());
 /// #
 /// # let b_shell = &cube.boundaries()[0];
 /// # assert_eq!(b_shell.len(), 6); // This solid is a cube!
@@ -662,7 +662,7 @@ pub fn scaled<T: Mapped<Matrix4>>(elem: &T, origin: Point3, scalars: Vector3) ->
 /// ```
 pub fn extrude<T, Swept>(elem: &T, vector: Vector3) -> Swept
 where T: Sweep<Matrix4, LineConnector, ExtrudeConnector, Swept> {
-    let trsl = Matrix4::from_translation(vector);
+    let trsl = Matrix4::new_translation(&vector);
     elem.sweep(trsl, LineConnector, ExtrudeConnector { vector })
 }
 
@@ -672,22 +672,22 @@ enum ValidatedCompositeSegment {
     Rotation {
         origin: Point3,
         axis: Vector3,
-        angle: Rad<f64>,
+        angle: f64,
     },
 }
 
 impl ValidatedCompositeSegment {
     fn transform(self) -> Matrix4 {
         match self {
-            Self::Translation(vector) => Matrix4::from_translation(vector),
+            Self::Translation(vector) => Matrix4::new_translation(&vector),
             Self::Rotation {
                 origin,
                 axis,
                 angle,
             } => {
-                Matrix4::from_translation(origin.to_vec())
-                    * Matrix4::from_axis_angle(axis, angle)
-                    * Matrix4::from_translation(-origin.to_vec())
+                Matrix4::new_translation(&origin.position_vector())
+                    * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), angle)
+                    * Matrix4::new_translation(&-origin.position_vector())
             }
         }
     }
@@ -700,7 +700,7 @@ fn normalize_composite_segments(
     for segment in segments {
         match segment {
             CompositeSweepSegment::Translation(vector) => {
-                let magnitude = vector.magnitude();
+                let magnitude = vector.norm();
                 if !magnitude.is_finite() || magnitude.so_small() {
                     return Err(Error::InvalidCompositeSweepSegment);
                 }
@@ -712,13 +712,13 @@ fn normalize_composite_segments(
                 angle,
                 division,
             } => {
-                let axis_magnitude = axis.magnitude();
+                let axis_magnitude = axis.norm();
                 if division == 0
                     || !axis_magnitude.is_finite()
                     || axis_magnitude.so_small()
-                    || !angle.0.is_finite()
-                    || angle.0.so_small()
-                    || angle.0.abs() >= 2.0 * std::f64::consts::PI
+                    || !angle.is_finite()
+                    || angle.so_small()
+                    || angle.abs() >= 2.0 * std::f64::consts::PI
                 {
                     return Err(Error::InvalidCompositeSweepSegment);
                 }
@@ -961,9 +961,9 @@ pub fn composite_closed_sweep(
 /// use monstertruck_modeling::builder::SweepAngle;
 ///
 /// let v = builder::vertex(Point3::new(3.0, 0.0, 0.0));
-/// let circle = builder::revolve(&v, Point3::new(2.0, 0.0, 0.0), Vector3::unit_z(), SweepAngle::Closed, 2)
+/// let circle = builder::revolve(&v, Point3::new(2.0, 0.0, 0.0), Vector3::z(), SweepAngle::Closed, 2)
 ///     .expect("valid torus profile sweep");
-/// let torus = builder::revolve(&circle, Point3::origin(), Vector3::unit_y(), SweepAngle::Closed, 2)
+/// let torus = builder::revolve(&circle, Point3::origin(), Vector3::y(), SweepAngle::Closed, 2)
 ///     .expect("valid torus sweep");
 /// let solid: Solid = Solid::new_unchecked(vec![torus]);
 /// #
@@ -990,11 +990,11 @@ pub fn composite_closed_sweep(
 /// // Modeling a pipe.
 /// use monstertruck_modeling::*;
 /// use monstertruck_modeling::builder::SweepAngle;
-/// const PI: Rad<f64> = Rad(std::f64::consts::PI);
+/// const PI: f64 = (std::f64::consts::PI);
 ///
 /// // Creates the base circle
 /// let v: Vertex = builder::vertex(Point3::new(1.0, 0.0, 4.0));
-/// let circle: Wire = builder::revolve(&v, Point3::new(2.0, 0.0, 4.0), -Vector3::unit_z(), SweepAngle::Closed, 2)
+/// let circle: Wire = builder::revolve(&v, Point3::new(2.0, 0.0, 4.0), -Vector3::z(), SweepAngle::Closed, 2)
 ///     .expect("valid pipe profile sweep");
 ///
 /// // the result shell of the pipe.
@@ -1012,7 +1012,7 @@ pub fn composite_closed_sweep(
 /// let mut bend_part: Shell = builder::revolve(
 ///     &another_circle,
 ///     Point3::origin(),
-///     Vector3::unit_y(),
+///     Vector3::y(),
 ///     SweepAngle::Partial(PI / 2.0),
 ///     2,
 /// )
@@ -1068,9 +1068,9 @@ fn validate_revolve_parameters(
         |vector: Vector3| vector.x.is_finite() && vector.y.is_finite() && vector.z.is_finite();
     let valid_sweep = match sweep {
         SweepAngle::Closed => division >= 2,
-        SweepAngle::Partial(angle) => division >= 1 && angle.0.is_finite() && !angle.0.so_small(),
+        SweepAngle::Partial(angle) => division >= 1 && angle.is_finite() && !angle.so_small(),
     };
-    if finite_point(origin) && finite_vector(axis) && axis.magnitude().near(&1.0) && valid_sweep {
+    if finite_point(origin) && finite_vector(axis) && axis.norm().near(&1.0) && valid_sweep {
         Ok(())
     } else {
         Err(Error::InvalidRevolveParameters)
@@ -1096,7 +1096,7 @@ where
     Ok(match sweep {
         SweepAngle::Closed => whole_revolve(elem, origin, axis, division),
         SweepAngle::Partial(angle) => {
-            let sign = f64::signum(angle.0);
+            let sign = f64::signum(angle);
             partial_revolve(elem, origin, sign * axis, angle * sign, division)
         }
     })
@@ -1106,12 +1106,15 @@ fn partial_revolve<T: MultiSweep<Matrix4, ArcConnector, RevoluteConnector, Swept
     elem: &T,
     origin: Point3,
     axis: Vector3,
-    angle: Rad<f64>,
+    angle: f64,
     division: usize,
 ) -> Swept {
-    let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, angle / crate::usize_to_f64(division));
-    let mat2 = Matrix4::from_translation(origin.to_vec());
+    let mat0 = Matrix4::new_translation(&-origin.position_vector());
+    let mat1 = Matrix4::from_axis_angle(
+        &Unit::new_unchecked(axis),
+        angle / crate::usize_to_f64(division),
+    );
+    let mat2 = Matrix4::new_translation(&origin.position_vector());
     let trsl = mat2 * mat1 * mat0;
     elem.multi_sweep(
         trsl,
@@ -1131,9 +1134,12 @@ fn whole_revolve<T: ClosedSweep<Matrix4, ArcConnector, RevoluteConnector, Swept>
     axis: Vector3,
     division: usize,
 ) -> Swept {
-    let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, PI * 2.0 / crate::usize_to_f64(division));
-    let mat2 = Matrix4::from_translation(origin.to_vec());
+    let mat0 = Matrix4::new_translation(&-origin.position_vector());
+    let mat1 = Matrix4::from_axis_angle(
+        &Unit::new_unchecked(axis),
+        PI * 2.0 / crate::usize_to_f64(division),
+    );
+    let mat2 = Matrix4::new_translation(&origin.position_vector());
     let trsl = mat2 * mat1 * mat0;
     elem.closed_sweep(
         trsl,
@@ -1155,7 +1161,7 @@ fn wire_endpoints_on_axis<C>(
     let (front, back) = wire
         .ends_vertices()
         .ok_or(Error::UnexpectedRevolveTopology)?;
-    let on_axis = |point: Point3| (point - origin).cross(axis).so_small();
+    let on_axis = |point: Point3| (point - origin).cross(&axis).so_small();
     Ok((on_axis(front.point()), on_axis(back.point())))
 }
 
@@ -1201,7 +1207,7 @@ where C: ParametricCurve3D + BoundedCurve + Cut {
 /// let shell = builder::revolve_wire(
 ///     &wire,
 ///     Point3::origin(),
-///     Vector3::unit_y(),
+///     Vector3::y(),
 ///     builder::SweepAngle::Closed,
 ///     4,
 /// )?;
@@ -1363,7 +1369,7 @@ mod revolve_wire_tests {
         let bad_division = revolve_wire::<crate::Curve, crate::Surface>(
             &wire,
             Point3::origin(),
-            Vector3::unit_z(),
+            Vector3::z(),
             SweepAngle::Closed,
             1,
         );
@@ -1372,8 +1378,8 @@ mod revolve_wire_tests {
         let zero_sweep = revolve_wire::<crate::Curve, crate::Surface>(
             &wire,
             Point3::origin(),
-            Vector3::unit_z(),
-            SweepAngle::Partial(Rad(0.0)),
+            Vector3::z(),
+            SweepAngle::Partial(0.0),
             1,
         );
         assert!(matches!(zero_sweep, Err(Error::InvalidRevolveParameters)));
@@ -1392,7 +1398,7 @@ mod revolve_wire_tests {
         let shell = revolve_wire::<crate::Curve, crate::Surface>(
             &wire,
             Point3::origin(),
-            Vector3::unit_y(),
+            Vector3::y(),
             SweepAngle::Closed,
             4,
         )?;

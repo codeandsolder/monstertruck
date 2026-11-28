@@ -3,7 +3,7 @@
 
 use super::{
     BsplineCurve, Conic2D, Conic3D, Curve2D, Curve3D, ElementarySurface, ExtrusionSurface,
-    IncludeCurve, InnerSpace, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3,
+    IncludeCurve, InnerProduct, Invertible, Line, Matrix3, Matrix4, Origin, Plane, Point2, Point3,
     Processor, RevolutionSurface, SearchParameter, Surface, SweepSurface, ToSameGeometry,
     TrimmedCurve, UnitCircle, Vector3,
 };
@@ -64,8 +64,8 @@ impl IncludeCurve<Curve3D> for Plane {
             Curve3D::NurbsCurve(bsp) => self.include(bsp),
             Curve3D::Conic(conic) => {
                 let mat = conic.posture();
-                let axis = mat.z.truncate();
-                axis.cross(self.normal()).so_small()
+                let axis = mat.column(2).into_owned().spatial();
+                axis.cross(&self.normal()).so_small()
             }
             Curve3D::Polyline(poly) => poly
                 .iter()
@@ -105,9 +105,9 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
                 let &Line(p, q) = line;
                 let v = q - p;
                 let axis = self.axis();
-                if v.cross(axis).so_small() {
+                if v.cross(&axis).so_small() {
                     let o = self.origin();
-                    let origin = o + (p - o).dot(axis) * axis;
+                    let origin = o + (p - o).dot(&axis) * axis;
                     let revo = RevolutionSurface::by_revolution(*line, origin, axis);
                     let processor = Processor::new(revo);
                     Surface::Elementary(ElementarySurface::CylindricalSurface(processor))
@@ -122,10 +122,10 @@ impl ToSameGeometry<Surface> for RevolutionSurface<Curve3D> {
 
 #[test]
 fn to_same_geometry_revolution_of_axis_parallel_line_is_uninverted_cylinder() {
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let center = Point3::new(0.5, -0.5, 0.0);
     let radius = 2.0;
-    let p = center + radius * Vector3::unit_x();
+    let p = center + radius * Vector3::x();
     let line = Line(p, p + axis);
     let revolution = RevolutionSurface::by_revolution(Curve3D::Line(line), center, axis);
 
@@ -144,9 +144,9 @@ fn to_same_geometry_revolution_of_axis_parallel_line_is_uninverted_cylinder() {
             let origin = entity.origin();
             assert_near!(origin.z, 0.0);
             let in_plane = origin - center;
-            assert_near!(in_plane.dot(axis), 0.0);
+            assert_near!(in_plane.dot(&axis), 0.0);
 
-            let profile_distance = (line.0 - origin).magnitude();
+            let profile_distance = (line.0 - origin).norm();
             assert_near!(profile_distance, radius);
         }
         other => panic!("expected cylindrical surface, got {other:?}"),
@@ -165,7 +165,7 @@ fn to_same_geometry_2d_line_round_trip() {
 
 #[test]
 fn to_same_geometry_2d_ellipse_wraps_in_conic() {
-    let scale = Matrix3::from_nonuniform_scale(2.0, 3.0);
+    let scale = Matrix3::new_nonuniform_scaling(&Vector2::new(2.0, 3.0));
     let arc = Processor::with_transform(
         TrimmedCurve::new(UnitCircle::<Point2>::new(), (0.0, TAU)),
         scale,
@@ -203,8 +203,8 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // cube
     let v = builder::vertices([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]);
     let e = builder::line(&v[0], &v[1]);
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube: Solid = builder::extrude(&f, Vector3::z());
     let mut poly = cube.triangulation(0.1).to_polygon();
     poly.put_together_same_attrs(1.0e-3).remove_unused_attrs();
     assert_eq!(poly.shell_condition(), ShellCondition::Closed);
@@ -215,7 +215,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut shell = builder::revolve(
         &e,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
         builder::SweepAngle::Closed,
         2,
     )?;
@@ -233,7 +233,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let w = builder::revolve(
         &v,
         Point3::new(1.0, 0.0, 0.0),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;
@@ -241,7 +241,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let torus: Solid = builder::revolve(
         &f,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
         builder::SweepAngle::Closed,
         2,
     )?;
@@ -251,9 +251,9 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // cylinder hole
     let v = builder::vertex((-1.0, -1.0, -1.0));
-    let e = builder::extrude(&v, 2.0 * Vector3::unit_x());
-    let f = builder::extrude(&e, 2.0 * Vector3::unit_y());
-    let s: Solid = builder::extrude(&f, 2.0 * Vector3::unit_z());
+    let e = builder::extrude(&v, 2.0 * Vector3::x());
+    let f = builder::extrude(&e, 2.0 * Vector3::y());
+    let s: Solid = builder::extrude(&f, 2.0 * Vector3::z());
     let mut shell = s.into_boundaries().pop().unwrap();
     let line = builder::line(
         &builder::vertex((0.5, 0.0, 1.0)),
@@ -262,7 +262,7 @@ fn builder() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let hole = builder::revolve(
         &line,
         Point3::origin(),
-        -Vector3::unit_z(),
+        -Vector3::z(),
         builder::SweepAngle::Closed,
         2,
     )?;

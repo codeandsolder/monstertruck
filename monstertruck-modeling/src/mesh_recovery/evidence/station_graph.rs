@@ -8,7 +8,7 @@ use super::{
     CarrierResidual, CircularMeridianEvidence, MeshEvidence, RegionBoundaryIndex, SurfaceCarrier,
     measure_circular_meridian,
 };
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Projected sample and fitting budgets, in original mesh units.
@@ -184,7 +184,7 @@ impl<'a> MeridianStationGraph<'a> {
         skip_unsampled: bool,
     ) -> Option<(usize, Option<Self>)> {
         if !options.valid()
-            || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+            || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.norm_squared() - 1.0).abs())
         {
             return None;
         }
@@ -193,7 +193,7 @@ impl<'a> MeridianStationGraph<'a> {
             .iter()
             .map(|&point| {
                 let delta = point - origin;
-                (delta.dot(axis), delta.cross(axis).magnitude())
+                (delta.dot(&axis), delta.cross(&axis).norm())
             })
             .collect::<Vec<_>>();
         if samples
@@ -708,7 +708,7 @@ impl<'a> MeridianStationGraph<'a> {
             return None;
         }
         let profile = Profile::Circular {
-            z: (fit.axial_center - self.origin).dot(self.axis),
+            z: (fit.axial_center - self.origin).dot(&self.axis),
             r: fit.radial_center,
             radius: fit.profile_radius,
         };
@@ -921,8 +921,9 @@ impl Profile {
         match self {
             Self::Circular { z, r, .. } => circular_profile_normal(delta - axis * z, axis, r),
             Self::Linear { slope, .. } => {
-                let radial = delta - axis * delta.dot(axis);
-                (radial.magnitude2() > 0.0).then(|| (radial.normalize() - axis * slope).normalize())
+                let radial = delta - axis * delta.dot(&axis);
+                (radial.norm_squared() > 0.0)
+                    .then(|| (radial.normalize() - axis * slope).normalize())
             }
         }
     }
@@ -942,17 +943,17 @@ fn index_stations(
         .map(|(id, cluster)| {
             let members = &clusters.order[cluster.members];
             let first = evidence.positions[members[0]] - origin;
-            let transverse = first - axis * first.dot(axis);
-            let length = transverse.magnitude();
+            let transverse = first - axis * first.dot(&axis);
+            let length = transverse.norm();
             let mut span = 0.0_f64;
             for &vertex in members {
                 by_vertex[vertex] = id;
                 let delta = evidence.positions[vertex] - origin;
                 if length > 0.0 {
                     span = span.max(
-                        (delta - axis * delta.dot(axis))
-                            .cross(transverse / length)
-                            .magnitude(),
+                        (delta - axis * delta.dot(&axis))
+                            .cross(&(transverse / length))
+                            .norm(),
                     );
                 }
             }
@@ -1031,9 +1032,9 @@ fn distinct_normals(evidence: &MeshEvidence, supports: &[usize], angle_tolerance
         return false;
     };
     let first = evidence.planar_supports[first].normal;
-    supports.iter().any(|&id| {
-        first.cross(evidence.planar_supports[id].normal).magnitude() > angle_tolerance.sin()
-    })
+    supports
+        .iter()
+        .any(|&id| first.cross(&evidence.planar_supports[id].normal).norm() > angle_tolerance.sin())
 }
 
 #[derive(Clone, Copy)]
@@ -1057,19 +1058,19 @@ fn polygon_orientation(
     }
     centroid /= crate::usize_to_f64(vertices.len());
     let expected = profile.normal(centroid, axis)?;
-    let dot = expected.dot(normal);
+    let dot = expected.dot(&normal);
     if dot.abs() <= angle_tolerance.sin() {
         return None;
     }
-    let deviation = expected.cross(normal).magnitude().atan2(dot.abs());
+    let deviation = expected.cross(&normal).norm().atan2(dot.abs());
     let mut span = 0.0_f64;
     for &id in vertices {
         if let Some(vertex_normal) = profile.normal(evidence.positions[id] - center, axis) {
             span = span.max(
                 expected
-                    .cross(vertex_normal)
-                    .magnitude()
-                    .atan2(expected.dot(vertex_normal)),
+                    .cross(&vertex_normal)
+                    .norm()
+                    .atan2(expected.dot(&vertex_normal)),
             );
         }
     }

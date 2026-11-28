@@ -53,7 +53,7 @@ fn non_riding_boundary_shell() -> Shell {
     let surface_raw = RevolutionSurface::by_revolution(
         Curve::Line(Line(p[2], p[0])),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let surface: Surface = Processor::new(surface_raw).into();
     vec![Face::new_unchecked(vec![w], surface)].into()
@@ -62,9 +62,9 @@ fn non_riding_boundary_shell() -> Shell {
 /// A closed unit-cube solid whose every (planar) face meshes cleanly.
 fn unit_cube() -> Solid {
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    builder::extrude(&f, Vector3::unit_z())
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    builder::extrude(&f, Vector3::z())
 }
 
 /// The non-riding face drops silently under the lenient pipeline. Historically

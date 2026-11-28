@@ -4,15 +4,14 @@
 )]
 
 use super::{
-    Angle, BoundedCurve, BoundedSurface, BsplineCurve, CurveDerivatives, CurveParameter, Debug,
-    EuclideanSpace, HashGen, InnerSpace, KERNEL_EPSILON, KnotVector, MAX_DER_ORDER, Matrix,
-    Matrix2, Matrix3, Matrix4, MetricSpace, Mul, NurbsCurve, ParameterDivision1D,
-    ParameterDivision2D, ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface,
-    ParametricSurface3D, Point1, Point2, Point3, Rad, RollingBallFilletContactCurve,
-    RollingBallFilletSurface, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
-    SearchParameterHint2D, SquareMatrix, SurfaceDerivatives, SurfaceParameter,
-    SurfaceParameterRange, ToSameGeometry, Tolerance, Vector2, Vector3, Vector4, Zero,
-    nonpositive_tolerance,
+    AffinePoint, BoundedCurve, BoundedSurface, BsplineCurve, CurveDerivatives, CurveParameter,
+    Debug, HashGen, InnerProduct, KERNEL_EPSILON, KnotVector, MAX_DER_ORDER, Matrix2, Matrix3,
+    Matrix4, MetricSpace, Mul, NurbsCurve, ParameterDivision1D, ParameterDivision2D,
+    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Point1, Point2, Point3, RollingBallFilletContactCurve, RollingBallFilletSurface,
+    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SearchParameterHint2D,
+    SquareLinearMap, SurfaceDerivatives, SurfaceParameter, SurfaceParameterRange, ToSameGeometry,
+    Tolerance, Vector2, Vector3, Vector4, Zero, nonpositive_tolerance,
 };
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 use std::f64::consts::PI;
@@ -133,7 +132,7 @@ impl From<ContactPoint> for (Point3, (f64, f64)) {
 pub struct ContactCircle {
     center: Point3,
     axis: Vector3,
-    angle: Rad<f64>,
+    angle: f64,
     t: f64,
     contact_point0: ContactPoint,
     contact_point1: ContactPoint,
@@ -339,8 +338,8 @@ where
 
         let cp0 = cc.contact_point0.point - cc.center;
         let cp = point - cc.center;
-        let u = cp.angle(cp0).0 / cc.angle.0;
-        if cp.magnitude2().near(&cp0.magnitude2()) {
+        let u = monstertruck_core::angle_between(cp, cp0) / cc.angle;
+        if cp.norm_squared().near(&cp0.norm_squared()) {
             Some((u, v))
         } else {
             None
@@ -382,7 +381,7 @@ where
         let max_order = max_order.min(MAX_DER_ORDER);
         if max_order == 0 {
             let mut derivatives = CurveDerivatives::new(0);
-            derivatives[0] = self.try_evaluate(t)?.to_vec();
+            derivatives[0] = self.try_evaluate(t)?.position_vector();
             return Some(derivatives);
         }
         let cc = self.surface.contact_circle(t)?;

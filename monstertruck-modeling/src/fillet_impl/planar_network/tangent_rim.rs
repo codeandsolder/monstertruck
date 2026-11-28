@@ -37,15 +37,15 @@ impl Side {
 
     fn cap_curve(self, edge: &Edge, radius: f64) -> Curve {
         let transform = match self {
-            Self::Planar { outward } => Matrix4::from_translation(-outward * radius),
+            Self::Planar { outward } => Matrix4::new_translation(&-outward * radius),
             Self::Circular {
                 center,
                 radius: original,
                 sense,
             } => {
-                Matrix4::from_translation(center.to_vec())
-                    * Matrix4::from_scale((sense.mul_add(-radius, original)) / original)
-                    * Matrix4::from_translation(-center.to_vec())
+                Matrix4::new_translation(&center.position_vector())
+                    * Matrix4::new_scaling((sense.mul_add(-radius, original)) / original)
+                    * Matrix4::new_translation(&-center.position_vector())
             }
         };
         edge.oriented_curve().transformed(transform)
@@ -63,7 +63,7 @@ impl Side {
                         start - normal * offset,
                         axis,
                     )));
-                if surface.normal(0.5, 0.0).dot(normal) < 0.0 {
+                if surface.normal(0.5, 0.0).dot(&normal) < 0.0 {
                     surface.invert();
                 }
                 Some(surface)
@@ -80,13 +80,13 @@ impl Side {
                     return None;
                 }
                 let x = (cap.front().point() - center).normalize();
-                let y = normal.cross(x).normalize();
-                let transform = Matrix4::from_cols(
-                    x.extend(0.0),
-                    y.extend(0.0),
-                    normal.extend(0.0),
+                let y = normal.cross(&x).normalize();
+                let transform = Matrix4::from_columns(&[
+                    x.push(0.0),
+                    y.push(0.0),
+                    normal.push(0.0),
                     (center - normal * offset).to_homogeneous(),
-                );
+                ]);
                 let torus = Torus::new(Point3::origin(), major, radius).ok()?;
                 let mut surface = Surface::Torus(Processor::with_transform(torus, transform));
                 if offset < 0.0 {
@@ -114,21 +114,21 @@ fn rim_convexity(edge: &Edge, side: Side, normal: Vector3) -> Option<bool> {
     // physical outward normal at convex rims and its negative at
     // reentrant shoulders. Both must agree over the complete edge.
     let initial = curve.derivative(start);
-    let magnitude = initial.magnitude();
+    let magnitude = initial.norm();
     if !magnitude.is_finite() || magnitude <= KERNEL_EPSILON {
         return None;
     }
     let convex = initial
         .normalize()
-        .cross(normal)
-        .dot(side.outward(edge.front().point()))
+        .cross(&normal)
+        .dot(&side.outward(edge.front().point()))
         > 0.0;
     let sense = if convex { 1.0 } else { -1.0 };
     for (t, vertex) in [(start, edge.front()), (end, edge.back())] {
         let tangent = curve.derivative(t);
-        let magnitude = tangent.magnitude();
+        let magnitude = tangent.norm();
         let residual =
-            (tangent.normalize().cross(normal) - side.outward(vertex.point()) * sense).magnitude();
+            (tangent.normalize().cross(&normal) - side.outward(vertex.point()) * sense).norm();
         if !magnitude.is_finite()
             || magnitude <= KERNEL_EPSILON
             || !residual.is_finite()
@@ -187,7 +187,7 @@ impl RimEdge {
             } => {
                 line_axis(&edge)?;
                 let outward = outward * sign;
-                if normal.dot(outward).abs() > ANGULAR {
+                if normal.dot(&outward).abs() > ANGULAR {
                     return None;
                 }
                 Side::Planar { outward }
@@ -197,10 +197,10 @@ impl RimEdge {
                 axis,
                 radius: original,
             } => {
-                if normal.cross(axis).magnitude() > ANGULAR {
+                if normal.cross(&axis).norm() > ANGULAR {
                     return None;
                 }
-                let center = origin + axis * (point - origin).dot(axis);
+                let center = origin + axis * (point - origin).dot(&axis);
                 let frame = CircularArcFrame::new(center, normal, original, point, KERNEL_EPSILON)?;
                 let rational =
                     NurbsCurve::new(edge.oriented_curve().try_into_homogeneous_bspline_curve()?);
@@ -251,7 +251,7 @@ fn junctions(rim: &[RimEdge], normal: Vector3, radius: f64) -> Option<Vec<Juncti
             }
             let point = vertex.point();
             let outward = edge.side.outward(point);
-            if (previous.side.outward(point) - outward).magnitude() > ANGULAR {
+            if (previous.side.outward(point) - outward).norm() > ANGULAR {
                 return None;
             }
             let cap = Vertex::new(point - outward * radius);
@@ -288,7 +288,7 @@ impl Patch {
             &end.side,
             rim.edge
                 .oriented_curve()
-                .transformed(Matrix4::from_translation(-normal * radius)),
+                .transformed(Matrix4::new_translation(&-normal * radius)),
         )
         .ok()?;
         let surface = rim.side.surface(&cap, normal, radius)?;
@@ -347,8 +347,8 @@ fn trim_generators(
                 return None;
             }
             let delta = other.point() - vertex.point();
-            if delta.dot(-normal) * offset.signum() <= offset.abs() + KERNEL_EPSILON
-                || delta.cross(normal).magnitude() > KERNEL_EPSILON
+            if delta.dot(&-normal) * offset.signum() <= offset.abs() + KERNEL_EPSILON
+                || delta.cross(&normal).norm() > KERNEL_EPSILON
             {
                 return None;
             }

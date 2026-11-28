@@ -4,12 +4,12 @@
 )]
 
 use super::{
-    Bound, BoundedCurve, BoundedSurface, EuclideanSpace, ExtrusionSurface, InnerSpace, Invertible,
-    Line, Matrix4, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D, ParameterDivision2D,
-    ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Plane, Point3,
-    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
-    SurfaceParameterRange, ToSameGeometry, Tolerance, Transform, Transformed, Vector3, VectorSpace,
-    Zero, algo,
+    AffinePoint, Bound, BoundedCurve, BoundedSurface, ExtrusionSurface, GeometryTransform,
+    Invertible, Line, LinearVector, Matrix4, MetricSpace, PRESEARCH_DIVISION, ParameterDivision1D,
+    ParameterDivision2D, ParameterRange, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    Plane, Point3, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    SurfaceParameter, SurfaceParameterRange, ToSameGeometry, Tolerance, Transformed, Vector3, Zero,
+    algo,
 };
 #[cfg(test)]
 use crate::prelude::assert_near;
@@ -36,15 +36,15 @@ impl<C, V: Copy> ExtrusionSurface<C, V> {
 impl<C> ParametricSurface for ExtrusionSurface<C, C::Vector>
 where
     C: ParametricCurveTrait,
-    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
-    C::Vector: VectorSpace<Scalar = f64>,
+    C::Point: AffinePoint<Scalar = f64, Diff = C::Vector>,
+    C::Vector: LinearVector<Scalar = f64>,
 {
     type Point = C::Point;
     type Vector = C::Vector;
     #[inline]
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         match (m, n) {
-            (0, 0) => self.evaluate(u, v).to_vec(),
+            (0, 0) => self.evaluate(u, v).position_vector(),
             (0, 1) => self.vector,
             (_, 0) => self.curve.derivative_n(m, u),
             _ => C::Vector::zero(),
@@ -76,7 +76,7 @@ where
 impl<C: ParametricCurve3D> ParametricSurface3D for ExtrusionSurface<C, Vector3> {
     #[inline]
     fn normal(&self, u: f64, _: f64) -> C::Vector {
-        self.curve.derivative(u).cross(self.vector).normalize()
+        self.curve.derivative(u).cross(&self.vector).normalize()
     }
 }
 
@@ -95,8 +95,8 @@ use monstertruck_traits::v2;
 impl<C> v2::ParametricSurface for ExtrusionSurface<C, C::Vector>
 where
     C: ParametricCurveTrait,
-    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
-    C::Vector: VectorSpace<Scalar = f64>,
+    C::Point: AffinePoint<Scalar = f64, Diff = C::Vector>,
+    C::Vector: LinearVector<Scalar = f64>,
 {
     type Scalar = f64;
     type Point = C::Point;
@@ -153,7 +153,7 @@ impl<C: ParameterDivision1D, V> ParameterDivision2D for ExtrusionSurface<C, V> {
 
 impl<P, C> SearchParameter<SurfaceParameter> for ExtrusionSurface<C, P::Diff>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P>,
     C: ParametricCurveTrait<Point = P, Vector = P::Diff> + BoundedCurve,
 {
@@ -204,7 +204,7 @@ impl<C: ParametricCurve3D + BoundedCurve> SearchNearestParameter<SurfaceParamete
 
 impl<P, C> v2::SearchParameter<v2::SurfaceParameter<f64>> for ExtrusionSurface<C, P::Diff>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P>,
     C: ParametricCurveTrait<Point = P, Vector = P::Diff> + BoundedCurve,
 {
@@ -250,12 +250,12 @@ impl<C: Invertible> Invertible for ExtrusionSurface<C, Vector3> {
 impl<C: Transformed<Matrix4>> Transformed<Matrix4> for ExtrusionSurface<C, Vector3> {
     fn transform_by(&mut self, trans: Matrix4) {
         self.curve.transform_by(trans);
-        self.vector = trans.transform_vector(self.vector);
+        self.vector = trans.apply_vector(self.vector);
     }
     fn transformed(&self, trans: Matrix4) -> Self {
         Self {
             curve: self.curve.transformed(trans),
-            vector: trans.transform_vector(self.vector),
+            vector: trans.apply_vector(self.vector),
         }
     }
 }

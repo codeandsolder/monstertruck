@@ -6,7 +6,7 @@ use super::{
     ContactCircleEvidence, ContactConicEvidence, ContactLineEvidence, ContactLinearSectionEvidence,
     ContactToroidalSectionEvidence, RegionContactPath, SurfaceCarrier,
 };
-use crate::{InnerSpace, Point3};
+use crate::{InnerProduct, Point3};
 use std::f64::consts::TAU;
 
 /// Local fit budget and bounded search configuration.
@@ -164,7 +164,7 @@ fn accepted(
     let first = points[ids[0]];
     let span = ids
         .iter()
-        .map(|&id| (points[id] - first).magnitude())
+        .map(|&id| (points[id] - first).norm())
         .fold(0.0_f64, f64::max);
     // A free planar curve has no independent intersection fixing its
     // carrier. Its endpoints must therefore be constraints of the fit,
@@ -244,26 +244,26 @@ fn endpoint_circle(
     let SurfaceCarrier::Plane { origin, normal } = carrier else {
         return None;
     };
-    let project = |p: Point3| p - normal * (p - origin).dot(normal);
+    let project = |p: Point3| p - normal * (p - origin).dot(&normal);
     let first = project(points[*ids.first()?]);
     let last = project(points[*ids.last()?]);
     let (center, radius) = if ids.first() == ids.last() {
         let center = project(observed.center);
-        (center, (first - center).magnitude())
+        (center, (first - center).norm())
     } else {
         let delta = last - first;
-        let length = delta.magnitude();
+        let length = delta.norm();
         if length <= 0.0 {
             return None;
         }
         let mid = first + delta * 0.5;
-        let direction = normal.cross(delta / length);
+        let direction = normal.cross(&(delta / length));
         let half_squared = 0.25 * length * length;
         let (numerator, denominator) = ids.iter().fold((0.0_f64, 0.0_f64), |(num, den), &id| {
             let local = project(points[id]) - mid;
-            let side = 2.0 * local.dot(direction);
+            let side = 2.0 * local.dot(&direction);
             (
-                side.mul_add(local.magnitude2() - half_squared, num),
+                side.mul_add(local.norm_squared() - half_squared, num),
                 side.mul_add(side, den),
             )
         });
@@ -511,7 +511,7 @@ mod tests {
             .collect::<Vec<_>>();
         let plane = SurfaceCarrier::Plane {
             origin: points[0],
-            normal: crate::Vector3::unit_z(),
+            normal: crate::Vector3::z(),
         };
         let options = SharedTrimOptions {
             absolute_tolerance: 1.0e-5,
@@ -526,11 +526,11 @@ mod tests {
                 return Err("circle".into());
             };
             for id in [ids[0], *ids.last().ok_or("end")?] {
-                assert!(((points[id] - circle.center).magnitude() - circle.radius).abs() < 1.0e-12);
+                assert!(((points[id] - circle.center).norm() - circle.radius).abs() < 1.0e-12);
             }
             circles.push(circle);
         }
-        assert!((circles[0].center - circles[1].center).magnitude() > 1.0e-8);
+        assert!((circles[0].center - circles[1].center).norm() > 1.0e-8);
         Ok(())
     }
 
@@ -546,7 +546,7 @@ mod tests {
         let path = path(points.len() - 1, false);
         let plane = SurfaceCarrier::Plane {
             origin: points[0],
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         };
         let result = path
             .segment_analytic_trims(&points, &[plane, plane], options())
@@ -567,7 +567,7 @@ mod tests {
         ));
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -599,11 +599,11 @@ mod tests {
         let points = [Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
         let plane = SurfaceCarrier::Plane {
             origin: points[0],
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         };
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -632,14 +632,14 @@ mod tests {
         let center = Point3::new(0.0, 0.0, 0.0);
         let torus = SurfaceCarrier::CircularRevolution {
             axial_center: center,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 4.0,
             profile_radius: 1.0,
         };
         let points = [Point3::new(5.0, 0.0, 0.0), Point3::new(4.0, 0.0, 1.0)];
         let plane = SurfaceCarrier::Plane {
             origin: center,
-            normal: Vector3::unit_y(),
+            normal: Vector3::y(),
         };
         let result = path(1, false)
             .segment_analytic_trims(&points, &[torus, plane], options())
@@ -647,10 +647,10 @@ mod tests {
         let SharedTrimGeometry::Circle(circle) = result.pieces[0].geometry else {
             return Err("missing meridian intersection".into());
         };
-        assert!((circle.center - Point3::new(4.0, 0.0, 0.0)).magnitude() < 1.0e-10);
+        assert!((circle.center - Point3::new(4.0, 0.0, 0.0)).norm() < 1.0e-10);
         let sphere = SurfaceCarrier::CircularRevolution {
             axial_center: center,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.0,
             profile_radius: 1.0,
         };
@@ -658,7 +658,7 @@ mod tests {
         let points = [Point3::new(0.5, radius, 0.0), Point3::new(0.5, 0.0, radius)];
         let plane = SurfaceCarrier::Plane {
             origin: points[0],
-            normal: Vector3::unit_x(),
+            normal: Vector3::x(),
         };
         let result = path(1, false)
             .segment_analytic_trims(&points, &[sphere, plane], options())
@@ -666,7 +666,7 @@ mod tests {
         let SharedTrimGeometry::Circle(circle) = result.pieces[0].geometry else {
             return Err("missing sphere-plane intersection".into());
         };
-        assert!((circle.center - Point3::new(0.5, 0.0, 0.0)).magnitude() < 1.0e-10);
+        assert!((circle.center - Point3::new(0.5, 0.0, 0.0)).norm() < 1.0e-10);
         assert!((circle.radius - radius).abs() < 1.0e-10);
         Ok(())
     }
@@ -677,13 +677,13 @@ mod tests {
         let center = Point3::new(0.0, 0.0, 0.0);
         let torus = SurfaceCarrier::CircularRevolution {
             axial_center: center,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.1,
             profile_radius: 1.0,
         };
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.1, 0.0, 0.0),
-            axis: Vector3::unit_y(),
+            axis: Vector3::y(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -724,7 +724,7 @@ mod tests {
             &crossing,
             &[0, 1, 2, 3],
             Point3::new(0.1, 0.0, 0.0),
-            Vector3::unit_y(),
+            Vector3::y(),
             1.0,
             1.0,
         )
@@ -750,7 +750,7 @@ mod tests {
         ];
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -785,11 +785,11 @@ mod tests {
         ];
         let plane = SurfaceCarrier::Plane {
             origin: points[0],
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
         };
         let cylinder = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };

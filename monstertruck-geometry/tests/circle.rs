@@ -60,8 +60,8 @@ proptest! {
             let t = f64::from(i) / 10.0;
             let p = bsp.evaluate(t).to_vec();
             let der = bsp.derivative(t);
-            prop_assert_near!(p.magnitude2(), 1.0);
-            prop_assert!(der.dot(p).so_small());
+            prop_assert_near!(p.norm_squared(), 1.0);
+            prop_assert!(der.dot(&p).so_small());
         }
     }
 }
@@ -111,6 +111,6 @@ fn parameter_division() {
     let (_div, pts) = c.parameter_division(c.range_tuple(), 0.05);
     for a in pts.windows(2) {
         let p = a[0].midpoint(a[1]);
-        assert!(p.to_vec().magnitude() > 0.95);
+        assert!(p.position_vector().norm() > 0.95);
     }
 }

@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::prelude::{RevolutionSurface, Sphere, prop_assert_near};
-use monstertruck_core::{MetricSpace, Transform, Zero};
+use monstertruck_core::{GeometryTransform, MetricSpace, Zero};
 use monstertruck_traits::ParametricSurface;
 use proptest::prelude::*;
 use std::f64::consts::PI;
@@ -46,9 +46,9 @@ fn surface_curve_cut_preserves_exact_split_without_deforming_approximate_leader(
     assert!(later.back().distance(exact) < 1e-10);
     later.invert();
     assert!(later.front().distance(exact) < 1e-10);
-    let translation = Matrix4::from_translation(Vector3::new(4.0, -3.0, 2.0));
+    let translation = Matrix4::new_translation(&Vector3::new(4.0, -3.0, 2.0));
     later.transform_by(translation);
-    assert!(later.front().distance(translation.transform_point(exact)) < 1e-10);
+    assert!(later.front().distance(translation.apply_point(exact)) < 1e-10);
 }
 
 #[test]
@@ -85,8 +85,8 @@ fn create_axis(n: Vector3) -> (Vector3, Vector3) {
     let idx = if n[idx].abs() < n[2].abs() { idx } else { 2 };
     let mut e = Vector3::zero();
     e[idx] = 1.0;
-    let x = n.cross(e).normalize();
-    (x, n.cross(x))
+    let x = n.cross(&e).normalize();
+    (x, n.cross(&x))
 }
 
 fn exec_plane_case(c0: [f64; 3], n0: [f64; 2], c1: [f64; 3], n1: [f64; 2]) -> PResult {
@@ -98,7 +98,7 @@ fn exec_plane_case(c0: [f64; 3], n0: [f64; 2], c1: [f64; 3], n1: [f64; 2]) -> PR
     let n1 = unit_normal_candidate(n1);
     let (x, y) = create_axis(n1);
     let plane1 = Plane::new(c1, c1 + x, c1 + y);
-    let n = n0.cross(n1).normalize();
+    let n = n0.cross(&n1).normalize();
     let mut o = None;
     for i in 0..10 {
         let t = f64::from(i);
@@ -150,19 +150,19 @@ proptest! {
 
 #[test]
 fn transformed_inverted_supports_continue_local_intersection_branch() {
-    let transform = Matrix4::from_cols(
-        Vector4::unit_x(),
-        Vector4::unit_y(),
-        Vector4::unit_z(),
+    let transform = Matrix4::from_columns(&[
+        Vector4::x(),
+        Vector4::y(),
+        Vector4::z(),
         Vector4::new(3.0, -2.0, 5.0, 1.0),
-    );
+    ]);
     let sphere: Processor<Sphere, Matrix4> =
         Processor::with_transform(Sphere::new(Point3::origin(), f64::sqrt(2.0)), transform);
 
     let cylinder_profile = Line(Point3::new(1.0, 0.0, -2.0), Point3::new(1.0, 0.0, 2.0));
     let mut cylinder: Processor<RevolutionSurface<Line<Point3>>, Matrix4> =
         Processor::with_transform(
-            RevolutionSurface::by_revolution(cylinder_profile, Point3::origin(), Vector3::unit_z()),
+            RevolutionSurface::by_revolution(cylinder_profile, Point3::origin(), Vector3::z()),
             transform,
         );
     cylinder.invert();
@@ -171,7 +171,7 @@ fn transformed_inverted_supports_continue_local_intersection_branch() {
     // the z=+1 branch from angle 0.2 to a transverse slice at angle 0.3.
     let source_angle = 0.2_f64;
     let target_angle = 0.3_f64;
-    let transform_point = |point: Point3| transform.transform_point(point);
+    let transform_point = |point: Point3| transform.apply_point(point);
     let expected = transform_point(Point3::new(target_angle.cos(), target_angle.sin(), 1.0));
     let tangent = Vector3::new(-target_angle.sin(), target_angle.cos(), 0.0);
     let leader = Line(

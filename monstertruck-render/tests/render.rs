@@ -25,11 +25,11 @@ fn test_scene(backend: Backends) -> common::TestResult<Scene> {
     });
     let handler = common::init_device(&instance)?;
     let camera_matrix = Matrix4::look_at_rh(
-        Point3::new(-1.0, 2.5, 2.0),
-        Point3::new(0.25, 0.25, 0.25),
-        Vector3::unit_y(),
+        &Point3::new(-1.0, 2.5, 2.0),
+        &Point3::new(0.25, 0.25, 0.25),
+        &Vector3::y(),
     )
-    .invert()
+    .try_inverse()
     .ok_or_else(|| io::Error::other("test camera matrix is singular"))?;
     Ok(Scene::new(
         handler,
@@ -37,7 +37,7 @@ fn test_scene(backend: Backends) -> common::TestResult<Scene> {
             studio: StudioConfig {
                 camera: Camera {
                     matrix: camera_matrix,
-                    method: ProjectionMethod::perspective(Rad(std::f64::consts::PI / 4.0)),
+                    method: ProjectionMethod::perspective((std::f64::consts::PI / 4.0)),
                     near_clip: 0.1,
                     far_clip: 100.0,
                 },

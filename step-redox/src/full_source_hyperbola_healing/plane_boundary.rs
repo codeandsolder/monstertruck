@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 use monstertruck_geometry::{
     analytic_plane_deviation::bound_nurbs_plane_deviation,
     prelude::{
-        BoundedCurve, BsplineCurve, InnerSpace, KnotVector, Line, Matrix4, NurbsCurve, Point3,
+        BoundedCurve, BsplineCurve, InnerProduct, KnotVector, Line, Matrix4, NurbsCurve, Point3,
         TryIntoHomogeneousBsplineCurve, Vector3, Vector4,
     },
 };
@@ -77,7 +77,7 @@ impl PlaneBound {
         let origin = point(line.origin_mm);
         let direction = Vector3::new(line.direction[0], line.direction[1], line.direction[2]);
         let project = |p: Point3| -> Result<(Point3, f64)> {
-            let projected = origin + direction * (p - origin).dot(direction);
+            let projected = origin + direction * (p - origin).dot(&direction);
             // The line placement can be far from the finite edge. Account
             // for cancellation in the projection, not only the final chord.
             let coordinate_scale = [origin.x, origin.y, origin.z, p.x, p.y, p.z]
@@ -86,7 +86,7 @@ impl PlaneBound {
                 .fold(1.0_f64, f64::max);
             let margin = 256.0 * f64::EPSILON * coordinate_scale;
             ensure!(
-                (projected - p).magnitude() + margin <= self.tolerance,
+                (projected - p).norm() + margin <= self.tolerance,
                 "source vertex is not certified on its authored line within source uncertainty"
             );
             Ok((projected, margin))
@@ -312,7 +312,7 @@ mod tests {
     fn entire_boundary_rejects_remote_vertices_and_interior_spline_excursion() {
         let plane = PlaneBound {
             origin: Point3::new(0.0, 0.0, 0.0),
-            normal: Vector3::unit_z(),
+            normal: Vector3::z(),
             tolerance: 1.0e-5,
             gap: 1.0e-9,
         };
@@ -336,7 +336,7 @@ mod tests {
     fn exact_conic_nets_include_entire_locus() -> Result<()> {
         use monstertruck_geometry::prelude::ParametricCurve;
         let (a, b) = (-0.7_f64, 1.3_f64);
-        let transform = Matrix4::from_scale(2.0);
+        let transform = Matrix4::new_scaling(2.0);
         for hyperbola in [false, true] {
             let net = NurbsCurve::new(conic_net(transform, (a, b), hyperbola)?);
             for i in 0..=20 {

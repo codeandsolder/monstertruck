@@ -1,4 +1,4 @@
-use monstertruck_core::{InnerSpace, Point3, Vector3};
+use monstertruck_core::{Point3, Vector3};
 
 /// Scalar-generic 3D parametric surface.
 ///
@@ -14,7 +14,7 @@ pub trait ParametricSurface3D: super::ParametricSurface<Point = Point3, Vector =
     /// Returns the unit normal vector at `(u, v)`.
     fn normal(&self, u: Self::Scalar, v: Self::Scalar) -> Vector3 {
         self.derivative_u(u, v)
-            .cross(self.derivative_v(u, v))
+            .cross(&self.derivative_v(u, v))
             .normalize()
     }
     /// Returns the derivative of the normal vector w.r.t. `u` at `(u, v)`.
@@ -23,10 +23,10 @@ pub trait ParametricSurface3D: super::ParametricSurface<Point = Point3, Vector =
         let vder = self.derivative_v(u, v);
         let uuder = self.derivative_uu(u, v);
         let uvder = self.derivative_uv(u, v);
-        let cross = uder.cross(vder);
-        let cross_uder = uuder.cross(vder) + uder.cross(uvder);
-        let abs = cross.magnitude();
-        let abs_uder = cross.dot(cross_uder) / abs;
+        let cross = uder.cross(&vder);
+        let cross_uder = uuder.cross(&vder) + uder.cross(&uvder);
+        let abs = cross.norm();
+        let abs_uder = cross.dot(&cross_uder) / abs;
         let abs_squared = abs * abs;
         (cross_uder * abs - cross * abs_uder) / abs_squared
     }
@@ -36,10 +36,10 @@ pub trait ParametricSurface3D: super::ParametricSurface<Point = Point3, Vector =
         let vder = self.derivative_v(u, v);
         let uvder = self.derivative_uv(u, v);
         let vvder = self.derivative_vv(u, v);
-        let cross = uder.cross(vder);
-        let cross_vder = uvder.cross(vder) + uder.cross(vvder);
-        let abs = cross.magnitude();
-        let abs_vder = cross.dot(cross_vder) / abs;
+        let cross = uder.cross(&vder);
+        let cross_vder = uvder.cross(&vder) + uder.cross(&vvder);
+        let abs = cross.norm();
+        let abs_vder = cross.dot(&cross_vder) / abs;
         let abs_squared = abs * abs;
         (cross_vder * abs - cross * abs_vder) / abs_squared
     }

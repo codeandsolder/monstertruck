@@ -4,7 +4,7 @@
 //! path is unchanged.
 
 use super::*;
-use monstertruck_core::cgmath64::{Point3, Vector3};
+use monstertruck_core::math::{Point3, Vector3};
 
 /// A curve whose evaluation is `NaN` everywhere, as produced by degenerate
 /// geometry (e.g. zero-weight rational points).

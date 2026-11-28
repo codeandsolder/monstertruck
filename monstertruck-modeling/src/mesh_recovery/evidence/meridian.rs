@@ -4,7 +4,7 @@
 
 use super::super::sample_fit::fit_circle_2d;
 use super::{MeshEvidence, spatial::source_meridian_samples};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use std::ops::Range;
 
 /// Independent measured circular meridian of a rotational carrier.
@@ -82,7 +82,7 @@ pub fn measure_circular_meridian(
 ) -> Option<CircularMeridianEvidence> {
     if !resolution.is_finite()
         || resolution < 0.0
-        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.norm_squared() - 1.0).abs())
         || support_ids.windows(2).any(|ids| ids[0] >= ids[1])
     {
         return None;
@@ -257,12 +257,12 @@ fn measure_normals(
             let Some(normal) = circular_profile_normal(centroid, axis, radial_center) else {
                 continue;
             };
-            let dot = normal.dot(support.normal);
+            let dot = normal.dot(&support.normal);
             result.positive |= dot > 0.0;
             result.negative |= dot < 0.0;
             result.max_angle = result
                 .max_angle
-                .max(normal.cross(support.normal).magnitude().atan2(dot.abs()));
+                .max(normal.cross(&support.normal).norm().atan2(dot.abs()));
             result.samples += 1;
         }
     }
@@ -276,17 +276,17 @@ pub(super) fn circular_profile_normal(
     axis: Vector3,
     radial_center: f64,
 ) -> Option<Vector3> {
-    let axial = delta.dot(axis);
+    let axial = delta.dot(&axis);
     let radial = delta - axis * axial;
-    let radius = radial.magnitude();
+    let radius = radial.norm();
     if radial_center == 0.0 {
-        return (delta.magnitude2() > 0.0).then(|| delta.normalize());
+        return (delta.norm_squared() > 0.0).then(|| delta.normalize());
     }
     if radius <= 0.0 {
         return None;
     }
     let gradient = axis * axial + radial * ((radius - radial_center) / radius);
-    (gradient.magnitude2() > 0.0).then(|| gradient.normalize())
+    (gradient.norm_squared() > 0.0).then(|| gradient.normalize())
 }
 
 #[cfg(test)]
@@ -359,7 +359,7 @@ mod tests {
             .iter()
             .find(|axis| {
                 axis.stations.len() >= minimum_stations
-                    && axis.axis.cross(Vector3::unit_z()).magnitude() < 1.0e-8
+                    && axis.axis.cross(&Vector3::z()).norm() < 1.0e-8
                     && axis.origin.x.hypot(axis.origin.y) < 1.0e-8
             })
             .ok_or("independent axis")?;
@@ -413,7 +413,7 @@ mod tests {
         let (count, fast) = MeridianStationGraph::for_discovery(
             &evidence,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("sampled discovery graph")?;
@@ -458,7 +458,7 @@ mod tests {
         let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: -2.0,
             profile_radius: 3.0,
         };
@@ -497,7 +497,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &evidence,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("graph")?;
@@ -567,7 +567,7 @@ mod tests {
         };
         assert!((slope.abs() - 0.25).abs() < 1.0e-10);
         assert!(
-            (radius_at_origin + slope * (Point3::new(0.0, 0.0, 0.0) - origin).dot(axis) - 1.0)
+            (radius_at_origin + slope * (Point3::new(0.0, 0.0, 0.0) - origin).dot(&axis) - 1.0)
                 .abs()
                 < 1.0e-10
         );
@@ -630,7 +630,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &baseline,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("graph")?;
@@ -663,7 +663,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &refined,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("refined graph")?;
@@ -688,7 +688,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &evidence,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("graph")?;
@@ -780,7 +780,7 @@ mod tests {
         let graph = MeridianStationGraph::new(
             &evidence,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             graph_options(),
         )
         .ok_or("graph")?;
@@ -801,7 +801,7 @@ mod tests {
             &evidence,
             &supports,
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
             1.0e-10,
         )
         .ok_or("missing circular profile")?;
@@ -828,7 +828,7 @@ mod tests {
                 &evidence,
                 &supports,
                 Point3::new(0.0, 0.0, 0.0),
-                Vector3::unit_z(),
+                Vector3::z(),
                 1.0e-10
             )
             .is_none()

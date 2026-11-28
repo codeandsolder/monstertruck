@@ -2,9 +2,9 @@
 //! swept surfaces.
 
 use super::{
-    Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder, BsplineSurface,
-    CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder, Deserialize,
-    ElementarySurface, EuclideanSpace, Holder, InnerSpace, Invertible, KERNEL_EPSILON, KnotType,
+    AffinePoint, Axis1Placement, Axis1PlacementHolder, Axis2Placement3d, Axis2Placement3dHolder,
+    BsplineSurface, CartesianPoint, CartesianPointHolder, Curve3D, CurveAny, CurveAnyHolder,
+    Deserialize, ElementarySurface, Holder, InnerProduct, Invertible, KERNEL_EPSILON, KnotType,
     KnotVector, Logical, Matrix4, NurbsSurface, PI, Point3, Result, RevolutionSurface, Serialize,
     Sphere, StepConvertingError, StepExtrusionSurface, StepRevolutionSurface, Surface,
     SweepSurface, Table, Torus, Transformed, Vector, Vector3, Vector4, VectorHolder, geom,
@@ -95,9 +95,9 @@ pub struct Plane {
 impl From<&Plane> for geom::Plane {
     fn from(plane: &Plane) -> Self {
         let mat = Matrix4::from(&plane.position);
-        let o = Point3::from_homogeneous(mat[3]);
-        let p = o + mat[0].truncate();
-        let q = o + mat[1].truncate();
+        let o = Point3::from_homogeneous(mat.column(3).into_owned());
+        let p = o + mat.column(0).into_owned().spatial();
+        let q = o + mat.column(1).into_owned().spatial();
         Self::new(o, p, q)
     }
 }
@@ -137,9 +137,9 @@ pub struct CylindricalSurface {
 impl From<&CylindricalSurface> for step_geometry::CylindricalSurface {
     fn from(cs: &CylindricalSurface) -> Self {
         let mat = Matrix4::from(&cs.position);
-        let x = mat[0].truncate();
-        let z = mat[2].truncate();
-        let center = Point3::from_homogeneous(mat[3]);
+        let x = mat.column(0).into_owned().spatial();
+        let z = mat.column(2).into_owned().spatial();
+        let center = Point3::from_homogeneous(mat.column(3).into_owned());
         let radius = cs.radius;
         let p = center + x * radius;
         let mut res = Self::new(RevolutionSurface::by_revolution(
@@ -317,11 +317,8 @@ impl From<&ConicalSurface> for step_geometry::ConicalSurface {
         let p = Point3::new(*radius, 0.0, 0.0);
         let semi_angle = normalize_conical_semi_angle(*semi_angle);
         let v = Vector3::new(f64::tan(semi_angle), 0.0, 1.0);
-        let rev = RevolutionSurface::by_revolution(
-            geom::Line(p, p + v),
-            Point3::origin(),
-            Vector3::unit_z(),
-        );
+        let rev =
+            RevolutionSurface::by_revolution(geom::Line(p, p + v), Point3::origin(), Vector3::z());
         let mut processor = Self::new(rev);
         processor.transform_by(mat);
         processor.invert();

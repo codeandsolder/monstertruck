@@ -46,11 +46,11 @@ fn join_straight(a: &Edge, b: &Edge) -> Option<Edge> {
     let first = middle - start;
     let second = end - middle;
     let span = end - start;
-    let length = span.magnitude();
+    let length = span.norm();
     if !length.is_finite()
         || length <= KERNEL_EPSILON
-        || first.dot(second) <= 0.0
-        || first.cross(span / length).magnitude() > KERNEL_EPSILON
+        || first.dot(&second) <= 0.0
+        || first.cross(&(span / length)).norm() > KERNEL_EPSILON
         || !certified_segment(a)
         || !certified_segment(b)
     {

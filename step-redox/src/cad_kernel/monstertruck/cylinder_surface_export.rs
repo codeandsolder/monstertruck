@@ -106,7 +106,7 @@ pub(super) fn rechart_face(
 mod tests {
     use super::*;
     use monstertruck_modeling::{
-        BsplineSurface, InnerSpace, KnotVector, NurbsSurface, ParametricSurface,
+        BsplineSurface, InnerProduct, KnotVector, NurbsSurface, ParametricSurface,
         ParametricSurface3D, Point3, Vector4,
     };
 
@@ -139,8 +139,8 @@ mod tests {
                 let native = native_cylinder(&original).expect("single-cover circle");
                 let angle = std::f64::consts::FRAC_PI_4;
                 let (u, v) = if swapped { (0.5, angle) } else { (angle, 0.5) };
-                assert!((original.evaluate(0.5, 0.5) - native.evaluate(u, v)).magnitude() < 1e-12);
-                assert!(original.normal(0.5, 0.5).dot(native.normal(u, v)) > 1.0 - 1e-12);
+                assert!((original.evaluate(0.5, 0.5) - native.evaluate(u, v)).norm() < 1e-12);
+                assert!(original.normal(0.5, 0.5).dot(&native.normal(u, v)) > 1.0 - 1e-12);
                 let wrong =
                     Curve::Line(Line(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0)));
                 assert!(rechart_face(&original, [wrong], 1e-7).is_none());

@@ -269,7 +269,7 @@ fn step_cylinder(
     axis: Vector3,
     radius: f64,
 ) -> Processor<RevolutionSurface<Line<Point3>>, Matrix4> {
-    let radial = Vector3::unit_x();
+    let radial = Vector3::x();
     let start = center + radial * radius;
     let mut cylinder = Processor::new(RevolutionSurface::by_revolution(
         Line(start, start + axis),
@@ -305,7 +305,7 @@ fn control_net_bbox(surface: &BsplineSurface<Vector4>) -> (Point3, Point3) {
 /// line's incidental 1.
 #[test]
 fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
-    let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 8.0);
+    let cylinder = step_cylinder(Point3::origin(), Vector3::z(), 8.0);
 
     // Untrimmed: the one-unit stub, unchanged.
     let stub = (cylinder.try_into_homogeneous_bspline_surface()).expect("cylinder converts");
@@ -380,7 +380,7 @@ fn trimmed_cylinder_control_net_spans_the_face_not_the_profile() {
 /// requested analytic cylinder wherever the face actually uses it.
 #[test]
 fn overlapping_trim_stays_on_the_exact_cylinder() {
-    let cylinder = step_cylinder(Point3::new(1.0, -2.0, 3.0), Vector3::unit_z(), 2.5);
+    let cylinder = step_cylinder(Point3::new(1.0, -2.0, 3.0), Vector3::z(), 2.5);
     for trim in [
         // Exactly the profile's own range.
         ((0.0, 1.0), (0.0, 1.0)),
@@ -434,7 +434,7 @@ fn overlapping_trim_stays_on_the_exact_cylinder() {
 /// We deliberately do not require identical control points or knot vectors.
 #[test]
 fn optional_trim_preserves_analytic_geometry() {
-    let cylinder = step_cylinder(Point3::origin(), Vector3::unit_z(), 3.0);
+    let cylinder = step_cylinder(Point3::origin(), Vector3::z(), 3.0);
     let cylinder_surface = as_nurbs(
         (cylinder.try_into_homogeneous_bspline_surface_over(None))
             .expect("cylinder converts")
@@ -512,7 +512,7 @@ fn trimmed_cone_stays_an_exact_cone() {
     let mut cone = Processor::new(RevolutionSurface::by_revolution(
         Line(start, start + Vector3::new(1.0, 0.0, 1.0)),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     ));
     cone.invert();
     let conv = as_nurbs(
@@ -543,17 +543,17 @@ fn transformed_torus_via_processor_lies_on_surface() {
     let torus = Torus::new_unchecked(Point3::origin(), 3.0, 1.0);
     // Rotate about x by 0.6 rad (tilts the torus axis off +z), then translate.
     let (sn, cs) = 0.6f64.sin_cos();
-    let rot_x = Matrix4::from_cols(
+    let rot_x = Matrix4::from_columns(&[
         Vector4::new(1.0, 0.0, 0.0, 0.0),
         Vector4::new(0.0, cs, sn, 0.0),
         Vector4::new(0.0, -sn, cs, 0.0),
         Vector4::new(0.0, 0.0, 0.0, 1.0),
-    );
-    let transform = Matrix4::from_translation(Vector3::new(5.0, -3.0, 2.0)) * rot_x;
+    ]);
+    let transform = Matrix4::new_translation(&Vector3::new(5.0, -3.0, 2.0)) * rot_x;
     let placed = Processor::with_transform(torus, transform);
     let conv =
         as_nurbs((placed.try_into_homogeneous_bspline_surface()).expect("placed torus converts"));
-    let inv = (transform.invert()).expect("rigid transform is invertible");
+    let inv = (transform.try_inverse()).expect("rigid transform is invertible");
     let tol = 1.0e-9 * (torus.large_radius() + torus.small_radius());
     for s in grid_params() {
         for t in grid_params() {
@@ -577,7 +577,7 @@ fn bounded_revolution_net_preserves_nonzero_near_axis_orbits() {
         KnotVector::bezier_knot(1),
         vec![Point3::new(radius, 0.0, 0.0), Point3::new(radius, 0.0, 1.0)],
     );
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     assert!(surface.homogeneous_net_covers_domain());
     assert!(!surface.supports_exact_patch_domains());
     let converted = as_nurbs(
@@ -592,7 +592,7 @@ fn bounded_revolution_net_preserves_nonzero_near_axis_orbits() {
         }
     }
     let line = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0));
-    let cylinder = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::unit_z());
+    let cylinder = RevolutionSurface::by_revolution(line, Point3::origin(), Vector3::z());
     assert!(!cylinder.homogeneous_net_covers_domain());
     assert!(cylinder.try_into_homogeneous_bspline_surface().is_some());
 }

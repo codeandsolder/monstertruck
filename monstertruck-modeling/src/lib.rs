@@ -7,9 +7,9 @@
 //!
 //! // Build a unit cube by three successive extrusions: point -> edge -> face -> solid
 //! let v = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
-//! let e = builder::extrude(&v, Vector3::unit_x());
-//! let f = builder::extrude(&e, Vector3::unit_y());
-//! let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+//! let e = builder::extrude(&v, Vector3::x());
+//! let f = builder::extrude(&e, Vector3::y());
+//! let cube: Solid = builder::extrude(&f, Vector3::z());
 //!
 //! assert_eq!(cube.boundaries()[0].len(), 6); // six faces
 //! ```
@@ -28,7 +28,7 @@ fn usize_to_f64(value: usize) -> f64 {
 /// re-export `monstertruck_core`.
 pub mod base {
     pub use monstertruck_core::{
-        assert_near, assert_near2, bounding_box::BoundingBox, cgmath64::*, prop_assert_near,
+        assert_near, assert_near2, bounding_box::BoundingBox, math::*, prop_assert_near,
         prop_assert_near2, tolerance::*,
     };
     pub use monstertruck_traits::*;

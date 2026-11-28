@@ -11,7 +11,7 @@ mod tests;
 
 use super::{BandContext, Ring, signed_delta};
 use crate::mesh_recovery::SurfaceCarrier;
-use crate::{Edge, InnerSpace, ParametricCurve, Point3, Vector3};
+use crate::{Edge, InnerProduct, ParametricCurve, Point3, Vector3};
 use controls::{Control, Controls};
 use interval::{Interval, angle};
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
@@ -150,16 +150,14 @@ impl Piece {
         edge: usize,
     ) -> Option<Self> {
         let rates = frame.rates(&controls.values)?;
-        if rates
-            .iter()
-            .any(|r| !r.finite() || r.magnitude() >= PI * 0.5)
+        if rates.iter().any(|r| !r.finite() || r.norm() >= PI * 0.5)
             || !rates.iter().any(|r| r.directed())
         {
             return None;
         }
         let raw_start = frame.endpoint(*controls.values.first()?)?;
         let start = std::array::from_fn(|i| near(raw_start[i], reference[i].mid()));
-        if (0..2).any(|i| start[i].sub(reference[i]).magnitude() > frame.resolution) {
+        if (0..2).any(|i| start[i].sub(reference[i]).norm() > frame.resolution) {
             return None;
         }
         let raw_end = frame.endpoint(*controls.values.last()?)?;
@@ -283,12 +281,8 @@ pub(super) fn prove(
     ];
     let (pieces, reference) = lift_cycle(frame, rim, first)?;
     let resolution = frame.resolution;
-    if reference[0]
-        .sub(first[0])
-        .sub(Interval::point(TAU))
-        .magnitude()
-        > resolution
-        || reference[1].sub(first[1]).magnitude() > resolution
+    if reference[0].sub(first[0]).sub(Interval::point(TAU)).norm() > resolution
+        || reference[1].sub(first[1]).norm() > resolution
     {
         return Err(Rejection::Winding);
     }
@@ -311,8 +305,8 @@ pub(super) fn prove(
         let point =
             curve.evaluate(piece.controls.parameter[0].midpoint(piece.controls.parameter[1]));
         let clearance = 4.0 * context.options.intersection_tolerance;
-        if (point - rim[piece.edge].front().point()).magnitude() <= clearance
-            || (point - rim[piece.edge].back().point()).magnitude() <= clearance
+        if (point - rim[piece.edge].front().point()).norm() <= clearance
+            || (point - rim[piece.edge].back().point()).norm() <= clearance
         {
             continue;
         }

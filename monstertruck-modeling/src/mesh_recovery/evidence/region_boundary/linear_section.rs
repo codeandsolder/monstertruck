@@ -7,7 +7,7 @@
 
 use super::super::super::sample_fit::normal_basis;
 use super::SurfaceCarrier;
-use crate::{BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3};
+use crate::{BsplineCurve, Curve, InnerProduct, KnotVector, NurbsCurve, Point3, Vector3};
 use monstertruck_geometry::{
     analytic_carrier::AnalyticSupport,
     analytic_curve_incidence::{CurveIncidence, certify_bspline_curve_on_support},
@@ -44,7 +44,7 @@ impl Linear {
         )
     }
 
-    fn radial(self, delta: Vector3) -> Vector3 { delta - self.axis * delta.dot(self.axis) }
+    fn radial(self, delta: Vector3) -> Vector3 { delta - self.axis * delta.dot(&self.axis) }
 
     fn contains(self, curve: &BsplineCurve<Point3>, tolerance: f64) -> bool {
         if self.slope == 0.0 {
@@ -63,7 +63,7 @@ impl Linear {
         let Some(first) = curve.control_points().first() else {
             return false;
         };
-        let height = (*first - self.origin).dot(self.axis);
+        let height = (*first - self.origin).dot(&self.axis);
         let radius = self.slope.mul_add(height, self.radius);
         bound_nurbs_radial_deviation(
             &NurbsCurve::from(curve.clone()),
@@ -149,15 +149,15 @@ impl Generator {
         Quadratic {
             a: self.radius_derivative.mul_add(
                 -self.radius_derivative,
-                self.transverse_direction.magnitude2(),
+                self.transverse_direction.norm_squared(),
             ),
             b: self.radius.mul_add(
                 -self.radius_derivative,
-                self.transverse.dot(self.transverse_direction),
+                self.transverse.dot(&self.transverse_direction),
             ),
             c: self
                 .radius
-                .mul_add(-self.radius, self.transverse.magnitude2()),
+                .mul_add(-self.radius, self.transverse.norm_squared()),
         }
     }
 }
@@ -175,8 +175,8 @@ impl Frame {
 
     fn angle(self, point: Point3) -> Option<f64> {
         let delta = point - self.first.origin;
-        let x = delta.dot(self.u);
-        let y = delta.dot(self.v);
+        let x = delta.dot(&self.u);
+        let y = delta.dot(&self.v);
         (x.is_finite() && y.is_finite() && x.hypot(y) > 0.0).then(|| y.atan2(x))
     }
 
@@ -196,8 +196,8 @@ impl Frame {
             radius: self
                 .second
                 .slope
-                .mul_add(base.dot(self.second.axis), self.second.radius),
-            radius_derivative: self.second.slope * direction.dot(self.second.axis),
+                .mul_add(base.dot(&self.second.axis), self.second.radius),
+            radius_derivative: self.second.slope * direction.dot(&self.second.axis),
         }
     }
 
@@ -226,11 +226,11 @@ impl Frame {
         let normal =
             self.second.radial(delta) - self.second.axis * (self.second.slope * second_radius);
         let angular = tangent * radius;
-        let denominator = normal.dot(g.direction);
+        let denominator = normal.dot(&g.direction);
         if !denominator.is_finite() || denominator == 0.0 {
             return None;
         }
-        let derivative = angular - g.direction * (normal.dot(angular) / denominator);
+        let derivative = angular - g.direction * (normal.dot(&angular) / denominator);
         let point = self.second.origin + delta;
         Some((point, derivative))
     }
@@ -248,12 +248,12 @@ impl Frame {
         let direction_motion = move_bound * self.first.slope.abs();
         let radius_motion = point_motion * self.second.slope.abs();
         let slope_motion = direction_motion * self.second.slope.abs();
-        let point_norm = generator.transverse.magnitude();
-        let direction_norm = generator.transverse_direction.magnitude();
+        let point_norm = generator.transverse.norm();
+        let direction_norm = generator.transverse_direction.norm();
         let scale = generator
             .base
-            .magnitude()
-            .max(generator.direction.magnitude())
+            .norm()
+            .max(generator.direction.norm())
             .max(generator.radius.abs())
             .max(generator.radius_derivative.abs())
             .max(1.0);
@@ -337,7 +337,7 @@ impl Frame {
             return false;
         };
         let local = controls.map(|p| p - self.first.origin);
-        let heights = local.map(|p| p.dot(self.first.axis));
+        let heights = local.map(|p| p.dot(&self.first.axis));
         // The positive-weight polynomial control hull must not approach the
         // competing quadratic root, even if it lies on both carriers.
         let lower = heights.into_iter().fold(f64::INFINITY, f64::min);
@@ -353,14 +353,14 @@ impl Frame {
         // A strict common angular direction for all control vectors and
         // derivative controls proves azimuth monotonicity on the full cubic.
         let derivatives = std::array::from_fn::<_, 3, _>(|i| radial[i + 1] - radial[i]);
-        let scale = radial.iter().map(|p| p.magnitude()).fold(1.0_f64, f64::max);
+        let scale = radial.iter().map(|p| p.norm()).fold(1.0_f64, f64::max);
         let margin = 128.0 * f64::EPSILON * scale * scale;
         let (middle, _) = self.direction(start.midpoint(end));
         radial.iter().all(|r| {
-            r.dot(middle) > tolerance && {
+            r.dot(&middle) > tolerance && {
                 derivatives
                     .iter()
-                    .all(|d| sign * self.first.axis.dot(r.cross(*d)) > margin)
+                    .all(|d| sign * self.first.axis.dot(&r.cross(&*d)) > margin)
             }
         })
     }
@@ -391,7 +391,7 @@ impl ContactLinearSectionEvidence {
     fn measure(mut self, points: &[Point3], ids: &[usize], tolerance: f64) -> Option<Self> {
         for &id in ids {
             let p = *points.get(id)?;
-            let residual = (self.projected(p)? - p).magnitude();
+            let residual = (self.projected(p)? - p).norm();
             if !residual.is_finite() || residual > tolerance {
                 return None;
             }
@@ -414,7 +414,7 @@ impl ContactLinearSectionEvidence {
             }
             let (_, da) = self.frame.evaluate(self.positive, start)?;
             let (_, db) = self.frame.evaluate(self.positive, start + step)?;
-            if da.dot(b - a) * step <= 0.0 || db.dot(b - a) * step <= 0.0 {
+            if da.dot(&(b - a)) * step <= 0.0 || db.dot(&(b - a)) * step <= 0.0 {
                 return None;
             }
             sign = step.signum();
@@ -449,8 +449,8 @@ impl ContactLinearSectionEvidence {
                 let Some((q, dq)) = other.frame.evaluate(other.positive, angle) else {
                     return false;
                 };
-                (p - q).magnitude() <= tolerance
-                    && dp.dot(dq) * self.signed_sweep_radians * other.signed_sweep_radians > 0.0
+                (p - q).norm() <= tolerance
+                    && dp.dot(&dq) * self.signed_sweep_radians * other.signed_sweep_radians > 0.0
             })
         })
     }
@@ -484,8 +484,8 @@ impl ContactLinearSectionEvidence {
         let end = start + step;
         if step * sweep <= 0.0
             || step.abs() > FRAC_PI_2
-            || (self.projected(a)? - a).magnitude() > tolerance
-            || (self.projected(b)? - b).magnitude() > tolerance
+            || (self.projected(a)? - a).norm() > tolerance
+            || (self.projected(b)? - b).norm() > tolerance
             || !self.frame.regular(start, end, self.positive, tolerance, 8)
         {
             return None;
@@ -575,8 +575,8 @@ mod tests {
     {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let carriers = [
-            carrier(origin, Vector3::unit_z(), 1.0, 0.0),
-            carrier(origin, Vector3::unit_x(), 2.0, 0.0),
+            carrier(origin, Vector3::z(), 1.0, 0.0),
+            carrier(origin, Vector3::x(), 2.0, 0.0),
         ];
         // Independent formula: x²+y²=1, y²+z²=4.
         let points = [0.1_f64, 0.22, 0.38].map(|angle| {
@@ -626,7 +626,7 @@ mod tests {
         let carriers = [
             carrier(
                 Point3::new(3.4274859842246683, -2.35, 0.1625140157753312),
-                Vector3::unit_y(),
+                Vector3::y(),
                 0.17251401577533082,
                 -1.2578156450763003e-32,
             ),
@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn skew_affine_revolutions_keep_both_signed_slopes() -> Result<(), Box<dyn std::error::Error>> {
         let carriers = [
-            carrier(Point3::new(0.0, 0.0, 0.0), Vector3::unit_z(), 1.0, 0.08),
+            carrier(Point3::new(0.0, 0.0, 0.0), Vector3::z(), 1.0, 0.08),
             carrier(
                 Point3::new(0.3, -0.2, 0.1),
                 Vector3::new(1.0, 0.2, 0.1).normalize(),

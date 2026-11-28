@@ -5,7 +5,7 @@ use monstertruck_geometry::prelude::*;
 use monstertruck_traits::v2;
 use std::hint::black_box;
 
-type Point3F32 = cgmath::Point3<f32>;
+type Point3F32 = nalgebra::Point3<f32>;
 
 fn bench_evaluate(c: &mut Criterion) {
     let line_f32: Line<Point3F32> =

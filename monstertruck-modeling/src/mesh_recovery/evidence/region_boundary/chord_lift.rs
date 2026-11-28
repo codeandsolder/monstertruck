@@ -5,7 +5,7 @@
 //! adjoining unresolved facet may use a separately bounded approximation.
 
 use super::{SurfaceCarrier, SurfaceRegionBudget};
-use crate::{BsplineCurve, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
+use crate::{BsplineCurve, InnerProduct, KnotVector, NurbsCurve, Point3, Vector3, Vector4};
 use monstertruck_geometry::analytic_line_segment::bound_nurbs_segment_locus;
 
 /// A source segment lifted to an independently fitted analytic carrier.
@@ -23,7 +23,7 @@ pub struct LiftedSourceChord {
 
 fn finite(p: Point3) -> bool { [p.x, p.y, p.z].into_iter().all(f64::is_finite) }
 
-fn unit(axis: Vector3) -> bool { (axis.magnitude2() - 1.0).abs() <= 64.0 * f64::EPSILON }
+fn unit(axis: Vector3) -> bool { (axis.norm_squared() - 1.0).abs() <= 64.0 * f64::EPSILON }
 
 fn homogeneous(point: Point3, w: f64) -> Vector4 {
     Vector4::new(point.x * w, point.y * w, point.z * w, w)
@@ -58,7 +58,7 @@ struct WeightedDirection {
 // great circles are handled by the same formula.
 fn direction_arc(a: Vector3, b: Vector3) -> Option<[WeightedDirection; 3]> {
     let bisector = a + b;
-    let weight = bisector.magnitude() * 0.5;
+    let weight = bisector.norm() * 0.5;
     if !weight.is_finite() || weight <= 128.0 * f64::EPSILON {
         return None; // Antipodal: samples do not determine a short branch.
     }
@@ -87,9 +87,9 @@ struct AxialPoint {
 
 fn axial_point(origin: Point3, axis: Vector3, point: Point3) -> Option<AxialPoint> {
     let delta = point - origin;
-    let axial = delta.dot(axis);
+    let axial = delta.dot(&axis);
     let radial = delta - axis * axial;
-    let radius = radial.magnitude();
+    let radius = radial.norm();
     if !axial.is_finite() || !radius.is_finite() {
         return None;
     }
@@ -120,7 +120,7 @@ fn plane(origin: Point3, normal: Vector3, source: [Point3; 2]) -> Option<Vec<Vec
     Some(
         source
             .into_iter()
-            .map(|p| homogeneous(p - normal * (p - origin).dot(normal), 1.0))
+            .map(|p| homogeneous(p - normal * (p - origin).dot(&normal), 1.0))
             .collect(),
     )
 }
@@ -130,7 +130,7 @@ fn sphere(center: Point3, radius: f64, source: [Point3; 2]) -> Option<Vec<Vector
         return None;
     }
     let [a, b] = source.map(|p| p - center);
-    if a.magnitude() <= 0.0 || b.magnitude() <= 0.0 {
+    if a.norm() <= 0.0 || b.norm() <= 0.0 {
         return None;
     }
     let arc = direction_arc(a.normalize(), b.normalize())?;
@@ -209,7 +209,7 @@ fn linear(
 
 fn meridian(point: AxialPoint, center_radius: f64) -> Option<Vector3> {
     let p = Vector3::new(point.radius - center_radius, point.axial, 0.0);
-    let norm = p.magnitude();
+    let norm = p.norm();
     (norm.is_finite() && norm > 0.0).then(|| p / norm)
 }
 
@@ -220,7 +220,7 @@ fn meridian(point: AxialPoint, center_radius: f64) -> Option<Vector3> {
 fn min_cosine(a: Vector3, b: Vector3) -> f64 {
     use std::f64::consts::PI;
     let first = a.y.atan2(a.x);
-    let sweep = a.x.mul_add(b.y, -a.y * b.x).atan2(a.dot(b));
+    let sweep = a.x.mul_add(b.y, -a.y * b.x).atan2(a.dot(&b));
     let last = first + sweep;
     let lo = first.min(last);
     let hi = first.max(last);
@@ -305,7 +305,7 @@ impl ToroidalChord {
         }
         let [a, b] = junctions.map(|p| axial_point(center, axis, p));
         let wedge = [a?.direction?, b?.direction?];
-        let direction = axis.dot(wedge[0].cross(wedge[1]));
+        let direction = axis.dot(&wedge[0].cross(&wedge[1]));
         if direction.abs() <= 128.0 * f64::EPSILON {
             return None;
         }
@@ -330,7 +330,7 @@ impl ToroidalChord {
         let [a, b] = junctions.map(|p| axial_point(self.center, self.axis, p));
         // All pieces must advance in the same short azimuthal chart. This
         // makes the entire edge injective, including its new junctions.
-        if self.direction * self.axis.dot(a?.direction?.cross(b?.direction?))
+        if self.direction * self.axis.dot(&a?.direction?.cross(&b?.direction?))
             <= 128.0 * f64::EPSILON
         {
             return None;
@@ -340,7 +340,7 @@ impl ToroidalChord {
         if endpoints
             .iter()
             .zip(source)
-            .any(|(&p, q)| (p - q).magnitude() > self.tolerance)
+            .any(|(&p, q)| (p - q).norm() > self.tolerance)
         {
             return None;
         }
@@ -361,9 +361,9 @@ impl ToroidalChord {
         let radial = axial_point(self.center, self.axis, middle)?.direction?;
         // Interior samples must remain inside the original short wedge;
         // consistently directed subarcs alone would not exclude a wrap.
-        if [self.wedge[0].cross(radial), radial.cross(self.wedge[1])]
+        if [self.wedge[0].cross(&radial), radial.cross(&self.wedge[1])]
             .iter()
-            .any(|&cross| self.direction * self.axis.dot(cross) <= 128.0 * f64::EPSILON)
+            .any(|&cross| self.direction * self.axis.dot(&cross) <= 128.0 * f64::EPSILON)
         {
             return None;
         }
@@ -471,22 +471,22 @@ impl SurfaceCarrier {
             || budget.chord <= 0.0
             || !junction_tolerance.is_finite()
             || junction_tolerance < 0.0
-            || (source[1] - source[0]).magnitude() <= 0.0
+            || (source[1] - source[0]).norm() <= 0.0
         {
             return None;
         }
         let controls = self.chord_controls(junctions)?;
         let endpoints = [cartesian(*controls.first()?), cartesian(*controls.last()?)];
         let vertex_displacement = (endpoints[0] - source[0])
-            .magnitude()
-            .max((endpoints[1] - source[1]).magnitude());
+            .norm()
+            .max((endpoints[1] - source[1]).norm());
         if !vertex_displacement.is_finite()
             || vertex_displacement > budget.vertex
             || endpoints
                 .iter()
                 .zip(junctions)
-                .any(|(&p, q)| (p - q).magnitude() > junction_tolerance)
-            || (endpoints[1] - endpoints[0]).magnitude() <= 0.0
+                .any(|(&p, q)| (p - q).norm() > junction_tolerance)
+            || (endpoints[1] - endpoints[0]).norm() <= 0.0
         {
             return None;
         }
@@ -531,9 +531,9 @@ mod tests {
             let (_, residual) = carrier.signed_constraint(p).expect("regular carrier");
             assert!(residual.abs() < 1.0e-11, "{residual}");
             let direction = source[1] - source[0];
-            let t = ((p - source[0]).dot(direction) / direction.magnitude2()).clamp(0.0, 1.0);
+            let t = ((p - source[0]).dot(&direction) / direction.norm_squared()).clamp(0.0, 1.0);
             assert!(
-                (p - (source[0] + direction * t)).magnitude()
+                (p - (source[0] + direction * t)).norm()
                     <= result.chord_deviation_upper_bound + 1.0e-12
             );
         }
@@ -542,9 +542,9 @@ mod tests {
     #[test]
     fn single_carrier_paths_are_exact_on_all_regular_families() {
         let origin = Point3::new(3.0, -5.0, 7.0);
-        let axis = Vector3::unit_z();
-        let x = Vector3::unit_x();
-        let y = Vector3::unit_y();
+        let axis = Vector3::z();
+        let x = Vector3::x();
+        let y = Vector3::y();
         check(
             SurfaceCarrier::Plane {
                 origin,
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn torus_lift_refines_the_meridian_without_inventing_a_branch() {
         let center = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let major = 5.7;
         let minor = 1.8;
         let meridian = 1.2_f64;
@@ -658,7 +658,7 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.0,
             profile_radius: 1.0,
         };
@@ -712,7 +712,7 @@ mod tests {
         // but the shorter meridian arc through cos(v)=-1 crosses its axis.
         let spindle = SurfaceCarrier::CircularRevolution {
             axial_center: origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 0.5,
             profile_radius: 1.0,
         };

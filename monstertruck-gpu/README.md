@@ -8,7 +8,7 @@ Graphics utility crate built on wgpu.
 
 ```rust
 use std::f64::consts::TAU;
-use monstertruck_core::cgmath64::*;
+use monstertruck_core::math::*;
 use monstertruck_gpu::*;
 
 let handler = pollster::block_on(DeviceHandler::default_device()).expect("GPU device is available");

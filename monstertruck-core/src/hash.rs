@@ -2,11 +2,11 @@
     clippy::many_single_char_names,
     reason = "hash mixing formulas use conventional coefficient and component symbols"
 )]
-use cgmath::num_traits::Float;
+use num_traits::Float;
 
 /// Scalar types for which the deterministic hash constants have an explicit,
 /// total representation conversion.
-trait HashFloat: Float {
+trait HashFloat: Float + nalgebra::Scalar {
     fn from_hash_constant(value: f64) -> Self;
 }
 
@@ -306,7 +306,7 @@ macro_rules! derive_hashgen {
     };
 }
 
-use cgmath::{Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4};
+use nalgebra::{Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4};
 derive_hashgen!(Point1<S>, [S; 1]);
 derive_hashgen!(Point2<S>, [S; 2]);
 derive_hashgen!(Point3<S>, [S; 3]);

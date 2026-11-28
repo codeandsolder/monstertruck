@@ -6,7 +6,7 @@
 
 use super::super::MeshRecoveryError;
 use super::{MeshEvidence, canonical_unit};
-use crate::{InnerSpace, Vector3};
+use crate::{InnerProduct, Vector3};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Numerical hypothesis bounds. All original supports and interfaces remain
@@ -83,9 +83,9 @@ impl RotationStep {
     }
 }
 
-fn axis_angle(a: Vector3, b: Vector3) -> f64 { a.cross(b).magnitude().atan2(a.dot(b).abs()) }
+fn axis_angle(a: Vector3, b: Vector3) -> f64 { a.cross(&b).norm().atan2(a.dot(&b).abs()) }
 
-fn normal_angle(a: Vector3, b: Vector3) -> f64 { a.cross(b).magnitude().atan2(a.dot(b)) }
+fn normal_angle(a: Vector3, b: Vector3) -> f64 { a.cross(&b).norm().atan2(a.dot(&b)) }
 
 fn valid_options(options: CurvatureTrackOptions) -> bool {
     options.min_normal_turn_radians.is_finite()
@@ -128,8 +128,8 @@ fn local_steps(evidence: &MeshEvidence, options: CurvatureTrackOptions) -> Vec<R
                     evidence.planar_supports[center].normal,
                     evidence.planar_supports[right].normal,
                 ];
-                let sign_first = axis.dot(a.cross(b));
-                let sign_second = axis.dot(b.cross(c));
+                let sign_first = axis.dot(&a.cross(&b));
+                let sign_second = axis.dot(&b.cross(&c));
                 if sign_first * sign_second <= 0.0 {
                     continue;
                 }
@@ -217,7 +217,7 @@ fn track_from_path(
     }
     let projections = supports
         .iter()
-        .map(|&support| evidence.planar_supports[support].normal.dot(axis))
+        .map(|&support| evidence.planar_supports[support].normal.dot(&axis))
         .collect::<Vec<_>>();
     let min_projection = projections.iter().copied().fold(f64::INFINITY, f64::min);
     let max_projection = projections
@@ -301,7 +301,7 @@ pub fn trace_curvature_tracks(
         let seed = steps[first].axis;
         let projections = steps[first]
             .supports
-            .map(|support| evidence.planar_supports[support].normal.dot(seed));
+            .map(|support| evidence.planar_supports[support].normal.dot(&seed));
         let mut min_projection = projections.iter().copied().fold(f64::INFINITY, f64::min);
         let mut max_projection = projections
             .iter()
@@ -329,7 +329,7 @@ pub fn trace_curvature_tracks(
             }
             let projection = evidence.planar_supports[steps[successor].supports[2]]
                 .normal
-                .dot(seed);
+                .dot(&seed);
             let new_min = min_projection.min(projection);
             let new_max = max_projection.max(projection);
             if new_max - new_min > options.max_normal_axis_projection_spread {

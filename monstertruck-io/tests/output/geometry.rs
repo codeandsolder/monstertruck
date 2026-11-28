@@ -74,11 +74,11 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3>>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-3.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = CIRCLE('', #2, 3.0);
@@ -89,11 +89,11 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitCircle<Point2>>, Matrix3>>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-8.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = ELLIPSE('', #2, 3.0, 8.0);
@@ -104,12 +104,12 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-3.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 3.0, 0.0),
                 Vector4::new(3.0, 1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = CIRCLE('', #2, 3.0);
@@ -121,12 +121,12 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitCircle<Point3>>, Matrix4>>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-8.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 1.0, 0.0),
                 Vector4::new(3.0, 1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = ELLIPSE('', #2, 3.0, 8.0);
@@ -138,11 +138,11 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitHyperbola<Point2>>, Matrix3>>(
         Processor::new(TrimmedCurve::new(UnitHyperbola::new(), (0.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-8.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = HYPERBOLA('', #2, 3.0, 8.0);
@@ -153,12 +153,12 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitHyperbola<Point3>>, Matrix4>>(
         Processor::new(TrimmedCurve::new(UnitHyperbola::new(), (0.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-8.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 1.0, 0.0),
                 Vector4::new(3.0, 1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = HYPERBOLA('', #2, 3.0, 8.0);
@@ -170,11 +170,11 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitParabola<Point2>>, Matrix3>>(
         Processor::new(TrimmedCurve::new(UnitParabola::new(), (0.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 4.0, 0.0),
                 Vector3::new(-2.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = PARABOLA('', #2, 1.0);
@@ -185,12 +185,12 @@ fn geometry() {
     );
     step_test::<Processor<TrimmedCurve<UnitParabola<Point3>>, Matrix4>>(
         Processor::new(TrimmedCurve::new(UnitParabola::new(), (0.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 4.0, 0.0, 0.0),
                 Vector4::new(-2.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 1.0, 0.0),
                 Vector4::new(3.0, 1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = PARABOLA('', #2, 1.0);
@@ -244,12 +244,12 @@ fn geometry() {
     );
     step_test::<Processor<Sphere, Matrix4>>(
         Processor::new(Sphere::new(Point3::new(1.0, 2.0, 3.0), 5.0)).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-3.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 3.0, 0.0),
                 Vector4::new(2.0, 1.0, 3.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = SPHERICAL_SURFACE('', #2, 15.0);
@@ -261,12 +261,12 @@ fn geometry() {
     );
     step_test::<Processor<Torus, Matrix4>>(
         Processor::new(Torus::new_unchecked(Point3::new(1.0, 2.0, 3.0), 5.0, 3.0)).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(-3.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 3.0, 0.0),
                 Vector4::new(2.0, 1.0, 3.0, 1.0),
-            ),
+            ]),
         ),
         "\
 #1 = TOROIDAL_SURFACE('', #2, 15.0, 9.0);
@@ -376,12 +376,12 @@ fn native_round_surface_parameter_curves_preserve_world_locus() -> anyhow::Resul
 
     let center = Point3::new(1.0, 2.0, 3.0);
     for sign in [1.0, -1.0] {
-        let transform = Matrix4::from_cols(
+        let transform = Matrix4::from_columns(&[
             Vector4::new(0.0, 3.0, 0.0, 0.0),
             Vector4::new(-3.0 * sign, 0.0, 0.0, 0.0),
             Vector4::new(0.0, 0.0, 3.0, 0.0),
             Vector4::new(2.0, 1.0, 3.0, 1.0),
-        );
+        ]);
         for inverted in [false, true] {
             let mut sphere = Processor::new(Sphere::new(center, 5.0)).transformed(transform);
             let mut torus = Processor::new(Torus::new(center, 5.0, 2.0)?).transformed(transform);
@@ -432,13 +432,13 @@ fn cylinder_export_preserves_uv_and_oriented_normal() -> anyhow::Result<()> {
             Point3::new(3., 0., 2. + axial_sign * 4.),
         );
         for reflection in [-1., 1.] {
-            let transform = Matrix4::from_translation(Vector3::new(1., 5., 3.))
-                * Matrix4::from_nonuniform_scale(2., 2. * reflection, 2.);
+            let transform = Matrix4::new_translation(&Vector3::new(1., 5., 3.))
+                * Matrix4::new_nonuniform_scaling(&Vector3::new(2., 2. * reflection, 2.));
             for inverted in [false, true] {
                 let mut native_surface = Processor::new(RevolutionSurface::by_revolution(
                     ModelCurve::Line(generator),
                     Point3::origin(),
-                    Vector3::unit_z(),
+                    Vector3::z(),
                 ))
                 .transformed(transform);
                 if inverted {
@@ -465,7 +465,7 @@ fn cylinder_export_preserves_uv_and_oriented_normal() -> anyhow::Result<()> {
                     let radial = Vector3::new(point.x - 1., point.y - 5., 0.);
                     let uv = uv.evaluate(t);
                     assert_eq!(
-                        surface.normal(uv.x, uv.y).dot(radial) > 0.,
+                        surface.normal(uv.x, uv.y).dot(&radial) > 0.,
                         surface.same_sense()
                     );
                 }

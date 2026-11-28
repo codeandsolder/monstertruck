@@ -2,7 +2,7 @@ use super::*;
 
 type CompressedSolid = monstertruck_topology::compress::CompressedSolid<Point3, Curve, Surface>;
 
-macro_rules! dir ( () => { concat!(env!("CARGO_MANIFEST_DIR"), "/../resources/shape/") });
+macro_rules! dir ( () => { concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/shape/") });
 
 const SHAPE_JSONS: &[&str] = &[
     concat!(dir!(), "bottle.json"),
@@ -126,7 +126,7 @@ fn special_cylinder_model() -> Result<Shell> {
     let surface_row = RevolutionSurface::<Curve>::by_revolution(
         Line(Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 0.0)).into(),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let surface: Surface = Processor::new(surface_row).into();
 
@@ -168,9 +168,9 @@ fn special_cylinder_csolid() -> Result<()> {
 fn robust_closed() {
     let cube: Solid = {
         let v = builder::vertex(Point3::origin());
-        let e = builder::extrude(&v, Vector3::unit_x());
-        let f = builder::extrude(&e, Vector3::unit_y());
-        builder::extrude(&f, Vector3::unit_z())
+        let e = builder::extrude(&v, Vector3::x());
+        let f = builder::extrude(&e, Vector3::y());
+        builder::extrude(&f, Vector3::z())
     };
 
     let o = Point3::new(0.5, 0.5, 0.5);
@@ -205,9 +205,9 @@ fn per_face_winding_consistency() -> Result<()> {
     let shapes: Vec<(&str, Shell)> = vec![
         ("cube", {
             let v = builder::vertex(Point3::origin());
-            let e = builder::extrude(&v, Vector3::unit_x());
-            let f = builder::extrude(&e, Vector3::unit_y());
-            let solid: Solid = builder::extrude(&f, Vector3::unit_z());
+            let e = builder::extrude(&v, Vector3::x());
+            let f = builder::extrude(&e, Vector3::y());
+            let solid: Solid = builder::extrude(&f, Vector3::z());
             solid.into_boundaries().pop().unwrap()
         }),
         ("cylinder", special_cylinder_model()?),
@@ -225,11 +225,11 @@ fn per_face_winding_consistency() -> Result<()> {
                 for tri in poly.tri_faces() {
                     let e1 = positions[tri[1].pos] - positions[tri[0].pos];
                     let e2 = positions[tri[2].pos] - positions[tri[0].pos];
-                    let geo = e1.cross(e2);
+                    let geo = e1.cross(&e2);
                     let vtx: Vector3 = tri.iter().fold(Vector3::zero(), |s, v| {
                         s + v.nor.map(|idx| normals[idx]).unwrap_or(Vector3::zero())
                     });
-                    let dot = geo.dot(vtx);
+                    let dot = geo.dot(&vtx);
                     if dot > 0.0 {
                         pos += 1;
                     } else if dot < 0.0 {

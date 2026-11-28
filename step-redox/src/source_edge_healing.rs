@@ -20,7 +20,7 @@ use monstertruck_geometry::analytic_radial_deviation::{
     RadialDeviationBounds, bound_nurbs_radial_deviation,
 };
 use monstertruck_geometry::prelude::{
-    InnerSpace, Matrix4, Point2, Point3, Processor, TrimmedCurve, UnitHyperbola, Vector3,
+    InnerProduct, Matrix4, Point2, Point3, Processor, TrimmedCurve, UnitHyperbola, Vector3,
 };
 use serde::Serialize;
 
@@ -317,8 +317,8 @@ fn verified_source_conical_chart(
     let cone_uv_end = cone_uv
         .cone_evaluate(Point2::new(cone_uv_trim.end[0], cone_uv_trim.end[1]))
         .ok_or_else(|| anyhow!("conical chart cannot evaluate source end"))?;
-    let conical_uv_start_endpoint_residual_mm = (cone_uv_start - source_start_mm).magnitude();
-    let conical_uv_end_endpoint_residual_mm = (cone_uv_end - source_end_mm).magnitude();
+    let conical_uv_start_endpoint_residual_mm = (cone_uv_start - source_start_mm).norm();
+    let conical_uv_end_endpoint_residual_mm = (cone_uv_end - source_end_mm).norm();
     if !conical_uv_start_endpoint_residual_mm.is_finite()
         || !conical_uv_end_endpoint_residual_mm.is_finite()
         || conical_uv_start_endpoint_residual_mm > endpoint_tolerance_mm
@@ -528,7 +528,7 @@ pub fn propose_plane_cone_hyperbola_healing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use monstertruck_geometry::prelude::{InnerSpace, ParametricCurve};
+    use monstertruck_geometry::prelude::{InnerProduct, ParametricCurve};
     use monstertruck_io::step::save::StepDisplay;
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
                     .analytic
                     .evaluate(t)
                     .ok_or_else(|| anyhow!("hyperbola evaluation failed"))?;
-                assert!((cone - hyperbola).magnitude() < 1.0e-10);
+                assert!((cone - hyperbola).norm() < 1.0e-10);
             }
             let original_plane_separation = (evidence.source_plane_max_deviation_lower_mm
                 - evidence.healed_source_plane_max_residual_mm)
@@ -621,8 +621,8 @@ mod tests {
                 .analytic
                 .evaluate(candidate.trim.end_parameter)
                 .ok_or_else(|| anyhow!("invalid analytic ending vertex"))?;
-            assert!((first - actual_first).magnitude() < 1.0e-10);
-            assert!((last - actual_last).magnitude() < 1.0e-10);
+            assert!((first - actual_first).norm() < 1.0e-10);
+            assert!((last - actual_last).norm() < 1.0e-10);
             let serialized = StepDisplay::new(&curve, 900).to_string();
             assert!(serialized.contains("HYPERBOLA("));
             assert!(serialized.contains("AXIS2_PLACEMENT_3D("));

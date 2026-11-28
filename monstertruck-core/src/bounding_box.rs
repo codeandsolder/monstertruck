@@ -1,6 +1,5 @@
-use cgmath::{
-    BaseFloat, MetricSpace, Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4, num_traits,
-};
+use crate::math::{KernelScalar, MetricSpace};
+use nalgebra::{Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::ops::Index;
@@ -13,7 +12,7 @@ pub struct BoundingBox<V>(V, V);
 pub trait Bounded:
     Copy + MetricSpace<Metric = Self::Scalar> + Index<usize, Output = Self::Scalar> + PartialEq {
     /// the scalar of vector
-    type Scalar: BaseFloat;
+    type Scalar: KernelScalar;
     /// the result of subtraction
     type Vector;
     #[doc(hidden)]
@@ -44,7 +43,7 @@ macro_rules! pr2 {
 }
 macro_rules! impl_bounded {
     ($typename: ident, $vectortype: ident, $($num: expr),*) => {
-        impl<S: BaseFloat> Bounded for $typename<S> {
+        impl<S: KernelScalar> Bounded for $typename<S> {
             type Scalar = S;
             type Vector = $vectortype<S>;
             fn infinity() -> $typename<S> {
@@ -111,7 +110,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Adds a point to the bounding box.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  1.0));
     /// bdd_box.push(Vector2::new(1.0,  -1.0));
@@ -121,7 +120,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the added point has NAN component, then the point is not added.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  1.0));
     /// bdd_box.push(Vector2::new(1.0,  -1.0));
@@ -139,7 +138,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the bounding box is empty or not.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// assert!(bdd_box.is_empty());
     /// bdd_box.push(Vector2::new(-1.0,  1.0));
@@ -150,7 +149,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the reference to the maximum point.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  1.0));
     /// bdd_box.push(Vector2::new(1.0,  -1.0));
@@ -159,7 +158,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returned vector consists `NEG_INFINITY` components.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector2>::new();
     /// assert_eq!(bdd_box.max(), Vector2::from([f64::NEG_INFINITY; 2]));
     /// ```
@@ -168,7 +167,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the reference to the minimal point.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  1.0));
     /// bdd_box.push(Vector2::new(1.0,  -1.0));
@@ -177,7 +176,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returned vector consists `INFINITY` components.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector2>::new();
     /// assert_eq!(bdd_box.min(), Vector2::from([f64::INFINITY; 2]));
     /// ```
@@ -186,7 +185,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the diagonal vector.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-2.0,  -3.0));
     /// bdd_box.push(Vector2::new(6.0,  4.0));
@@ -195,7 +194,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returned vector consists `f64::NEG_INFINITY` components.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector2>::new();
     /// assert_eq!(bdd_box.diagonal(), Vector2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
     /// ```
@@ -205,7 +204,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the diameter of the bounding box.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  -3.0));
     /// bdd_box.push(Vector2::new(2.0,  1.0));
@@ -214,14 +213,14 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returns `f64::NEG_INFINITY`.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector3>::new();
     /// assert_eq!(bdd_box.diameter(), f64::NEG_INFINITY);
     /// ```
     #[inline]
     pub fn diameter(self) -> V::Scalar {
         if self.is_empty() {
-            num_traits::Float::neg_infinity()
+            V::Scalar::neg_infinity()
         } else {
             self.0.distance(self.1)
         }
@@ -230,7 +229,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the maximum length of the edges of the bounding box.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector3::new(-1.0, -3.0,  2.0));
     /// bdd_box.push(Vector3::new(2.0, 1.0,  10.0));
@@ -239,7 +238,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returns `f64::NEG_INFINITY`.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector3>::new();
     /// assert_eq!(bdd_box.size(), f64::NEG_INFINITY);
     /// ```
@@ -249,7 +248,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns the center of the bounding box.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::new();
     /// bdd_box.push(Vector2::new(-1.0,  -3.0));
     /// bdd_box.push(Vector2::new(5.0,  1.0));
@@ -258,7 +257,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// # Remarks
     /// If the bounding box is empty, returned vector consists `std::f64::NAN` components.
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box = BoundingBox::<Vector3>::new();
     /// let center = bdd_box.center();
     /// assert!(center[0].is_nan());
@@ -270,7 +269,7 @@ impl<V: Bounded> BoundingBox<V> {
     /// Returns whether `self` contains `pt` or not.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*};
+    /// use monstertruck_core::{math::*, bounding_box::*};
     /// let bdd_box = BoundingBox::from_iter(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)]);
     /// assert!(bdd_box.contains(Point2::new(0.5, 0.5)));
     /// assert!(bdd_box.contains(Point2::new(0.0, 0.5)));
@@ -304,7 +303,7 @@ impl<V: Bounded> std::ops::AddAssign<&Self> for BoundingBox<V> {
     /// Puts the points in `other` into `self`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -326,7 +325,7 @@ impl<V: Bounded> std::ops::AddAssign<Self> for BoundingBox<V> {
     /// Puts the points in `other` into `self`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -352,7 +351,7 @@ impl<V: Bounded> std::ops::Add<&BoundingBox<V>> for &BoundingBox<V> {
     /// Returns the direct sum of `self` and other.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0, 6.0),
     /// ]);
@@ -376,7 +375,7 @@ impl<V: Bounded> std::ops::Add<&Self> for BoundingBox<V> {
     /// Returns the direct sum of `self` and other.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -400,7 +399,7 @@ impl<V: Bounded> std::ops::Add<BoundingBox<V>> for &BoundingBox<V> {
     /// Returns the direct sum of `self` and other.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -424,7 +423,7 @@ impl<V: Bounded> std::ops::Add<Self> for BoundingBox<V> {
     /// Returns the direct sum of `self` and other.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -450,7 +449,7 @@ impl<V: Bounded> std::ops::BitXorAssign<&Self> for BoundingBox<V> {
     /// Assigns the intersection of `self` and `other` to `self`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -471,7 +470,7 @@ impl<V: Bounded> std::ops::BitXorAssign<Self> for BoundingBox<V> {
     /// Assigns the intersection of `self` and `other` to `self`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let mut bdd_box = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -496,7 +495,7 @@ impl<V: Bounded> std::ops::BitXor<&BoundingBox<V>> for &BoundingBox<V> {
     /// Returns the intersection of `self` and `other`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0, 2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -519,7 +518,7 @@ impl<V: Bounded> std::ops::BitXor<&Self> for BoundingBox<V> {
     /// Returns the intersection of `self` and `other`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0,  2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -542,7 +541,7 @@ impl<V: Bounded> std::ops::BitXor<BoundingBox<V>> for &BoundingBox<V> {
     /// Returns the intersection of `self` and `other`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0,  2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -565,7 +564,7 @@ impl<V: Bounded> std::ops::BitXor<Self> for BoundingBox<V> {
     /// Returns the intersection of `self` and `other`.
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*, tolerance::*};
+    /// use monstertruck_core::{math::*, bounding_box::*, tolerance::*};
     /// let bdd_box0 = BoundingBox::from_iter(&[
     ///     Vector2::new(3.0,  2.0), Vector2::new(5.0,  6.0),
     /// ]);
@@ -590,7 +589,7 @@ impl<V: Bounded> PartialOrd for BoundingBox<V> {
     /// Inclusion relationship
     /// # Examples
     /// ```
-    /// use monstertruck_core::{cgmath64::*, bounding_box::*};
+    /// use monstertruck_core::{math::*, bounding_box::*};
     /// let bbx0 = BoundingBox::from_iter(&[
     ///     Point2::new(0.0, 0.0),
     ///     Point2::new(1.0, 1.0),
@@ -624,7 +623,7 @@ impl<V: Bounded> PartialOrd for BoundingBox<V> {
 
 #[test]
 fn test_bbox_non_crossing() {
-    use crate::cgmath64::Point2;
+    use crate::math::Point2;
     let a = BoundingBox::<Point2>::from_iter(&[
         Point2::new(2.0, 1.0),
         Point2::new(3.999_999_9, 4.999_999),
@@ -636,7 +635,7 @@ fn test_bbox_non_crossing() {
 
 #[test]
 fn test_bbox_touch_edge() {
-    use crate::cgmath64::Point2;
+    use crate::math::Point2;
     let a = BoundingBox::<Point2>::from_iter(&[Point2::new(2.0, 1.0), Point2::new(3.0, 4.0)]);
     let b = BoundingBox::<Point2>::from_iter(&[Point2::new(3.0, 0.0), Point2::new(4.0, 3.0)]);
     let intersection = a ^ b;
@@ -647,7 +646,7 @@ fn test_bbox_touch_edge() {
 
 #[test]
 fn test_bbox_touch_corner() {
-    use crate::cgmath64::Point2;
+    use crate::math::Point2;
     let a = BoundingBox::<Point2>::from_iter(&[Point2::new(2.0, 1.0), Point2::new(3.0, 4.0)]);
     let b = BoundingBox::<Point2>::from_iter(&[Point2::new(3.0, 4.0), Point2::new(4.0, 8.0)]);
     let intersection = a ^ b;

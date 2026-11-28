@@ -5,7 +5,7 @@ use super::{
 use monstertruck_core::{
     assert_near,
     bounding_box::BoundingBox,
-    cgmath64::{Point2, Point3, Vector2, Vector3},
+    math::{Point2, Point3, Vector2, Vector3},
     tolerance::{KERNEL_EPSILON, Tolerance},
 };
 use rand::{RngExt, SeedableRng, rngs::StdRng};

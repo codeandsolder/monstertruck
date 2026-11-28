@@ -7,8 +7,8 @@
 //! triangulator consumes. What stays here is the vocabulary all four share.
 
 use super::{
-    BoundedCurve, Cdt, EuclideanSpace, ExactParameterBoundary2D, ExactTrimBoundary2D,
-    FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
+    AffinePoint, BoundedCurve, Cdt, ExactParameterBoundary2D, ExactTrimBoundary2D,
+    FixedVertexHandle, HashMap, InnerProduct, IsoparametricCurveOptions, Itertools, MetricSpace,
     Origin, ParameterBoundary2D, ParametricCurve3D, ParametricSurface3D, Point2, Point3,
     PolylineCurve, PreMeshableSurface, SP, SPoint2, Tolerance, Triangulation, algo, env, mesh,
     resample_boundary, simplify_parameter_boundary,

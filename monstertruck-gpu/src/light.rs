@@ -1,6 +1,6 @@
 use crate::{
-    BufferHandler, BufferUsages, Device, EuclideanSpace, Light, LightInfo, LightType, Point3,
-    Vector3, narrow_f64_to_f32,
+    AffinePoint, BufferHandler, BufferUsages, Device, Light, LightInfo, LightType, Point3, Vector3,
+    narrow_f64_to_f32,
 };
 
 impl Light {

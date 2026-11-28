@@ -26,15 +26,15 @@ struct Revolution {
 /// let uhcircle = NurbsCurve::new(BsplineCurve::new_unchecked(knot_vec, control_points));
 /// // sphere constructed by revolving circle
 /// let sphere = RevolutionSurface::by_revolution(
-///     uhcircle, Point3::origin(), Vector3::unit_x(),
+///     uhcircle, Point3::origin(), Vector3::x(),
 /// );
 /// const N: usize = 30;
 /// for i in 0..=N {
 ///     for j in 0..=N {
 ///         let u = i as f64 / N as f64;
 ///         let v = 2.0 * PI * j as f64 / N as f64;
-///         let pt: Vector3 = sphere.evaluate(u, v).to_vec();
-///         assert_near2!(pt.magnitude2(), 1.0);
+///         let pt: Vector3 = sphere.evaluate(u, v).position_vector();
+///         assert_near2!(pt.norm_squared(), 1.0);
 ///         assert_near!(pt, sphere.normal(u, v));
 ///     }
 /// }
@@ -65,7 +65,7 @@ pub struct RevolutionSurface<C> {
 /// let curve = BsplineCurve::new_unchecked(KnotVector::bezier_knot(2), cpts);
 ///
 /// // create extruded surface
-/// let surface0 = ExtrusionSurface::by_extrusion(curve, Vector3::unit_z());
+/// let surface0 = ExtrusionSurface::by_extrusion(curve, Vector3::z());
 ///
 /// // same surface defined by B-spline description
 /// let surface1 = BsplineSurface::new_unchecked((KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)), spts);
@@ -218,7 +218,7 @@ pub struct Processor<E, T> {
 /// let pt = pt + Vector3::new(0.01, 0.06, -0.03);
 /// assert!(pcurve.search_parameter(pt, None, 100).is_none());
 /// let t = pcurve.search_nearest_parameter(pt, None, 100).unwrap();
-/// assert!(pcurve.derivative(t).dot(pcurve.evaluate(t) - pt).so_small());
+/// assert!(pcurve.derivative(t).dot(&pcurve.evaluate(t) - pt).so_small());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, SelfSameGeometry)]
 pub struct ParameterCurve<C, S> {
@@ -278,7 +278,7 @@ pub struct EdgeBlendSurface<C0, S0, F0, C1, S1, F1> {
 /// let coef = |i: usize| if matches!(i, 0 | 100) { 1.0 } else { 2.0 };
 /// let sum = (0..=100).fold(0.0, |sum, i| {
 ///     let t = i as f64 / 100.0;
-///     sum + intersection_curve.derivative(t).magnitude() * coef(i)
+///     sum + intersection_curve.derivative(t).norm() * coef(i)
 /// });
 /// let length = sum / 100.0 / 2.0;
 /// assert!(f64::abs(length - PI) < 1.0e-4 * PI);

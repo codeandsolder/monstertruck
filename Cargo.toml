@@ -42,7 +42,7 @@ anyhow = "1"
 array-macro = "2"
 async-trait = "0.1"
 bytemuck = { version = "1", features = ["derive"] }
-cgmath = { version = "0.18", features = ["serde"] }
+approx = "0.5"
 chrono = { version = "0.4", features = ["wasmbind"] }
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.8", features = ["html_reports"] }
@@ -57,7 +57,7 @@ image = "0.25"
 itertools = "0.15"
 js-sys = "0.3"
 log = "0.4"
-matext4cgmath = "0.1"
+nalgebra = { version = "0.35", default-features = false, features = ["std", "serde-serialize"] }
 num-traits = "0.2"
 naga = { version = "30", features = ["wgsl-in"] }
 parking_lot = "0.13"

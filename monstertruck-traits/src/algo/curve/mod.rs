@@ -1,7 +1,7 @@
 use super::{
-    CalcOutput, EuclideanSpace, HashGen, InnerSpace, KERNEL_EPSILON, MetricSpace, ParameterRange,
-    ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
-    SurfaceParameterRange, Tolerance, VectorSpace, Zero, newton, scalar_from_usize, surface,
+    AffinePoint, CalcOutput, HashGen, InnerProduct, KERNEL_EPSILON, LinearVector, MetricSpace,
+    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
+    SurfaceParameterRange, Tolerance, Zero, newton, scalar_from_usize, surface,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use surface::{SearchNearestParameterVector, SearchParameterVector};
@@ -40,16 +40,16 @@ pub fn search_nearest_parameter<C>(
 ) -> Option<f64>
 where
     C: ParametricCurve,
-    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
-    C::Vector: InnerSpace<Scalar = f64> + Tolerance,
+    C::Point: AffinePoint<Scalar = f64, Diff = C::Vector>,
+    C::Vector: InnerProduct<Scalar = f64> + Tolerance,
 {
     let function = move |t: f64| {
         let diff = curve.evaluate(t) - point;
         let der = curve.derivative(t);
         let der2 = curve.derivative_2(t);
         CalcOutput {
-            value: der.dot(diff),
-            derivation: der2.dot(diff) + der.magnitude2(),
+            value: der.dot(&diff),
+            derivation: der2.dot(&diff) + der.norm_squared(),
         }
     };
     newton::solve(
@@ -65,14 +65,14 @@ where
 pub fn search_parameter<C>(curve: &C, point: C::Point, hint: f64, trials: usize) -> Option<f64>
 where
     C: ParametricCurve,
-    C::Point: EuclideanSpace<Scalar = f64, Diff = C::Vector>,
-    C::Vector: InnerSpace<Scalar = f64> + Tolerance, {
+    C::Point: AffinePoint<Scalar = f64, Diff = C::Vector>,
+    C::Vector: InnerProduct<Scalar = f64> + Tolerance, {
     let function = move |t: f64| {
         let diff = curve.evaluate(t) - point;
         let der = curve.derivative(t);
         CalcOutput {
-            value: der.dot(diff),
-            derivation: der.magnitude2(),
+            value: der.dot(&diff),
+            derivation: der.norm_squared(),
         }
     };
     newton::solve(
@@ -82,7 +82,12 @@ where
         DEFAULT_NUMERICAL_TOLERANCES.newton_curve_parameter_step,
     )
     .ok()
-    .filter(|&t| curve.evaluate(t).to_vec().near(&point.to_vec()))
+    .filter(|&t| {
+        curve
+            .evaluate(t)
+            .position_vector()
+            .near(&point.position_vector())
+    })
 }
 
 /// Creates the curve division
@@ -93,7 +98,7 @@ where
 pub fn parameter_division<C>(curve: &C, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<C::Point>)
 where
     C: ParametricCurve,
-    C::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>, {
+    C::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>, {
     nonpositive_tolerance!(tol);
     sub_parameter_division(
         curve,
@@ -113,7 +118,7 @@ fn sub_parameter_division<C>(
 ) -> (Vec<f64>, Vec<C::Point>)
 where
     C: ParametricCurve,
-    C::Point: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
+    C::Point: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + HashGen<f64>,
 {
     let seed = ends.0.midpoint(ends.1);
     let p = 0.5 + 0.2f64.mul_add(HashGen::hash1(seed), -0.1);
@@ -162,8 +167,8 @@ struct SubSurface<C0, C1> {
 
 impl<P, C0, C1> ParametricSurface for SubSurface<C0, C1>
 where
-    P: EuclideanSpace<Scalar = f64>,
-    P::Diff: VectorSpace<Scalar = f64>,
+    P: AffinePoint<Scalar = f64>,
+    P::Diff: LinearVector<Scalar = f64>,
     C0: ParametricCurve<Point = P, Vector = P::Diff>,
     C1: ParametricCurve<Point = P, Vector = P::Diff>,
 {
@@ -180,7 +185,7 @@ where
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Self::Point {
-        P::from_vec(self.derivative_mn(0, 0, u, v))
+        P::from_coordinates(self.derivative_mn(0, 0, u, v))
     }
     #[inline]
     fn derivative_u(&self, u: f64, _: f64) -> Self::Vector { self.curve0.derivative(u) }
@@ -221,8 +226,8 @@ pub fn presearch_closest_point<P, C0, C1>(
     division: usize,
 ) -> (f64, f64)
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Copy,
-    P::Diff: VectorSpace<Scalar = f64>,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Copy,
+    P::Diff: LinearVector<Scalar = f64>,
     C0: ParametricCurve<Point = P, Vector = P::Diff>,
     C1: ParametricCurve<Point = P, Vector = P::Diff>,
 {
@@ -243,7 +248,7 @@ pub fn search_closest_parameter<P, C0, C1>(
     trials: usize,
 ) -> Option<(f64, f64)>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64>,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64>,
     P::Diff: SearchNearestParameterVector<Point = P> + Tolerance,
     C0: ParametricCurve<Point = P, Vector = P::Diff>,
     C1: ParametricCurve<Point = P, Vector = P::Diff>,
@@ -260,7 +265,7 @@ pub fn search_intersection_parameter<P, C0, C1>(
     trials: usize,
 ) -> Option<(f64, f64)>
 where
-    P: EuclideanSpace<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
+    P: AffinePoint<Scalar = f64> + MetricSpace<Metric = f64> + Tolerance,
     P::Diff: SearchParameterVector<Point = P> + Tolerance,
     C0: ParametricCurve<Point = P, Vector = P::Diff>,
     C1: ParametricCurve<Point = P, Vector = P::Diff>,

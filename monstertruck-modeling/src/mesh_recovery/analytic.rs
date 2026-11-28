@@ -14,7 +14,7 @@ use super::{
     SurfaceRegionBudget, SurfaceRegionPartition, SurfaceRegionProposal, analyze_mesh_evidence,
     discover_circle_axes, measure_curvature_spatial, trace_curvature_tracks,
 };
-use crate::{InnerSpace, KERNEL_EPSILON, Point3, Shell, Vector3};
+use crate::{InnerProduct, KERNEL_EPSILON, Point3, Shell, Vector3};
 use monstertruck_mesh::PolygonMesh;
 use monstertruck_topology::shell::ShellCondition;
 use std::collections::{BTreeMap, BTreeSet};
@@ -134,7 +134,7 @@ impl AnalyticRecoveryOptions {
             evidence
                 .positions
                 .iter()
-                .map(|&p| (p - reference).magnitude())
+                .map(|&p| (p - reference).norm())
                 .fold(0.0_f64, f64::max)
         });
         SharedTrimOptions {
@@ -688,7 +688,7 @@ fn independent_axes(
     let extent = evidence
         .positions
         .iter()
-        .map(|&p| (p - reference).magnitude())
+        .map(|&p| (p - reference).norm())
         .fold(0.0_f64, f64::max);
     if extent <= 0.0 {
         return Vec::new();
@@ -722,10 +722,10 @@ fn independent_axes(
     let mut result: Vec<PlacedAxis> = Vec::new();
     for (id, fit) in tracks {
         let axis = fit.axis;
-        let origin = fit.axis_origin + axis * (reference - fit.axis_origin).dot(axis);
+        let origin = fit.axis_origin + axis * (reference - fit.axis_origin).dot(&axis);
         if result.iter().any(|placed| {
-            axis.cross(placed.axis).magnitude() <= options.axis_relative_resolution
-                && (origin - placed.origin).magnitude() <= options.axis_relative_resolution * extent
+            axis.cross(&placed.axis).norm() <= options.axis_relative_resolution
+                && (origin - placed.origin).norm() <= options.axis_relative_resolution * extent
         }) {
             continue;
         }
@@ -751,7 +751,7 @@ fn extend_with_circle_axes(
         let extent = evidence
             .positions
             .iter()
-            .map(|&point| (point - reference).magnitude())
+            .map(|&point| (point - reference).norm())
             .fold(0.0_f64, f64::max);
         let resolution = extent * options.axis_relative_resolution;
         if let Some(discovery) = discover_circle_axes(
@@ -766,8 +766,8 @@ fn extend_with_circle_axes(
             let mut added = 0;
             for (id, group) in discovery.axes.iter().enumerate() {
                 if let Some(placed) = axes.iter_mut().find(|placed| {
-                    group.axis.cross(placed.axis).magnitude() <= options.axis_relative_resolution
-                        && (group.origin - placed.origin).magnitude() <= resolution
+                    group.axis.cross(&placed.axis).norm() <= options.axis_relative_resolution
+                        && (group.origin - placed.origin).norm() <= resolution
                 }) {
                     placed.circular_seed |= group.stations.len() >= 4;
                     continue;
@@ -801,7 +801,7 @@ fn graph_options(
     let extent = evidence
         .positions
         .iter()
-        .map(|&p| (p - placed.origin).magnitude())
+        .map(|&p| (p - placed.origin).norm())
         .fold(0.0_f64, f64::max);
     let resolution = extent * options.axis_relative_resolution;
     MeridianGraphOptions {
@@ -1122,7 +1122,7 @@ fn append_expanded_proposals<'a>(
             .flat_map(|&id| &evidence.planar_supports[id].source_face_indices)
             .filter_map(|&id| evidence.source_polygon_vertices(id))
             .flatten()
-            .map(|&id| (evidence.positions[id] - reference).magnitude())
+            .map(|&id| (evidence.positions[id] - reference).norm())
             .fold(0.0_f64, f64::max);
         if matches.iter().any(|&id| {
             proposal

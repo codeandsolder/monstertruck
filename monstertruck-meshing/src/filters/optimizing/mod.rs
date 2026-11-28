@@ -1,5 +1,5 @@
 use super::{
-    BoundingBox, ElementWise, Faces, MetricSpace, Point3, PolygonMesh, PolygonMeshEditor,
+    BoundingBox, ComponentWise, Faces, MetricSpace, Point3, PolygonMesh, PolygonMeshEditor,
     StandardAttributes, Vector2, Vector3, Vertex,
 };
 use rustc_hash::FxHashMap as HashMap;
@@ -325,7 +325,7 @@ fn centralize<T: SameAttr>(
     components.for_each(|component| {
         let center = component
             .iter()
-            .fold(T::zero(), |sum, j| sum.add_element_wise(attrs[*j]))
+            .fold(T::zero(), |sum, j| sum.component_sum(attrs[*j]))
             / crate::count_as_f64(component.len());
         let Some((&first, rest)) = component.split_first() else {
             return;
@@ -389,7 +389,7 @@ fn split_into_nondegenerate(poly: Vec<Vertex>) -> Vec<Vec<Vertex>> {
 }
 
 trait CastIntVector:
-    Sized + ElementWise<Self> + Mul<f64, Output = Self> + Div<f64, Output = Self> {
+    Sized + ComponentWise<Self> + Mul<f64, Output = Self> + Div<f64, Output = Self> {
     type IntVector: IntVector;
     fn cast_int(self) -> Option<Self::IntVector>;
     fn round(self, tol: f64) -> Option<Self::IntVector>;

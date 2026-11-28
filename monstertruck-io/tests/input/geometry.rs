@@ -162,7 +162,7 @@ fn exec_axis1_placement(org_coord: [f64; 3], dir_array: [f64; 2]) {
     );
     let placement = step_to_entity::<Axis1PlacementHolder>(&step_str);
     assert_near!(p, Point2::from(&placement.location));
-    assert_near!(dir, placement.direction().truncate());
+    assert_near!(dir, placement.direction().spatial());
 
     let p = Point3::from(org_coord);
     let dir = dir_from_array(dir_array);
@@ -197,7 +197,11 @@ fn exec_axis2_placement2d(org_coord: [f64; 2], theta: f64) {
     let placement = step_to_entity::<Axis2Placement2dHolder>(&step_str);
     let res: Matrix3 = (&placement).into();
     let n = Vector2::new(-dir.y, dir.x);
-    let ans = Matrix3::from_cols(dir.extend(0.0), n.extend(0.0), origin.to_vec().extend(1.0));
+    let ans = Matrix3::from_columns(&[
+        dir.push(0.0),
+        n.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     assert_near!(res, ans);
 }
 
@@ -215,9 +219,9 @@ fn exec_axis2_placement3d(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_arra
     let p = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA;#1 = AXIS2_PLACEMENT_3D('', #2, #3, #4);{}{}{}ENDSEC;",
         StepDisplay::new(p, 2),
@@ -226,12 +230,12 @@ fn exec_axis2_placement3d(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_arra
     );
     let placement = step_to_entity::<Axis2Placement3dHolder>(&step_str);
     let res: Matrix4 = (&placement).into();
-    let ans = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        p.to_vec().extend(1.0),
-    );
+    let ans = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        p.position_vector().push(1.0),
+    ]);
     assert_near!(res, ans);
 }
 
@@ -676,9 +680,9 @@ fn exec_circle(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2]
     let origin = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA; #1 = CIRCLE('', #2, {radius}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
         StepDisplay::new(origin, 3),
@@ -687,16 +691,16 @@ fn exec_circle(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2]
     );
     let step_circle = step_to_entity::<CircleHolder>(&step_str);
     let ellipse: step_geometry::Ellipse<Point3, Matrix4> = (&step_circle).try_into().unwrap();
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        origin.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     (0..10).for_each(|i| {
         let t = 2.0 * PI * f64::from(i) / 10.0;
         let p = Point3::new(radius * f64::cos(t), radius * f64::sin(t), 0.0);
-        assert_near!(ellipse.evaluate(t), mat.transform_point(p));
+        assert_near!(ellipse.evaluate(t), mat.apply_point(p));
     });
 }
 
@@ -721,9 +725,9 @@ fn exec_ellipse(
     let origin = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA; #1 = ELLIPSE('', #2, {}, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
         FloatDisplay(radius[0]),
@@ -734,16 +738,16 @@ fn exec_ellipse(
     );
     let step_ellipse = step_to_entity::<EllipseHolder>(&step_str);
     let ellipse: step_geometry::Ellipse<Point3, Matrix4> = (&step_ellipse).try_into().unwrap();
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        origin.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     (0..10).for_each(|i| {
         let t = 2.0 * PI * f64::from(i) / 10.0;
         let p = Point3::new(radius[0] * f64::cos(t), radius[1] * f64::sin(t), 0.0);
-        assert_near!(ellipse.evaluate(t), mat.transform_point(p));
+        assert_near!(ellipse.evaluate(t), mat.apply_point(p));
     });
 }
 
@@ -768,9 +772,9 @@ fn exec_hyperbola(
     let origin = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA; #1 = HYPERBOLA('', #2, {}, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
         FloatDisplay(radius[0]),
@@ -782,16 +786,16 @@ fn exec_hyperbola(
     let step_hyperbola = step_to_entity::<HyperbolaHolder>(&step_str);
     let hyperbola: step_geometry::Hyperbola<Point3, Matrix4> =
         (&step_hyperbola).try_into().unwrap();
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        origin.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     (0..10).for_each(|i| {
         let t = 2.0 * f64::from(i) / 10.0 - 1.0;
         let p = Point3::new(radius[0] * f64::cosh(t), radius[1] * f64::sinh(t), 0.0);
-        assert_near!(hyperbola.evaluate(t), mat.transform_point(p));
+        assert_near!(hyperbola.evaluate(t), mat.apply_point(p));
     });
 }
 
@@ -816,9 +820,9 @@ fn exec_parabola(
     let origin = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA; #1 = PARABOLA('', #2, {}); #2 = AXIS2_PLACEMENT_3D('', #3, #4, #5); {}{}{}ENDSEC;",
         FloatDisplay(focal_dist),
@@ -828,16 +832,16 @@ fn exec_parabola(
     );
     let step_parabola = step_to_entity::<ParabolaHolder>(&step_str);
     let parabola: step_geometry::Parabola<Point3, Matrix4> = (&step_parabola).try_into().unwrap();
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        origin.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        origin.position_vector().push(1.0),
+    ]);
     (0..10).for_each(|i| {
         let t = 2.0 * f64::from(i) / 10.0 - 1.0;
         let p = Point3::new(focal_dist * t * t, focal_dist * 2.0 * t, 0.0);
-        assert_near!(parabola.evaluate(t), mat.transform_point(p));
+        assert_near!(parabola.evaluate(t), mat.apply_point(p));
     });
 }
 
@@ -857,9 +861,9 @@ fn exec_plane(org_coord: [f64; 3], dir_array: [f64; 2], ref_dir_array: [f64; 2])
     let origin = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA;
 #1 = PLANE('', #2);
@@ -896,9 +900,9 @@ fn exec_spherical_surface(
     let p = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str = format!(
         "DATA;
 #1 = SPHERICAL_SURFACE('', #2, {radius});
@@ -912,19 +916,19 @@ fn exec_spherical_surface(
     let sphere: step_geometry::ElementarySurface = (&step_sphere)
         .try_into()
         .expect("a spherical surface must convert");
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        p.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        p.position_vector().push(1.0),
+    ]);
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
             let u = 2.0 * PI * f64::from(i) / 10.0;
             let v = PI * f64::from(j) / 10.0 - PI / 2.0;
             let res = sphere.evaluate(u, v);
-            let ans = mat.transform_point(Point3::new(
+            let ans = mat.apply_point(Point3::new(
                 radius * f64::cos(u) * f64::cos(v),
                 radius * f64::sin(u) * f64::cos(v),
                 radius * f64::sin(v),
@@ -954,9 +958,9 @@ fn exec_cylindrical_surface(
     let p = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let step_str0 = format!(
         "DATA;
 #1 = CYLINDRICAL_SURFACE('', #2, {radius});
@@ -978,12 +982,12 @@ fn exec_cylindrical_surface(
         .try_into()
         .expect("a cylindrical surface must convert");
 
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        p.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        p.position_vector().push(1.0),
+    ]);
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
@@ -991,8 +995,7 @@ fn exec_cylindrical_surface(
             let v = f64::from(j);
             let res0 = cylinder0.evaluate(u, v);
             let res1 = cylinder1.evaluate(u, v);
-            let ans =
-                mat.transform_point(Point3::new(radius * f64::cos(u), radius * f64::sin(u), v));
+            let ans = mat.apply_point(Point3::new(radius * f64::cos(u), radius * f64::sin(u), v));
             assert_near!(res0, ans, "u:{u} v:{v} res:{res0:?} ans:{ans:?}");
             assert_near!(res1, ans, "u:{u} v:{v} res:{res1:?} ans:{ans:?}");
         });
@@ -1019,9 +1022,9 @@ fn exec_toroidal_surface(
     let p = Point3::from(org_coord);
     let z = dir_from_array(dir_array);
     let ref_dir = dir_from_array(ref_dir_array);
-    let v = z.cross(ref_dir);
+    let v = z.cross(&ref_dir);
     let y = if v.so_small() { return } else { v.normalize() };
-    let x = y.cross(z).normalize();
+    let x = y.cross(&z).normalize();
     let major_radius = f64::max(radii[0], radii[1]);
     let minor_radius = (f64::min(radii[0], radii[1])) / 2.0;
     let step_str = format!(
@@ -1037,19 +1040,19 @@ fn exec_toroidal_surface(
     let toroidal: step_geometry::ElementarySurface = (&step_toroidal)
         .try_into()
         .expect("a ring torus must convert");
-    let mat = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
-        p.to_vec().extend(1.0),
-    );
+    let mat = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
+        p.position_vector().push(1.0),
+    ]);
     (0..=10)
         .flat_map(move |i| (0..=10).map(move |j| (i, j)))
         .for_each(|(i, j)| {
             let u = 2.0 * PI * f64::from(i) / 10.0;
             let v = 2.0 * PI * f64::from(j) / 10.0;
             let res = toroidal.evaluate(u, v);
-            let ans = mat.transform_point(Point3::new(
+            let ans = mat.apply_point(Point3::new(
                 minor_radius.mul_add(f64::cos(v), major_radius) * f64::cos(u),
                 minor_radius.mul_add(f64::cos(v), major_radius) * f64::sin(u),
                 minor_radius * f64::sin(v),
@@ -1083,18 +1086,18 @@ fn exec_conical_surface(
     // Near-parallel reference directions do not define a stable angular
     // origin. The STEP placement may choose an arbitrary fallback frame;
     // still verify the cone's intrinsic geometry in this case.
-    let projected = ref_dir - ref_dir.dot(z) * z;
-    let frame = if projected.magnitude2().so_small() {
+    let projected = ref_dir - ref_dir.dot(&z) * z;
+    let frame = if projected.norm_squared().so_small() {
         None
     } else {
-        let y = z.cross(ref_dir).normalize();
-        let x = y.cross(z).normalize();
-        Some(Matrix4::from_cols(
-            x.extend(0.0),
-            y.extend(0.0),
-            z.extend(0.0),
-            p.to_vec().extend(1.0),
-        ))
+        let y = z.cross(&ref_dir).normalize();
+        let x = y.cross(&z).normalize();
+        Some(Matrix4::from_columns(&[
+            x.push(0.0),
+            y.push(0.0),
+            z.push(0.0),
+            p.position_vector().push(1.0),
+        ]))
     };
     let step_str = format!(
         "DATA;
@@ -1126,7 +1129,7 @@ fn exec_conical_surface(
             let res1 = conical1.evaluate(u, v);
             assert_near!(res, res1, "roundtrip at u:{u} v:{v}");
             if let Some(mat) = frame.as_ref() {
-                let ans = mat.transform_point(Point3::new(
+                let ans = mat.apply_point(Point3::new(
                     v.mul_add(f64::tan(semi_angle), radius) * f64::cos(u),
                     v.mul_add(f64::tan(semi_angle), radius) * f64::sin(u),
                     v,
@@ -1135,11 +1138,11 @@ fn exec_conical_surface(
             } else {
                 // Fallback fixes no seam angle, only axis and radial distance.
                 let from_origin = res - p;
-                let axial = from_origin.dot(z);
+                let axial = from_origin.dot(&z);
                 let radial = from_origin - axial * z;
                 assert_near!(axial, v, "cone axial distance at u:{u} v:{v}");
                 assert_near!(
-                    radial.magnitude(),
+                    radial.norm(),
                     v.mul_add(f64::tan(semi_angle), radius),
                     "cone radius at u:{u} v:{v}",
                 );
@@ -1773,8 +1776,8 @@ fn exec_surface_of_revolution(
             let lc = line.evaluate(v) - origin;
             let ans = origin
                 + lc * f64::cos(u)
-                + dir * lc.dot(dir) * (1.0 - f64::cos(u))
-                + dir.cross(lc) * f64::sin(u);
+                + dir * lc.dot(&dir) * (1.0 - f64::cos(u))
+                + dir.cross(&lc) * f64::sin(u);
             assert_near!(surface.evaluate(u, v), ans);
         });
 }

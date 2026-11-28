@@ -1,5 +1,5 @@
 use crate::{AbstractShape, Edge, Face, IntoWasm, Vertex, Wire, wasm_bindgen};
-use monstertruck_modeling::{Point3, Rad, Vector3, builder};
+use monstertruck_modeling::{Point3, Vector3, builder};
 use wasm_bindgen::JsValue;
 
 fn js_error(message: impl AsRef<str>) -> JsValue { JsValue::from_str(message.as_ref()) }
@@ -194,7 +194,7 @@ pub fn rotated(
 ) -> std::result::Result<AbstractShape, JsValue> {
     let origin = point3(origin, "origin")?;
     let axis = vector3(axis, "axis")?;
-    derive_all_shape!(shape, builder::rotated, (origin, axis, Rad(angle)))
+    derive_all_shape!(shape, builder::rotated, (origin, axis, angle))
 }
 
 /// Returns a scaled vertex, edge, wire, face, shell or solid.
@@ -246,11 +246,6 @@ pub fn revolve(
     derive_all_fallible_sweepable!(
         shape,
         builder::revolve,
-        (
-            origin,
-            axis,
-            builder::SweepAngle::Partial(Rad(angle)),
-            division
-        )
+        (origin, axis, builder::SweepAngle::Partial(angle), division)
     )
 }

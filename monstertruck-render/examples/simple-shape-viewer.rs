@@ -35,7 +35,7 @@ use app::{App, AppResult, ControlFlow, async_trait};
 
 const PUNCHED_CUBE_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../resources/shape/punched-cube.json",
+    "/../fixtures/shape/punched-cube.json",
 ));
 
 enum RenderMode {
@@ -58,15 +58,15 @@ struct MyApp {
 impl MyApp {
     fn create_camera() -> AppResult<Camera> {
         let matrix = Matrix4::look_at_rh(
-            Point3::new(1.5, 1.5, 1.5),
-            Point3::origin(),
-            Vector3::unit_y(),
+            &Point3::new(1.5, 1.5, 1.5),
+            &Point3::origin(),
+            &Vector3::y(),
         );
         Ok(Camera {
             matrix: matrix
-                .invert()
+                .try_inverse()
                 .ok_or_else(|| std::io::Error::other("camera matrix is singular"))?,
-            method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+            method: ProjectionMethod::perspective((PI / 4.0)),
             near_clip: 0.1,
             far_clip: 40.0,
         })
@@ -150,14 +150,14 @@ impl MyApp {
                 };
             });
         let (size, center) = (bdd_box.size(), bdd_box.center());
-        let mat = Matrix4::from_translation(center.to_vec()) * Matrix4::from_scale(size);
+        let mat = Matrix4::new_translation(&center.position_vector()) * Matrix4::new_scaling(size);
         let mesh_solid = solid.triangulation(size * 0.005);
         let curves = mesh_solid
             .edge_iter()
             .map(|edge| edge.curve())
             .collect::<Vec<_>>();
         let inverse = mat
-            .invert()
+            .try_inverse()
             .ok_or_else(|| std::io::Error::other("shape normalization matrix is singular"))?;
         let polygon_state = PolygonState {
             matrix: inverse,
@@ -247,7 +247,7 @@ impl App for MyApp {
                     }
                     LightType::Uniform => {
                         light.position = camera.position();
-                        let strength = light.position.to_vec().magnitude();
+                        let strength = light.position.position_vector().norm();
                         light.position /= strength;
                     }
                 }
@@ -266,7 +266,7 @@ impl App for MyApp {
                     }
                     ProjectionMethod::Perspective { .. } => {
                         let trans_vec = camera.eye_direction() * f64::from(y) * 0.2;
-                        camera.matrix = Matrix4::from_translation(trans_vec) * camera.matrix;
+                        camera.matrix = Matrix4::new_translation(&trans_vec) * camera.matrix;
                     }
                 }
             }
@@ -283,11 +283,11 @@ impl App for MyApp {
             if dir2d.so_small() {
                 return Self::default_control_flow();
             }
-            let mut axis = dir2d[1] * matrix[0].truncate();
-            axis += dir2d[0] * matrix[1].truncate();
-            axis /= axis.magnitude();
-            let angle = dir2d.magnitude() * 0.01;
-            let inverse_rotation = Matrix4::from_axis_angle(axis, Rad(-angle));
+            let mut axis = dir2d[1] * matrix.column(0).into_owned().spatial();
+            axis += dir2d[0] * matrix.column(1).into_owned().spatial();
+            axis /= axis.norm();
+            let angle = dir2d.norm() * 0.01;
+            let inverse_rotation = Matrix4::from_axis_angle(&Unit::new_unchecked(axis), -angle);
             *matrix = inverse_rotation * *matrix;
         }
         self.prev_cursor = position;
@@ -304,9 +304,7 @@ impl App for MyApp {
             KeyCode::KeyP => {
                 let camera = &mut self.scene.studio_config_mut().camera;
                 camera.method = match camera.method {
-                    ProjectionMethod::Parallel { .. } => {
-                        ProjectionMethod::perspective(Rad(PI / 4.0))
-                    }
+                    ProjectionMethod::Parallel { .. } => ProjectionMethod::perspective((PI / 4.0)),
                     ProjectionMethod::Perspective { .. } => ProjectionMethod::parallel(1.0),
                 };
             }
@@ -318,7 +316,7 @@ impl App for MyApp {
                 *light = match light.kind {
                     LightType::Point => {
                         let mut vec = camera.position();
-                        vec /= vec.to_vec().magnitude();
+                        vec /= vec.position_vector().norm();
                         Light {
                             position: vec,
                             color: Vector3::new(1.0, 1.0, 1.0),

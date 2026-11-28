@@ -1,6 +1,6 @@
 use super::{
-    Bound, InnerSpace, ParameterRange, ParametricCurve, Point2, Point3, SurfaceDerivatives,
-    Vector2, Vector3, Zero, bound2opt,
+    Bound, ParameterRange, ParametricCurve, Point2, Point3, SurfaceDerivatives, Vector2, Vector3,
+    Zero, bound2opt,
 };
 
 type Tuple = (f64, f64);
@@ -252,7 +252,7 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
     #[inline]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         self.derivative_u(u, v)
-            .cross(self.derivative_v(u, v))
+            .cross(&self.derivative_v(u, v))
             .normalize()
     }
     /// Returns the derivation by `u` of the normal vector at `(u, v)`.
@@ -261,10 +261,10 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
         let vder = self.derivative_v(u, v);
         let uuder = self.derivative_uu(u, v);
         let uvder = self.derivative_uv(u, v);
-        let cross = uder.cross(vder);
-        let cross_uder = uuder.cross(vder) + uder.cross(uvder);
-        let abs = cross.magnitude();
-        let abs_uder = cross.dot(cross_uder) / abs;
+        let cross = uder.cross(&vder);
+        let cross_uder = uuder.cross(&vder) + uder.cross(&uvder);
+        let abs = cross.norm();
+        let abs_uder = cross.dot(&cross_uder) / abs;
         let abs_squared = abs * abs;
         (cross_uder * abs - cross * abs_uder) / abs_squared
     }
@@ -274,10 +274,10 @@ pub trait ParametricSurface3D: ParametricSurface<Point = Point3, Vector = Vector
         let vder = self.derivative_v(u, v);
         let uvder = self.derivative_uv(u, v);
         let vvder = self.derivative_vv(u, v);
-        let cross = uder.cross(vder);
-        let cross_vder = uvder.cross(vder) + uder.cross(vvder);
-        let abs = cross.magnitude();
-        let abs_vder = cross.dot(cross_vder) / abs;
+        let cross = uder.cross(&vder);
+        let cross_vder = uvder.cross(&vder) + uder.cross(&vvder);
+        let abs = cross.norm();
+        let abs_vder = cross.dot(&cross_vder) / abs;
         let abs_squared = abs * abs;
         (cross_vder * abs - cross * abs_vder) / abs_squared
     }

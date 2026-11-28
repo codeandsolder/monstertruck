@@ -2,7 +2,7 @@
 //! Compare carriers in a source-local domain, not at arbitrary world origins.
 
 use super::SurfaceCarrier;
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 
 /// Difference between two same-family carrier residual functions over a
 /// source-local ball.
@@ -65,10 +65,10 @@ impl SurfaceCarrier {
                 && finite_point(second) =>
             {
                 let (angle, aligned_normal) = aligned_direction(first_normal, second_normal);
-                let offset = ((reference - first).dot(first_normal)
-                    - (reference - second).dot(aligned_normal))
+                let offset = ((reference - first).dot(&first_normal)
+                    - (reference - second).dot(&aligned_normal))
                 .abs();
-                let normal_difference = (first_normal - aligned_normal).magnitude();
+                let normal_difference = (first_normal - aligned_normal).norm();
                 Some(CarrierCoincidenceEvidence {
                     direction_angle_radians: angle,
                     reference_position_difference: offset,
@@ -101,15 +101,15 @@ impl SurfaceCarrier {
                 let (angle, _) = aligned_direction(first_axis, second_axis);
                 let first_delta = reference - first;
                 let second_delta = reference - second;
-                let first_axial = first_delta.dot(first_axis);
-                let second_axial = second_delta.dot(second_axis);
+                let first_axial = first_delta.dot(&first_axis);
+                let second_axial = second_delta.dot(&second_axis);
                 let first_offset = first_delta - first_axis * first_axial;
                 let second_offset = second_delta - second_axis * second_axial;
-                let position = (first_offset - second_offset).magnitude();
+                let position = (first_offset - second_offset).norm();
                 let radius = (first_slope.mul_add(first_axial, first_radius)
                     - second_slope.mul_add(second_axial, second_radius))
                 .abs();
-                let gradient = (first_axis * first_slope - second_axis * second_slope).magnitude();
+                let gradient = (first_axis * first_slope - second_axis * second_slope).norm();
                 // ||P1-P2||_2 = sin(angle) for orthogonal projectors
                 // transverse to unit axes. Apply the reverse triangle
                 // inequality to their radial norms and add the affine
@@ -172,7 +172,7 @@ fn compare_circular(
     }
     if first_radial == 0.0 && second_radial == 0.0 {
         // Spheres have no identifiable rotational axis.
-        let position = (first - second).magnitude();
+        let position = (first - second).norm();
         let profile = (first_radius - second_radius).abs();
         return Some(CarrierCoincidenceEvidence {
             direction_angle_radians: 0.0,
@@ -185,14 +185,14 @@ fn compare_circular(
     let (angle, aligned_axis) = aligned_direction(first_axis, second_axis);
     let first_delta = reference - first;
     let second_delta = reference - second;
-    let first_axial = first_delta.dot(first_axis);
-    let second_axial = second_delta.dot(aligned_axis);
+    let first_axial = first_delta.dot(&first_axis);
+    let second_axial = second_delta.dot(&aligned_axis);
     let first_offset = first_delta - first_axis * first_axial;
     let second_offset = second_delta - aligned_axis * second_axial;
-    let position = (first_offset - second_offset).magnitude();
+    let position = (first_offset - second_offset).norm();
     let profile = (first_axial - second_axial).hypot(first_radial - second_radial)
         + (first_radius - second_radius).abs();
-    let gradient = (first_axis - aligned_axis).magnitude();
+    let gradient = (first_axis - aligned_axis).norm();
     Some(CarrierCoincidenceEvidence {
         direction_angle_radians: angle,
         reference_position_difference: position,
@@ -203,8 +203,8 @@ fn compare_circular(
 }
 
 fn aligned_direction(first: Vector3, second: Vector3) -> (f64, Vector3) {
-    let dot = first.dot(second);
-    let angle = first.cross(second).magnitude().atan2(dot.abs());
+    let dot = first.dot(&second);
+    let angle = first.cross(&second).norm().atan2(dot.abs());
     (angle, if dot < 0.0 { -second } else { second })
 }
 
@@ -220,7 +220,7 @@ mod tests {
     fn cone_origin_translation_and_axis_reversal_preserve_identity()
     -> Result<(), Box<dyn std::error::Error>> {
         let origin = Point3::new(100.0, -200.0, 50.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let first = SurfaceCarrier::LinearRevolution {
             origin,
             axis,
@@ -244,7 +244,7 @@ mod tests {
     fn same_circle_does_not_make_different_cone_slopes_coincident()
     -> Result<(), Box<dyn std::error::Error>> {
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let first = SurfaceCarrier::LinearRevolution {
             origin,
             axis,
@@ -275,7 +275,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let origin = Point3::new(2.0, 3.0, 4.0);
         let other_origin = origin + Vector3::new(0.2, 0.3, -1.0);
-        let first_axis = Vector3::unit_z();
+        let first_axis = Vector3::z();
         let other_axis = Vector3::new(0.1, -0.2, 1.0).normalize();
         let first = SurfaceCarrier::LinearRevolution {
             origin,
@@ -306,7 +306,7 @@ mod tests {
     }
 
     fn radial_error(delta: Vector3, axis: Vector3, radius: f64, slope: f64) -> f64 {
-        let axial = delta.dot(axis);
-        (delta - axis * axial).magnitude() - slope.mul_add(axial, radius)
+        let axial = delta.dot(&axis);
+        (delta - axis * axial).norm() - slope.mul_add(axial, radius)
     }
 }

@@ -99,7 +99,7 @@ page-build: adhoc-viewer wgpu-examples
 
 # Generate shape JSON fixtures used by examples and tests.
 create-shape-json:
-    cd resources/shape && \
+    cd fixtures/shape && \
     cargo run -p monstertruck-modeling --example bottle && \
     cargo run -p monstertruck-modeling --example cube && \
     cargo run -p monstertruck-modeling --example cylinder && \

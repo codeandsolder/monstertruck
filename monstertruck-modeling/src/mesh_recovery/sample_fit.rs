@@ -1,25 +1,25 @@
 //! Geometric sample fitting shared across mesh-recovery hypothesis generators.
 
 use super::evidence::canonical_unit;
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 
 /// Least-squares circle in a known plane. The relative frame avoids
 /// cancellation for large world offsets.
 pub(super) fn fit_circle(points: &[Point3], ids: &[usize], axis: Vector3) -> Option<(Point3, f64)> {
     let start = points[*ids.first()?];
     let delta = points[*ids.get(1)?] - start;
-    let projected = delta - axis * delta.dot(axis);
-    let norm = projected.magnitude();
+    let projected = delta - axis * delta.dot(&axis);
+    let norm = projected.norm();
     if !norm.is_finite() || norm <= 0.0 {
         return None;
     }
     let xaxis = projected / norm;
-    let yaxis = axis.cross(xaxis);
+    let yaxis = axis.cross(&xaxis);
     let samples = ids
         .iter()
         .map(|&id| {
             let delta = points[id] - start;
-            (delta.dot(xaxis), delta.dot(yaxis))
+            (delta.dot(&xaxis), delta.dot(&yaxis))
         })
         .collect::<Vec<_>>();
     let ([cx, cy], radius) = fit_circle_2d(&samples)?;
@@ -67,12 +67,12 @@ pub(super) fn fit_circle_2d(samples: &[(f64, f64)]) -> Option<([f64; 2], f64)> {
 pub(super) fn normal_basis(axis: Vector3) -> (Vector3, Vector3) {
     // Select a transverse reference away from the axis for conditioning.
     let reference = if axis.z.abs() <= 0.75 {
-        Vector3::unit_z()
+        Vector3::z()
     } else {
-        Vector3::unit_x()
+        Vector3::x()
     };
-    let u = axis.cross(reference).normalize();
-    let v = axis.cross(u);
+    let u = axis.cross(&reference).normalize();
+    let v = axis.cross(&u);
     (u, v)
 }
 
@@ -94,16 +94,16 @@ fn source_plane(points: &[Point3], ids: &[usize]) -> Option<(Vector3, f64, usize
         .iter()
         .enumerate()
         .map(|(i, &id)| (i, points[id] - origin))
-        .max_by(|a, b| a.1.magnitude2().total_cmp(&b.1.magnitude2()))?;
-    let span_squared = delta.magnitude2();
+        .max_by(|a, b| a.1.norm_squared().total_cmp(&b.1.norm_squared()))?;
+    let span_squared = delta.norm_squared();
     if !span_squared.is_finite() || span_squared <= 0.0 {
         return None;
     }
     let cross = ids
         .iter()
-        .map(|&id| delta.cross(points[id] - origin))
-        .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
-    let strength = cross.magnitude() / span_squared;
+        .map(|&id| delta.cross(&(points[id] - origin)))
+        .max_by(|a, b| a.norm_squared().total_cmp(&b.norm_squared()))?;
+    let strength = cross.norm() / span_squared;
     if !strength.is_finite() || strength <= 64.0 * f64::EPSILON {
         return None;
     }
@@ -121,11 +121,11 @@ pub(super) fn fit_circle_carrier(points: &[Point3], ids: &[usize]) -> Option<Cir
     let (max_plane_residual, max_radial_residual) =
         ids.iter().fold((0.0_f64, 0.0_f64), |(plane, radial), &id| {
             let relative = points[id] - center;
-            let distance = relative.dot(normal);
+            let distance = relative.dot(&normal);
             let projected = relative - normal * distance;
             (
                 plane.max(distance.abs()),
-                radial.max((projected.magnitude() - radius).abs()),
+                radial.max((projected.norm() - radius).abs()),
             )
         });
     Some(CircleCarrierFit {

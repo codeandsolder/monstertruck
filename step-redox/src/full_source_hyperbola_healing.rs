@@ -99,7 +99,7 @@ fn analytic_geometry_with_local_refs(
         bail!("source unit conversion is not representable by a finite transform");
     }
     let mut geometry = native_healed_intersection_curve(candidate);
-    geometry.transform_by(Matrix4::from_scale(inverse_scale));
+    geometry.transform_by(Matrix4::new_scaling(inverse_scale));
     let mut fragment = String::new();
     std::fmt::write(
         &mut fragment,
@@ -514,7 +514,7 @@ pub fn heal_step_document(
 mod tests {
     use super::*;
     use crate::step_entities::vertex_point;
-    use monstertruck_geometry::prelude::{InnerSpace, ParametricCurve};
+    use monstertruck_geometry::prelude::{InnerProduct, ParametricCurve};
     use monstertruck_io::step::load::{EdgeCurveHolder, Table};
     use step_p21::tables::EntityTable;
 
@@ -664,8 +664,8 @@ mod tests {
                 let point = |xyz: [f64; 3]| {
                     monstertruck_geometry::prelude::Point3::new(xyz[0], xyz[1], xyz[2])
                 };
-                assert!((curve.evaluate(a) - point(start)).magnitude() < 1.0e-8);
-                assert!((curve.evaluate(b) - point(end)).magnitude() < 1.0e-8);
+                assert!((curve.evaluate(a) - point(start)).norm() < 1.0e-8);
+                assert!((curve.evaluate(b) - point(end)).norm() < 1.0e-8);
                 assert!(detail.source_to_healed_locus_separation_lower_mm > 1.0e-5);
                 let boundary = &detail.replacement_plane_boundary;
                 assert_eq!(boundary.loop_count, 1);
@@ -787,9 +787,9 @@ mod tests {
             .analytic
             .evaluate(0.5)
             .ok_or_else(|| anyhow!("original hyperbola out of domain"))?;
-        let discrepancy = (millimetres - centimetres * 10.0).magnitude();
-        let leader_discrepancy = (mm_leader - cm_leader * 10.0).magnitude();
-        assert!((mm_leader - expected).magnitude() < 1.0e-9);
+        let discrepancy = (millimetres - centimetres * 10.0).norm();
+        let leader_discrepancy = (mm_leader - cm_leader * 10.0).norm();
+        assert!((mm_leader - expected).norm() < 1.0e-9);
         assert!(leader_discrepancy < 1.0e-9);
         assert!(
             discrepancy < 1.0e-9,

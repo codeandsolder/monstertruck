@@ -104,14 +104,14 @@ mod tests {
     fn crossing_cylinder_export_is_bounded_and_preserves_guide_direction() {
         let first = cylinder(
             Point3::new(0.0, 0.0, -2.0),
-            Vector3::unit_z(),
-            Vector3::unit_x() * 0.2,
+            Vector3::z(),
+            Vector3::x() * 0.2,
             4.0,
         );
         let second = cylinder(
             Point3::new(-2.0, 0.0, 0.0),
-            Vector3::unit_x(),
-            Vector3::unit_y() * 0.5,
+            Vector3::x(),
+            Vector3::y() * 0.5,
             4.0,
         );
         let analytic = |angle: f64, sign: f64| {

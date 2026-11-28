@@ -110,7 +110,7 @@ fn step_cylinder_surface() -> Processor<RevolutionSurface<Line<Point3>>, Matrix4
     let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
         profile,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     ));
     surface.invert();
     surface
@@ -233,7 +233,7 @@ fn seam_crossing_step_cylinder_patch_piece(
 #[test]
 fn parameter_curve_trim_samples_curved_surface_lift() {
     let profile = Line(Point3::new(0.25, 0.0, 0.0), Point3::new(0.25, 0.0, 1.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let trim = ParameterCurve::new(
         Line(Point2::new(0.5, 0.0), Point2::new(0.5, FRAC_PI_2)),
         surface,
@@ -267,7 +267,7 @@ fn shared_polyline_preserves_exact_trim_samples() {
     let mut surface: Processor<_, Matrix4> = Processor::new(RevolutionSurface::by_revolution(
         profile,
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     ));
     surface.invert();
     let trim = ParameterCurve::new(
@@ -337,7 +337,7 @@ fn shared_polyline_densifies_topological_edge_curve() {
 #[test]
 fn trimmed_cshell_reuses_shared_edge_samples_for_exact_trims() {
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let curve_on_surface = |front, back| ParameterCurve::new(Line(front, back), surface);
     let vertices = vec![
         surface.evaluate(0.0, 0.0),
@@ -503,7 +503,7 @@ fn trimmed_shell_isoparams_stay_inside_trim_domain() {
 #[test]
 fn trimmed_cylinder_patch_inserts_surface_rows_for_ruled_axis() {
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 10.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let boundary = PolyBoundary::new(vec![cylinder_patch_piece(&surface)], &surface, 0.01);
 
     let mesh = trimming_tessellation(
@@ -525,7 +525,7 @@ fn trimmed_cylinder_patch_inserts_surface_rows_for_ruled_axis() {
 #[test]
 fn periodic_full_rings_pair_into_cylinder_strip() {
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 10.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let boundary = PolyBoundary::new(
         vec![
             cylinder_ring_piece(&surface, 0.0, false),
@@ -552,7 +552,7 @@ fn periodic_full_rings_pair_into_cylinder_strip() {
 #[test]
 fn periodic_ring_closed_by_wrap_completes_to_full_period() {
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 10.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let boundary = PolyBoundary::new(
         vec![
             shortened_cylinder_ring_piece(&surface, 0.0, false),
@@ -923,7 +923,7 @@ fn classify_face_drop_maps_each_silent_drop() {
 
     // A real, non-empty tessellation is not a drop.
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 10.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
     let boundary = PolyBoundary::new(vec![cylinder_patch_piece(&surface)], &surface, 0.01);
     let mesh = trimming_tessellation(
         &surface,
@@ -941,7 +941,7 @@ fn observe_face_drop_advances_the_loud_metric() {
     use super::diagnostics::observe_face_drop;
 
     let profile = Line(Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 10.0));
-    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::unit_z());
+    let surface = RevolutionSurface::by_revolution(profile, Point3::origin(), Vector3::z());
 
     // The metric is process-global and monotonic within a run, so a strict
     // increase across our own dropping call proves the signal fired even if

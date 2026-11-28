@@ -8,7 +8,7 @@
 //! release that shipped a self-contained boolean backend).
 
 use monstertruck_core::{
-    cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
+    math::{AffinePoint, InnerProduct, MetricSpace, Point3},
     tolerance::{DEFAULT_NUMERICAL_TOLERANCES, KERNEL_EPSILON, Tolerance},
 };
 use monstertruck_meshing::prelude::PolylineCurve;
@@ -214,12 +214,12 @@ fn closest_progress_on_polyline(poly: &PolylineCurve<Point3>, point: Point3) -> 
     let mut closest = None::<(f64, f64)>;
     for segment in poly.windows(2) {
         let direction = segment[1] - segment[0];
-        let squared = direction.magnitude2();
+        let squared = direction.norm_squared();
         if squared <= 0.0 || !squared.is_finite() {
             continue;
         }
         let length = squared.sqrt();
-        let fraction = (point - segment[0]).dot(direction) / squared;
+        let fraction = (point - segment[0]).dot(&direction) / squared;
         let fraction = fraction.clamp(0.0, 1.0);
         let foot = segment[0] + direction * fraction;
         let distance2 = foot.distance2(point);

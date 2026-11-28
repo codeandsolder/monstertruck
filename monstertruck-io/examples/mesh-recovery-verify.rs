@@ -16,7 +16,7 @@ use monstertruck_meshing::{
     },
 };
 use monstertruck_modeling::{
-    Curve, EuclideanSpace, KERNEL_EPSILON, Point3, Shell, Solid, Surface,
+    AffinePoint, Curve, KERNEL_EPSILON, Point3, Shell, Solid, Surface,
     ToCompressedTrimmedParameterCurves,
     mesh_recovery::{AnalyticRecoveryOptions, recover_analytic_mesh},
 };
@@ -95,7 +95,7 @@ fn numerical_volume(shell: &Shell, tolerance: f64) -> Value {
 fn measure_polygon_volume(mut mesh: PolygonMesh, tolerance: f64) -> Value {
     if let Some(&origin) = mesh.positions().first() {
         for point in mesh.positions_mut() {
-            *point -= origin.to_vec();
+            *point -= origin.position_vector();
         }
     }
     let condition = mesh.shell_condition();

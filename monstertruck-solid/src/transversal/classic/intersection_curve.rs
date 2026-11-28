@@ -14,7 +14,7 @@ pub(in crate::transversal::classic) use analytic::{
 use super::tolerance::BooleanTolerance;
 
 use monstertruck_core::{
-    cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point3},
+    math::{AffinePoint, InnerProduct, MetricSpace, Point3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;
@@ -132,21 +132,21 @@ where
     };
 
     let bridge = b - a;
-    let bridge_length = bridge.magnitude();
+    let bridge_length = bridge.norm();
 
     let outward_a = a - a_inner;
     let outward_b = b - b_inner;
-    let span_a = outward_a.magnitude();
-    let span_b = outward_b.magnitude();
+    let span_a = outward_a.norm();
+    let span_b = outward_b.norm();
     if span_a <= validation.tolerance || span_b <= validation.tolerance {
         return false;
     }
 
     // The missing interval must continue outward from both fragments and remain
     // on their endpoint tangents to within the kernel validation tolerance.
-    let direction_ok = outward_a.dot(bridge) > 0.0 && outward_b.dot(-bridge) > 0.0;
-    let line_error_a = outward_a.cross(bridge).magnitude() / span_a;
-    let line_error_b = outward_b.cross(bridge).magnitude() / span_b;
+    let direction_ok = outward_a.dot(&bridge) > 0.0 && outward_b.dot(&-bridge) > 0.0;
+    let line_error_a = outward_a.cross(&bridge).norm() / span_a;
+    let line_error_b = outward_b.cross(&bridge).norm() / span_b;
     let line_ok = line_error_a <= validation.tolerance && line_error_b <= validation.tolerance;
     if !(direction_ok && line_ok) {
         return false;
@@ -310,21 +310,21 @@ where
     let (a, a_inner) = endpoint_and_inner(first, first_front, tolerance)?;
     let (b, b_inner) = endpoint_and_inner(second, second_front, tolerance)?;
     let span = b - a;
-    let length = span.magnitude();
+    let length = span.norm();
     if !length.is_finite() || length <= tolerance || length > mesh_scale * 16.0 {
         return None;
     }
     let tangent_a = a - a_inner;
     let tangent_b = b - b_inner;
-    let ta = tangent_a.magnitude();
-    let tb = tangent_b.magnitude();
+    let ta = tangent_a.norm();
+    let tb = tangent_b.norm();
     if ta <= tolerance || tb <= tolerance {
         return None;
     }
     let direction = span / length;
     // Both samples must approach this missing interval from opposite ends;
     // require positive transverse progress, not identical straight tangents.
-    if tangent_a.dot(direction) / ta <= 0.5 || -tangent_b.dot(direction) / tb <= 0.5 {
+    if tangent_a.dot(&direction) / ta <= 0.5 || -tangent_b.dot(&direction) / tb <= 0.5 {
         return None;
     }
 
@@ -368,13 +368,13 @@ where
             || !q.x.is_finite()
             || !q.y.is_finite()
             || !q.z.is_finite()
-            || (q - a).dot(direction) < 0.0
-            || (b - q).dot(direction) < 0.0
+            || (q - a).dot(&direction) < 0.0
+            || (b - q).dot(&direction) < 0.0
         {
             return None;
         }
         if let Some(previous) = samples.last()
-            && (*previous - q).dot(direction) >= 0.0
+            && (*previous - q).dot(&direction) >= 0.0
         {
             return None;
         }
@@ -390,12 +390,12 @@ where
     if debug {
         eprintln!(
             "CURVED_BRIDGE_END length={length} start_alignment={} end_alignment={}",
-            start.dot(tangent_a) / (start.magnitude() * ta),
-            -end.dot(tangent_b) / (end.magnitude() * tb)
+            start.dot(&tangent_a) / (start.norm() * ta),
+            -end.dot(&tangent_b) / (end.norm() * tb)
         );
     }
-    if start.dot(tangent_a) / (start.magnitude() * ta) <= 0.5
-        || -end.dot(tangent_b) / (end.magnitude() * tb) <= 0.5
+    if start.dot(&tangent_a) / (start.norm() * ta) <= 0.5
+        || -end.dot(&tangent_b) / (end.norm() * tb) <= 0.5
     {
         return None;
     }
@@ -502,11 +502,11 @@ where
     let mut matched_progress = None::<f64>;
     for (index, segment) in curve.windows(2).enumerate() {
         let delta = segment[1] - segment[0];
-        let length2 = delta.magnitude2();
+        let length2 = delta.norm_squared();
         if length2 <= tolerance * tolerance {
             continue;
         }
-        let along = (point - segment[0]).dot(delta) / length2;
+        let along = (point - segment[0]).dot(&delta) / length2;
         if !(-DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack
             ..=1.0 + DEFAULT_NUMERICAL_TOLERANCES.boolean_leader_parameter_slack)
             .contains(&along)
@@ -592,7 +592,7 @@ where
         let delta = pair[1] - pair[0];
         // Reject nonfinite/overflowed counts instead of saturating a float
         // cast and overflowing the cumulative sampling budget.
-        let count = (delta.magnitude() / mesh_step).ceil().max(1.0).to_usize()?;
+        let count = (delta.norm() / mesh_step).ceil().max(1.0).to_usize()?;
         if samples.checked_add(count).is_none_or(|total| total > 4096) {
             return None;
         }
@@ -618,7 +618,7 @@ where
                     .evaluate(u0.x, u0.y)
                     .distance(surface1.evaluate(u1.x, u1.y))
                     > surface_residual
-                    || exact.distance(predictor) > delta.magnitude() * 0.5
+                    || exact.distance(predictor) > delta.norm() * 0.5
                 {
                     return None;
                 }
@@ -699,11 +699,11 @@ where
     ) else {
         return None;
     };
-    let n0 = forward0.magnitude();
-    let n1 = forward1.magnitude();
+    let n0 = forward0.norm();
+    let n1 = forward1.norm();
     if n0 <= tolerance
         || n1 <= tolerance
-        || forward0.dot(forward1) / (n0 * n1)
+        || forward0.dot(&forward1) / (n0 * n1)
             < DEFAULT_NUMERICAL_TOLERANCES.boolean_fragment_forward_alignment_cosine
     {
         return None;
@@ -866,7 +866,7 @@ where
         let point = raw[index];
         let tangent = ic.leader().derivative(parameter);
         let continuation = prior
-            .filter(|_| tangent.magnitude2() > tolerances.length * tolerances.length)
+            .filter(|_| tangent.norm_squared() > tolerances.length * tolerances.length)
             .and_then(|(uv0, uv1)| {
                 ic.search_intersection_in_plane(point, tangent, Some(uv0), Some(uv1), 100)
             })

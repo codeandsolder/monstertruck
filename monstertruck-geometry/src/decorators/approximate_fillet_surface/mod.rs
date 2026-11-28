@@ -4,11 +4,11 @@
 )]
 
 use super::{
-    ApproximateFilletSurface, BsplineCurve, CurveDerivatives, EuclideanSpace, InnerSpace,
-    KnotVector, Matrix3, MetricSpace, Mul, NurbsCurve, ParameterCurve, ParameterDivision2D,
-    ParameterRange, ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D,
-    Point1, Point2, Point3, RollingBallFilletSurface, SearchParameter, SquareMatrix,
-    SurfaceDerivatives, SurfaceParameter, ToSameGeometry, Vector2, Vector3, Vector4, algo,
+    AffinePoint, ApproximateFilletSurface, BsplineCurve, CurveDerivatives, Homogeneous, KnotVector,
+    Matrix3, MetricSpace, Mul, NurbsCurve, ParameterCurve, ParameterDivision2D, ParameterRange,
+    ParametricCurve, ParametricCurve3D, ParametricSurface, ParametricSurface3D, Point1, Point2,
+    Point3, RollingBallFilletSurface, SearchParameter, SurfaceDerivatives, SurfaceParameter,
+    ToSameGeometry, Vector2, Vector3, Vector4, algo,
     rolling_ball_fillet::{ContactCircle, RadiusFunction},
 };
 
@@ -36,7 +36,7 @@ impl<S0, S1> ApproximateFilletSurface<S0, S1> {
     fn vdegree(&self) -> usize { self.knot_vec.len() - self.weights.len() - 1 }
 }
 
-fn pmul<P: EuclideanSpace>((b, p): (&P::Scalar, &P)) -> P::Diff { p.to_vec() * *b }
+fn pmul<P: AffinePoint>((b, p): (&P::Scalar, &P)) -> P::Diff { p.position_vector() * *b }
 fn tmul<S: Copy, T: Copy + Mul<S>>((b, v): (&S, &T)) -> <T as Mul<S>>::Output { *v * *b }
 
 type SurfaceTriple<'a, S> = (S, &'a Vec<Point2>, &'a Vec<Vector2>);
@@ -51,10 +51,10 @@ fn control_points_u<S: ParametricSurface3D>(
     let (p, uder, vder) = (sders[0][0], sders[1][0], sders[0][1]);
     let duv: Vector2 = dbasis.iter().zip(side_control_points).map(pmul).sum();
     let cder = (uder * duv.x + vder * duv.y).normalize();
-    let axis = cder.cross(uder.cross(vder).normalize());
+    let axis = cder.cross(&uder.cross(&vder).normalize());
     let tuv: Vector2 = basis.iter().zip(tangent_vecs).map(tmul).sum();
     let wq = weight * p + (axis * tuv.x + cder * tuv.y) / 3.0;
-    (p.extend(1.0), wq.extend(weight))
+    (p.push(1.0), wq.push(weight))
 }
 
 const fn bezier_3rd_basis(n: usize, u: f64) -> [f64; 4] {
@@ -88,7 +88,7 @@ mod subders {
     fn axis_v_ders(p_ders: &CurveDerivatives<Vector3>) -> CurveDerivatives<Vector3> {
         let p_derders = p_ders.derivative();
         let homog_ders =
-            p_derders.element_wise_derivatives(&p_derders.absolute_derivatives(), Vector3::extend);
+            p_derders.element_wise_derivatives(&p_derders.absolute_derivatives(), |a, b| a.push(b));
         homog_ders.rational_derivatives()
     }
     fn n_ders(
@@ -97,9 +97,9 @@ mod subders {
     ) -> CurveDerivatives<Vector3> {
         let uders = s_ders.derivative_u().composite_derivatives(uv_ders);
         let vders = s_ders.derivative_v().composite_derivatives(uv_ders);
-        let lnders = uders.combinatorial_derivatives(&vders, Vector3::cross);
+        let lnders = uders.combinatorial_derivatives(&vders, |a, b| a.cross(&b));
         let homog =
-            lnders.element_wise_derivatives(&lnders.absolute_derivatives(), Vector3::extend);
+            lnders.element_wise_derivatives(&lnders.absolute_derivatives(), |a, b| a.push(b));
         homog.rational_derivatives()
     }
     fn wq_ders(
@@ -110,7 +110,7 @@ mod subders {
     ) -> CurveDerivatives<Vector3> {
         use std::ops::Add;
         let axis_v_ders = axis_v_ders(p_ders);
-        let u_axis_ders = axis_v_ders.combinatorial_derivatives(n_ders, Vector3::cross);
+        let u_axis_ders = axis_v_ders.combinatorial_derivatives(n_ders, |a, b| a.cross(&b));
         let wp_ders = w_ders.combinatorial_derivatives(p_ders, |w, p| w * p);
         let aders = b_ders.combinatorial_derivatives(&u_axis_ders, |v, p| v[0] * p) / 3.0;
         let bders = b_ders.combinatorial_derivatives(&axis_v_ders, |v, p| v[1] * p) / 3.0;
@@ -121,7 +121,7 @@ mod subders {
     fn lift_p_ders(p_ders: &CurveDerivatives<Vector3>) -> CurveDerivatives<Vector4> {
         let mut w_ders = CurveDerivatives::<f64>::new(p_ders.max_order());
         w_ders[0] = 1.0;
-        p_ders.element_wise_derivatives(&w_ders, Vector3::extend)
+        p_ders.element_wise_derivatives(&w_ders, |a, b| a.push(b))
     }
     pub fn control_points_ders(
         s_ders: &SurfaceDerivatives<Vector3>,
@@ -132,8 +132,7 @@ mod subders {
         let p_ders = s_ders.composite_derivatives(uv_ders);
         let lift_p_ders = lift_p_ders(&p_ders);
         let wq_ders = wq_ders(w_ders, &p_ders, b_ders, &n_ders(s_ders, uv_ders));
-        let lift_q_ders =
-            wq_ders.element_wise_derivatives(w_ders, monstertruck_core::cgmath::Vector3::extend);
+        let lift_q_ders = wq_ders.element_wise_derivatives(w_ders, |a, b| a.push(b));
         (lift_p_ders, lift_q_ders)
     }
 }
@@ -161,9 +160,9 @@ where
             b1_ders[order] = basis.iter().zip(&self.tangent_vecs1).map(tmul).sum();
             w_ders[order] = basis.iter().zip(&self.weights).map(tmul).sum();
         });
-        let Vector2 { x: u0, y: v0 } = uv0_ders[0];
+        let [u0, v0] = <[f64; 2]>::from(uv0_ders[0]);
         let s0_ders = self.surface0.derivatives(max_order + 1, u0, v0);
-        let Vector2 { x: u1, y: v1 } = uv1_ders[0];
+        let [u1, v1] = <[f64; 2]>::from(uv1_ders[0]);
         let s1_ders = self.surface1.derivatives(max_order + 1, u1, v1);
 
         let (lift_p0_ders, lift_q0_ders) =
@@ -210,7 +209,7 @@ where
         let (pt0, pt1) = control_points_u(&basis, &dbasis, striple0, weight);
         let (pt3, pt2) = control_points_u(&basis, &dbasis, striple1, weight);
         let b = bezier_3rd_basis(0, u);
-        Point3::from_homogeneous(b[0] * pt0 + b[1] * pt1 + b[2] * pt2 + b[3] * pt3)
+        (b[0] * pt0 + b[1] * pt1 + b[2] * pt2 + b[3] * pt3).to_point()
     }
     fn derivative_u(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(1, 0, u, v) }
     fn derivative_v(&self, u: f64, v: f64) -> Self::Vector { self.derivative_mn(0, 1, u, v) }
@@ -231,7 +230,7 @@ where
 {
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         let ders = self.derivatives(1, u, v);
-        ders[1][0].cross(ders[0][1]).normalize()
+        ders[1][0].cross(&ders[0][1]).normalize()
     }
 }
 
@@ -318,19 +317,19 @@ where
                 let cder0 = pcurve0.derivative(v).normalize();
                 let uv0 = cc.contact_point0().uv;
                 let n0 = fillet_surface.surface0.normal(uv0.x, uv0.y);
-                let handle0 = cder0.cross(n0);
-                let mat0 = Matrix3::from_cols(handle0, cder0, n0);
-                let vec0 = mat0.invert()? * der0;
-                raw_tangent_vecs0.push((v, vec0.truncate()));
+                let handle0 = cder0.cross(&n0);
+                let mat0 = Matrix3::from_columns(&[handle0, cder0, n0]);
+                let vec0 = mat0.try_inverse()? * der0;
+                raw_tangent_vecs0.push((v, vec0.spatial()));
 
                 let der1 = -nurbs.derivative(1.0);
                 let cder1 = pcurve1.derivative(v).normalize();
                 let uv1 = cc.contact_point1().uv;
                 let n1 = fillet_surface.surface1.normal(uv1.x, uv1.y);
-                let handle1 = cder1.cross(n1);
-                let mat1 = Matrix3::from_cols(handle1, cder1, n1);
-                let vec1 = mat1.invert()? * der1;
-                raw_tangent_vecs1.push((v, vec1.truncate()));
+                let handle1 = cder1.cross(&n1);
+                let mat1 = Matrix3::from_columns(&[handle1, cder1, n1]);
+                let vec1 = mat1.try_inverse()? * der1;
+                raw_tangent_vecs1.push((v, vec1.spatial()));
             }
 
             let tangent_curve0 =

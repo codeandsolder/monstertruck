@@ -131,78 +131,78 @@ fn oi() {
     ));
     oitest_tryfrom::<step_geometry::Ellipse<Point2, Matrix3>, CircleHolder>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-3.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Ellipse<Point2, Matrix3>, EllipseHolder>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-8.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Ellipse<Point3, Matrix4>, CircleHolder>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 3.0, 0.0),
                 Vector4::new(3.0, 0.0, 0.0, 0.0),
                 Vector4::new(1.0, 2.0, 3.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Ellipse<Point3, Matrix4>, EllipseHolder>(
         Processor::new(TrimmedCurve::new(UnitCircle::new(), (0.0, 2.0 * PI))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 8.0, 0.0),
                 Vector4::new(3.0, 0.0, 0.0, 0.0),
                 Vector4::new(1.0, 2.0, 3.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Hyperbola<Point2, Matrix3>, HyperbolaHolder>(
         Processor::new(TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 3.0, 0.0),
                 Vector3::new(-8.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Hyperbola<Point3, Matrix4>, HyperbolaHolder>(
         Processor::new(TrimmedCurve::new(UnitHyperbola::new(), (-1.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 8.0, 0.0),
                 Vector4::new(3.0, 0.0, 0.0, 0.0),
                 Vector4::new(1.0, 2.0, 3.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Parabola<Point2, Matrix3>, ParabolaHolder>(
         Processor::new(TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0))).transformed(
-            Matrix3::from_cols(
+            Matrix3::from_columns(&[
                 Vector3::new(0.0, 2.0, 0.0),
                 Vector3::new(-2.0, 0.0, 0.0),
                 Vector3::new(1.0, 2.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<step_geometry::Parabola<Point3, Matrix4>, ParabolaHolder>(
         Processor::new(TrimmedCurve::new(UnitParabola::new(), (-1.0, 1.0))).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 3.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 3.0, 0.0),
                 Vector4::new(3.0, 0.0, 0.0, 0.0),
                 Vector4::new(1.0, 2.0, 3.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest::<truck::Plane, PlaneHolder>(truck::Plane::new(
@@ -218,24 +218,24 @@ fn oi() {
             Point3::new(0.0, 0.0, 0.0),
             15.0,
         )))
-        .transformed(Matrix4::from_cols(
+        .transformed(Matrix4::from_columns(&[
             Vector4::new(0.0, 1.0, 0.0, 0.0),
             Vector4::new(-1.0, 0.0, 0.0, 0.0),
             Vector4::new(0.0, 0.0, 1.0, 0.0),
             Vector4::new(1.0, 2.0, 3.0, 1.0),
-        )),
+        ])),
     );
     // `TryFrom` since spec 011 T1: the STEP -> geometry torus conversion refuses
     // the degenerate self-intersecting regime instead of panicking in
     // `Torus::new`. A ring torus (15 > 9) round-trips exactly as before.
     oitest_tryfrom::<Processor<Torus, Matrix4>, ToroidalSurfaceHolder>(
         Processor::new(Torus::new_unchecked(Point3::new(0.0, 0.0, 0.0), 15.0, 9.0)).transformed(
-            Matrix4::from_cols(
+            Matrix4::from_columns(&[
                 Vector4::new(0.0, 1.0, 0.0, 0.0),
                 Vector4::new(-1.0, 0.0, 0.0, 0.0),
                 Vector4::new(0.0, 0.0, 1.0, 0.0),
                 Vector4::new(1.0, 2.0, 3.0, 1.0),
-            ),
+            ]),
         ),
     );
     oitest_tryfrom::<

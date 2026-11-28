@@ -208,9 +208,9 @@ fn spherical_revolution_from_profile(
     let reference_offset = reference - origin;
     let center_parameter = samples.iter().skip(1).find_map(|point| {
         let offset = *point - origin;
-        let denominator = 2.0 * axis.dot(offset - reference_offset);
+        let denominator = 2.0 * axis.dot(&(offset - reference_offset));
         (denominator.abs() > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution)
-            .then(|| (offset.magnitude2() - reference_offset.magnitude2()) / denominator)
+            .then(|| (offset.norm_squared() - reference_offset.norm_squared()) / denominator)
     })?;
     let center = origin + axis * center_parameter;
     let radius = samples
@@ -224,11 +224,11 @@ fn spherical_revolution_from_profile(
         .iter()
         .map(|point| {
             let radial = *point - center;
-            radial - axis * radial.dot(axis)
+            radial - axis * radial.dot(&axis)
         })
-        .max_by(|lhs, rhs| lhs.magnitude2().total_cmp(&rhs.magnitude2()))?;
+        .max_by(|lhs, rhs| lhs.norm_squared().total_cmp(&rhs.norm_squared()))?;
     (radius > radius_tolerance
-        && meridian_vector.magnitude() > radius_tolerance
+        && meridian_vector.norm() > radius_tolerance
         && samples
             .iter()
             .all(|point| (point.distance(center) - radius).abs() <= radius_tolerance))
@@ -283,7 +283,7 @@ where C: ParametricCurve3D + TryIntoHomogeneousBsplineCurve
             meridian_direction,
             ..
         } = candidate;
-        let transverse = axis.cross(meridian_direction);
+        let transverse = axis.cross(&meridian_direction);
         let frame = CircularArcFrame::new(
             center,
             transverse,
@@ -307,16 +307,16 @@ where C: ParametricCurve3D + TryIntoHomogeneousBsplineCurve
         {
             return None;
         }
-        let axial_traversal = (rational.back() - rational.front()).dot(axis);
+        let axial_traversal = (rational.back() - rational.front()).dot(&axis);
         if !axial_traversal.is_finite() || axial_traversal.abs() <= tolerance {
             return None;
         }
-        let pose = Matrix4::from_cols(
-            meridian_direction.extend(0.0),
-            transverse.extend(0.0),
-            axis.extend(0.0),
-            center.to_vec().extend(1.0),
-        );
+        let pose = Matrix4::from_columns(&[
+            meridian_direction.push(0.0),
+            transverse.push(0.0),
+            axis.push(0.0),
+            center.position_vector().push(1.0),
+        ]);
         let mut sphere = Processor::with_transform(
             Sphere::new(Point3::origin(), radius),
             *self.transform() * pose,
@@ -358,7 +358,7 @@ fn planar_points(points: &[Point3]) -> Option<Plane> {
     })?;
     let u_axis = one - origin;
     let another = points.iter().copied().find(|point| {
-        u_axis.cross(*point - origin).magnitude2()
+        u_axis.cross(&(*point - origin)).norm_squared()
             > DEFAULT_NUMERICAL_TOLERANCES.analytic_plane_identity.powi(2)
     })?;
     let plane = Plane::new(origin, one, another);
@@ -442,7 +442,7 @@ fn transform_homogeneous_extrusion(
         .curve
         .control_points_mut()
         .for_each(|point| *point = transform * *point);
-    extrusion.vector = transform.transform_vector(extrusion.vector);
+    extrusion.vector = transform.apply_vector(extrusion.vector);
     extrusion
 }
 
@@ -450,23 +450,23 @@ fn transform_spherical_revolution(
     sphere: &SphericalRevolutionSurface,
     transform: Matrix4,
 ) -> Option<SphericalRevolutionSurface> {
-    let transverse = sphere.axis.cross(sphere.meridian_direction).normalize();
-    let axis = transform.transform_vector(sphere.axis);
-    let meridian = transform.transform_vector(sphere.meridian_direction);
-    let transverse = transform.transform_vector(transverse);
-    let meridian_scale = meridian.magnitude();
-    let transverse_scale = transverse.magnitude();
-    let axis_scale = axis.magnitude();
+    let transverse = sphere.axis.cross(&sphere.meridian_direction).normalize();
+    let axis = transform.apply_vector(sphere.axis);
+    let meridian = transform.apply_vector(sphere.meridian_direction);
+    let transverse = transform.apply_vector(transverse);
+    let meridian_scale = meridian.norm();
+    let transverse_scale = transverse.norm();
+    let axis_scale = axis.norm();
     let scale_tolerance =
         DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution * meridian_scale.max(1.0);
     (meridian_scale > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution
         && axis_scale > DEFAULT_NUMERICAL_TOLERANCES.analytic_spherical_revolution
         && (transverse_scale - meridian_scale).abs() <= scale_tolerance
-        && axis.dot(meridian).abs() <= scale_tolerance
-        && axis.dot(transverse).abs() <= scale_tolerance
-        && meridian.dot(transverse).abs() <= scale_tolerance)
+        && axis.dot(&meridian).abs() <= scale_tolerance
+        && axis.dot(&transverse).abs() <= scale_tolerance
+        && meridian.dot(&transverse).abs() <= scale_tolerance)
         .then(|| SphericalRevolutionSurface {
-            center: transform.transform_point(sphere.center),
+            center: transform.apply_point(sphere.center),
             radius: sphere.radius * meridian_scale,
             axis: axis.normalize(),
             meridian_direction: meridian.normalize(),
@@ -505,13 +505,16 @@ mod tests {
     fn spherical_rechart_certifies_meridian_and_orientation() -> anyhow::Result<()> {
         let meridian = Processor::with_transform(
             TrimmedCurve::new(UnitCircle::<Point3>::new(), (-0.8, 1.2)),
-            Matrix4::from_angle_x(Rad(std::f64::consts::FRAC_PI_2)),
+            Matrix4::from_axis_angle(&Vector3::x_axis(), (std::f64::consts::FRAC_PI_2)),
         );
-        let revolution =
-            RevolutionSurface::by_revolution(meridian, Point3::origin(), Vector3::unit_z());
+        let revolution = RevolutionSurface::by_revolution(meridian, Point3::origin(), Vector3::z());
         for reflected in [false, true] {
-            let transform = Matrix4::from_translation(Vector3::new(1.0, 2.0, 3.0))
-                * Matrix4::from_nonuniform_scale(if reflected { -2.0 } else { 2.0 }, 2.0, 2.0);
+            let transform = Matrix4::new_translation(&Vector3::new(1.0, 2.0, 3.0))
+                * Matrix4::new_nonuniform_scaling(&Vector3::new(
+                    if reflected { -2.0 } else { 2.0 },
+                    2.0,
+                    2.0,
+                ));
             let mut surface = Processor::with_transform(revolution, transform);
             for inverted in [false, true] {
                 if inverted {
@@ -525,7 +528,7 @@ mod tests {
                 let AnalyticSupport::Sphere { center, radius } = carrier.support() else {
                     anyhow::bail!("not a sphere");
                 };
-                assert!((center - Point3::new(1.0, 2.0, 3.0)).magnitude() < 1.0e-9);
+                assert!((center - Point3::new(1.0, 2.0, 3.0)).norm() < 1.0e-9);
                 assert!((radius - 2.0).abs() < 1.0e-9);
                 for (u, v) in [(-0.3, 0.4), (0.5, 1.7), (1.1, 4.5)] {
                     let (u, v) = if inverted { (v, u) } else { (u, v) };
@@ -533,7 +536,7 @@ mod tests {
                     let (s, t) = sphere
                         .search_parameter(point, None, 20)
                         .ok_or_else(|| anyhow::anyhow!("same spatial point"))?;
-                    assert!(surface.normal(u, v).dot(sphere.normal(s, t)) > 1.0 - 1.0e-9);
+                    assert!(surface.normal(u, v).dot(&sphere.normal(s, t)) > 1.0 - 1.0e-9);
                 }
             }
         }
@@ -542,12 +545,12 @@ mod tests {
 
     #[test]
     fn spherical_rechart_refuses_folded_or_nonspherical_profiles() {
-        let rotation = Matrix4::from_angle_x(Rad(std::f64::consts::FRAC_PI_2));
+        let rotation = Matrix4::from_axis_angle(&Vector3::x_axis(), (std::f64::consts::FRAC_PI_2));
         for (range, matrix) in [
             ((-0.5, 2.2), rotation),
             (
                 (-0.8, 1.2),
-                Matrix4::from_nonuniform_scale(1.0, 1.0, 1.01) * rotation,
+                Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, 1.01)) * rotation,
             ),
         ] {
             let meridian = Processor::with_transform(
@@ -557,7 +560,7 @@ mod tests {
             let revolution = Processor::new(RevolutionSurface::by_revolution(
                 meridian,
                 Point3::origin(),
-                Vector3::unit_z(),
+                Vector3::z(),
             ));
             assert!(revolution.try_certified_sphere(1.0e-7).is_none());
         }

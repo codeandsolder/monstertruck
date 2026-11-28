@@ -68,12 +68,12 @@ fn test_polygons() -> common::TestResult<[PolygonMesh; 2]> {
 
 fn nontex_inst_state() -> PolygonState {
     PolygonState {
-        matrix: Matrix4::from_cols(
+        matrix: Matrix4::from_columns(&[
             [1.0, 2.0, 3.0, 4.0].into(),
             [5.0, 6.0, 7.0, 8.0].into(),
             [9.0, 10.0, 11.0, 12.0].into(),
             [13.0, 14.0, 15.0, 16.0].into(),
-        ),
+        ]),
         material: Material {
             albedo: Vector4::new(0.2, 0.4, 0.6, 1.0),
             roughness: 0.31415,

@@ -63,7 +63,7 @@ fn line_axis(edge: &Edge) -> Option<Vector3> {
     let start = edge.absolute_front().point();
     let end = edge.absolute_back().point();
     let delta = end - start;
-    (delta.magnitude() > KERNEL_EPSILON
+    (delta.norm() > KERNEL_EPSILON
         && crate::certify_native_curve_segment_locus(&edge.curve(), start, end, KERNEL_EPSILON)
             == SegmentLocus::WithinTolerance)
         .then(|| delta.normalize())
@@ -74,7 +74,7 @@ fn normal(shell: &Shell, face: usize) -> Option<Vector3> {
         return None;
     };
     let normal = p.normal();
-    normal.magnitude().near(&1.0).then_some(normal)
+    normal.norm().near(&1.0).then_some(normal)
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +91,8 @@ enum PlanarTreatment {
 /// auxiliary rolling-circle radius by setback = radius * tan(angle/2).
 fn chamfer_radius(normals: [Vector3; 2], setback: f64) -> Option<f64> {
     let [a, b] = normals;
-    let sine = a.cross(b).magnitude();
-    let cosine = a.dot(b);
+    let sine = a.cross(&b).norm();
+    let cosine = a.dot(&b);
     if sine <= ANGULAR || !setback.is_finite() || setback <= KERNEL_EPSILON {
         return None;
     }
@@ -134,8 +134,8 @@ impl SelectedEdge {
         let forward = if a.forward { axis } else { -axis };
         // The interior of face A lies to the left of its outward coedge.
         // Its relation to carrier B distinguishes convex and reentrant edges.
-        let bend = nb.dot(na.cross(forward));
-        if bend.abs() <= ANGULAR || na.dot(axis).abs() > ANGULAR || nb.dot(axis).abs() > ANGULAR {
+        let bend = nb.dot(&na.cross(&forward));
+        if bend.abs() <= ANGULAR || na.dot(&axis).abs() > ANGULAR || nb.dot(&axis).abs() > ANGULAR {
             return None;
         }
         let normals = [na, nb];
@@ -148,11 +148,11 @@ impl SelectedEdge {
             } => {
                 if !second_setback.is_finite()
                     || second_setback <= KERNEL_EPSILON
-                    || !first_normal.magnitude().near(&1.0)
+                    || !first_normal.norm().near(&1.0)
                 {
                     return None;
                 }
-                let distances = normals.map(|n| n.cross(first_normal).magnitude());
+                let distances = normals.map(|n| n.cross(&first_normal).norm());
                 let setbacks = match distances.map(|d| d <= ANGULAR) {
                     [true, false] => [size, second_setback],
                     [false, true] => [second_setback, size],
@@ -191,16 +191,16 @@ struct Corner {
 
 fn intersection_displacement(normals: [Vector3; 3], offsets: [f64; 3]) -> Option<Vector3> {
     let [a, b, c] = normals;
-    let det = a.dot(b.cross(c));
+    let det = a.dot(&b.cross(&c));
     if det.abs() <= ANGULAR {
         return None;
     }
     let displacement =
-        (b.cross(c) * offsets[0] + c.cross(a) * offsets[1] + a.cross(b) * offsets[2]) / det;
+        (b.cross(&c) * offsets[0] + c.cross(&a) * offsets[1] + a.cross(&b) * offsets[2]) / det;
     normals
         .iter()
         .zip(offsets)
-        .all(|(n, d)| (n.dot(displacement) - d).abs() <= KERNEL_EPSILON)
+        .all(|(n, d)| (n.dot(&displacement) - d).abs() <= KERNEL_EPSILON)
         .then_some(displacement)
 }
 
@@ -208,7 +208,7 @@ fn projected_radial(radial: Vector3, kind: &CornerKind) -> Vector3 {
     match *kind {
         CornerKind::Sphere => radial,
         CornerKind::Cap { normal, axis, .. } => {
-            radial - axis * (normal.dot(radial) / normal.dot(axis))
+            radial - axis * (normal.dot(&radial) / normal.dot(&axis))
         }
     }
 }
@@ -245,7 +245,7 @@ fn validate_corner_seams(
         let missing = faces
             .iter()
             .position(|&f| source.uses.iter().all(|u| u.face != f))?;
-        let advance = normals[missing].dot(other.point() - point);
+        let advance = normals[missing].dot(&(other.point() - point));
         if offsets[missing] == 0.0 {
             if advance.abs() <= KERNEL_EPSILON {
                 return None;
@@ -293,7 +293,7 @@ impl Corner {
                     .iter()
                     .position(|&f| edge.faces.iter().all(|u| u.face != f))?;
                 let cap_normal = normals[cap_index];
-                if cap_normal.dot(edge.axis).abs() <= ANGULAR {
+                if cap_normal.dot(&edge.axis).abs() <= ANGULAR {
                     return None;
                 }
                 offsets[cap_index] = 0.0;
@@ -329,13 +329,13 @@ impl Corner {
                 let slot = edge.faces.iter().position(|u| u.face == face)?;
                 let n = edge.normals[slot];
                 let other = edge.normals[1 - slot];
-                let direction = -sense * (other - n * n.dot(other)).normalize();
+                let direction = -sense * (other - n * n.dot(&other)).normalize();
                 point + projected_radial(direction * setbacks[slot], &kind)
             } else {
                 center + projected_radial(sense * radius * normals[i], &kind)
             };
             if normals.iter().zip(offsets).any(|(n, offset)| {
-                let distance = n.dot(contact - point);
+                let distance = n.dot(&(contact - point));
                 if offset == 0.0 {
                     distance.abs() > KERNEL_EPSILON
                 } else {
@@ -367,9 +367,9 @@ struct Section {
 impl Section {
     fn new(corner: &Corner, edge: &SelectedEdge) -> Option<Self> {
         let [a, b] = edge.normals;
-        let cosine = a.dot(b);
+        let cosine = a.dot(&b);
         let tangent = b - a * cosine;
-        let angle = tangent.magnitude().atan2(cosine);
+        let angle = tangent.norm().atan2(cosine);
         if angle <= ANGULAR || std::f64::consts::PI - angle <= ANGULAR {
             return None;
         }
@@ -383,13 +383,13 @@ impl Section {
     }
 
     fn curve(&self) -> Curve {
-        let basis = self.cosine.cross(self.sine).normalize();
-        let transform = Matrix4::from_cols(
-            self.cosine.extend(0.0),
-            self.sine.extend(0.0),
-            basis.extend(0.0),
+        let basis = self.cosine.cross(&self.sine).normalize();
+        let transform = Matrix4::from_columns(&[
+            self.cosine.push(0.0),
+            self.sine.push(0.0),
+            basis.push(0.0),
             self.center.to_homogeneous(),
-        );
+        ]);
         Processor::with_transform(
             TrimmedCurve::new(UnitCircle::<Point3>::new(), (0.0, self.angle)),
             transform,
@@ -405,7 +405,7 @@ impl Section {
     }
 
     fn axial_coefficients(&self, axis: Vector3) -> [f64; 2] {
-        [axis.dot(self.cosine), axis.dot(self.sine)]
+        [axis.dot(&self.cosine), axis.dot(&self.sine)]
     }
 }
 
@@ -444,8 +444,8 @@ struct TreatedEdge {
 fn exact_cylinder(start: &Section, end: &Section, edge: &SelectedEdge) -> Option<Surface> {
     let axis = edge.axis;
     let center_delta = end.center - start.center;
-    let span = center_delta.dot(axis);
-    if (center_delta - axis * span).magnitude() > KERNEL_EPSILON {
+    let span = center_delta.dot(&axis);
+    if (center_delta - axis * span).norm() > KERNEL_EPSILON {
         return None;
     }
     let [a, b] = start.axial_coefficients(axis);
@@ -463,13 +463,13 @@ fn exact_cylinder(start: &Section, end: &Section, edge: &SelectedEdge) -> Option
         start.center + radial + axis * low,
         start.center + radial + axis * high,
     ));
-    let orbit_axis = edge.normals[0].cross(edge.normals[1]).normalize();
+    let orbit_axis = edge.normals[0].cross(&edge.normals[1]).normalize();
     let mut surface = Surface::Revolution(Processor::new(RevolutionSurface::by_revolution(
         generator,
         start.center,
         orbit_axis,
     )));
-    if surface.normal(0.5, 0.0).dot(edge.normals[0]) < 0.0 {
+    if surface.normal(0.5, 0.0).dot(&edge.normals[0]) < 0.0 {
         surface.invert();
     }
     Some(surface)
@@ -500,7 +500,7 @@ impl TreatedEdge {
                 // The bevel is a plane. Both rails must retain a positive
                 // axial interval even with oblique termination planes.
                 if rails.iter().any(|rail| {
-                    (rail.back().point() - rail.front().point()).dot(edge.axis) <= KERNEL_EPSILON
+                    (rail.back().point() - rail.front().point()).dot(&edge.axis) <= KERNEL_EPSILON
                 }) {
                     return None;
                 }
@@ -574,10 +574,10 @@ fn validate_trim(original: &Edge, ends: &[Vertex; 2]) -> Option<bool> {
     let old_a = original.absolute_front().point();
     let old_b = original.absolute_back().point();
     let axis = line_axis(original)?;
-    let length = (old_b - old_a).dot(axis);
+    let length = (old_b - old_a).dot(&axis);
     let [a, b] = ends.each_ref().map(Vertex::point);
-    let ta = (a - old_a).dot(axis);
-    let tb = (b - old_a).dot(axis);
+    let ta = (a - old_a).dot(&axis);
+    let tb = (b - old_a).dot(&axis);
     if [ta, tb]
         .into_iter()
         .any(|t| t < -KERNEL_EPSILON || t > length + KERNEL_EPSILON)
@@ -872,20 +872,20 @@ fn spherical_face(corner: &Corner, original: &Vertex, mut seams: Vec<Edge>) -> O
     // the opposite hemisphere, away from the finite triangular trim.
     let x = (corner.center - original.point()).normalize();
     let seed = if x.x.abs() < x.y.abs() && x.x.abs() < x.z.abs() {
-        Vector3::unit_x()
+        Vector3::x()
     } else if x.y.abs() < x.z.abs() {
-        Vector3::unit_y()
+        Vector3::y()
     } else {
-        Vector3::unit_z()
+        Vector3::z()
     };
-    let z = x.cross(seed).normalize();
-    let y = z.cross(x);
-    let transform = Matrix4::from_cols(
-        x.extend(0.0),
-        y.extend(0.0),
-        z.extend(0.0),
+    let z = x.cross(&seed).normalize();
+    let y = z.cross(&x);
+    let transform = Matrix4::from_columns(&[
+        x.push(0.0),
+        y.push(0.0),
+        z.push(0.0),
         corner.center.to_homogeneous(),
-    );
+    ]);
     let surface = Surface::Sphere(Processor::with_transform(
         Sphere::new(Point3::origin(), corner.radius),
         transform,

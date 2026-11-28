@@ -18,7 +18,7 @@ fn cylinder(height: f64, radius: f64) -> monstertruck_modeling::Result<Solid> {
     let circle = builder::revolve(
         &vertex,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;

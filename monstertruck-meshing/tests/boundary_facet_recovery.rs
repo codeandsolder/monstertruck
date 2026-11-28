@@ -53,18 +53,18 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
     // Three orthogonal sphere points in a compact longitude/latitude chart.
     // Rotation avoids both poles and makes this an ordinary analytic patch,
     // not a special spherical-cap chart.
-    use monstertruck_geometry::prelude::{InnerSpace, SquareMatrix, Transform};
+    use monstertruck_geometry::prelude::{GeometryTransform, InnerProduct, SquareLinearMap};
     let axis = Vector3::new(1.0, -1.0, 0.0).normalize();
     let tangent = Vector3::new(1.0, 1.0, -2.0).normalize();
-    let normal = tangent.cross(axis);
-    let matrix = Matrix4::from_cols(
-        normal.extend(0.0),
-        tangent.extend(0.0),
-        axis.extend(0.0),
+    let normal = tangent.cross(&axis);
+    let matrix = Matrix4::from_columns(&[
+        normal.push(0.0),
+        tangent.push(0.0),
+        axis.push(0.0),
         Vector4::new(0.0, 0.0, 0.0, 1.0),
-    );
+    ]);
     let inverse = matrix
-        .invert()
+        .try_inverse()
         .ok_or_else(|| anyhow::anyhow!("chart frame"))?;
     let source = [
         Point3::new(1.0, 0.0, 0.0),
@@ -72,10 +72,10 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
         Point3::new(0.0, 0.0, 1.0),
         Point3::new(0.0, 0.0, 0.0),
     ]
-    .map(|p| inverse.transform_point(p));
+    .map(|p| inverse.apply_point(p));
     let carrier = SurfaceCarrier::CircularRevolution {
         axial_center: Point3::new(0.0, 0.0, 0.0),
-        axis: Vector3::unit_z(),
+        axis: Vector3::z(),
         radial_center: 0.0,
         profile_radius: 1.0,
     };
@@ -138,7 +138,7 @@ fn closed_hybrid_shell_preserves_analytic_carrier_and_shared_edges() -> anyhow::
 #[test]
 fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Result<()> {
     use monstertruck_geometry::prelude::{
-        BsplineSurface, InnerSpace, NurbsSurface, ParametricSurface3D,
+        BsplineSurface, InnerProduct, NurbsSurface, ParametricSurface3D,
     };
     use monstertruck_modeling::{Face, Surface, Wire};
 
@@ -164,11 +164,11 @@ fn collapsed_curved_fan_keeps_chart_winding_at_coarse_resolution() -> anyhow::Re
     )?);
     // The XY projection of the base is a convex quadratic below y=0;
     // the apex lies above y=0, so its projected angular derivative is positive.
-    let chord_normal = (points[1] - points[0]).cross(points[2] - points[0]);
+    let chord_normal = (points[1] - points[0]).cross(&(points[2] - points[0]));
     for u in [0.0, 0.5, 1.0] {
         let normal = surface.normal(u, 0.0);
         assert!(normal.z > 0.0);
-        assert!(chord_normal.dot(normal) < 0.0);
+        assert!(chord_normal.dot(&normal) < 0.0);
     }
     let wire = [
         Edge::new(&a, &b, Curve::NurbsCurve(curve))?,

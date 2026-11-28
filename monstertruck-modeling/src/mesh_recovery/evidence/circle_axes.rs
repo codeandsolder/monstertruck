@@ -5,7 +5,7 @@
 
 use super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier};
 use super::{MeshEvidence, source_edge_incidence};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::VecDeque;
 
@@ -244,13 +244,13 @@ fn valid_fit(fit: CircleCarrierFit, options: CircleAxisOptions) -> bool {
 
 fn sample_matches(point: Point3, fit: CircleCarrierFit, tolerance: f64) -> bool {
     let delta = point - fit.center;
-    let axial = delta.dot(fit.normal);
+    let axial = delta.dot(&fit.normal);
     axial.abs() <= tolerance
-        && ((delta - fit.normal * axial).magnitude() - fit.radius).abs() <= tolerance
+        && ((delta - fit.normal * axial).norm() - fit.radius).abs() <= tolerance
 }
 
 fn reference_origin(center: Point3, axis: Vector3, reference: Point3) -> Point3 {
-    center + axis * (reference - center).dot(axis)
+    center + axis * (reference - center).dot(&axis)
 }
 
 fn position_cell(origin: Point3, reference: Point3, width: f64) -> [f64; 3] {
@@ -308,12 +308,12 @@ fn group_axes(
             .into_iter()
             .filter_map(|index| {
                 let group = &groups[index];
-                let position = (origin - group.origin).magnitude();
+                let position = (origin - group.origin).norm();
                 let angle = group
                     .axis
-                    .cross(circle.normal)
-                    .magnitude()
-                    .atan2(group.axis.dot(circle.normal).abs());
+                    .cross(&circle.normal)
+                    .norm()
+                    .atan2(group.axis.dot(&circle.normal).abs());
                 (position <= options.axis_position_tolerance
                     && angle <= options.axis_angle_tolerance_radians)
                     .then_some((index, position, angle))
@@ -342,7 +342,7 @@ fn group_axes(
             index
         };
         let group = &mut groups[index];
-        let axial = (circle.center - group.origin).dot(group.axis);
+        let axial = (circle.center - group.origin).dot(&group.axis);
         if let Some(station) = group.stations.iter_mut().find(|station| {
             (station.axial - axial).abs() <= options.axis_position_tolerance
                 && (station.radius - circle.radius).abs() <= options.vertex_tolerance

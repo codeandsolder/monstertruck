@@ -32,14 +32,14 @@ proptest! {
         let v = Vertex::from_points(p);
         let edge = array![i => builder::line(&v[i], &v[(i + 1) % 3]); 3];
         let face = builder::try_attach_plane(&[edge.to_vec().into()]).unwrap();
-        let base_solid: Solid = builder::extrude(&face, h * Vector3::unit_z());
+        let base_solid: Solid = builder::extrude(&face, h * Vector3::z());
         let axis = dir_from_array(dir_array);
-        let trans = Matrix4::from_translation(vec.into()) * Matrix4::from_axis_angle(axis, Rad(angle));
+        let trans = Matrix4::new_translation(&vec.into()) * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), angle);
         let solid = builder::transformed(&base_solid, trans);
         let msolid = solid.triangulation(0.05).collect_option().unwrap();
 
         prop_assert_near!(msolid.volume(), volume);
-        prop_assert_near!(msolid.center_of_gravity().to_point(), trans.transform_point(grav));
+        prop_assert_near!(msolid.center_of_gravity().to_point(), trans.apply_point(grav));
     }
 }
 
@@ -53,10 +53,10 @@ fn translated_thin_triangle_prism_centroid() {
     let v = Vertex::from_points(p);
     let edge = array![i => builder::line(&v[i], &v[(i + 1) % 3]); 3];
     let face = builder::try_attach_plane(&[edge.to_vec().into()]).unwrap();
-    let solid: Solid = builder::extrude(&face, 0.1 * Vector3::unit_z());
+    let solid: Solid = builder::extrude(&face, 0.1 * Vector3::z());
     let solid = builder::transformed(
         &solid,
-        Matrix4::from_translation(Vector3::new(0., 0., 4.414880353919416)),
+        Matrix4::new_translation(&Vector3::new(0., 0., 4.414880353919416)),
     );
     let msolid = solid.triangulation(0.05).collect_option().unwrap();
     assert!(

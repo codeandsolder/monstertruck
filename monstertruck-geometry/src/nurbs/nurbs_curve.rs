@@ -1,7 +1,7 @@
 use super::{
-    Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError, ControlPoint,
-    CurveDerivatives, CurveParameter, Cut, Debug, Error, EuclideanSpace, HashGen, Homogeneous,
-    InnerSpace, Invertible, KnotVector, MetricSpace, NurbsCurve, Origin, ParameterDivision1D,
+    AffinePoint, Bound, Bounded, BoundedCurve, BoundingBox, BsplineCurve, Concat, ConcatError,
+    ControlPoint, CurveDerivatives, CurveParameter, Cut, Debug, Error, HashGen, Homogeneous,
+    InnerProduct, Invertible, KnotVector, MetricSpace, NurbsCurve, Origin, ParameterDivision1D,
     ParameterRange, ParameterTransform, ParametricCurve, Result, SearchNearestParameter,
     SearchParameter, SearchParameterHint1D, Tolerance, Transformed, algo, rational_derivative,
     search_curve_with_hint,
@@ -457,7 +457,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>>
     SearchNearestParameter<CurveParameter> for NurbsCurve<V>
 where
     V::Point: MetricSpace<Metric = f64>,
-    <V::Point as EuclideanSpace>::Diff: InnerSpace + Tolerance,
+    <V::Point as AffinePoint>::Diff: InnerProduct + Tolerance,
 {
     type Point = V::Point;
     /// Searches the parameter `t` which minimize |self(t) - point| by Newton's method with initial guess `hint`.
@@ -478,7 +478,7 @@ where
     ///
     /// // check the answer
     /// let res = curve.evaluate(t);
-    /// let ans = Point2::from_vec(pt.to_vec().normalize());
+    /// let ans = Point2::from(pt.position_vector().normalize());
     /// assert_near!(res, ans);
     /// ```
     /// # Remarks
@@ -519,7 +519,7 @@ impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> SearchParameter
     for NurbsCurve<V>
 where
     V::Point: MetricSpace<Metric = f64>,
-    <V::Point as EuclideanSpace>::Diff: InnerSpace + Tolerance,
+    <V::Point as AffinePoint>::Diff: InnerProduct + Tolerance,
 {
     type Point = V::Point;
     #[inline]
@@ -546,7 +546,7 @@ where V::Point: Bounded<Scalar = f64>
 
 impl<V: Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>> ParametricCurve for NurbsCurve<V> {
     type Point = V::Point;
-    type Vector = <V::Point as EuclideanSpace>::Diff;
+    type Vector = <V::Point as AffinePoint>::Diff;
     fn derivative_n(&self, n: usize, t: f64) -> Self::Vector {
         self.0.derivatives(n, t).rational_derivatives()[n]
     }
@@ -590,7 +590,7 @@ where V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64,
 {
     type Scalar = f64;
     type Point = V::Point;
-    type Vector = <V::Point as EuclideanSpace>::Diff;
+    type Vector = <V::Point as AffinePoint>::Diff;
 
     #[inline]
     fn evaluate(&self, t: Self::Scalar) -> Self::Point { ParametricCurve::evaluate(self, t) }
@@ -633,7 +633,7 @@ impl<V> v2::SearchNearestParameter<v2::CurveParameter<f64>> for NurbsCurve<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     V::Point: MetricSpace<Metric = f64>,
-    <V::Point as EuclideanSpace>::Diff: InnerSpace + Tolerance,
+    <V::Point as AffinePoint>::Diff: InnerProduct + Tolerance,
 {
     type Point = V::Point;
     #[inline]
@@ -651,7 +651,7 @@ impl<V> v2::SearchParameter<v2::CurveParameter<f64>> for NurbsCurve<V>
 where
     V: HasScalar<Scalar = f64> + Homogeneous<Scalar = f64> + ControlPoint<f64, Diff = V>,
     V::Point: MetricSpace<Metric = f64>,
-    <V::Point as EuclideanSpace>::Diff: InnerSpace + Tolerance,
+    <V::Point as AffinePoint>::Diff: InnerProduct + Tolerance,
 {
     type Point = V::Point;
     #[inline]

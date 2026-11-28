@@ -4,10 +4,10 @@
 )]
 
 use super::{
-    Bound, BoundedSurface, ElementWise, Error, EuclideanSpace, InnerSpace, KERNEL_EPSILON,
-    MetricSpace, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
-    Point3, Result, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
-    SurfaceParameter, SurfaceParameterRange, Torus, Vector2, Vector3, Zero,
+    AffinePoint, Bound, BoundedSurface, ComponentWise, Error, KERNEL_EPSILON, MetricSpace,
+    ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point3, Result,
+    SearchNearestParameter, SearchParameter, SearchParameterHint2D, SurfaceParameter,
+    SurfaceParameterRange, Torus, Vector2, Vector3, Zero,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use std::f64::consts::PI;
@@ -70,7 +70,7 @@ impl ParametricSurface for Torus {
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Self::Vector {
         let ((su, cu), (sv, cv)) = (u.sin_cos(), v.sin_cos());
         let center = match (m, n) {
-            (0, 0) => self.center.to_vec(),
+            (0, 0) => self.center.position_vector(),
             _ => Vector3::zero(),
         };
         let u_z = if m == 0 { 1.0 } else { 0.0 };
@@ -89,7 +89,7 @@ impl ParametricSurface for Torus {
             _ => Vector2::new(r1 * sv, -r1 * cv),
         };
         let v_part = Vector3::new(v_part_d2.x, v_part_d2.x, v_part_d2.y);
-        center + u_part.mul_element_wise(v_part)
+        center + u_part.component_product(v_part)
     }
     #[inline]
     fn evaluate(&self, u: f64, v: f64) -> Point3 {
@@ -347,7 +347,7 @@ impl Torus {
         hint: Option<(f64, f64)>,
     ) -> Vec<(f64, f64, f64)> {
         let relative = point - self.center();
-        let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
+        let scale = (self.large_radius() + self.small_radius() + relative.norm()).max(1.0);
         let tolerance2 = (KERNEL_EPSILON * scale).powi(2);
         if !tolerance2.is_finite() {
             return Vec::new();
@@ -372,8 +372,8 @@ impl Torus {
         hint: Option<(f64, f64)>,
     ) -> Vec<(f64, f64, f64)> {
         let relative = point - self.center();
-        let rho = Vector2::new(relative.x, relative.y).magnitude();
-        let scale = (self.large_radius() + self.small_radius() + relative.magnitude()).max(1.0);
+        let rho = Vector2::new(relative.x, relative.y).norm();
+        let scale = (self.large_radius() + self.small_radius() + relative.norm()).max(1.0);
         let eps = 128.0 * f64::EPSILON * scale;
         let azimuth = if rho > eps {
             relative.y.atan2(relative.x).rem_euclid(2.0 * PI)

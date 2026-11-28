@@ -51,8 +51,8 @@ use cadmpeg_ir::topology::{
 };
 use cadmpeg_ir::transform::Transform as IrTransform;
 use monstertruck_modeling::{
-    BoundedCurve, Curve, EuclideanSpace, InnerSpace, MetricSpace, ParametricCurve,
-    ParametricSurface, ParametricSurface3D, Point3, SearchParameter, Surface, Transform as _,
+    AffinePoint, BoundedCurve, Curve, GeometryTransform as _, InnerProduct, MetricSpace,
+    ParametricCurve, ParametricSurface, ParametricSurface3D, Point3, SearchParameter, Surface,
     Vector3,
 };
 use monstertruck_topology::compress::{CompressedEdgeIndex, CompressedFace};
@@ -389,7 +389,7 @@ fn a_planar_sheet_face_becomes_a_compressed_shell() {
         );
     };
     assert!(plane.normal().z > 0.999, "normal was {:?}", plane.normal());
-    assert!(plane.origin().to_vec().magnitude() < 1.0e-12);
+    assert!(plane.origin().position_vector().norm() < 1.0e-12);
 }
 
 /// The invariant `Edge::try_new` will check later: an edge's curve runs from its
@@ -545,12 +545,12 @@ fn a_mirrored_body_keeps_every_face_outward() {
         panic!("a cube is a solid");
     };
     let shell = &solid.boundaries[0];
-    let centroid = Point3::from_vec(
+    let centroid = Point3::from(
         shell
             .vertices
             .iter()
             .fold(Vector3::new(0.0, 0.0, 0.0), |sum, point| {
-                sum + point.to_vec()
+                sum + point.position_vector()
             })
             / shell.vertices.len() as f64,
     );
@@ -563,11 +563,11 @@ fn a_mirrored_body_keeps_every_face_outward() {
                 count += 1.0;
             }
         }
-        let face_centre = Point3::from_vec(sum / count);
+        let face_centre = Point3::from(sum / count);
         let normal = face.surface.normal(0.0, 0.0);
         let oriented = if face.orientation { normal } else { -normal };
         assert!(
-            oriented.dot(face_centre - centroid) > 0.0,
+            oriented.dot(&face_centre - centroid) > 0.0,
             "face {index} faces inward after a mirror"
         );
     }
@@ -642,8 +642,8 @@ fn a_classified_outer_loop_is_put_first() {
     let touches_origin = |boundary: &[CompressedEdgeIndex]| {
         boundary.iter().any(|use_of| {
             let edge = &sheet.edges[use_of.index];
-            sheet.vertices[edge.vertices.0].to_vec().magnitude() < 1.0e-12
-                || sheet.vertices[edge.vertices.1].to_vec().magnitude() < 1.0e-12
+            sheet.vertices[edge.vertices.0].position_vector().norm() < 1.0e-12
+                || sheet.vertices[edge.vertices.1].position_vector().norm() < 1.0e-12
         })
     };
     assert!(
@@ -752,7 +752,7 @@ fn ir_oriented_normal(
             .into_raw();
     let du = Vector3::new(partials.du.x, partials.du.y, partials.du.z);
     let dv = Vector3::new(partials.dv.x, partials.dv.y, partials.dv.z);
-    let mut normal = du.cross(dv).normalize();
+    let mut normal = du.cross(&dv).normalize();
     if let Some(SolvedSurfaceGeometry::Nurbs(net)) = geometry.solved()
         && net.normal_reversed()
     {
@@ -806,7 +806,7 @@ fn assert_face_faces_like_the_source(
         let (point, expected) = ir_oriented_normal(&geometry, sense, u, v);
         let got = converted_oriented_normal(face, point);
         assert!(
-            got.dot(expected) > 0.999,
+            got.dot(&expected) > 0.999,
             "at source ({u}, {v}) = {point:?} the source face faces {expected:?}, the converted \
              face faces {got:?} -- a flipped face"
         );
@@ -1873,7 +1873,7 @@ fn a_row_major_transform_is_not_read_transposed() {
         [0.0, 0.0, 1.0, 0.0],
     ])
     .unwrap();
-    let turned = frame::matrix(&transform).transform_point(Point3::new(1.0, 0.0, 0.0));
+    let turned = frame::matrix(&transform).apply_point(Point3::new(1.0, 0.0, 0.0));
     assert!(
         turned.distance(Point3::new(0.0, 1.0, 0.0)) < 1.0e-12,
         "+x turned to {turned:?}; transposed would give (0, -1, 0)"

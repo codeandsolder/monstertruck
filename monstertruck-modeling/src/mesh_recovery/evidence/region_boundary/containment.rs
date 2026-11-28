@@ -5,7 +5,7 @@ use super::super::super::sample_fit::normal_basis;
 use super::super::{CircularMeridianEvidence, MeshEvidence, PlanarSupport, SpatialTrackEvidence};
 mod circular;
 use super::{ContactCircleEvidence, ContactCurveEvidence, ContactLineEvidence};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use circular::CircularProfile;
 
 /// Infinite surface carrier hypothesis, independently fitted to source faces.
@@ -76,7 +76,7 @@ impl SurfaceCarrier {
     // Linear profile residual is normalized to unit gradient.
     pub(super) fn signed_constraint(self, point: Point3) -> Option<(Vector3, f64)> {
         match self {
-            Self::Plane { origin, normal } => Some((normal, (point - origin).dot(normal))),
+            Self::Plane { origin, normal } => Some((normal, (point - origin).dot(&normal))),
             Self::LinearRevolution {
                 origin,
                 axis,
@@ -84,9 +84,9 @@ impl SurfaceCarrier {
                 slope,
             } => {
                 let delta = point - origin;
-                let z = delta.dot(axis);
+                let z = delta.dot(&axis);
                 let radial = delta - axis * z;
-                let rho = radial.magnitude();
+                let rho = radial.norm();
                 if rho <= 0.0 {
                     return None;
                 }
@@ -104,12 +104,12 @@ impl SurfaceCarrier {
             } => {
                 let delta = point - axial_center;
                 if radial_center == 0.0 {
-                    let rho = delta.magnitude();
+                    let rho = delta.norm();
                     return (rho > 0.0).then(|| (delta / rho, rho - profile_radius));
                 }
-                let z = delta.dot(axis);
+                let z = delta.dot(&axis);
                 let radial = delta - axis * z;
-                let rho = radial.magnitude();
+                let rho = radial.norm();
                 let distance = z.hypot(rho - radial_center);
                 if rho <= 0.0 || distance <= 0.0 {
                     return None;
@@ -182,9 +182,9 @@ impl SurfaceCarrier {
         match self {
             Self::Plane { origin, normal } if unit(normal) => {
                 let error = (start - origin)
-                    .dot(normal)
+                    .dot(&normal)
                     .abs()
-                    .max((end - origin).dot(normal).abs());
+                    .max((end - origin).dot(&normal).abs());
                 residual(error, error, None)
             }
             Self::LinearRevolution {
@@ -209,9 +209,9 @@ impl SurfaceCarrier {
                     }
                 }
                 // The minimum radial distance may occur inside a chord.
-                let denominator = b.radial.magnitude2();
+                let denominator = b.radial.norm_squared();
                 if denominator > 0.0 {
-                    let t = (-a.radial.dot(b.radial) / denominator).clamp(0.0, 1.0);
+                    let t = (-a.radial.dot(&b.radial) / denominator).clamp(0.0, 1.0);
                     witness = witness.max(a.add_scaled(b, t).error());
                 }
                 radial_residual(maximum, witness, minimum_radius)
@@ -357,13 +357,13 @@ impl SurfaceCarrier {
             return None;
         }
         let relative = first - circle.center;
-        let radial = relative - circle.normal * relative.dot(circle.normal);
-        let length = radial.magnitude();
+        let radial = relative - circle.normal * relative.dot(&circle.normal);
+        let length = radial.norm();
         if length <= 0.0 || !length.is_finite() {
             return None;
         }
         let u = radial * (circle.radius / length);
-        let v = circle.normal.cross(u);
+        let v = circle.normal.cross(&u);
         CircularProfile::new(axial_center, axis, radial_center, profile_radius)?.circle_over(
             circle.center,
             u,
@@ -381,8 +381,8 @@ impl SurfaceCarrier {
         let (basis_u, basis_v) = (basis_u * circle.radius, basis_v * circle.radius);
         match self {
             Self::Plane { origin, normal } if unit(normal) => {
-                let error = (circle.center - origin).dot(normal).abs()
-                    + basis_u.dot(normal).hypot(basis_v.dot(normal));
+                let error = (circle.center - origin).dot(&normal).abs()
+                    + basis_u.dot(&normal).hypot(basis_v.dot(&normal));
                 residual(error, error, None)
             }
             Self::LinearRevolution {
@@ -428,7 +428,7 @@ impl SurfaceCarrier {
 }
 
 pub(super) fn unit(axis: Vector3) -> bool {
-    (0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+    (0.0..=64.0 * f64::EPSILON).contains(&(axis.norm_squared() - 1.0).abs())
 }
 
 fn residual(
@@ -474,7 +474,7 @@ struct RadialTerm {
 
 impl RadialTerm {
     fn new(delta: Vector3, axis: Vector3, radius: f64, slope: f64) -> Self {
-        let axial = delta.dot(axis);
+        let axial = delta.dot(&axis);
         Self {
             radial: delta - axis * axial,
             expected: slope.mul_add(axial, radius),
@@ -483,7 +483,7 @@ impl RadialTerm {
 
     fn form(self, other: Self) -> f64 {
         self.expected
-            .mul_add(-other.expected, self.radial.dot(other.radial))
+            .mul_add(-other.expected, self.radial.dot(&other.radial))
     }
 
     fn add_scaled(self, other: Self, scale: f64) -> Self {
@@ -493,7 +493,7 @@ impl RadialTerm {
         }
     }
 
-    fn error(self) -> f64 { (self.radial.magnitude() - self.expected).abs() }
+    fn error(self) -> f64 { (self.radial.norm() - self.expected).abs() }
 }
 
 #[cfg(test)]
@@ -505,7 +505,7 @@ mod tests {
         ContactLineEvidence {
             endpoints: [start, end],
             direction: (end - start).normalize(),
-            chord_length: (end - start).magnitude(),
+            chord_length: (end - start).norm(),
             max_vertex_offset: 0.0,
             max_reverse_step: 0.0,
             exactly_collinear: true,
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn independent_plane_and_cone_contain_same_circle() -> Result<(), Box<dyn std::error::Error>> {
         let origin = Point3::new(1.0e6, -2.0e6, 3.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let center = origin + axis * 4.0;
         let profile = SurfaceCarrier::LinearRevolution {
             origin,
@@ -557,7 +557,7 @@ mod tests {
                 .ok_or("missing circle constraint")?;
             assert!(measured.upper_bound < 1.0e-12);
         }
-        let shifted = circle(center + Vector3::unit_x() * 0.125, axis, 4.0);
+        let shifted = circle(center + Vector3::x() * 0.125, axis, 4.0);
         let residual = profile
             .circle_residual(&shifted)
             .ok_or("missing circle residual")?;
@@ -572,7 +572,7 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let carrier = SurfaceCarrier::LinearRevolution {
             origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 0.0,
         };
@@ -614,7 +614,7 @@ mod tests {
         let evidence = analyze_mesh_evidence(&mesh, EvidenceOptions::default())?;
         let carrier = SurfaceCarrier::CircularRevolution {
             axial_center: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radial_center: 20.0,
             profile_radius: 1.0,
         };
@@ -649,11 +649,11 @@ mod tests {
         let origin = Point3::new(0.0, 0.0, 0.0);
         let cone = SurfaceCarrier::LinearRevolution {
             origin,
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 0.0,
             slope: 1.0,
         };
-        let wrong_sheet = circle(Point3::new(0.0, 0.0, -2.0), Vector3::unit_z(), 2.0);
+        let wrong_sheet = circle(Point3::new(0.0, 0.0, -2.0), Vector3::z(), 2.0);
         let residual = cone
             .circle_residual(&wrong_sheet)
             .ok_or("missing sheet evidence")?;

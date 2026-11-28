@@ -25,7 +25,7 @@ fn modeling_cylinder(
 #[test]
 fn modeling_cylinder_saves_as_cylindrical_surface() {
     let origin = Point3::origin();
-    let axis = Vector3::unit_z();
+    let axis = Vector3::z();
     let radius = 3.0;
     let surface = modeling_cylinder(origin, axis, radius, 2.0);
 
@@ -53,11 +53,11 @@ fn modeling_cylinder_saves_as_cylindrical_surface() {
         for &u in &[0.0, 0.5, 1.0] {
             let point = reloaded.evaluate(u, v);
             let offset = point - origin;
-            let radial = offset - axis * offset.dot(axis);
+            let radial = offset - axis * offset.dot(&axis);
             assert!(
-                (radial.magnitude() - radius).abs() < 1.0e-6,
+                (radial.norm() - radius).abs() < 1.0e-6,
                 "reloaded cylinder point off-radius at (u = {u}, v = {v}): {}",
-                radial.magnitude()
+                radial.norm()
             );
         }
     }

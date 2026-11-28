@@ -30,18 +30,18 @@ pub(super) const VOLUME_EPS: f64 = 1.0e-3;
 /// Axis-aligned unit cube with its minimum corner at `origin`.
 pub(super) fn unit_cube(origin: Point3) -> Solid {
     let v = builder::vertex(origin);
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    builder::extrude(&f, Vector3::unit_z())
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    builder::extrude(&f, Vector3::z())
 }
 
 /// Square-section vertical column centered on `(cx, cy)`, tall enough to pierce
 /// a unit cube standing on `z = 0`.
 pub(super) fn square_column(cx: f64, cy: f64, half: f64) -> Solid {
     let v = builder::vertex(Point3::new(cx - half, cy - half, -0.5));
-    let e = builder::extrude(&v, Vector3::unit_x() * (2.0 * half));
-    let f = builder::extrude(&e, Vector3::unit_y() * (2.0 * half));
-    builder::extrude(&f, Vector3::unit_z() * 2.0)
+    let e = builder::extrude(&v, Vector3::x() * (2.0 * half));
+    let f = builder::extrude(&e, Vector3::y() * (2.0 * half));
+    builder::extrude(&f, Vector3::z() * 2.0)
 }
 
 pub(super) fn unit_cylinder_y(y0: f64) -> Result<Solid> {
@@ -50,12 +50,12 @@ pub(super) fn unit_cylinder_y(y0: f64) -> Result<Solid> {
     let circle = builder::revolve(
         &vertex,
         center,
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         2,
     )?;
     let disk = builder::try_attach_plane([circle])?;
-    Ok(builder::extrude(&disk, Vector3::unit_y()))
+    Ok(builder::extrude(&disk, Vector3::y()))
 }
 
 /// Asserts a boolean result is watertight and geometrically correct: it has at
@@ -90,11 +90,11 @@ pub(super) fn solid_angle_contains(mesh: &PolygonMesh, point: Point3) -> bool {
         let a = mesh.positions()[triangle[0].pos] - point;
         let b = mesh.positions()[triangle[1].pos] - point;
         let c = mesh.positions()[triangle[2].pos] - point;
-        let la = a.magnitude();
-        let lb = b.magnitude();
-        let lc = c.magnitude();
-        let numerator = a.dot(b.cross(c));
-        let denominator = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+        let la = a.norm();
+        let lb = b.norm();
+        let lc = c.norm();
+        let numerator = a.dot(&b.cross(&c));
+        let denominator = la * lb * lc + a.dot(&b) * lc + b.dot(&c) * la + c.dot(&a) * lb;
         winding += 2.0 * numerator.atan2(denominator);
     }
     winding.abs() > std::f64::consts::TAU

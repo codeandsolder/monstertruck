@@ -112,7 +112,7 @@ fn step_to_mesh(table: &Table) -> Result<Vec<MeshedCShell>> {
                 .map_or_else(Vec::new, |node| node.shape().clone());
             for mut shell in shapes.into_iter().flatten() {
                 for vertex in &mut shell.vertices {
-                    *vertex = matrix.transform_point(*vertex);
+                    *vertex = matrix.apply_point(*vertex);
                 }
                 for edge in &mut shell.edges {
                     edge.curve.transform_by(matrix);

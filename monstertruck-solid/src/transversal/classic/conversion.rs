@@ -3,9 +3,9 @@
 use super::tolerance::BooleanTolerance;
 use super::{
     AltCurveShell, Alternative, BoundaryCurve2D, BoundedCurve, BoundedSurface, BsplineCurve, Cut,
-    InnerSpace, IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve, ParameterCurve,
-    ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve, ShapeOpsSurface,
-    Shell, SurfaceCurve, Vector4,
+    InnerProduct, IntersectionCurve, Invertible, KnotVector, MetricSpace, NurbsCurve,
+    ParameterCurve, ParametricCurve, Point3, PolylineCurve, SearchNearestParameter, ShapeOpsCurve,
+    ShapeOpsSurface, Shell, SurfaceCurve, Vector4,
 };
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 use num_traits::ToPrimitive;
@@ -144,7 +144,7 @@ fn certified_plane_cylinder_iso<S: ShapeOpsSurface>(
     else {
         return false;
     };
-    exact_plane.normal().cross(axis).magnitude() <= DEFAULT_NUMERICAL_TOLERANCES.angular
+    exact_plane.normal().cross(&axis).norm() <= DEFAULT_NUMERICAL_TOLERANCES.angular
 }
 
 /// Guide samples come from tessellation, not geometric identity. Use only to
@@ -169,11 +169,11 @@ fn iso_candidate_follows_guide(
             .enumerate()
             .filter_map(|(index, segment)| {
                 let delta = segment[1] - segment[0];
-                let squared = delta.magnitude2();
+                let squared = delta.norm_squared();
                 if !squared.is_finite() || squared <= 0.0 {
                     return None;
                 }
-                let t = ((point - segment[0]).dot(delta) / squared).clamp(0.0, 1.0);
+                let t = ((point - segment[0]).dot(&delta) / squared).clamp(0.0, 1.0);
                 let distance = point.distance(segment[0] + delta * t);
                 Some(((index, t), distance))
             })

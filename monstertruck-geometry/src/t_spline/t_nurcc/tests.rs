@@ -15,14 +15,14 @@ use crate::{
 fn make_cube() -> Result<Tnurcc<Point3>> {
     use crate::prelude::Point3;
     let points = vec![
-        Point3::from((0.0, 0.0, 0.0)), // 0
-        Point3::from((0.0, 0.0, 1.0)), // 1
-        Point3::from((1.0, 0.0, 1.0)), // 2
-        Point3::from((1.0, 0.0, 0.0)), // 3
-        Point3::from((0.0, 1.0, 0.0)), // 4
-        Point3::from((0.0, 1.0, 1.0)), // 5
-        Point3::from((1.0, 1.0, 1.0)), // 6
-        Point3::from((1.0, 1.0, 0.0)), // 7
+        Point3::from([0.0, 0.0, 0.0]), // 0
+        Point3::from([0.0, 0.0, 1.0]), // 1
+        Point3::from([1.0, 0.0, 1.0]), // 2
+        Point3::from([1.0, 0.0, 0.0]), // 3
+        Point3::from([0.0, 1.0, 0.0]), // 4
+        Point3::from([0.0, 1.0, 1.0]), // 5
+        Point3::from([1.0, 1.0, 1.0]), // 6
+        Point3::from([1.0, 1.0, 0.0]), // 7
     ];
 
     let faces = vec![
@@ -464,14 +464,14 @@ fn t_nurcc_test_clone() {
 #[test]
 fn t_nurcc_test_from_quad_mesh_cube() {
     let points = vec![
-        Point3::from((0.0, 0.0, 0.0)),
-        Point3::from((0.0, 0.0, 1.0)),
-        Point3::from((1.0, 0.0, 1.0)),
-        Point3::from((1.0, 0.0, 0.0)),
-        Point3::from((0.0, 1.0, 0.0)),
-        Point3::from((0.0, 1.0, 1.0)),
-        Point3::from((1.0, 1.0, 1.0)),
-        Point3::from((1.0, 1.0, 0.0)),
+        Point3::from([0.0, 0.0, 0.0]),
+        Point3::from([0.0, 0.0, 1.0]),
+        Point3::from([1.0, 0.0, 1.0]),
+        Point3::from([1.0, 0.0, 0.0]),
+        Point3::from([0.0, 1.0, 0.0]),
+        Point3::from([0.0, 1.0, 1.0]),
+        Point3::from([1.0, 1.0, 1.0]),
+        Point3::from([1.0, 1.0, 0.0]),
     ];
     // Same winding as make_cube().
     let faces = [
@@ -502,10 +502,10 @@ fn t_nurcc_test_from_quad_mesh_cube() {
 fn t_nurcc_test_from_quad_mesh_open_mesh_rejected() {
     // An open mesh (not all edges shared by 2 faces) should be rejected.
     let points = vec![
-        Point3::from((0.0, 0.0, 0.0)),
-        Point3::from((1.0, 0.0, 0.0)),
-        Point3::from((1.0, 1.0, 0.0)),
-        Point3::from((0.0, 1.0, 0.0)),
+        Point3::from([0.0, 0.0, 0.0]),
+        Point3::from([1.0, 0.0, 0.0]),
+        Point3::from([1.0, 1.0, 0.0]),
+        Point3::from([0.0, 1.0, 0.0]),
     ];
     // Single quad face -- edges have only 1 face each.
     let faces = [[0, 1, 2, 3]];

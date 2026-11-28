@@ -780,7 +780,7 @@ mod tests {
     fn cone_witness_is_normalized_spatial_distance() {
         let cone = SurfaceCarrier::LinearRevolution {
             origin: Point3::new(0.0, 0.0, 0.0),
-            axis: Vector3::unit_z(),
+            axis: Vector3::z(),
             radius_at_origin: 1.0,
             slope: 1.0,
         };

@@ -4,7 +4,7 @@
 )]
 #![cfg(feature = "polynomial")]
 
-use monstertruck_core::{cgmath64::*, tolerance::*};
+use monstertruck_core::{math::*, tolerance::*};
 use monstertruck_traits::{polynomial::PolynomialCurve, *};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
@@ -171,7 +171,7 @@ fn exec_polycurve_closest_point(rng: &mut StdRng) -> bool {
     let (p1, der1) = (poly1.evaluate(t1), poly1.derivative(t1));
     let n = p1 - p0;
 
-    n.dot(der0).so_small() && n.dot(der1).so_small()
+    n.dot(&der0).so_small() && n.dot(&der1).so_small()
 }
 
 #[test]

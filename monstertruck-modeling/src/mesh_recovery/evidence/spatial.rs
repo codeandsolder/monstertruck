@@ -7,7 +7,7 @@
 
 use super::super::sample_fit::normal_basis;
 use super::{CurvatureTrack, MeshEvidence};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use rustc_hash::FxHashSet as HashSet;
 
 /// Approximate cross-sectional source vertex cluster at one axial station.
@@ -120,9 +120,9 @@ fn fit_support_plane_placement(
             let support = evidence.planar_supports.get(id)?;
             let relative = support.origin - reference;
             Some((
-                support.normal.dot(basis_u),
-                support.normal.dot(basis_v),
-                support.normal.dot(relative),
+                support.normal.dot(&basis_u),
+                support.normal.dot(&basis_v),
+                support.normal.dot(&relative),
             ))
         })
         .collect::<Option<Vec<_>>>()?;
@@ -276,8 +276,8 @@ pub(super) fn source_meridian_samples(
     let mut data = Vec::with_capacity(ids.len());
     for id in ids {
         let relative = *evidence.positions.get(id)? - origin;
-        let axial = relative.dot(axis);
-        let radial = (relative - axis * axial).magnitude();
+        let axial = relative.dot(&axis);
+        let radial = (relative - axis * axial).norm();
         if !axial.is_finite() || !radial.is_finite() {
             return None;
         }
@@ -360,7 +360,7 @@ pub fn measure_spatial_support_set(
     angular_uncertainty: f64,
 ) -> Option<SpatialTrackEvidence> {
     if supports.windows(2).any(|pair| pair[0] >= pair[1])
-        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.magnitude2() - 1.0).abs())
+        || !(0.0..=64.0 * f64::EPSILON).contains(&(axis.norm_squared() - 1.0).abs())
         || !(0.0..=std::f64::consts::FRAC_PI_2).contains(&angular_uncertainty)
     {
         return None;
@@ -375,7 +375,7 @@ pub fn measure_spatial_support_set(
     )?;
     let (projection_sum, projection_min, projection_max) = supports
         .iter()
-        .map(|&id| evidence.planar_supports[id].normal.dot(axis))
+        .map(|&id| evidence.planar_supports[id].normal.dot(&axis))
         .fold(
             (0.0_f64, f64::INFINITY, f64::NEG_INFINITY),
             |(sum, min, max), value| (sum + value, min.min(value), max.max(value)),

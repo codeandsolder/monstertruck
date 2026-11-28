@@ -1,6 +1,6 @@
 use crate::dag;
 pub use dag::{Edge, EdgeMut, Node, NodeMut, Path};
-use monstertruck_core::cgmath64::One;
+use monstertruck_core::math::One;
 
 /// Entity of the node
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

@@ -5,12 +5,12 @@
 
 use super::{
     CartesianPoint, CartesianPointHolder, Conic, Conic2D, Conic3D, Curve2D, Curve3D, CurveAny,
-    CurveAnyHolder, Deserialize, Holder, Invertible, KERNEL_EPSILON, Matrix3, Matrix4, Name, PI,
-    PcurveOrSurface, PlaceHolder, Point2, Point3, PreferredSurfaceCurveRepresentation, Processor,
-    Result, SearchNearestParameter, Serialize, SquareMatrix, StepConvertingError, Surface,
-    SurfaceAny, SurfaceAnyHolder, SurfaceCurve, SurfaceCurveEntityKind, Table, Tolerance,
-    Transform, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola, UnitParabola, geom,
-    step_geometry,
+    CurveAnyHolder, Deserialize, GeometryTransform, Holder, Invertible, KERNEL_EPSILON, Matrix3,
+    Matrix4, Name, PI, PcurveOrSurface, PlaceHolder, Point2, Point3,
+    PreferredSurfaceCurveRepresentation, Processor, Result, SearchNearestParameter, Serialize,
+    SquareLinearMap, StepConvertingError, Surface, SurfaceAny, SurfaceAnyHolder, SurfaceCurve,
+    SurfaceCurveEntityKind, Table, Tolerance, Transformed, TrimmedCurve, UnitCircle, UnitHyperbola,
+    UnitParabola, geom, step_geometry,
 };
 
 /// `vertex_point`
@@ -61,11 +61,10 @@ macro_rules! trimmed_step_conic {
     ($mat:expr, $start:expr, $end:expr, $basis:ty,
      $inverse_error:literal, $start_error:expr, $end_error:expr, $wrap:literal) => {{
         let matrix = $mat;
-        let inverse = matrix.invert().ok_or_else(|| $inverse_error.to_string())?;
-        let (start, end) = (
-            inverse.transform_point($start),
-            inverse.transform_point($end),
-        );
+        let inverse = matrix
+            .try_inverse()
+            .ok_or_else(|| $inverse_error.to_string())?;
+        let (start, end) = (inverse.apply_point($start), inverse.apply_point($end));
         let unit = <$basis>::new();
         let u = unit
             .search_nearest_parameter(start, None, 0)
@@ -133,7 +132,7 @@ impl EdgeCurve {
     fn parse_conic_2d(curve: &Conic, p: Point2, q: Point2) -> Result<Curve2D, StepConvertingError> {
         Ok(match curve {
             Conic::Circle(circle) => Curve2D::Conic(Conic2D::Ellipse(trimmed_step_conic!(
-                Matrix3::try_from(&circle.position)? * Matrix3::from_scale(circle.radius),
+                Matrix3::try_from(&circle.position)? * Matrix3::new_scaling(circle.radius),
                 p,
                 q,
                 UnitCircle<Point2>,
@@ -144,7 +143,10 @@ impl EdgeCurve {
             ))),
             Conic::Ellipse(ellipse) => Curve2D::Conic(Conic2D::Ellipse(trimmed_step_conic!(
                 Matrix3::try_from(&ellipse.position)?
-                    * Matrix3::from_nonuniform_scale(ellipse.semi_axis_1, ellipse.semi_axis_2),
+                    * Matrix3::new_nonuniform_scaling(&Vector2::new(
+                        ellipse.semi_axis_1,
+                        ellipse.semi_axis_2
+                    )),
                 p,
                 q,
                 UnitCircle<Point2>,
@@ -155,7 +157,10 @@ impl EdgeCurve {
             ))),
             Conic::Hyperbola(hyperbola) => Curve2D::Conic(Conic2D::Hyperbola(trimmed_step_conic!(
                 Matrix3::try_from(&hyperbola.position)?
-                    * Matrix3::from_nonuniform_scale(hyperbola.semi_axis, hyperbola.semi_imag_axis),
+                    * Matrix3::new_nonuniform_scaling(&Vector2::new(
+                        hyperbola.semi_axis,
+                        hyperbola.semi_imag_axis
+                    )),
                 p,
                 q,
                 UnitHyperbola<Point2>,
@@ -165,7 +170,7 @@ impl EdgeCurve {
                 false
             ))),
             Conic::Parabola(parabola) => Curve2D::Conic(Conic2D::Parabola(trimmed_step_conic!(
-                Matrix3::try_from(&parabola.position)? * Matrix3::from_scale(parabola.focal_dist),
+                Matrix3::try_from(&parabola.position)? * Matrix3::new_scaling(parabola.focal_dist),
                 p,
                 q,
                 UnitParabola<Point2>,
@@ -193,7 +198,7 @@ impl EdgeCurve {
     fn parse_conic_3d(curve: &Conic, p: Point3, q: Point3) -> Result<Curve3D, StepConvertingError> {
         Ok(match curve {
             Conic::Circle(circle) => Curve3D::Conic(Conic3D::Ellipse(trimmed_step_conic!(
-                Matrix4::try_from(&circle.position)? * Matrix4::from_scale(circle.radius),
+                Matrix4::try_from(&circle.position)? * Matrix4::new_scaling(circle.radius),
                 p,
                 q,
                 UnitCircle<Point3>,
@@ -204,11 +209,11 @@ impl EdgeCurve {
             ))),
             Conic::Ellipse(ellipse) => Curve3D::Conic(Conic3D::Ellipse(trimmed_step_conic!(
                 Matrix4::try_from(&ellipse.position)?
-                    * Matrix4::from_nonuniform_scale(
+                    * Matrix4::new_nonuniform_scaling(&Vector3::new(
                         ellipse.semi_axis_1,
                         ellipse.semi_axis_2,
-                        f64::min(ellipse.semi_axis_1, ellipse.semi_axis_2),
-                    ),
+                        f64::min(ellipse.semi_axis_1, ellipse.semi_axis_2)
+                    )),
                 p,
                 q,
                 UnitCircle<Point3>,
@@ -219,11 +224,11 @@ impl EdgeCurve {
             ))),
             Conic::Hyperbola(hyperbola) => Curve3D::Conic(Conic3D::Hyperbola(trimmed_step_conic!(
                 Matrix4::try_from(&hyperbola.position)?
-                    * Matrix4::from_nonuniform_scale(
+                    * Matrix4::new_nonuniform_scaling(&Vector3::new(
                         hyperbola.semi_axis,
                         hyperbola.semi_imag_axis,
-                        f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis),
-                    ),
+                        f64::min(hyperbola.semi_axis, hyperbola.semi_imag_axis)
+                    )),
                 p,
                 q,
                 UnitHyperbola<Point3>,
@@ -233,7 +238,7 @@ impl EdgeCurve {
                 false
             ))),
             Conic::Parabola(parabola) => Curve3D::Conic(Conic3D::Parabola(trimmed_step_conic!(
-                Matrix4::try_from(&parabola.position)? * Matrix4::from_scale(parabola.focal_dist),
+                Matrix4::try_from(&parabola.position)? * Matrix4::new_scaling(parabola.focal_dist),
                 p,
                 q,
                 UnitParabola<Point3>,

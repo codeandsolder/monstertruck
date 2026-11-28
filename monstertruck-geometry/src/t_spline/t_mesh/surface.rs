@@ -5,9 +5,9 @@
 
 use super::basis::basis_function_der;
 use super::{
-    Arc, BoundedSurface, BsplineCurve, BsplineSurface, Error, InnerSpace, Invertible, KnotVector,
-    Matrix4, Origin, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D,
-    Point3, Result, RwLock, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
+    Arc, BoundedSurface, BsplineCurve, BsplineSurface, Error, Invertible, KnotVector, Matrix4,
+    Origin, ParameterDivision2D, ParameterRange, ParametricSurface, ParametricSurface3D, Point3,
+    Result, RwLock, SearchNearestParameter, SearchParameter, SearchParameterHint2D,
     SurfaceParameter, SurfaceParameterRange, Tmesh, TmeshConnectionType, TmeshControlPoint,
     TmeshDirection, Transformed, Vector3, algo,
 };
@@ -135,22 +135,22 @@ impl Tmesh<Point3> {
         let suv = self.try_analytical_der_mn(1, 1, u, v)?;
         let svv = self.try_analytical_der_mn(0, 2, u, v)?;
 
-        let normal = su.cross(sv);
-        let normal_len = normal.magnitude();
+        let normal = su.cross(&sv);
+        let normal_len = normal.norm();
         let curvature = if normal_len.so_small() {
             0.0
         } else {
             let n = normal / normal_len;
 
             // First fundamental form coefficients.
-            let cap_e = su.dot(su);
-            let cap_f = su.dot(sv);
-            let cap_g = sv.dot(sv);
+            let cap_e = su.dot(&su);
+            let cap_f = su.dot(&sv);
+            let cap_g = sv.dot(&sv);
 
             // Second fundamental form coefficients.
-            let e = suu.dot(n);
-            let f = suv.dot(n);
-            let g = svv.dot(n);
+            let e = suu.dot(&n);
+            let f = suv.dot(&n);
+            let g = svv.dot(&n);
 
             let cap_f_squared = cap_f * cap_f;
             let denom = f64::mul_add(cap_e, cap_g, -cap_f_squared);
@@ -365,11 +365,11 @@ impl Invertible for Tmesh<Point3> {
 
 impl Transformed<Matrix4> for Tmesh<Point3> {
     fn transform_by(&mut self, trans: Matrix4) {
-        use monstertruck_core::cgmath64::Transform;
+        use monstertruck_core::math::GeometryTransform;
         for cp in &self.control_points {
             let mut w = cp.write();
             let p = *w.point();
-            w.set_point(trans.transform_point(p));
+            w.set_point(trans.apply_point(p));
         }
         // Invalidate cached knot vectors.
         *self.knot_vectors.write() = None;

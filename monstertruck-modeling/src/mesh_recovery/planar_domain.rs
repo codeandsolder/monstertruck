@@ -13,7 +13,7 @@
 //! certified by this test.
 
 use super::sample_fit::normal_basis;
-use crate::{Edge, InnerSpace, Point3, Vector2, Vector3, Wire};
+use crate::{Edge, InnerProduct, Point3, Vector2, Vector3, Wire};
 use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineCurve, proof_bezier_spans, subdivide_homogeneous_bezier,
 };
@@ -72,7 +72,7 @@ impl Span {
 
     fn strip(&self) -> Option<Strip> {
         let delta = self.ends[1] - self.ends[0];
-        let length = delta.magnitude();
+        let length = delta.norm();
         if !length.is_finite() || length <= self.margin {
             return None;
         }
@@ -81,7 +81,7 @@ impl Span {
         let range = self
             .controls
             .iter()
-            .map(|&p| (point(p) - origin).dot(normal))
+            .map(|&p| (point(p) - origin).dot(&normal))
             .fold([0.0_f64, 0.0_f64], |[lo, hi], value| {
                 [lo.min(value), hi.max(value)]
             });
@@ -108,24 +108,24 @@ impl Span {
         ])
     }
 
-    fn size(&self) -> f64 { (self.bounds[1] - self.bounds[0]).magnitude() }
+    fn size(&self) -> f64 { (self.bounds[1] - self.bounds[0]).norm() }
 
     // Ordered rational control coordinates imply monotonicity for
     // positive weights, irrespective of the curve's parameter speed.
     fn monotone(&self) -> bool {
         let direction = self.ends[1] - self.ends[0];
-        if direction.magnitude() <= self.margin {
+        if direction.norm() <= self.margin {
             return false;
         }
         self.controls
             .windows(2)
-            .all(|pair| (point(pair[1]) - point(pair[0])).dot(direction) >= 0.0)
+            .all(|pair| (point(pair[1]) - point(pair[0])).dot(&direction) >= 0.0)
     }
 }
 
 impl Strip {
     fn traversed_by(self, span: &Span, margin: f64) -> bool {
-        let [a, b] = span.ends.map(|p| (p - self.origin).dot(self.normal));
+        let [a, b] = span.ends.map(|p| (p - self.origin).dot(&self.normal));
         a.min(b) < self.range[0] - margin && a.max(b) > self.range[1] + margin
     }
 
@@ -133,7 +133,7 @@ impl Strip {
         let [lo, hi] = span
             .controls
             .iter()
-            .map(|&p| (point(p) - self.origin).dot(self.normal))
+            .map(|&p| (point(p) - self.origin).dot(&self.normal))
             .fold([f64::INFINITY, f64::NEG_INFINITY], |[lo, hi], value| {
                 [lo.min(value), hi.max(value)]
             });
@@ -238,7 +238,7 @@ fn projected_spans<'a>(
             if let Some(direction) = halfspace {
                 for p in &span.controls {
                     let q = Point3::new(p[0] / p[3], p[1] / p[3], p[2] / p[3]) - origin;
-                    if q.dot(direction) <= margin {
+                    if q.dot(&direction) <= margin {
                         return None;
                     }
                 }
@@ -249,7 +249,7 @@ fn projected_spans<'a>(
                 .map(|p| {
                     let w = p[3] / maximum;
                     let q = Point3::new(p[0] / p[3], p[1] / p[3], p[2] / p[3]) - origin;
-                    [q.dot(basis[0]) * w, q.dot(basis[1]) * w, 0.0, w]
+                    [q.dot(&basis[0]) * w, q.dot(&basis[1]) * w, 0.0, w]
                 })
                 .collect();
             spans.push((id, Span::new(controls, margin)?));
@@ -314,9 +314,9 @@ pub(super) fn revolution_crossing_pairs(
             let p = edge.front().point() - origin;
             let q = edge.back().point() - origin;
             let midpoint = p + q;
-            sum + midpoint - axis * midpoint.dot(axis)
+            sum + midpoint - axis * midpoint.dot(&axis)
         });
-    let length = radial.magnitude();
+    let length = radial.norm();
     if length <= tolerance || !length.is_finite() {
         return Vec::new();
     }
@@ -324,7 +324,7 @@ pub(super) fn revolution_crossing_pairs(
     let Some(spans) = projected_spans(
         edges.iter().copied(),
         origin,
-        [axis, axis.cross(normal)],
+        [axis, axis.cross(&normal)],
         Some(normal),
         tolerance,
     ) else {
@@ -372,7 +372,7 @@ fn crossing_pairs(mut spans: Vec<(usize, Span)>, first_only: bool) -> Vec<[usize
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BsplineCurve, Curve, Edge, EuclideanSpace, KnotVector, NurbsCurve, builder};
+    use crate::{AffinePoint, BsplineCurve, Curve, Edge, KnotVector, NurbsCurve, builder};
 
     #[test]
     fn revolution_chart_rejects_crossing_trims_without_changing_carrier()
@@ -388,9 +388,9 @@ mod tests {
                 let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
                     KnotVector::bezier_knot(2),
                     vec![
-                        a.to_vec().extend(1.0),
-                        mid.to_vec().extend(1.0) * weight,
-                        b.to_vec().extend(1.0),
+                        a.position_vector().push(1.0),
+                        mid.position_vector().push(1.0) * weight,
+                        b.position_vector().push(1.0),
                     ],
                 )?));
                 Ok(Edge::new(&builder::vertex(a), &builder::vertex(b), curve)?)
@@ -400,7 +400,7 @@ mod tests {
         let clear = arc(0.0, 0.0, 1.0)?;
         let opposite = arc(1.0, 1.0, -1.0)?;
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let check = |a, b| revolution_crossing_pairs(&[(3, a), (7, b)], origin, axis, 1e-8);
         assert_eq!(check(&bow, &level), vec![[3, 7]]);
         assert!(check(&clear, &level).is_empty());
@@ -424,9 +424,9 @@ mod tests {
             let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
                 KnotVector::bezier_knot(2),
                 vec![
-                    a.point().to_vec().extend(1.0),
-                    mid.to_vec().extend(1.0),
-                    b.point().to_vec().extend(1.0),
+                    a.point().position_vector().push(1.0),
+                    mid.position_vector().push(1.0),
+                    b.point().position_vector().push(1.0),
                 ],
             )?));
             let wire = Wire::from(vec![
@@ -435,7 +435,7 @@ mod tests {
                 builder::line(&c, &a),
             ]);
             assert_eq!(
-                has_crossing(&[wire], a.point(), Vector3::unit_z(), 1.0e-8),
+                has_crossing(&[wire], a.point(), Vector3::z(), 1.0e-8),
                 crosses
             );
         }

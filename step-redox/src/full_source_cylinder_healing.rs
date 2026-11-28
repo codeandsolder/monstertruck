@@ -17,7 +17,7 @@ use crate::{
     step_io::write_exchange,
 };
 use anyhow::{Context, Result, bail};
-use monstertruck_geometry::prelude::{InnerSpace, Matrix4, Point3, Transformed};
+use monstertruck_geometry::prelude::{InnerProduct, Matrix4, Point3, Transformed};
 use monstertruck_io::step::{load::ParsedStepSource, save::StepDisplay};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -199,8 +199,7 @@ fn serialized_control_error(
         ]
         .into_iter()
         .fold(1.0_f64, f64::max);
-        let deviation =
-            (64.0 * f64::EPSILON).mul_add(coordinate_scale, (actual - expected).magnitude());
+        let deviation = (64.0 * f64::EPSILON).mul_add(coordinate_scale, (actual - expected).norm());
         if !deviation.is_finite() {
             bail!("nonfinite serialized leader coordinates");
         }
@@ -222,7 +221,7 @@ fn native_entities(section: &DataSection, prepared: &PreparedRepair) -> Result<N
     if !inverse_scale.is_finite() || inverse_scale <= 0.0 {
         bail!("invalid coordinate conversion for finite STEP leader");
     }
-    leader.transform_by(Matrix4::from_scale(inverse_scale));
+    leader.transform_by(Matrix4::new_scaling(inverse_scale));
     let first = usize::try_from(leader_id)?;
     let [primary, secondary] = prepared.surfaces;
     let fragment = format!(
@@ -436,7 +435,7 @@ mod tests {
                     .evaluate(candidate.arc.sweep() * t)
                     .context("bad analytical reference")?;
                 assert!(
-                    (leader.evaluate((hi - lo).mul_add(t, lo)) - reference).magnitude()
+                    (leader.evaluate((hi - lo).mul_add(t, lo)) - reference).norm()
                         <= repair.leader_error_upper_mm
                 );
             }

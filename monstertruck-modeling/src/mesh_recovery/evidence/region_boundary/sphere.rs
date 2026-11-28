@@ -6,7 +6,7 @@ use super::super::super::sample_fit::{CircleCarrierFit, fit_circle_carrier, norm
 use super::{
     MeshEvidence, RegionBoundaryIndex, SurfaceCarrier, SurfaceRegionBudget, SurfaceRegionProposal,
 };
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Clone, Copy)]
@@ -17,29 +17,29 @@ struct SphereSeed {
 
 impl SphereSeed {
     fn from_circles(a: CircleCarrierFit, b: CircleCarrierFit, tolerance: f64) -> Option<Self> {
-        let direction = a.normal.cross(b.normal);
-        let denominator = direction.magnitude2();
+        let direction = a.normal.cross(&b.normal);
+        let denominator = direction.norm_squared();
         if denominator <= 64.0 * f64::EPSILON {
             return None;
         }
         let delta = b.center - a.center;
-        let ta = delta.cross(b.normal).dot(direction) / denominator;
-        let tb = delta.cross(a.normal).dot(direction) / denominator;
+        let ta = delta.cross(&b.normal).dot(&direction) / denominator;
+        let tb = delta.cross(&a.normal).dot(&direction) / denominator;
         let ca = a.center + a.normal * ta;
         let cb = b.center + b.normal * tb;
-        if (ca - cb).magnitude() > tolerance {
+        if (ca - cb).norm() > tolerance {
             return None;
         }
         let center = ca + (cb - ca) * 0.5;
-        let ra = (center - a.center).magnitude().hypot(a.radius);
-        let rb = (center - b.center).magnitude().hypot(b.radius);
+        let ra = (center - a.center).norm().hypot(a.radius);
+        let rb = (center - b.center).norm().hypot(b.radius);
         let radius = ra.midpoint(rb);
         (radius.is_finite() && radius > 0.0 && (ra - rb).abs() <= tolerance)
             .then_some(Self { center, radius })
     }
 
     fn same(self, other: Self, tolerance: f64) -> bool {
-        (self.center - other.center).magnitude() <= tolerance
+        (self.center - other.center).norm() <= tolerance
             && (self.radius - other.radius).abs() <= tolerance
     }
 }
@@ -64,15 +64,15 @@ fn fit_sphere(points: &[Point3], ids: &[usize]) -> Option<SphereSeed> {
         .iter()
         .map(|&id| points[id] - origin)
         .collect::<Vec<_>>();
-    let scale = local.iter().map(|p| p.magnitude()).fold(0.0_f64, f64::max);
+    let scale = local.iter().map(|p| p.norm()).fold(0.0_f64, f64::max);
     if scale <= 0.0 || !scale.is_finite() {
         return None;
     }
     let local = local.into_iter().map(|p| p / scale).collect::<Vec<_>>();
-    let mean_squared = local.iter().map(|p| p.magnitude2()).sum::<f64>() / count;
+    let mean_squared = local.iter().map(|p| p.norm_squared()).sum::<f64>() / count;
     let rhs = local
         .iter()
-        .map(|p| 0.5 * (p.magnitude2() - mean_squared))
+        .map(|p| 0.5 * (p.norm_squared() - mean_squared))
         .collect::<Vec<_>>();
     let mut columns = [0, 1, 2].map(|axis| local.iter().map(|p| p[axis]).collect::<Vec<_>>());
     let dot = |a: &[f64], b: &[f64]| {
@@ -129,7 +129,7 @@ fn fit_sphere(points: &[Point3], ids: &[usize]) -> Option<SphereSeed> {
     let center = origin + offset;
     let radius = ids
         .iter()
-        .map(|&id| (points[id] - center).magnitude())
+        .map(|&id| (points[id] - center).norm())
         .sum::<f64>()
         / count;
     (radius > 0.0 && radius.is_finite()).then_some(SphereSeed { center, radius })
@@ -147,14 +147,14 @@ pub(super) fn facet_residual_bound(
     radius: f64,
 ) -> Option<f64> {
     let plane = evidence.planar_supports.get(support)?;
-    let offset = (plane.origin - center).dot(plane.normal);
+    let offset = (plane.origin - center).dot(&plane.normal);
     let (u, v) = normal_basis(plane.normal);
     let mut bound = 0.0_f64;
     for &polygon in &plane.source_face_indices {
         let vertices = evidence.source_polygon_vertices(polygon)?;
         let mut maximum = 0.0_f64;
         for &id in vertices {
-            maximum = maximum.max((evidence.positions.get(id)? - center).magnitude());
+            maximum = maximum.max((evidence.positions.get(id)? - center).norm());
         }
         // Distance to the sphere is bounded by its maximum at the farthest
         // vertex and its minimum radial distance over the filled polygon.
@@ -182,8 +182,8 @@ fn projected_polygon_distance(
     let project = |id: usize| {
         let delta = *evidence.positions.get(id)? - center;
         Some(Coord {
-            x: delta.dot(u),
-            y: delta.dot(v),
+            x: delta.dot(&u),
+            y: delta.dot(&v),
         })
     };
     let mut distance = f64::INFINITY;
@@ -253,7 +253,7 @@ pub(super) fn independently_tested(
     }
     let span = ids
         .iter()
-        .map(|&id| (evidence.positions[id] - first).magnitude())
+        .map(|&id| (evidence.positions[id] - first).norm())
         .fold(0.0_f64, f64::max);
     if !span.is_finite() || span <= 0.0 {
         return false;
@@ -326,12 +326,12 @@ impl SphereDiscovery<'_> {
         // A support need not itself be cyclic (e.g. a tessellated seam
         // with extra coplanar samples). Test its actual source vertices.
         let plane = &self.evidence.planar_supports[support];
-        let offset = (plane.origin - sphere.center).dot(plane.normal);
+        let offset = (plane.origin - sphere.center).dot(&plane.normal);
         if offset.abs() <= tolerance || (offset > 0.0) != outward {
             return false;
         }
         sample.vertices.iter().all(|&id| {
-            ((self.evidence.positions[id] - sphere.center).magnitude() - sphere.radius).abs()
+            ((self.evidence.positions[id] - sphere.center).norm() - sphere.radius).abs()
                 <= tolerance
         }) && facet_residual_bound(self.evidence, support, sphere.center, sphere.radius)
             .is_some_and(|error| error <= self.chord_fraction * sphere.radius)
@@ -387,8 +387,7 @@ impl SphereDiscovery<'_> {
             interior
                 .iter()
                 .map(|&id| {
-                    ((self.evidence.positions[id] - sphere.center).magnitude() - sphere.radius)
-                        .abs()
+                    ((self.evidence.positions[id] - sphere.center).norm() - sphere.radius).abs()
                 })
                 .fold(0.0_f64, f64::max)
         };
@@ -467,7 +466,7 @@ impl<'a> RegionBoundaryIndex<'a> {
                 continue;
             }
             let outward =
-                (first.center - sphere.center).dot(self.evidence.planar_supports[a].normal) > 0.0;
+                (first.center - sphere.center).dot(&self.evidence.planar_supports[a].normal) > 0.0;
             if !discovery.accepts(a, sphere, outward, tolerance)
                 || !discovery.accepts(b, sphere, outward, tolerance)
             {
@@ -489,7 +488,7 @@ impl<'a> RegionBoundaryIndex<'a> {
             let tolerance = discovery.strict_tolerance(sphere);
             let carrier = SurfaceCarrier::CircularRevolution {
                 axial_center: sphere.center,
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 0.0,
                 profile_radius: sphere.radius,
             };
@@ -616,7 +615,7 @@ mod tests {
         else {
             return Err("unexpected carrier".into());
         };
-        assert!((axial_center - center).magnitude() < 1.0e-10);
+        assert!((axial_center - center).norm() < 1.0e-10);
         assert!(radial_center.abs() < 1.0e-10 && (profile_radius - radius).abs() < 1.0e-10);
         // A numerically tiny fitted radial offset must not survive as
         // a toroidal implicit constraint at a spherical pole.
@@ -625,7 +624,7 @@ mod tests {
                 proposal.supports(),
                 SurfaceCarrier::CircularRevolution {
                     axial_center: center,
-                    axis: Vector3::unit_z(),
+                    axis: Vector3::z(),
                     radial_center: crate::KERNEL_EPSILON * 0.25,
                     profile_radius: radius,
                 },
@@ -642,12 +641,12 @@ mod tests {
                 ..
             }
         ));
-        let pole = center + Vector3::unit_z() * radius;
+        let pole = center + Vector3::z() * radius;
         let (normal, residual) = measured
             .carrier()
             .signed_constraint(pole)
             .ok_or("sphere pole")?;
-        assert_eq!(normal, Vector3::unit_z());
+        assert_eq!(normal, Vector3::z());
         assert_eq!(residual, 0.0);
         let recovered = crate::mesh_recovery::recover_analytic_mesh(&mesh, Default::default())?;
         assert_eq!(recovered.native.regions.len(), 1);
@@ -679,7 +678,7 @@ mod tests {
         else {
             return Err("unexpected carrier".into());
         };
-        assert!((axial_center - center).magnitude() < 1.0e-9);
+        assert!((axial_center - center).norm() < 1.0e-9);
         assert!(radial_center.abs() < 1.0e-9 && (profile_radius - radius).abs() < 1.0e-9);
         let max_error = proposal.relative_vertex_error() * radius * 1.0e-4;
         assert!((max_error - seam_displacement).abs() < 1.0e-9);
@@ -720,12 +719,12 @@ mod tests {
         };
         let supports = (0..evidence.planar_supports.len()).collect::<Vec<_>>();
         let outward = (evidence.planar_supports[0].origin - center)
-            .dot(evidence.planar_supports[0].normal)
+            .dot(&evidence.planar_supports[0].normal)
             > 0.0;
         let (fitted, core, expanded) = discovery
             .refit_interior(&index, &supports, biased, outward)
             .ok_or("refit")?;
-        assert!((fitted.center - center).magnitude() < 1.0e-12);
+        assert!((fitted.center - center).norm() < 1.0e-12);
         assert!((fitted.radius - radius).abs() < 1.0e-12);
         assert_eq!(expanded, supports);
         assert!(core.len() < expanded.len());
@@ -814,7 +813,7 @@ mod tests {
             let center = Point3::new(0.0, 0.0, 0.0);
             let carrier = SurfaceCarrier::CircularRevolution {
                 axial_center: center,
-                axis: Vector3::unit_z(),
+                axis: Vector3::z(),
                 radial_center: 0.0,
                 profile_radius: 1.0,
             };

@@ -8,7 +8,7 @@
 use super::analytic_curve_incidence::certify_analytic_curve_on_surface;
 use super::analytic_line_segment::certify_native_curve_segment_locus;
 use super::surface::analytic_carrier;
-use super::{BoundedCurve, Curve, InnerSpace, MetricSpace, Point3, Solid, Surface};
+use super::{BoundedCurve, Curve, InnerProduct, MetricSpace, Point3, Solid, Surface};
 use crate::Wire;
 use monstertruck_geometry::analytic_carrier::{
     AnalyticCarrier, AnalyticSupport, CarrierDomainRelation,
@@ -365,7 +365,7 @@ fn requires_planar_segment_locus(
     };
     // Distinct parallel planes do not intersect. Near-parallel support
     // directions cannot establish a stable physical intersection line.
-    let transversality = first.cross(second).magnitude();
+    let transversality = first.cross(&second).norm();
     if !transversality.is_finite() || transversality <= angular_tolerance {
         return Err(BoundaryIncidenceFailure::PlaneIntersectionNotTransverse);
     }
@@ -553,9 +553,9 @@ mod tests {
 
     fn cube() -> Solid {
         let vertex = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
-        let edge = builder::extrude(&vertex, Vector3::unit_x());
-        let face = builder::extrude(&edge, Vector3::unit_y());
-        builder::extrude(&face, Vector3::unit_z())
+        let edge = builder::extrude(&vertex, Vector3::x());
+        let face = builder::extrude(&edge, Vector3::y());
+        builder::extrude(&face, Vector3::z())
     }
 
     const LINEAR: f64 = 1.0e-7;
@@ -567,9 +567,9 @@ mod tests {
             origin: Point3::new(0.0, 0.0, 0.0),
             normal,
         };
-        let a = p(Vector3::unit_z());
-        let parallel = p(Vector3::unit_z());
-        let transverse = p(Vector3::unit_x());
+        let a = p(Vector3::z());
+        let parallel = p(Vector3::z());
+        let transverse = p(Vector3::x());
         assert_eq!(
             requires_planar_segment_locus(a, parallel, false, ANGULAR),
             Err(BoundaryIncidenceFailure::PlaneIntersectionNotTransverse)

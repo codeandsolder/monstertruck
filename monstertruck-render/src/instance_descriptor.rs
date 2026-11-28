@@ -2,7 +2,7 @@ use crate::SamplerBindingType::Filtering;
 use crate::{
     BindingType, BufferBindingType, BufferHandler, BufferUsages, Device, FilterMode, Material,
     Matrix4, MipmapFilterMode, PolygonState, PreBindGroupLayoutEntry, Sampler, SamplerDescriptor,
-    ShaderStages, SquareMatrix, TextureSampleType, TextureView, TextureViewDescriptor,
+    ShaderStages, SquareLinearMap, TextureSampleType, TextureView, TextureViewDescriptor,
     TextureViewDimension, Vector4, matrix4_to_raw_f32, narrow_f64_to_f32,
 };
 

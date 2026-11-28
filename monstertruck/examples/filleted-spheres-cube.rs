@@ -13,8 +13,8 @@ use monstertruck_geometry::prelude::{
 use monstertruck_io::step::save::{CompleteStepDisplay, StepHeaderDescriptor, StepModel};
 use monstertruck_mesh::PolylineCurve as PolylineCurve2;
 use monstertruck_modeling::{
-    Curve, Curve2D, Edge, EuclideanSpace, NurbsCurve, ParameterDivision1D, Point3, Rad, Solid,
-    Surface, SurfaceCurve, Tolerance, Vector3, Wire, builder,
+    AffinePoint, Curve, Curve2D, Edge, NurbsCurve, ParameterDivision1D, Point3, Solid, Surface,
+    SurfaceCurve, Tolerance, Vector3, Wire, builder,
 };
 use monstertruck_solid::{GeometryPolicy, difference, or};
 use monstertruck_topology::compress::{CompressedSolid, CompressedTrimmedSolid};
@@ -259,19 +259,19 @@ fn sphere(center: Point3, radius: f64) -> Result<Solid> {
     let wire: Wire = builder::revolve(
         &top,
         Point3::origin(),
-        Vector3::unit_x(),
-        builder::SweepAngle::Partial(Rad(PI)),
+        Vector3::x(),
+        builder::SweepAngle::Partial(PI),
         3,
     )?;
     let shell = builder::revolve_wire(
         &wire,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         4,
     )?;
     let s = Solid::new_unchecked(vec![shell]);
-    Ok(builder::translated(&s, center.to_vec()))
+    Ok(builder::translated(&s, center.position_vector()))
 }
 
 fn main() -> Result<()> {
@@ -280,9 +280,9 @@ fn main() -> Result<()> {
 
     // Unit cube at origin.
     let v = builder::vertex(Point3::origin());
-    let e = builder::extrude(&v, Vector3::unit_x());
-    let f = builder::extrude(&e, Vector3::unit_y());
-    let cube = builder::extrude(&f, Vector3::unit_z());
+    let e = builder::extrude(&v, Vector3::x());
+    let f = builder::extrude(&e, Vector3::y());
+    let cube = builder::extrude(&f, Vector3::z());
 
     // Tetrahedral group A -- subtract these four corners.
     let subtract = [

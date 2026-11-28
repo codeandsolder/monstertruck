@@ -2,7 +2,7 @@
 //!
 //! Generated json file can be visualized by `simple-shape-viewer`, an example of `monstertruck-render`.
 
-use monstertruck_modeling::{EuclideanSpace, Point3, Solid, Vector3, Wire, builder};
+use monstertruck_modeling::{AffinePoint, Point3, Solid, Vector3, Wire, builder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let v0 = builder::vertex(Point3::new(0.0, 0.5, 0.0));
@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shell = builder::revolve_wire(
         &wire,
         Point3::origin(),
-        Vector3::unit_y(),
+        Vector3::y(),
         builder::SweepAngle::Closed,
         4,
     )?;

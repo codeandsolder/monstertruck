@@ -7,17 +7,17 @@ pub fn circle_arc(
     point: Point3,
     origin: Point3,
     axis: Vector3,
-    angle: Rad<f64>,
+    angle: f64,
     (w0, w1): (f64, f64),
 ) -> NurbsCurve<Vector4> {
-    let origin = origin + (axis.dot(point - origin)) * axis;
+    let origin = origin + (axis.dot(&(point - origin))) * axis;
     let diag = point - origin;
-    let axis_trsf = Matrix4::from_cols(
-        diag.extend(0.0),
-        axis.cross(diag).extend(0.0),
-        axis.extend(0.0),
+    let axis_trsf = Matrix4::from_columns(&[
+        diag.push(0.0),
+        axis.cross(&diag).push(0.0),
+        axis.push(0.0),
         origin.to_homogeneous(),
-    );
+    ]);
     let mut unit_curve = unit_circle_arc(angle, w0, w1);
     unit_curve.transform_by(axis_trsf);
     unit_curve
@@ -29,18 +29,18 @@ pub fn circle_arc_by_three_points(
     transit: Point3,
 ) -> NurbsCurve<Vector4> {
     let (w0, w1) = (point0.w, point1.w);
-    let point0 = Point3::from_homogeneous(point0);
-    let point1 = Point3::from_homogeneous(point1);
+    let point0 = (point0).to_point();
+    let point1 = (point1).to_point();
     let origin = circum_center(point0, point1, transit);
     let (vec0, vec1) = (point0 - transit, point1 - transit);
-    let axis = vec1.cross(vec0).normalize();
-    let angle = Rad(PI) - vec0.angle(vec1);
+    let axis = vec1.cross(&vec0).normalize();
+    let angle = PI - angle_between(vec0, vec1);
     circle_arc(point0, origin, axis, angle * 2.0, (w0, w1))
 }
 
 fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     let (vec0, vec1) = (pt1 - pt0, pt2 - pt0);
-    let (a2, ab, b2) = (vec0.dot(vec0), vec0.dot(vec1), vec1.dot(vec1));
+    let (a2, ab, b2) = (vec0.dot(&vec0), vec0.dot(&vec1), vec1.dot(&vec1));
     let det = ab.mul_add(-ab, a2 * b2);
     // Solving the 2×2 Gram system for the circumcenter coefficients gives
     // b²(a² - a·b) and a²(b² - a·b). Factoring the shared terms makes
@@ -50,9 +50,9 @@ fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
-fn unit_circle_arc(angle: Rad<f64>, w0: f64, w1: f64) -> NurbsCurve<Vector4> {
+fn unit_circle_arc(angle: f64, w0: f64, w1: f64) -> NurbsCurve<Vector4> {
     let p0 = Vector3::new(w0, 0.0, w0);
-    let p1 = Vector3::new(Rad::cos(angle), Rad::sin(angle), 1.0) * w1;
+    let p1 = Vector3::new(f64::cos(angle), f64::sin(angle), 1.0) * w1;
     let (sin_half, cos_half) = (angle / 2.0).sin_cos();
     let middle_weight = f64::sqrt(w0 * w1);
     let c = Vector3::new(
@@ -83,7 +83,7 @@ pub const fn number_of_cpts_of_unit_circle() -> usize { 6 }
 
 #[test]
 fn unit_circle_info() {
-    let uc = unit_circle_arc(Rad(PI), 1.0, 1.0);
+    let uc = unit_circle_arc(PI, 1.0, 1.0);
     assert_eq!(uc.knot_vector(), &unit_circle_knot_vec());
     assert_eq!(uc.control_points().len(), number_of_cpts_of_unit_circle());
 }
@@ -97,13 +97,13 @@ proptest::proptest! {
         w1 in 0.1f64..5.0,
     ) {
         use proptest::prelude::*;
-        let uc = unit_circle_arc(Rad(angle), w0, w1);
+        let uc = unit_circle_arc(angle, w0, w1);
         const N: usize = 10;
         for i in 0..=N {
             let t = i as f64 / N as f64;
             let p = uc.evaluate(t).to_vec();
             let v = uc.derivative(t);
-            prop_assert_near!(p.magnitude2(), 1.0, "{w0} {w1} {p:?} {angle}");
+            prop_assert_near!(p.norm_squared(), 1.0, "{w0} {w1} {p:?} {angle}");
             prop_assert!(p.z.so_small2());
             prop_assert!(p.x * v.y - p.y * v.x > 0.0, "minus area {:?}", uc.control_point(1));
         }
@@ -170,21 +170,21 @@ impl RelaySphere {
         flip_side: bool,
     ) -> Option<(Point3, Point3, Point3)> {
         let ((p, der), (p0, n0), (p1, n1)) = (point_on_curve, plane0, plane1);
-        let n = n0.cross(n1);
+        let n = n0.cross(&n1);
         // Which side of the edge the sphere sits on is keyed off the seam
         // direction relative to the surface normals; `flip_side` selects the
         // opposite solution for shells wound the other way (swapping the
         // faces cannot flip it: that negates both the cross product and
         // `der`, leaving the sign invariant).
         let orientation = if flip_side { -1.0 } else { 1.0 };
-        let sign = f64::signum(n.dot(der)) * orientation;
-        let mat = Matrix3::from_cols(n, n0, n1).transpose();
+        let sign = f64::signum(n.dot(&der)) * orientation;
+        let mat = Matrix3::from_columns(&[n, n0, n1]).transpose();
         let vec = Vector3::new(
-            n.dot(p.to_vec()),
-            f64::mul_add(sign, -radius, n0.dot(p0.to_vec())),
-            f64::mul_add(sign, -radius, n1.dot(p1.to_vec())),
+            n.dot(&p.position_vector()),
+            f64::mul_add(sign, -radius, n0.dot(&p0.position_vector())),
+            f64::mul_add(sign, -radius, n1.dot(&p1.position_vector())),
         );
-        let center = Point3::from_vec(mat.invert()? * vec);
+        let center = Point3::from(mat.try_inverse()? * vec);
         let q0 = center + sign * radius * n0;
         let q1 = center + sign * radius * n1;
         Some((center, q0, q1))
@@ -198,15 +198,15 @@ impl RelaySphere {
         let first_tangent = surface.derivative_u(parameters.0, parameters.1);
         let second_tangent = surface.derivative_v(parameters.0, parameters.1);
         let displacement = points.1 - points.0;
-        let first_norm = first_tangent.dot(first_tangent);
-        let cross_term = first_tangent.dot(second_tangent);
-        let second_norm = second_tangent.dot(second_tangent);
+        let first_norm = first_tangent.dot(&first_tangent);
+        let cross_term = first_tangent.dot(&second_tangent);
+        let second_norm = second_tangent.dot(&second_tangent);
         let matrix = Matrix2::new(first_norm, cross_term, cross_term, second_norm);
         let projection = Vector2::new(
-            first_tangent.dot(displacement),
-            second_tangent.dot(displacement),
+            first_tangent.dot(&displacement),
+            second_tangent.dot(&displacement),
         );
-        let correction = matrix.invert()? * projection;
+        let correction = matrix.try_inverse()? * projection;
         let updated = (parameters.0 + correction.x, parameters.1 + correction.y);
         Some((surface.evaluate(updated.0, updated.1), updated))
     }
@@ -513,8 +513,8 @@ fn map_profile_to_3d(
     transit: Point3,
     profile: &BsplineCurve<Point2>,
 ) -> BsplineCurve<Vector4> {
-    let pt0 = Point3::from_homogeneous(*p0);
-    let pt1 = Point3::from_homogeneous(*p1);
+    let pt0 = (*p0).to_point();
+    let pt1 = (*p1).to_point();
     let mid = pt0.midpoint(pt1);
     let toward_transit = transit - mid;
     let cpts: Vec<Vector4> = profile

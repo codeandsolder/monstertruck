@@ -1,5 +1,5 @@
 use crate::{
-    Deserialize, Faces, InnerSpace, KERNEL_EPSILON, Point3, PolygonMesh, Serialize,
+    Deserialize, Faces, InnerProduct, KERNEL_EPSILON, Point3, PolygonMesh, Serialize,
     StandardAttributes, StandardVertex, Vector3, array, errors, faces,
 };
 use bytemuck::{Pod, Zeroable};
@@ -290,7 +290,7 @@ impl Iterator for PolygonMeshStlFaceIterator<'_> {
     fn next(&mut self) -> Option<StlFace> {
         self.faces.next().map(|face| {
             let p = array![i => self.positions[face[i].pos]; 3];
-            let n = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
+            let n = (p[1] - p[0]).cross(&(p[2] - p[0])).normalize();
             let normal = [stl_f32(n.x), stl_f32(n.y), stl_f32(n.z)];
             let vertices = array![i => [stl_f32(p[i].x), stl_f32(p[i].y), stl_f32(p[i].z)]; 3];
             StlFace { normal, vertices }

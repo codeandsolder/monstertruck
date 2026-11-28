@@ -27,7 +27,7 @@ impl Separator {
         let point = face.vertex_iter().next()?.point();
         let (u, v) = surface.search_parameter(point, None, 100)?;
         let normal = surface.normal(u, v);
-        let alignment = normal.dot(plane.normal());
+        let alignment = normal.dot(&plane.normal());
         if !alignment.is_finite() || alignment.abs() < 1.0 - DEFAULT_NUMERICAL_TOLERANCES.angular {
             return None;
         }
@@ -37,7 +37,7 @@ impl Separator {
         })
     }
 
-    fn height(self, point: Point3) -> f64 { (point - self.origin).dot(self.normal) }
+    fn height(self, point: Point3) -> f64 { (point - self.origin).dot(&self.normal) }
 }
 
 struct FaceBounds {
@@ -58,7 +58,7 @@ fn face_bounds<C: ShapeOpsCurve<S> + TryIntoHomogeneousBsplineCurve, S: ShapeOps
         if !control.w.is_finite() || control.w <= 0.0 {
             return None;
         }
-        let p = Point3::from_vec(control.truncate() / control.w);
+        let p = Point3::from(control.spatial() / control.w);
         if ![p.x, p.y, p.z].into_iter().all(f64::is_finite) {
             return None;
         }
@@ -136,8 +136,7 @@ fn cap_partition(
             let plane = face.outward_plane?;
             // The direction is tested independently from the length budget.
             // An inward-facing or nonplanar contact cannot be discarded.
-            if (plane.normal - separator.normal * sign).magnitude()
-                > BooleanTolerance::new(tol).angular
+            if (plane.normal - separator.normal * sign).norm() > BooleanTolerance::new(tol).angular
                 || separator.height(plane.origin).abs() > tol
             {
                 return None;
@@ -220,7 +219,7 @@ impl ProjectedBounds {
         };
         for p in points {
             for (i, axis) in axes.iter().enumerate() {
-                let x = (*p - separation.origin).dot(*axis);
+                let x = (*p - separation.origin).dot(&*axis);
                 bounds.low[i] = bounds.low[i].min(x);
                 bounds.high[i] = bounds.high[i].max(x);
             }
@@ -235,14 +234,14 @@ impl ProjectedBounds {
 
 fn tangent_axes(normal: Vector3) -> [Vector3; 2] {
     let base = if normal.x.abs() <= normal.y.abs() && normal.x.abs() <= normal.z.abs() {
-        Vector3::unit_x()
+        Vector3::x()
     } else if normal.y.abs() <= normal.z.abs() {
-        Vector3::unit_y()
+        Vector3::y()
     } else {
-        Vector3::unit_z()
+        Vector3::z()
     };
-    let u = normal.cross(base).normalize();
-    [u, normal.cross(u)]
+    let u = normal.cross(&base).normalize();
+    [u, normal.cross(&u)]
 }
 
 /// For each tool, find a plane whose outward half-space is empty within
@@ -276,7 +275,7 @@ fn local_cap_partition(
             .all(|&p| separator.height(p).abs() <= tol)
         {
             let plane = face.outward_plane?;
-            if (plane.normal - separator.normal).magnitude() > BooleanTolerance::new(tol).angular
+            if (plane.normal - separator.normal).norm() > BooleanTolerance::new(tol).angular
                 || separator.height(plane.origin).abs() > tol
             {
                 return None;
@@ -631,7 +630,7 @@ where
     let AnalyticSurfaceKind::Plane(mut plane) = surface.try_into_analytic_surface_kind()? else {
         return None;
     };
-    if plane.normal().dot(reference.normal) < 0.0 {
+    if plane.normal().dot(&reference.normal) < 0.0 {
         plane.invert();
     }
     let chart = plane.to_same_geometry();
@@ -639,7 +638,7 @@ where
     for (i, face) in faces.iter().enumerate() {
         let bounds = face_bounds(face)?;
         let outward = bounds.outward_plane?;
-        if (outward.normal - reference.normal).magnitude() > DEFAULT_NUMERICAL_TOLERANCES.angular
+        if (outward.normal - reference.normal).norm() > DEFAULT_NUMERICAL_TOLERANCES.angular
             || bounds
                 .points
                 .iter()
@@ -680,9 +679,9 @@ mod tests {
 
     fn box_at(origin: Point3, size: Vector3) -> ModelSolid {
         let v = builder::vertex(origin);
-        let e = builder::extrude(&v, Vector3::unit_x() * size.x);
-        let f = builder::extrude(&e, Vector3::unit_y() * size.y);
-        builder::extrude(&f, Vector3::unit_z() * size.z)
+        let e = builder::extrude(&v, Vector3::x() * size.x);
+        let f = builder::extrude(&e, Vector3::y() * size.y);
+        builder::extrude(&f, Vector3::z() * size.z)
     }
 
     #[test]
@@ -783,12 +782,7 @@ mod tests {
     fn planar_profile_union_preserves_nested_circular_islands() {
         use monstertruck_modeling::{primitive, profile};
         let circle = |r: f64| {
-            primitive::circle::<Curve>(
-                Point3::new(r, 0., 0.),
-                Point3::origin(),
-                Vector3::unit_z(),
-                4,
-            )
+            primitive::circle::<Curve>(Point3::new(r, 0., 0.), Point3::origin(), Vector3::z(), 4)
         };
         let annulus: Face<Point3, Curve, Surface> =
             profile::attach_plane_normalized(vec![circle(3.), circle(2.)]).unwrap();
@@ -804,15 +798,15 @@ mod tests {
         assert_eq!(counts, [1, 2]);
         let mut boundaries = Vec::new();
         for face in regions.iter() {
-            let component: ModelSolid = builder::extrude(face, Vector3::unit_z());
+            let component: ModelSolid = builder::extrude(face, Vector3::z());
             boundaries.extend(component.into_boundaries());
         }
         let lower = Solid::new(boundaries).unwrap();
         assert_eq!(lower.boundaries().len(), 2);
         let cap: Face<Point3, Curve, Surface> =
             profile::attach_plane_normalized(vec![circle(3.)]).unwrap();
-        let upper: ModelSolid = builder::extrude(&cap, Vector3::unit_z());
-        let upper = builder::translated(&upper, Vector3::unit_z());
+        let upper: ModelSolid = builder::extrude(&cap, Vector3::z());
+        let upper = builder::translated(&upper, Vector3::z());
         let joined = union(&lower, &upper, 1e-6).expect("upper slab connects both islands");
         assert_eq!(joined.boundaries().len(), 1);
         assert!(joined.is_geometric_consistent());

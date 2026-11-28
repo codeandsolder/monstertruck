@@ -3,15 +3,15 @@
 //! The continuous rational-curve certificate remains authoritative.
 
 use super::{
-    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, InnerSpace, Point3, Vector3, Vector4,
-    centroid, cross, directed_pairs, finite, proof_bezier_spans, rational_point,
+    BoundaryFacetApproximation, BoundaryFacetError, FacetFan, InnerProduct, Point3, Vector3,
+    Vector4, centroid, cross, directed_pairs, finite, proof_bezier_spans, rational_point,
     subdivide_homogeneous_bezier,
 };
 
 // Clip an apex proposal polygon to the left of a directed projected line.
 // This is candidate generation only; it cannot waive the final certificate.
 fn clip_apex_polygon(points: &mut Vec<Point3>, normal: Vector3, origin: Point3, tangent: Vector3) {
-    if tangent.magnitude2() == 0.0 || points.is_empty() {
+    if tangent.norm_squared() == 0.0 || points.is_empty() {
         return;
     }
     let signed = |p: Point3| cross(normal, tangent, p - origin);
@@ -117,8 +117,8 @@ impl FacetFan<'_> {
             .chain([candidate])
             .map(|p| p - reference)
             .fold((0.0_f64, 0.0_f64, 0.0_f64), |(lo, hi, scale), p| {
-                let h = self.normal.dot(p);
-                (lo.min(h), hi.max(h), scale.max(p.magnitude()))
+                let h = self.normal.dot(&p);
+                (lo.min(h), hi.max(h), scale.max(p.norm()))
             });
         (64.0 * f64::EPSILON).mul_add(scale, high - low)
     }

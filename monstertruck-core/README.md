@@ -7,7 +7,7 @@ Core types and traits for linear algebra, curves, surfaces, and tolerances.
 ## Examples
 
 ```rust
-use monstertruck_core::{cgmath64::*, tolerance::Tolerance, bounding_box::BoundingBox};
+use monstertruck_core::{math::*, tolerance::Tolerance, bounding_box::BoundingBox};
 
 let a = Point3::new(1.0, 2.0, 3.0);
 let b = Point3::new(1.0 + 1e-7, 2.0, 3.0);

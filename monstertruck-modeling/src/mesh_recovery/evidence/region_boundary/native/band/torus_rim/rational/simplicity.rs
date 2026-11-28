@@ -19,9 +19,9 @@ fn tangent_separates(a: &Piece, b: &Piece, shift: f64, junction: Junction, margi
     };
     if left.end[0]
         .sub(right.start[0].add(Interval::point(offset)))
-        .magnitude()
+        .norm()
         > margin
-        || left.end[1].sub(right.start[1]).magnitude() > margin
+        || left.end[1].sub(right.start[1]).norm() > margin
     {
         return false;
     }

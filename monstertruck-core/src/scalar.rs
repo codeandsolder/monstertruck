@@ -11,14 +11,14 @@
 //! requirements are known.
 
 use crate::tolerance::{KERNEL_EPSILON, KERNEL_EPSILON_F32, KERNEL_EPSILON_SQUARED};
-use cgmath::AbsDiffEq;
+use approx::AbsDiffEq;
 use std::fmt::Debug;
 
 /// Core numeric marker for analytic evaluation, Newton steps, and normalization.
 ///
 /// Intentionally kept minimal in Phase 0. Stronger numeric bounds (e.g. `Float`)
 /// will be added when algorithm migration actually needs them.
-pub trait NumericScalar: Copy + Debug + Default + Send + Sync + 'static {}
+pub trait NumericScalar: Copy + Debug + Default + PartialEq + Send + Sync + 'static {}
 
 impl NumericScalar for f32 {}
 impl NumericScalar for f64 {}
@@ -72,7 +72,7 @@ impl<T: AbsDiffEq + Debug> ToleranceV2 for T where T::Epsilon: ToleranceScalar {
 ///
 /// Replacement for [`crate::tolerance::Origin`] that works with any scalar
 /// whose `AbsDiffEq::Epsilon` implements [`ToleranceScalar`].
-pub trait OriginV2: ToleranceV2 + cgmath::Zero
+pub trait OriginV2: ToleranceV2 + num_traits::Zero
 where Self::Epsilon: ToleranceScalar {
     /// Near origin.
     #[inline]
@@ -83,22 +83,22 @@ where Self::Epsilon: ToleranceScalar {
     fn so_small2_v2(&self) -> bool { self.near2_v2(&Self::zero()) }
 }
 
-impl<T: ToleranceV2 + cgmath::Zero> OriginV2 for T where T::Epsilon: ToleranceScalar {}
+impl<T: ToleranceV2 + num_traits::Zero> OriginV2 for T where T::Epsilon: ToleranceScalar {}
 
 /// Extracts the natural scalar type from a geometric point or vector.
 ///
-/// This trait bridges the gap between cgmath's generic types (e.g.
+/// This trait bridges the gap between nalgebra's generic types (e.g.
 /// `Point3<S>`) and the v2 trait layer's `Scalar` associated type.
 /// It allows geometry types like `Line<P>` to derive their scalar from
 /// `P` without carrying an extra type parameter.
 pub trait HasScalar {
     /// The scalar type this geometric type naturally operates with.
-    type Scalar: NumericScalar + cgmath::BaseFloat;
+    type Scalar: NumericScalar + crate::math::KernelScalar;
 }
 
 macro_rules! impl_has_scalar {
     ($ty:ident) => {
-        impl<S: cgmath::BaseFloat + NumericScalar> HasScalar for cgmath::$ty<S> {
+        impl<S: crate::math::KernelScalar + NumericScalar> HasScalar for nalgebra::$ty<S> {
             type Scalar = S;
         }
     };

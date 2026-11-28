@@ -29,7 +29,7 @@ fn normal_offset_field_line_with_variable_length() {
     assert_near!(offset.derivative_2(t), Vector2::new(0.0, -2.0));
 
     let derivatives = offset.derivatives(3, t);
-    assert_near!(derivatives[0], Point2::new(t, -length).to_vec());
+    assert_near!(derivatives[0], Point2::new(t, -length).position_vector());
     assert_near!(derivatives[1], Vector2::new(1.0, 2.0f64.mul_add(-t, -1.0)));
     assert_near!(derivatives[2], Vector2::new(0.0, -2.0));
     assert_near!(derivatives[3], Vector2::zero());

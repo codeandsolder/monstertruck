@@ -7,7 +7,7 @@
 use super::{
     Axis2Placement, Axis2PlacementHolder, Deserialize, Holder, Matrix3, Matrix4,
     RepresentationContext, RepresentationContextHolder, RepresentationItem,
-    RepresentationItemHolder, Result, Serialize, SquareMatrix, StepConvertingError, Table,
+    RepresentationItemHolder, Result, Serialize, SquareLinearMap, StepConvertingError, Table,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Holder)]
@@ -233,7 +233,7 @@ impl TryFrom<&ItemDefinedTransformation> for Matrix3 {
         let mat1: Self = (&value.transform_item_1).try_into()?;
         let mat2: Self = (&value.transform_item_2).try_into()?;
         let inv = mat1
-            .invert()
+            .try_inverse()
             .ok_or("failed to invert transform_item_1 Matrix3")?;
         Ok(mat2 * inv)
     }
@@ -245,7 +245,7 @@ impl TryFrom<&ItemDefinedTransformation> for Matrix4 {
         let mat1: Self = (&value.transform_item_1).try_into()?;
         let mat2: Self = (&value.transform_item_2).try_into()?;
         let inv = mat1
-            .invert()
+            .try_inverse()
             .ok_or("failed to invert transform_item_1 Matrix4")?;
         Ok(mat2 * inv)
     }

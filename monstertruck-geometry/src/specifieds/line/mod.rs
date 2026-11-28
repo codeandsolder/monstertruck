@@ -1,10 +1,10 @@
 use super::{
-    Bound, BoundedCurve, BsplineCurve, CurveParameter, Cut, EuclideanSpace, InnerSpace, Invertible,
-    KnotVector, Line, Matrix2, One, ParameterDivision1D, ParameterRange, ParametricCurve, Point2,
-    SearchNearestParameter, SearchParameter, SearchParameterHint1D, SquareMatrix, ToSameGeometry,
-    Tolerance, Transform, Transformed, Zero,
+    AffinePoint, Bound, BoundedCurve, BsplineCurve, CurveParameter, Cut, GeometryTransform,
+    InnerProduct, Invertible, KnotVector, Line, Matrix2, One, ParameterDivision1D, ParameterRange,
+    ParametricCurve, Point2, SearchNearestParameter, SearchParameter, SearchParameterHint1D,
+    ToSameGeometry, Tolerance, Transformed, Zero,
 };
-use monstertruck_core::cgmath64::control_point::ControlPoint;
+use monstertruck_core::math::control_point::ControlPoint;
 
 impl<P: Copy> Line<P> {
     /// initialize line from vector
@@ -17,8 +17,8 @@ impl<P: Copy> Line<P> {
 
 impl<P> Line<P>
 where
-    P: EuclideanSpace<Scalar = f64>,
-    P::Diff: InnerSpace<Scalar = f64>,
+    P: AffinePoint<Scalar = f64>,
+    P::Diff: InnerProduct<Scalar = f64>,
 {
     /// Returns the projected point to the line.
     /// # Examples
@@ -30,7 +30,7 @@ where
     /// ```
     pub fn projection(self, point: P) -> P {
         let (u, v) = (point - self.0, self.1 - self.0);
-        self.0 + v * u.dot(v) / v.dot(v)
+        self.0 + v * u.dot(&v) / v.dot(&v)
     }
     /// Returns the distance between the line and the point `point`.
     /// # Examples
@@ -48,7 +48,7 @@ where
     /// ```
     pub fn distance_to_point(self, point: P) -> f64 {
         let (u, v) = (point - self.0, self.1 - self.0);
-        (u - v * u.dot(v) / v.dot(v)).magnitude()
+        (u - v * u.dot(&v) / v.dot(&v)).norm()
     }
     /// Returns the distance between the sengment and the point `point`.
     /// # Examples
@@ -66,8 +66,8 @@ where
     /// ```
     pub fn distance_to_point_as_segment(self, point: P) -> f64 {
         let (u, v) = (point - self.0, self.1 - self.0);
-        let t = f64::clamp(u.dot(v) / v.dot(v), 0.0, 1.0);
-        (u - v * t).magnitude()
+        let t = f64::clamp(u.dot(&v) / v.dot(&v), 0.0, 1.0);
+        (u - v * t).norm()
     }
 }
 
@@ -93,9 +93,9 @@ impl Line<Point2> {
     /// ```
     #[must_use = "Ignoring this result discards the intersection of two lines and its parameters."]
     pub fn intersection(self, other: Self) -> Option<(f64, f64, Point2)> {
-        let mat = Matrix2::from_cols(self.1 - self.0, other.0 - other.1);
+        let mat = Matrix2::from_columns(&[self.1 - self.0, other.0 - other.1]);
         let v = other.0 - self.0;
-        let params = mat.invert().map(|inv| inv * v)?;
+        let params = mat.try_inverse().map(|inv| inv * v)?;
         Some((params.x, params.y, self.evaluate(params.x)))
     }
 }
@@ -157,7 +157,7 @@ impl<P: Copy> Invertible for Line<P> {
 impl<P> SearchNearestParameter<CurveParameter> for Line<P>
 where
     P: ControlPoint<f64>,
-    P::Diff: InnerSpace<Scalar = f64>,
+    P::Diff: InnerProduct<Scalar = f64>,
 {
     type Point = P;
     #[inline]
@@ -168,14 +168,14 @@ where
         _: usize,
     ) -> Option<f64> {
         let b = self.1 - self.0;
-        Some((pt - self.0).dot(b) / b.dot(b))
+        Some((pt - self.0).dot(&b) / b.dot(&b))
     }
 }
 
 impl<P> SearchParameter<CurveParameter> for Line<P>
 where
     P: ControlPoint<f64> + Tolerance,
-    P::Diff: InnerSpace<Scalar = f64>,
+    P::Diff: InnerProduct<Scalar = f64>,
 {
     type Point = P;
     #[inline]
@@ -186,7 +186,7 @@ where
         _: usize,
     ) -> Option<f64> {
         let b = self.1 - self.0;
-        let t = (pt - self.0).dot(b) / b.dot(b);
+        let t = (pt - self.0).dot(&b) / b.dot(&b);
         if self.evaluate(t).near(&pt) {
             Some(t)
         } else {
@@ -195,15 +195,15 @@ where
     }
 }
 
-impl<P: EuclideanSpace, M: Transform<P>> Transformed<M> for Line<P> {
+impl<P: AffinePoint, M: GeometryTransform<P>> Transformed<M> for Line<P> {
     #[inline]
     fn transform_by(&mut self, trans: M) {
-        self.0 = trans.transform_point(self.0);
-        self.1 = trans.transform_point(self.1);
+        self.0 = trans.apply_point(self.0);
+        self.1 = trans.apply_point(self.1);
     }
     #[inline]
     fn transformed(&self, trans: M) -> Self {
-        Self(trans.transform_point(self.0), trans.transform_point(self.1))
+        Self(trans.apply_point(self.0), trans.apply_point(self.1))
     }
 }
 
@@ -275,7 +275,7 @@ where P: HasScalar + ControlPoint<<P as HasScalar>::Scalar>
 impl<P> v2::SearchNearestParameter<v2::CurveParameter<<P as HasScalar>::Scalar>> for Line<P>
 where
     P: HasScalar + ControlPoint<<P as HasScalar>::Scalar>,
-    P::Diff: InnerSpace<Scalar = <P as HasScalar>::Scalar>,
+    P::Diff: InnerProduct<Scalar = <P as HasScalar>::Scalar>,
 {
     type Point = P;
 
@@ -287,7 +287,7 @@ where
         _: usize,
     ) -> Option<<P as HasScalar>::Scalar> {
         let b = self.1 - self.0;
-        Some((pt - self.0).dot(b) / b.dot(b))
+        Some((pt - self.0).dot(&b) / b.dot(&b))
     }
 }
 
@@ -296,7 +296,7 @@ where
     P: HasScalar
         + ControlPoint<<P as HasScalar>::Scalar>
         + ToleranceV2<Epsilon = <P as HasScalar>::Scalar>,
-    P::Diff: InnerSpace<Scalar = <P as HasScalar>::Scalar>,
+    P::Diff: InnerProduct<Scalar = <P as HasScalar>::Scalar>,
     <P as HasScalar>::Scalar: ToleranceScalar,
 {
     type Point = P;
@@ -309,7 +309,7 @@ where
         _: usize,
     ) -> Option<<P as HasScalar>::Scalar> {
         let b = self.1 - self.0;
-        let t = (pt - self.0).dot(b) / b.dot(b);
+        let t = (pt - self.0).dot(&b) / b.dot(&b);
         v2::ParametricCurve::evaluate(self, t)
             .near_v2(&pt)
             .then_some(t)

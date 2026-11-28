@@ -90,7 +90,7 @@ mod tests {
         let revolution = RevolutionSurface::by_revolution(
             Curve::Line(Line(Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0))),
             Point3::new(0.0, 0.0, 0.0),
-            Vector3::unit_z(),
+            Vector3::z(),
         );
         let surface = Surface::Revolution(Processor::new(revolution));
         let weight = 0.5_f64.sqrt();

@@ -4,7 +4,7 @@
 //! name is unchanged, so every test keeps its path and its identity.
 
 use super::*;
-use monstertruck_core::cgmath64::Zero;
+use monstertruck_core::math::Zero;
 
 /// A surface whose evaluation carries a high-frequency term that a bilinear
 /// interpolant can never match, so the deviation test fails at EVERY level:
@@ -20,14 +20,14 @@ impl ParametricSurface for NonConvergingSurface {
         // 1e9 cycles across the unit domain: no level of halving resolves it.
         Point3::new(u, v, f64::sin(1.0e9 * u) * f64::cos(1.0e9 * v))
     }
-    fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::unit_x() }
-    fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::unit_y() }
+    fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::x() }
+    fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::y() }
     fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
         match (m, n) {
-            (0, 0) => self.evaluate(u, v).to_vec(),
+            (0, 0) => self.evaluate(u, v).position_vector(),
             (1, 0) => self.derivative_u(u, v),
             (0, 1) => self.derivative_v(u, v),
             _ => Vector3::zero(),
@@ -44,14 +44,14 @@ impl ParametricSurface for FlatSurface {
     type Point = Point3;
     type Vector = Vector3;
     fn evaluate(&self, u: f64, v: f64) -> Point3 { Point3::new(u, v, 0.0) }
-    fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::unit_x() }
-    fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::unit_y() }
+    fn derivative_u(&self, _: f64, _: f64) -> Vector3 { Vector3::x() }
+    fn derivative_v(&self, _: f64, _: f64) -> Vector3 { Vector3::y() }
     fn derivative_uu(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_uv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_vv(&self, _: f64, _: f64) -> Vector3 { Vector3::zero() }
     fn derivative_mn(&self, m: usize, n: usize, u: f64, v: f64) -> Vector3 {
         match (m, n) {
-            (0, 0) => self.evaluate(u, v).to_vec(),
+            (0, 0) => self.evaluate(u, v).position_vector(),
             (1, 0) => self.derivative_u(u, v),
             (0, 1) => self.derivative_v(u, v),
             _ => Vector3::zero(),

@@ -26,7 +26,7 @@ pub(super) use ruled::{
 };
 
 use monstertruck_core::{
-    cgmath64::{EuclideanSpace, InnerSpace, MetricSpace, Point2, Point3, Vector2, Vector3},
+    math::{AffinePoint, InnerProduct, MetricSpace, Point2, Point3, Vector2, Vector3},
     tolerance::DEFAULT_NUMERICAL_TOLERANCES,
 };
 use monstertruck_geometry::prelude::*;
@@ -100,7 +100,7 @@ impl ShapesOpStatus {
         let der = curve.leader().derivative(t);
         let normal0 = curve.surface0().normal(pt0[0], pt0[1]);
         let normal1 = curve.surface1().normal(pt1[0], pt1[1]);
-        if normal0.cross(der).dot(normal1) > 0.0 {
+        if normal0.cross(&der).dot(&normal1) > 0.0 {
             Some(Self::Or)
         } else {
             Some(Self::And)
@@ -1452,11 +1452,11 @@ where
 
     let l = curve.derivative(t);
     let n = surface.normal(u, v);
-    let denominator = l.dot(n);
+    let denominator = l.dot(&n);
     if !denominator.is_finite() || denominator == 0.0 {
         return None;
     }
-    let t0 = (pt1 - pt0).dot(n) / denominator;
+    let t0 = (pt1 - pt0).dot(&n) / denominator;
     curve_surface_projection(
         curve,
         Some(t),
@@ -1481,7 +1481,7 @@ fn unique_nearby_loop_point<C>(
         .chain(rhs.iter())
         .flat_map(|wire| wire.vertex_iter())
         .map(|vertex| vertex.point())
-        .filter(|nearby| (*nearby - point).magnitude() <= tolerance)
+        .filter(|nearby| (*nearby - point).norm() <= tolerance)
     {
         match candidate {
             None => candidate = Some(nearby),

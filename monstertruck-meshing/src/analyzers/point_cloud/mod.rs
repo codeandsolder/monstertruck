@@ -2,7 +2,7 @@ use crate::common::point_segment_distance2;
 use array_macro::array;
 
 use super::{
-    BoundingBox, EuclideanSpace, InnerSpace, KERNEL_EPSILON, MetricSpace, Origin, Point3,
+    AffinePoint, BoundingBox, InnerProduct, KERNEL_EPSILON, MetricSpace, Origin, Point3,
     PolygonMesh, Vector3, hash, nonpositive_tolerance,
 };
 mod hashed_point_cloud;
@@ -93,18 +93,18 @@ fn distance2_point_triangle(point: Point3, triangle: [Point3; 3]) -> f64 {
     let bp = point - triangle[1];
     let ca = triangle[0] - triangle[2];
     let cp = point - triangle[2];
-    let nor = ab.cross(ca);
+    let nor = ab.cross(&ca);
 
-    let coef = f64::signum(ab.cross(nor).dot(ap))
-        + f64::signum(bc.cross(nor).dot(bp))
-        + f64::signum(ca.cross(nor).dot(cp));
-    if coef < 2.0 || nor.magnitude().so_small() {
+    let coef = f64::signum(ab.cross(&nor).dot(&ap))
+        + f64::signum(bc.cross(&nor).dot(&bp))
+        + f64::signum(ca.cross(&nor).dot(&cp));
+    if coef < 2.0 || nor.norm().so_small() {
         let a = point_segment_distance2(point, triangle[0], triangle[1]);
         let b = point_segment_distance2(point, triangle[1], triangle[2]);
         let c = point_segment_distance2(point, triangle[2], triangle[0]);
         f64::min(f64::min(a, b), c)
     } else {
-        nor.dot(ap) * nor.dot(ap) / nor.magnitude2()
+        nor.dot(&ap) * nor.dot(&ap) / nor.norm_squared()
     }
 }
 

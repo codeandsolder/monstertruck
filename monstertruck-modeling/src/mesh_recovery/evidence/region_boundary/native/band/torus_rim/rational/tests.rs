@@ -4,7 +4,7 @@ use crate::{BsplineCurve, KnotVector, Vector4};
 fn frame() -> Frame {
     Frame {
         center: Point3::new(0.0, 0.0, 0.0),
-        basis: [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()],
+        basis: [Vector3::x(), Vector3::y(), Vector3::z()],
         major: 3.0,
         varying: 0,
         direction: 1.0,
@@ -112,9 +112,7 @@ fn interval_extraction_covers_nonclamped_knots_and_tiny_active_spans()
     for (bounds, approximate) in certified.iter().zip(ordinary) {
         for (enclosure, coefficient) in bounds.values.iter().zip(approximate.controls) {
             for (bound, value) in enclosure.iter().zip(coefficient) {
-                assert!(
-                    bound.contains(value) || bound.sub(Interval::point(value)).magnitude() < 1e-12
-                );
+                assert!(bound.contains(value) || bound.sub(Interval::point(value)).norm() < 1e-12);
             }
         }
     }

@@ -1,5 +1,5 @@
 use super::{
-    Adjacency, Faces, InnerSpace, Matrix3, PolygonMesh, SquareMatrix, Vector3, Vertex,
+    Adjacency, Faces, InnerProduct, Matrix3, PolygonMesh, SquareLinearMap, Vector3, Vertex,
     nonpositive_tolerance,
 };
 
@@ -173,11 +173,11 @@ impl SubStructureFilter for PolygonMesh {
         let k = (0..3).find(|k| face0.iter().all(|x| x.pos != face1[*k].pos))?;
         let vec0 = self.positions()[face0[1].pos] - self.positions()[face0[0].pos];
         let vec1 = self.positions()[face0[2].pos] - self.positions()[face0[0].pos];
-        let mut n = vec0.cross(vec1);
-        n /= n.magnitude();
+        let mut n = vec0.cross(&vec1);
+        n /= n.norm();
         let vec2 = self.positions()[face1[k].pos] - self.positions()[face0[0].pos];
-        let mat = Matrix3::from_cols(vec0, vec1, n);
-        let coef = mat.invert()? * vec2;
+        let mat = Matrix3::from_columns(&[vec0, vec1, n]);
+        let coef = mat.try_inverse()? * vec2;
 
         if coef[2] > plane_tol {
             None
@@ -239,7 +239,5 @@ trait CosAngle {
 }
 
 impl CosAngle for Vector3 {
-    fn cos_angle(self, other: Self) -> f64 {
-        self.dot(other) / (self.magnitude() * other.magnitude())
-    }
+    fn cos_angle(self, other: Self) -> f64 { self.dot(&other) / (self.norm() * other.norm()) }
 }

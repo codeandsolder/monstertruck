@@ -41,7 +41,7 @@ fn tessellate_shape(name: &str, json: &str) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let shapes_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../resources/shape");
+    let shapes_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/shape");
     println!("=== Shape tessellation benchmarks ===");
     let mut entries = std::fs::read_dir(shapes_dir)?.collect::<Result<Vec<_>, _>>()?;
     entries.retain(|entry| entry.path().extension().is_some_and(|ext| ext == "json"));

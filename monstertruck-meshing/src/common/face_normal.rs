@@ -1,4 +1,4 @@
-use super::{EuclideanSpace, InnerSpace, Point3, Vector3, Vertex, Zero};
+use super::{AffinePoint, InnerProduct, Point3, Vector3, Vertex, Zero};
 use monstertruck_mesh::Origin;
 
 #[derive(Clone, Copy, Debug)]
@@ -30,9 +30,9 @@ impl FaceNormal {
             .fold(Vector3::zero(), |sum, edge| {
                 let vec0 = positions[edge[0].pos].to_vec() - center;
                 let vec1 = positions[edge[1].pos].to_vec() - center;
-                sum + vec0.cross(vec1)
+                sum + vec0.cross(&vec1)
             });
-        if normal.magnitude2().so_small() || !normal.magnitude2().is_finite() {
+        if normal.norm_squared().so_small() || !normal.norm_squared().is_finite() {
             return None;
         }
         Some(Self {

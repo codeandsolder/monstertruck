@@ -6,7 +6,7 @@
 //! volume are independently certified.
 
 use super::super::{EdgeKey, EdgeUse, InputPolygon, seams};
-use crate::{InnerSpace, Point3, Vector3};
+use crate::{InnerProduct, Point3, Vector3};
 use robust::{Coord3D, orient3d};
 use std::cmp::Ordering;
 
@@ -75,7 +75,7 @@ impl Ray {
             return None;
         }
         let normal = (cross / magnitude).normalize();
-        let alignment = normal.dot(source.normal);
+        let alignment = normal.dot(&source.normal);
         if !alignment.is_finite() || alignment == 0.0 {
             return None;
         }
@@ -116,14 +116,14 @@ impl Fan {
 
     fn same_ray(&self, left: Ray, right: Ray) -> bool {
         self.turn(left, right) == Some(Ordering::Equal)
-            && left.transverse_normal.dot(right.transverse_normal) > 0.0
+            && left.transverse_normal.dot(&right.transverse_normal) > 0.0
     }
 
     fn half(&self, reference: Ray, ray: Ray) -> Option<bool> {
         Some(match self.turn(reference, ray)? {
             Ordering::Greater => false,
             Ordering::Less => true,
-            Ordering::Equal => reference.transverse_normal.dot(ray.transverse_normal) < 0.0,
+            Ordering::Equal => reference.transverse_normal.dot(&ray.transverse_normal) < 0.0,
         })
     }
 

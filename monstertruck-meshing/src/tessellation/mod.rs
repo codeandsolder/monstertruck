@@ -1,5 +1,5 @@
 use crate::{
-    BoundedCurve, CurveParameter, EuclideanSpace, ExactParameterBoundary2D, Faces, InnerSpace,
+    AffinePoint, BoundedCurve, CurveParameter, ExactParameterBoundary2D, Faces, InnerProduct,
     Invertible, KERNEL_EPSILON, MetricSpace, Origin, ParameterBoundary2D, ParameterDivision1D,
     ParameterDivision2D, ParametricCurve2D, ParametricCurve3D, ParametricSurface3D, Point3,
     PolygonMesh, SearchNearestParameter, SearchParameter, StandardAttributes, StandardVertex,
@@ -399,9 +399,9 @@ pub trait MeshableShape {
     ///
     /// // modeling a unit cube
     /// let v = builder::vertex(Point3::origin());
-    /// let e = builder::extrude(&v, Vector3::unit_x());
-    /// let f = builder::extrude(&e, Vector3::unit_y());
-    /// let cube: Solid = builder::extrude(&f, Vector3::unit_z());
+    /// let e = builder::extrude(&v, Vector3::x());
+    /// let f = builder::extrude(&e, Vector3::y());
+    /// let cube: Solid = builder::extrude(&f, Vector3::z());
     ///
     /// // cube is Solid, however, the tessellated mesh is not closed.
     /// let mut mesh = cube.triangulation(0.01).to_polygon();
@@ -482,7 +482,7 @@ pub trait RobustMeshableShape {
     /// let surface_raw = RevolutionSurface::by_revolution(
     ///     Curve::Line(Line(p[2], p[0])),
     ///     Point3::origin(),
-    ///     Vector3::unit_z(),
+    ///     Vector3::z(),
     /// );
     /// let surface: Surface = Processor::new(surface_raw).into();
     /// // shell

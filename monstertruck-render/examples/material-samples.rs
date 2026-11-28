@@ -42,8 +42,8 @@ impl App for MyApp {
         let scene_desc = WindowSceneDescriptor {
             studio: StudioConfig {
                 camera: Camera {
-                    matrix: Matrix4::from_translation(camera_dist * Vector3::unit_z()),
-                    method: ProjectionMethod::perspective(Rad(PI / 4.0)),
+                    matrix: Matrix4::new_translation(&camera_dist * Vector3::z()),
+                    method: ProjectionMethod::perspective((PI / 4.0)),
                     near_clip: 0.1,
                     far_clip: 100.0,
                 },
@@ -83,9 +83,9 @@ impl App for MyApp {
         };
         let mut scene = WindowScene::from_window(window, &scene_desc).await?;
         let vertex = builder::vertex(Point3::new(-0.5, -0.5, -0.5));
-        let edge = builder::extrude(&vertex, Vector3::unit_x());
-        let face = builder::extrude(&edge, Vector3::unit_y());
-        let cube: Solid = builder::extrude(&face, Vector3::unit_z());
+        let edge = builder::extrude(&vertex, Vector3::x());
+        let face = builder::extrude(&edge, Vector3::y());
+        let cube: Solid = builder::extrude(&face, Vector3::z());
         let mesh = cube.triangulation(0.01).to_polygon();
         let instance: PolygonInstance = scene
             .instance_creator()
@@ -99,7 +99,7 @@ impl App for MyApp {
                     f64::from(row) / f64::from(N - 1),
                     f64::from(column) / f64::from(N - 1),
                 );
-                let matrix = Matrix4::from_translation(Vector3::new(
+                let matrix = Matrix4::new_translation(&Vector3::new(
                     1.5_f64.mul_add(f64::from(row + 1), -(side_length / 2.0)),
                     1.5_f64.mul_add(f64::from(column + 1), -(side_length / 2.0)),
                     0.0,
@@ -134,12 +134,12 @@ impl App for MyApp {
         for (index, shape) in self.instances.iter_mut().enumerate() {
             let pair_sign = if (index / 2) % 2 == 0 { 1.0 } else { -1.0 };
             let axis = if index % 2 == 0 {
-                pair_sign * Vector3::unit_y()
+                pair_sign * Vector3::y()
             } else {
-                -pair_sign * Vector3::unit_x()
+                -pair_sign * Vector3::x()
             };
-            shape.instance_state_mut().matrix =
-                self.matrices[index] * Matrix4::from_axis_angle(axis, Rad(time * PI / 2.0));
+            shape.instance_state_mut().matrix = self.matrices[index]
+                * Matrix4::from_axis_angle(&Unit::new_unchecked(axis), (time * PI / 2.0));
             self.scene.update_bind_group(shape);
         }
         if let Err(error) = self.scene.render_frame() {

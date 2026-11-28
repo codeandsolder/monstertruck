@@ -22,16 +22,16 @@ proptest! {
 
         let uder0 = torus.derivative_u(u, v);
         let uder1 = (torus.evaluate(u + EPS, v) - torus.evaluate(u - EPS, v)) / (2.0 * EPS);
-        prop_assert!((uder0 - uder1).magnitude() < EPS, "{:?} {:?}", uder0, uder1);
+        prop_assert!((uder0 - uder1).norm() < EPS, "{:?} {:?}", uder0, uder1);
 
         let vder0 = torus.derivative_v(u, v);
         let vder1 = (torus.evaluate(u, v + EPS) - torus.evaluate(u, v - EPS)) / (2.0 * EPS);
-        prop_assert!((vder0 - vder1).magnitude() < EPS, "{:?} {:?}", vder0, vder1);
+        prop_assert!((vder0 - vder1).norm() < EPS, "{:?} {:?}", vder0, vder1);
 
         let uuder0 = torus.derivative_uu(u, v);
         let uuder1 = (torus.derivative_u(u + EPS, v) - torus.derivative_u(u - EPS, v)) / (2.0 * EPS);
         prop_assert!(
-            (uuder0 - uuder1).magnitude() < EPS,
+            (uuder0 - uuder1).norm() < EPS,
             "{:?} {:?}",
             uuder0,
             uuder1
@@ -40,7 +40,7 @@ proptest! {
         let uvder0 = torus.derivative_uv(u, v);
         let uvder1 = (torus.derivative_v(u + EPS, v) - torus.derivative_v(u - EPS, v)) / (2.0 * EPS);
         prop_assert!(
-            (uvder0 - uvder1).magnitude() < EPS,
+            (uvder0 - uvder1).norm() < EPS,
             "{:?} {:?}",
             uvder0,
             uvder1
@@ -49,14 +49,14 @@ proptest! {
         let vvder0 = torus.derivative_vv(u, v);
         let vvder1 = (torus.derivative_v(u, v + EPS) - torus.derivative_v(u, v - EPS)) / (2.0 * EPS);
         prop_assert!(
-            (vvder0 - vvder1).magnitude() < EPS,
+            (vvder0 - vvder1).norm() < EPS,
             "{:?} {:?}",
             vvder0,
             vvder1
         );
 
         let n0 = torus.normal(u, v);
-        let n1 = torus.derivative_u(u, v).cross(torus.derivative_v(u, v)).normalize();
+        let n1 = torus.derivative_u(u, v).cross(&torus.derivative_v(u, v)).normalize();
         prop_assert_near!(n0, n1);
 
         let (u0, v0) = torus.search_parameter(p, None, 1).unwrap();
@@ -93,7 +93,7 @@ proptest! {
             let der1 = (torus.derivative_mn(m, n, u, v + EPS) - torus.derivative_mn(m, n, u, v - EPS)) / (2.0 * EPS);
             (der0, der1)
         };
-        prop_assert!((der0 - der1).magnitude() < 0.01 * der0.magnitude());
+        prop_assert!((der0 - der1).norm() < 0.01 * der0.norm());
     }
 }
 
@@ -177,7 +177,7 @@ fn spindle_torus_nearest_parameter_matches_dense_meridian_reference() {
             let dr = rho - q.abs();
             sampled = sampled.min(dr * dr + dz * dz);
         }
-        let scale = (torus.large_radius() + torus.small_radius() + relative.magnitude()).max(1.0);
+        let scale = (torus.large_radius() + torus.small_radius() + relative.norm()).max(1.0);
         assert!(
             got <= sampled + (2.0 * PI / SAMPLES as f64 * scale).powi(2),
             "nearest point worse than dense meridian reference: got {got}, sampled {sampled}, point {point:?}",
@@ -309,11 +309,11 @@ fn exact_inverse_is_conditioned_at_meridian_extrema() {
         let torus = Torus::new_unchecked(Point3::new(41.4274, -8.2296, 3.8608), major, minor);
         for u in [0.0, 0.37, PI, 5.2] {
             for v in [-PI * 0.5, PI * 0.5, PI * 0.5 - 1.0e-8] {
-                let point = torus.evaluate(u, v) + Vector3::unit_z() * (v.signum() * 1.0e-11);
+                let point = torus.evaluate(u, v) + Vector3::z() * (v.signum() * 1.0e-11);
                 let (ru, rv) = torus.search_parameter(point, Some((u, v)), 1).unwrap();
                 assert!(torus.evaluate(ru, rv).distance(point) < 1.0e-10);
                 assert!((rv - v).abs() < 1.0e-9);
-                let outside = point + Vector3::unit_z() * (v.signum() * 1.0e-3);
+                let outside = point + Vector3::z() * (v.signum() * 1.0e-3);
                 assert!(torus.search_parameter(outside, Some((u, v)), 1).is_none());
             }
         }

@@ -6,7 +6,7 @@
 //! transformations are expressed in.
 
 use super::{
-    Deserialize, EuclideanSpace, Holder, InnerSpace, Matrix3, Matrix4, Origin, Point2, Point3,
+    AffinePoint, Deserialize, Holder, InnerProduct, Matrix3, Matrix4, Origin, Point2, Point3,
     Result, Serialize, StepConvertingError, Table, Tolerance, Vector2, Vector3, Zero,
 };
 
@@ -181,7 +181,7 @@ impl From<&Axis2Placement2d> for Matrix3 {
             .as_ref()
             .map_or_else(Vector2::unit_x, Vector2::from);
         let y = Vector2::new(-x.y, x.x);
-        Self::from_cols(x.extend(0.0), y.extend(0.0), z.to_vec().extend(1.0))
+        Self::from_columns(&[x.push(0.0), y.push(0.0), z.position_vector().push(1.0)])
     }
 }
 
@@ -208,10 +208,10 @@ impl From<&Axis2Placement3d> for Matrix4 {
             .as_ref()
             .map_or_else(Vector3::unit_z, Vector3::from);
         // Pick a fallback reference direction that is not parallel to `z`.
-        let fallback = if z.near(&Vector3::unit_x()) {
-            Vector3::unit_y()
+        let fallback = if z.near(&Vector3::x()) {
+            Vector3::y()
         } else {
-            Vector3::unit_x()
+            Vector3::x()
         };
         let x = axis.ref_direction.as_ref().map_or(fallback, Vector3::from);
         // Gram-Schmidt: remove the `z` component of `x`. ISO 10303 permits
@@ -219,18 +219,18 @@ impl From<&Axis2Placement3d> for Matrix4 {
         // vector is zero and `normalize()` would produce `NaN`, which later
         // panics in `nonpositive_tolerance!` during meshing. Fall back to an
         // arbitrary direction orthogonal to `z` when the projection degenerates.
-        let projected = x - x.dot(z) * z;
-        let x = if projected.magnitude2().so_small() {
-            (fallback - fallback.dot(z) * z).normalize()
+        let projected = x - x.dot(&z) * z;
+        let x = if projected.norm_squared().so_small() {
+            (fallback - fallback.dot(&z) * z).normalize()
         } else {
             projected.normalize()
         };
-        let y = z.cross(x);
-        Self::from_cols(
-            x.extend(0.0),
-            y.extend(0.0),
-            z.extend(0.0),
-            w.to_vec().extend(1.0),
-        )
+        let y = z.cross(&x);
+        Self::from_columns(&[
+            x.push(0.0),
+            y.push(0.0),
+            z.push(0.0),
+            w.position_vector().push(1.0),
+        ])
     }
 }

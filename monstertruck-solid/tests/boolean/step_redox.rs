@@ -6,12 +6,12 @@ use monstertruck_modeling::*;
 #[test]
 fn step_redox_122_two_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
-        Matrix4::from_cols(
+        Matrix4::from_columns(&[
             Vector4::new(x.x, x.y, x.z, 0.0),
             Vector4::new(y.x, y.y, y.z, 0.0),
             Vector4::new(z.x, z.y, z.z, 0.0),
             Vector4::new(origin.x, origin.y, origin.z, 1.0),
-        )
+        ])
     }
 
     let small_uv = [
@@ -31,10 +31,8 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
             )
         })
         .collect();
-    let small = profile::solid_from_planar_profile::<Curve, Surface>(
-        vec![small_wire],
-        Vector3::unit_z() * 0.4,
-    )?;
+    let small =
+        profile::solid_from_planar_profile::<Curve, Surface>(vec![small_wire], Vector3::z() * 0.4)?;
     let small = builder::transformed(
         &small,
         frame_matrix(
@@ -121,7 +119,7 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
     .into();
     let main = profile::solid_from_planar_profile::<Curve, Surface>(
         vec![main_wire],
-        Vector3::unit_z() * 0.6000000000000001,
+        Vector3::z() * 0.6000000000000001,
     )?;
     let main = builder::transformed(
         &main,
@@ -155,12 +153,12 @@ fn step_redox_122_two_core_union_regression() -> Result<()> {
 #[test]
 fn step_redox_38_three_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
-        Matrix4::from_cols(
+        Matrix4::from_columns(&[
             Vector4::new(x.x, x.y, x.z, 0.0),
             Vector4::new(y.x, y.y, y.z, 0.0),
             Vector4::new(z.x, z.y, z.z, 0.0),
             Vector4::new(origin.x, origin.y, origin.z, 1.0),
-        )
+        ])
     }
     let point_on_arc = |center: [f64; 2], radius: f64, angle: f64| {
         Point3::new(
@@ -227,7 +225,7 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
     .into();
     let plate = profile::solid_from_planar_profile::<Curve, Surface>(
         vec![plate_wire],
-        Vector3::unit_z() * 0.19999999999999973,
+        Vector3::z() * 0.19999999999999973,
     )?;
     let plate = builder::transformed(
         &plate,
@@ -287,10 +285,8 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
         builder::line(&hook_vertices[7], &hook_vertices[0]),
     ]
     .into();
-    let hook = profile::solid_from_planar_profile::<Curve, Surface>(
-        vec![hook_wire],
-        Vector3::unit_z() * 2.0,
-    )?;
+    let hook =
+        profile::solid_from_planar_profile::<Curve, Surface>(vec![hook_wire], Vector3::z() * 2.0)?;
     let hook = builder::transformed(
         &hook,
         frame_matrix(
@@ -364,15 +360,15 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
     .into();
     let rounded = profile::solid_from_planar_profile::<Curve, Surface>(
         vec![rounded_wire],
-        Vector3::unit_z() * 0.2000000000000001,
+        Vector3::z() * 0.2000000000000001,
     )?;
     let rounded = builder::transformed(
         &rounded,
         frame_matrix(
             Point3::new(3.375000000000002, -0.6499999999999994, 0.0),
-            Vector3::unit_x(),
-            Vector3::unit_y(),
-            Vector3::unit_z(),
+            Vector3::x(),
+            Vector3::y(),
+            Vector3::z(),
         ),
     );
 
@@ -421,12 +417,12 @@ fn step_redox_38_three_core_union_regression() -> Result<()> {
 #[test]
 fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
-        Matrix4::from_cols(
+        Matrix4::from_columns(&[
             Vector4::new(x.x, x.y, x.z, 0.0),
             Vector4::new(y.x, y.y, y.z, 0.0),
             Vector4::new(z.x, z.y, z.z, 0.0),
             Vector4::new(origin.x, origin.y, origin.z, 1.0),
-        )
+        ])
     }
 
     let plate_uv = [
@@ -450,7 +446,7 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
         .collect();
     let plate = profile::solid_from_planar_profile::<Curve, Surface>(
         vec![plate_wire],
-        Vector3::unit_z() * 0.20000000000000018,
+        Vector3::z() * 0.20000000000000018,
     )?;
     let plate = builder::transformed(
         &plate,
@@ -498,7 +494,7 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
     .into();
     let rounded = profile::solid_from_planar_profile::<Curve, Surface>(
         vec![rounded_wire],
-        Vector3::unit_z() * 0.2,
+        Vector3::z() * 0.2,
     )?;
     let rounded = builder::transformed(
         &rounded,
@@ -539,12 +535,12 @@ fn step_redox_173_edge_touching_cores_remain_distinct() -> Result<()> {
 #[test]
 fn step_redox_97_nine_core_union_regression() -> Result<()> {
     fn frame_matrix(origin: Point3, x: Vector3, y: Vector3, z: Vector3) -> Matrix4 {
-        Matrix4::from_cols(
+        Matrix4::from_columns(&[
             Vector4::new(x.x, x.y, x.z, 0.0),
             Vector4::new(y.x, y.y, y.z, 0.0),
             Vector4::new(z.x, z.y, z.z, 0.0),
             Vector4::new(origin.x, origin.y, origin.z, 1.0),
-        )
+        ])
     }
     let c1_v = [
         builder::vertex(Point3::new(0.0, 0.0, 0.0)),

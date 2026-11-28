@@ -3,7 +3,7 @@
 //! topological endpoints must never trigger a new three-point circle fit.
 
 use monstertruck_modeling::{
-    BsplineCurve, EuclideanSpace, InnerSpace, KnotVector, NurbsCurve, Point3, Vector3, Vector4,
+    AffinePoint, BsplineCurve, InnerProduct, KnotVector, NurbsCurve, Point3, Vector3, Vector4,
 };
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -21,8 +21,8 @@ pub(super) fn affine_arc(
     if !sweep.is_finite()
         || sweep == 0.0
         || sweep.abs() > TAU
-        || !x.cross(y).magnitude2().is_finite()
-        || x.cross(y).magnitude2() <= 0.0
+        || !x.cross(&y).norm_squared().is_finite()
+        || x.cross(&y).norm_squared() <= 0.0
     {
         return None;
     }
@@ -33,9 +33,10 @@ pub(super) fn affine_arc(
             BsplineCurve::new(
                 KnotVector::bezier_knot(2),
                 vec![
-                    (origin.to_vec() + x).extend(1.0),
-                    (origin.to_vec() * cos_half + x * cos_half + y * sin_half).extend(cos_half),
-                    (origin.to_vec() + x * cos + y * sin).extend(1.0),
+                    (origin.position_vector() + x).push(1.0),
+                    (origin.position_vector() * cos_half + x * cos_half + y * sin_half)
+                        .extend(cos_half),
+                    (origin.position_vector() + x * cos + y * sin).push(1.0),
                 ],
             )
             .ok()?,
@@ -56,7 +57,7 @@ pub(super) fn affine_arc(
     let weight = (0.5 * step).cos();
     let control = |angle: f64, w: f64| {
         let (sin, cos) = angle.sin_cos();
-        let h = origin.to_vec() * w + x * cos + y * sin;
+        let h = origin.position_vector() * w + x * cos + y * sin;
         h.extend(w)
     };
     let mut controls = vec![control(0.0, 1.0)];

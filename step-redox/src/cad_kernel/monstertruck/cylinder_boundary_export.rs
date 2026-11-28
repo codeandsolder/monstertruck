@@ -12,7 +12,7 @@ use monstertruck_geometry::{
     prelude::TryIntoHomogeneousBsplineSurface,
 };
 use monstertruck_modeling::{
-    BoundedCurve, BsplineCurve, Curve, InnerSpace, KnotVector, NurbsCurve, Surface, SurfaceCurve,
+    BoundedCurve, BsplineCurve, Curve, InnerProduct, KnotVector, NurbsCurve, Surface, SurfaceCurve,
     algo,
 };
 
@@ -79,8 +79,8 @@ pub(super) fn bounded_crossing_cylinder_step_guide(curve: &Curve, tolerance: f64
     let start = guide.front();
     let end = guide.back();
     let endpoint_error = (spline.front() - start)
-        .magnitude()
-        .max((spline.back() - end).magnitude());
+        .norm()
+        .max((spline.back() - end).norm());
     if !endpoint_error.is_finite() || leader.maximum_error + endpoint_error > proof_tolerance {
         return None;
     }

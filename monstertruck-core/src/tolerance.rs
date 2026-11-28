@@ -1,5 +1,5 @@
-use crate::cgmath64::{Zero, cgmath};
-use cgmath::AbsDiffEq;
+use crate::math::Zero;
+use approx::AbsDiffEq;
 use std::fmt::Debug;
 
 /// Central numerical tolerances used by the kernel implementation.

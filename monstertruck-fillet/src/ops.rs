@@ -846,7 +846,7 @@ mod fillet_pcurve_edge_tests {
             let expected = Point3::new(t, 0.2 + 0.6 * t, 0.0);
             let actual = curve.evaluate(t);
             assert!(
-                (actual - expected).magnitude() < 1.0e-9,
+                (actual - expected).norm() < 1.0e-9,
                 "t={t}: expected {expected:?}, got {actual:?}",
             );
         }

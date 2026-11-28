@@ -7,7 +7,7 @@
 //! source stays readable; the module path is unchanged. What it measures and
 //! why is the banner below.
 
-use super::{EuclideanSpace, InnerSpace, MetricSpace, Point3, PreMeshableSurface, algo, env};
+use super::{AffinePoint, InnerProduct, MetricSpace, Point3, PreMeshableSurface, algo, env};
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
 
 // ---------------------------------------------------------------------------
@@ -154,8 +154,8 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
     let (residual, du, dv) = previous.map_or((f64::NAN, f64::NAN, f64::NAN), |(u, v)| {
         (
             surface.evaluate(u, v).distance(point),
-            surface.derivative_u(u, v).magnitude(),
-            surface.derivative_v(u, v).magnitude(),
+            surface.derivative_u(u, v).norm(),
+            surface.derivative_v(u, v).norm(),
         )
     });
     // Seam signature: distance from the previous uv to each declared endpoint.
@@ -217,7 +217,7 @@ pub(super) fn report_projection_failure<S: PreMeshableSurface>(
         }
     };
     let snp_text = format!("snp_hint[{}] snp_mid[{}]", snp(previous), snp(None));
-    let point_norm = point.to_vec().magnitude();
+    let point_norm = point.position_vector().norm();
     eprintln!(
         "BPROJ_FAIL face={} attempt={attempt} start={start} vertex={vertex}/{total} \
          stage={stage} point=({:.9},{:.9},{:.9}) prev_uv={previous_text} raw_uv={raw_text} \

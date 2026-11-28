@@ -16,16 +16,16 @@ fn contact_circle_as_curve() {
     assert_near!(cc.evaluate(0.0), nurbs.evaluate(0.0));
     assert_near!(cc.evaluate(0.5), nurbs.evaluate(0.5));
     assert_near!(cc.evaluate(1.0), nurbs.evaluate(1.0));
-    assert_near!((nurbs.evaluate(0.2) - cc.center()).magnitude(), r);
+    assert_near!((nurbs.evaluate(0.2) - cc.center()).norm(), r);
 
     const EPS: f64 = 1.0e-4;
     for i in 1..=9 {
         let s = f64::from(i) / 10.0;
         assert_near!(cc.evaluate(s).distance2(cc.center()), r * r);
         let cal_der = (cc.evaluate(s + EPS) - cc.evaluate(s - EPS)) / (2.0 * EPS);
-        assert!((cal_der - cc.derivative(s)).magnitude() < EPS);
+        assert!((cal_der - cc.derivative(s)).norm() < EPS);
         let cal_der2 = (cc.derivative(s + EPS) - cc.derivative(s - EPS)) / (2.0 * EPS);
-        assert!((cal_der2 - cc.derivative_2(s)).magnitude() < EPS);
+        assert!((cal_der2 - cc.derivative_2(s)).norm() < EPS);
     }
 }
 
@@ -35,7 +35,7 @@ fn fillet_between_two_spheres() {
     let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), 2.0);
     let edge_circle = Processor::with_transform(
         UnitCircle::<Point3>::new(),
-        Matrix4::from_scale(f64::sqrt(3.0)),
+        Matrix4::new_scaling(f64::sqrt(3.0)),
     );
 
     #[derive(Clone, Copy, Debug)]
@@ -69,9 +69,9 @@ fn fillet_between_two_spheres() {
 
         let contact_radius = 2.0 / (2.0 + r) * center_radius;
         let contact_z = r / (2.0 + r);
-        let contact_point0 = contact_radius * uc.evaluate(t) + contact_z * Vector3::unit_z();
+        let contact_point0 = contact_radius * uc.evaluate(t) + contact_z * Vector3::z();
         assert_near!(cp_curve0.evaluate(t), contact_point0);
-        let contact_point1 = contact_radius * uc.evaluate(t) - contact_z * Vector3::unit_z();
+        let contact_point1 = contact_radius * uc.evaluate(t) - contact_z * Vector3::z();
         assert_near!(cp_curve1.evaluate(t), contact_point1);
 
         let t0 = (cp_curve0.search_parameter(cc.contact_point0().point, None, 10)).unwrap();
@@ -89,20 +89,20 @@ fn fillet_between_two_spheres() {
             let ders_plus = fillet.derivatives(1, u + eps, v);
             let ders_minus = fillet.derivatives(1, u - eps, v);
             let uder_approx = (ders_plus[0][0] - ders_minus[0][0]) / (2.0 * eps);
-            assert!((ders[1][0] - uder_approx).magnitude() < eps);
+            assert!((ders[1][0] - uder_approx).norm() < eps);
             let uvder_approx = (ders_plus[0][1] - ders_minus[0][1]) / (2.0 * eps);
-            assert!((ders[1][1] - uvder_approx).magnitude() < eps);
+            assert!((ders[1][1] - uvder_approx).norm() < eps);
             let uuder_approx = (ders_plus[1][0] - ders_minus[1][0]) / (2.0 * eps);
-            assert!((ders[2][0] - uuder_approx).magnitude() < eps);
+            assert!((ders[2][0] - uuder_approx).norm() < eps);
 
             let ders_plus = fillet.derivatives(1, u, v + eps);
             let ders_minus = fillet.derivatives(1, u, v - eps);
             let vder_approx = (ders_plus[0][0] - ders_minus[0][0]) / (2.0 * eps);
-            assert!((ders[0][1] - vder_approx).magnitude() < eps);
+            assert!((ders[0][1] - vder_approx).norm() < eps);
             let uvder_approx = (ders_plus[1][0] - ders_minus[1][0]) / (2.0 * eps);
-            assert!((ders[1][1] - uvder_approx).magnitude() < eps);
+            assert!((ders[1][1] - uvder_approx).norm() < eps);
             let vvder_approx = (ders_plus[0][1] - ders_minus[0][1]) / (2.0 * eps);
-            assert!((ders[0][2] - vvder_approx).magnitude() < eps);
+            assert!((ders[0][2] - vvder_approx).norm() < eps);
 
             let p = cc.evaluate(u);
             let (u0, v0) = fillet
@@ -119,7 +119,7 @@ fn rolling_ball_fillet_supports_third_order_mixed_derivatives() {
     let sphere1 = Sphere::new(Point3::new(0.0, 0.0, -1.0), 2.0);
     let edge_circle = Processor::with_transform(
         UnitCircle::<Point3>::new(),
-        Matrix4::from_scale(f64::sqrt(3.0)),
+        Matrix4::new_scaling(f64::sqrt(3.0)),
     );
 
     #[derive(Clone, Copy, Debug)]
@@ -147,7 +147,7 @@ fn rolling_ball_fillet_supports_third_order_mixed_derivatives() {
     for (m, n) in [(0, 3), (1, 2), (2, 1)] {
         let approximation = (plus_v[m][n - 1] - minus_v[m][n - 1]) / (2.0 * epsilon);
         assert!(
-            (derivatives[m][n] - approximation).magnitude() < 2.0e-3,
+            (derivatives[m][n] - approximation).norm() < 2.0e-3,
             "third derivative ({m}, {n}) differs: exact={:?}, finite_difference={approximation:?}",
             derivatives[m][n],
         );
@@ -157,7 +157,7 @@ fn rolling_ball_fillet_supports_third_order_mixed_derivatives() {
     let minus_u = fillet.derivatives(2, u - epsilon, v);
     let u_approximation = (plus_u[2][0] - minus_u[2][0]) / (2.0 * epsilon);
     assert!(
-        (derivatives[3][0] - u_approximation).magnitude() < 2.0e-3,
+        (derivatives[3][0] - u_approximation).norm() < 2.0e-3,
         "third derivative (3, 0) differs: exact={:?}, finite_difference={u_approximation:?}",
         derivatives[3][0],
     );

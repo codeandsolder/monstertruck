@@ -123,8 +123,7 @@ fn solid_from_profile_simple() {
 #[test]
 fn clockwise_profile_extrusion_is_oriented_with_positive_sweep() {
     let outer = rect_wire_cw(-1.0, -1.0, 1.0, 1.0);
-    let solid =
-        solid_from_planar_profile::<Curve, Surface>(vec![outer], Vector3::unit_z()).unwrap();
+    let solid = solid_from_planar_profile::<Curve, Surface>(vec![outer], Vector3::z()).unwrap();
     let shell = &solid.boundaries()[0];
     let cap_normal_at = |z: f64| {
         shell
@@ -136,15 +135,14 @@ fn clockwise_profile_extrusion_is_oriented_with_positive_sweep() {
             .map(|face| face.oriented_surface().normal(0.0, 0.0))
             .expect("extrusion must have a cap at the requested z")
     };
-    assert_near!(cap_normal_at(0.0), -Vector3::unit_z());
-    assert_near!(cap_normal_at(1.0), Vector3::unit_z());
+    assert_near!(cap_normal_at(0.0), -Vector3::z());
+    assert_near!(cap_normal_at(1.0), Vector3::z());
 }
 
 #[test]
 fn profile_extrusion_is_oriented_with_negative_sweep() {
     let outer = rect_wire(-1.0, -1.0, 1.0, 1.0);
-    let solid =
-        solid_from_planar_profile::<Curve, Surface>(vec![outer], -Vector3::unit_z()).unwrap();
+    let solid = solid_from_planar_profile::<Curve, Surface>(vec![outer], -Vector3::z()).unwrap();
     let shell = &solid.boundaries()[0];
     let cap_normal_at = |z: f64| {
         shell
@@ -156,8 +154,8 @@ fn profile_extrusion_is_oriented_with_negative_sweep() {
             .map(|face| face.oriented_surface().normal(0.0, 0.0))
             .expect("extrusion must have a cap at the requested z")
     };
-    assert_near!(cap_normal_at(0.0), Vector3::unit_z());
-    assert_near!(cap_normal_at(-1.0), -Vector3::unit_z());
+    assert_near!(cap_normal_at(0.0), Vector3::z());
+    assert_near!(cap_normal_at(-1.0), -Vector3::z());
 }
 
 #[test]

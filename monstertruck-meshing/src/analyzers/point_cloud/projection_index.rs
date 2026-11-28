@@ -4,7 +4,7 @@
 
 use super::super::triangle_projection_interval;
 use super::{
-    EuclideanSpace, InnerSpace, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
+    AffinePoint, InnerProduct, Origin, Point3, PolygonMesh, Vector3, distance2_point_triangle,
     hash, nonpositive_tolerance,
 };
 
@@ -53,7 +53,7 @@ impl<'a> ProjectionNeighborhood<'a> {
                     return false;
                 }
                 if (triangle[1] - triangle[0])
-                    .cross(triangle[2] - triangle[0])
+                    .cross(&(triangle[2] - triangle[0]))
                     .so_small()
                 {
                     continue;
@@ -139,10 +139,9 @@ impl<'a> ProjectionNeighborhood<'a> {
         };
         // Preserve the original total-order handling for unusual floating
         // inputs instead of introducing a different NaN/overflow policy.
-        if points
-            .iter()
-            .any(|p| !(0..3).all(|axis| p[axis].is_finite()) || !p.to_vec().dot(unit).is_finite())
-        {
+        if points.iter().any(|p| {
+            !(0..3).all(|axis| p[axis].is_finite()) || !p.position_vector().dot(&unit).is_finite()
+        }) {
             return super::sort_end_points::pointcloud_in_polygon_neighborhood(
                 self.polygon,
                 points,
@@ -154,7 +153,7 @@ impl<'a> ProjectionNeighborhood<'a> {
             Self::contains(
                 &self.intervals,
                 self.polygon.positions(),
-                point.to_vec().dot(unit),
+                point.position_vector().dot(&unit),
                 point,
                 tolerance2,
             )

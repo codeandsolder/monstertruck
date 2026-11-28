@@ -1,7 +1,5 @@
-use cgmath::{
-    BaseFloat, BaseNum, EuclideanSpace, InnerSpace, Point1, Point2, Point3, Vector1, Vector2,
-    Vector3, Vector4, VectorSpace, Zero,
-};
+use crate::math::{AffinePoint, InnerProduct, KernelScalar, LinearVector, Zero};
+use nalgebra::{Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4};
 
 /// Shape/capacity error for derivative-array conversion helpers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,7 +51,7 @@ impl std::fmt::Display for DerivativeBufferError {
 
 impl std::error::Error for DerivativeBufferError {}
 
-pub(crate) fn scalar_from_u128<S: BaseNum>(mut value: u128) -> S {
+pub(crate) fn scalar_from_u128<S: KernelScalar>(mut value: u128) -> S {
     let mut result = S::zero();
     let mut bit = S::one();
     while value != 0 {
@@ -71,7 +69,7 @@ pub(crate) fn scalar_from_u128<S: BaseNum>(mut value: u128) -> S {
 /// declare control point
 pub mod control_point {
     use super::{
-        BaseFloat, EuclideanSpace, Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4, Zero,
+        AffinePoint, KernelScalar, Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4, Zero,
     };
     use std::fmt::Debug;
     use std::ops::{
@@ -118,49 +116,49 @@ pub mod control_point {
         fn from_vec(vec: Self::Diff) -> Self;
     }
 
-    impl<S: BaseFloat> ControlPoint<S> for Point1<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Point1<S> {
         type Diff = Vector1<S>;
         const DIM: usize = 1;
-        fn origin() -> Self { EuclideanSpace::origin() }
-        fn to_vec(self) -> Self::Diff { EuclideanSpace::to_vec(self) }
-        fn from_vec(vec: Self::Diff) -> Self { EuclideanSpace::from_vec(vec) }
+        fn origin() -> Self { AffinePoint::origin() }
+        fn to_vec(self) -> Self::Diff { self.coords }
+        fn from_vec(vec: Self::Diff) -> Self { Self::from(vec) }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Point2<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Point2<S> {
         type Diff = Vector2<S>;
         const DIM: usize = 2;
-        fn origin() -> Self { EuclideanSpace::origin() }
-        fn to_vec(self) -> Self::Diff { EuclideanSpace::to_vec(self) }
-        fn from_vec(vec: Self::Diff) -> Self { EuclideanSpace::from_vec(vec) }
+        fn origin() -> Self { AffinePoint::origin() }
+        fn to_vec(self) -> Self::Diff { self.coords }
+        fn from_vec(vec: Self::Diff) -> Self { Self::from(vec) }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Point3<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Point3<S> {
         type Diff = Vector3<S>;
         const DIM: usize = 3;
-        fn origin() -> Self { EuclideanSpace::origin() }
-        fn to_vec(self) -> Self::Diff { EuclideanSpace::to_vec(self) }
-        fn from_vec(vec: Self::Diff) -> Self { EuclideanSpace::from_vec(vec) }
+        fn origin() -> Self { AffinePoint::origin() }
+        fn to_vec(self) -> Self::Diff { self.coords }
+        fn from_vec(vec: Self::Diff) -> Self { Self::from(vec) }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Vector1<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Vector1<S> {
         type Diff = Self;
         const DIM: usize = 1;
         fn origin() -> Self { Zero::zero() }
         fn to_vec(self) -> Self { self }
         fn from_vec(vec: Self::Diff) -> Self { vec }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Vector2<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Vector2<S> {
         type Diff = Self;
         const DIM: usize = 2;
         fn origin() -> Self { Zero::zero() }
         fn to_vec(self) -> Self { self }
         fn from_vec(vec: Self::Diff) -> Self { vec }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Vector3<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Vector3<S> {
         type Diff = Self;
         const DIM: usize = 3;
         fn origin() -> Self { Zero::zero() }
         fn to_vec(self) -> Self { self }
         fn from_vec(vec: Self::Diff) -> Self { vec }
     }
-    impl<S: BaseFloat> ControlPoint<S> for Vector4<S> {
+    impl<S: KernelScalar> ControlPoint<S> for Vector4<S> {
         type Diff = Self;
         const DIM: usize = 4;
         fn origin() -> Self { Zero::zero() }
@@ -172,17 +170,17 @@ pub mod control_point {
 /// Homogeneous coordinate of an Euclidean space and a vector space.
 /// # Examples
 /// ```
-/// use monstertruck_core::cgmath64::*;
-/// assert_eq!(Vector4::new(8.0, 6.0, 4.0, 2.0).truncate(), Vector3::new(8.0, 6.0, 4.0));
+/// use monstertruck_core::math::*;
+/// assert_eq!(Vector4::new(8.0, 6.0, 4.0, 2.0).spatial(), Vector3::new(8.0, 6.0, 4.0));
 /// assert_eq!(Vector4::new(8.0, 6.0, 4.0, 2.0).weight(), 2.0);
 /// assert_eq!(Vector4::new(8.0, 6.0, 4.0, 2.0).to_point(), Point3::new(4.0, 3.0, 2.0));
 /// assert_eq!(Vector4::from_point(Point3::new(4.0, 3.0, 2.0)), Vector4::new(4.0, 3.0, 2.0, 1.0));
 /// ```
-pub trait Homogeneous: VectorSpace {
+pub trait Homogeneous: LinearVector {
     /// The point expressed by homogeneous coordinate
-    type Point: EuclideanSpace<Scalar = Self::Scalar>;
+    type Point: AffinePoint<Scalar = Self::Scalar>;
     /// Returns the first dim - 1 components.
-    fn truncate(self) -> <Self::Point as EuclideanSpace>::Diff;
+    fn spatial(self) -> <Self::Point as AffinePoint>::Diff;
     /// Returns the last component.
     fn weight(self) -> Self::Scalar;
     /// Returns homogeneous coordinate.
@@ -194,13 +192,15 @@ pub trait Homogeneous: VectorSpace {
     }
     /// Returns the projection to the plane whose the last component is `1.0`.
     #[inline]
-    fn to_point(self) -> Self::Point { Self::Point::from_vec(self.truncate() / self.weight()) }
+    fn to_point(self) -> Self::Point {
+        Self::Point::from_coordinates(self.spatial() / self.weight())
+    }
 }
 
 /// Returns the higher order derivation of the rational curve.
 /// # Examples
 /// ```
-/// use monstertruck_core::cgmath64::*;
+/// use monstertruck_core::math::*;
 /// // calculate the derivation at t = 1.5
 /// let t = 1.5;
 ///
@@ -224,22 +224,22 @@ pub trait Homogeneous: VectorSpace {
 /// let ans_der3 = Vector3::new(0.0, 0.0, 6.0);
 /// assert_eq!(rational_derivative(&[pt, der, der2, der3]), ans_der3);
 /// ```
-pub fn rational_derivative<V: Homogeneous>(ders: &[V]) -> <V::Point as EuclideanSpace>::Diff {
-    let zero = <V::Point as EuclideanSpace>::Diff::zero();
+pub fn rational_derivative<V: Homogeneous>(ders: &[V]) -> <V::Point as AffinePoint>::Diff {
+    let zero = <V::Point as AffinePoint>::Diff::zero();
     let len = ders.len();
     if len == 0 {
         zero
     } else if len == 1 {
-        ders[0].to_point().to_vec()
+        ders[0].to_point().position_vector()
     } else if len == 2 {
-        let (s, sw) = (ders[0].truncate(), ders[0].weight());
-        let (d, dw) = (ders[1].truncate(), ders[1].weight());
+        let (s, sw) = (ders[0].spatial(), ders[0].weight());
+        let (d, dw) = (ders[1].spatial(), ders[1].weight());
         let sw2 = sw * sw;
         (d * sw - s * dw) / sw2
     } else if len == 3 {
-        let (s, sw) = (ders[0].truncate(), ders[0].weight());
-        let (d, dw) = (ders[1].truncate(), ders[1].weight());
-        let (d2, d2w) = (ders[2].truncate(), ders[2].weight());
+        let (s, sw) = (ders[0].spatial(), ders[0].weight());
+        let (d, dw) = (ders[1].spatial(), ders[1].weight());
+        let (d2, d2w) = (ders[2].spatial(), ders[2].weight());
         // SAFETY: The integer 2 is representable in any numeric type.
         let two = scalar_from_u128(2);
         let sw2 = sw * sw;
@@ -258,7 +258,7 @@ pub fn rational_derivative<V: Homogeneous>(ders: &[V]) -> <V::Point as Euclidean
 /// Store the multi-orders derivations of the rational curve in `evals`.
 /// # Examples
 /// ```
-/// use monstertruck_core::cgmath64::*;
+/// use monstertruck_core::math::*;
 /// // calculate the derivation at t = 1.5
 /// let t = 1.5;
 ///
@@ -283,7 +283,7 @@ pub fn rational_derivative<V: Homogeneous>(ders: &[V]) -> <V::Point as Euclidean
 /// ```
 fn rational_derivatives_into<V: Homogeneous>(
     ders: &[V],
-    evals: &mut [<V::Point as EuclideanSpace>::Diff],
+    evals: &mut [<V::Point as AffinePoint>::Diff],
 ) {
     for i in 0..ders.len() {
         let mut c = 1;
@@ -291,7 +291,7 @@ fn rational_derivatives_into<V: Homogeneous>(
             c = c * (i - j + 1) / j;
             sum + evals[j] * (ders[i - j].weight() * scalar_from_u128(c as u128))
         });
-        evals[i] = (ders[i].truncate() - sum) / ders[0].weight();
+        evals[i] = (ders[i].spatial() - sum) / ders[0].weight();
     }
 }
 
@@ -301,7 +301,7 @@ fn rational_derivatives_into<V: Homogeneous>(
 /// Returns [`DerivativeBufferError::OutputTooShort`] if `evals` cannot hold every input order.
 pub fn rational_derivatives<V: Homogeneous>(
     ders: &[V],
-    evals: &mut [<V::Point as EuclideanSpace>::Diff],
+    evals: &mut [<V::Point as AffinePoint>::Diff],
 ) -> Result<(), DerivativeBufferError> {
     if evals.len() < ders.len() {
         return Err(DerivativeBufferError::OutputTooShort {
@@ -316,7 +316,7 @@ pub fn rational_derivatives<V: Homogeneous>(
 /// Returns the multi-orders derivations of the rational surface.
 /// # Examples
 /// ```
-/// use monstertruck_core::cgmath64::*;
+/// use monstertruck_core::math::*;
 /// // calculate the derivation at (u, v) = (1.0, 2.0).
 /// let (u, v) = (1.0, 2.0);
 /// // the curve: s(u, v) = (u^3 v^2, u^2 v^3, u v, u)
@@ -355,11 +355,11 @@ pub fn rational_derivatives<V: Homogeneous>(
 /// Returns [`DerivativeBufferError::RaggedInput`] when the input rows do not all have the same width.
 pub fn multi_rational_derivative<V, A>(
     ders: &[A],
-) -> Result<<V::Point as EuclideanSpace>::Diff, DerivativeBufferError>
+) -> Result<<V::Point as AffinePoint>::Diff, DerivativeBufferError>
 where
     V: Homogeneous,
     A: AsRef<[V]>, {
-    let zero = <V::Point as EuclideanSpace>::Diff::zero();
+    let zero = <V::Point as AffinePoint>::Diff::zero();
     if ders.is_empty() {
         return Ok(zero);
     }
@@ -378,7 +378,7 @@ where
     let value = if n == 0 {
         zero
     } else if (m, n) == (1, 1) {
-        ders[0].as_ref()[0].to_point().to_vec()
+        ders[0].as_ref()[0].to_point().position_vector()
     } else if m == 1 {
         rational_derivative(ders[0].as_ref())
     } else if (m, n) == (2, 1) {
@@ -402,10 +402,10 @@ where
         let u_derivative = u_row[0];
         let v_derivative = value_row[1];
         let cross_derivative = u_row[1];
-        let (surface_point, surface_weight) = (surface_value.truncate(), surface_value.weight());
-        let (u_vector, u_weight) = (u_derivative.truncate(), u_derivative.weight());
-        let (v_vector, v_weight) = (v_derivative.truncate(), v_derivative.weight());
-        let (cross_vector, cross_weight) = (cross_derivative.truncate(), cross_derivative.weight());
+        let (surface_point, surface_weight) = (surface_value.spatial(), surface_value.weight());
+        let (u_vector, u_weight) = (u_derivative.spatial(), u_derivative.weight());
+        let (v_vector, v_weight) = (v_derivative.spatial(), v_derivative.weight());
+        let (cross_vector, cross_weight) = (cross_derivative.spatial(), cross_derivative.weight());
         let weight_squared = surface_weight * surface_weight;
         cross_vector / surface_weight
             - u_vector * (v_weight / weight_squared)
@@ -432,7 +432,7 @@ where
 /// - Extra rows or columns in either input are ignored.
 /// # Examples
 /// ```
-/// use monstertruck_core::cgmath64::*;
+/// use monstertruck_core::math::*;
 /// // calculate the derivation at (u, v) = (1.0, 2.0).
 /// let (u, v) = (1.0, 2.0);
 /// // the curve: s(u, v) = (u^3 v^2, u^2 v^3, u v, u)
@@ -503,11 +503,11 @@ fn multi_rational_derivatives_into<V, A0, A1>(
 ) where
     V: Homogeneous,
     A0: AsRef<[V]>,
-    A1: AsMut<[<V::Point as EuclideanSpace>::Diff]>,
+    A1: AsMut<[<V::Point as AffinePoint>::Diff]>,
 {
     for m in 0..m_max {
         for n in 0..n_max {
-            let mut sum = <V::Point as EuclideanSpace>::Diff::zero();
+            let mut sum = <V::Point as AffinePoint>::Diff::zero();
             let mut c0 = 1;
             for i in 0..=m {
                 let mut c1 = 1;
@@ -520,7 +520,7 @@ fn multi_rational_derivatives_into<V, A0, A1>(
                 c0 = c0 * (m - i) / (i + 1);
             }
             let (eval_mn, der_mn) = (&mut evals[m].as_mut()[n], ders[m].as_ref()[n]);
-            *eval_mn = (der_mn.truncate() - sum) / ders[0].as_ref()[0].weight();
+            *eval_mn = (der_mn.spatial() - sum) / ders[0].as_ref()[0].weight();
         }
     }
 }
@@ -537,7 +537,7 @@ pub fn multi_rational_derivatives<V, A0, A1>(
 where
     V: Homogeneous,
     A0: AsRef<[V]>,
-    A1: AsMut<[<V::Point as EuclideanSpace>::Diff]>,
+    A1: AsMut<[<V::Point as AffinePoint>::Diff]>,
 {
     if evals.len() < ders.len() {
         return Err(DerivativeBufferError::OutputTooShort {
@@ -573,30 +573,30 @@ where
     Ok(())
 }
 
-impl<S: BaseFloat> Homogeneous for Vector2<S> {
+impl<S: KernelScalar> Homogeneous for Vector2<S> {
     type Point = Point1<S>;
     #[inline]
-    fn truncate(self) -> Vector1<S> { Vector1::new(self[0]) }
+    fn spatial(self) -> Vector1<S> { Vector1::new(self[0]) }
     #[inline]
     fn weight(self) -> S { self[1] }
     #[inline]
     fn from_point(point: Self::Point) -> Self { Self::new(point[0], S::one()) }
 }
 
-impl<S: BaseFloat> Homogeneous for Vector3<S> {
+impl<S: KernelScalar> Homogeneous for Vector3<S> {
     type Point = Point2<S>;
     #[inline]
-    fn truncate(self) -> Vector2<S> { self.truncate() }
+    fn spatial(self) -> Vector2<S> { self.fixed_rows::<2>(0).into_owned() }
     #[inline]
     fn weight(self) -> S { self[2] }
     #[inline]
     fn from_point(point: Self::Point) -> Self { Self::new(point[0], point[1], S::one()) }
 }
 
-impl<S: BaseFloat> Homogeneous for Vector4<S> {
+impl<S: KernelScalar> Homogeneous for Vector4<S> {
     type Point = Point3<S>;
     #[inline]
-    fn truncate(self) -> Vector3<S> { self.truncate() }
+    fn spatial(self) -> Vector3<S> { self.fixed_rows::<3>(0).into_owned() }
     #[inline]
     fn weight(self) -> S { self[3] }
     #[inline]
@@ -606,7 +606,7 @@ impl<S: BaseFloat> Homogeneous for Vector4<S> {
 /// Store the multi-orders derivations of the magnitude of the curve of vector.
 /// # Examples
 /// ```
-/// use monstertruck_core::{assert_near, cgmath64::*};
+/// use monstertruck_core::{assert_near, math::*};
 ///
 /// let t = 0.3;
 ///
@@ -630,7 +630,7 @@ impl<S: BaseFloat> Homogeneous for Vector4<S> {
 /// # Errors
 /// Returns [`DerivativeBufferError::OutputTooShort`] when `evals` cannot hold every input derivative order.
 pub fn absolute_derivatives<V>(ders: &[V], evals: &mut [f64]) -> Result<(), DerivativeBufferError>
-where V: InnerSpace<Scalar = f64> {
+where V: InnerProduct<Scalar = f64> {
     if evals.len() < ders.len() {
         return Err(DerivativeBufferError::OutputTooShort {
             required: ders.len(),
@@ -645,11 +645,11 @@ where V: InnerSpace<Scalar = f64> {
     if n == 0 {
         return Ok(());
     }
-    evals[0] = ders[0].magnitude();
+    evals[0] = ders[0].norm();
     for m in 1..n {
         let mut c = 1;
         let sum = (0..m).fold(0.0, |mut sum, i| {
-            let x = ders[i + 1].dot(ders[m - 1 - i]);
+            let x = ders[i + 1].dot(&ders[m - 1 - i]);
             let y = evals[i + 1] * evals[m - 1 - i];
             let coefficient = scalar_from_u128(c as u128);
             sum = (x - y).mul_add(coefficient, sum);

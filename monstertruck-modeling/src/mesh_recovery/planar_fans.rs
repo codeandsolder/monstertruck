@@ -12,7 +12,7 @@ use super::{
     sample_fit::normal_basis,
 };
 use crate::{
-    Curve, Edge, EdgeId, Face, InnerSpace, KERNEL_EPSILON, NurbsSurface, Plane, Point3, Shell,
+    Curve, Edge, EdgeId, Face, InnerProduct, KERNEL_EPSILON, NurbsSurface, Plane, Point3, Shell,
     Surface, Vector3, Vector4, VertexId, Wire,
 };
 use monstertruck_geometry::prelude::TryIntoHomogeneousBsplineCurve;
@@ -120,7 +120,7 @@ impl Fan {
     ) -> Option<Self> {
         let controls = surface.control_points();
         let [front, back] = [base.front().point(), base.back().point()];
-        let orientation = (back - front).cross(apex - front);
+        let orientation = (back - front).cross(&(apex - front));
         // The native spatial edge must be the same rational control net
         // as one full surface side, up to orientation. Carrier proximity
         // alone cannot establish that equality.
@@ -169,7 +169,7 @@ impl Fan {
             256.0 * f64::EPSILON * world_scale * (max_weight / min_weight) * degree * degree;
         let collapse = controls
             .iter()
-            .map(|r| (point(r[1 - row]) - apex).magnitude())
+            .map(|r| (point(r[1 - row]) - apex).norm())
             .fold(0.0_f64, f64::max)
             + margin;
         if !collapse.is_finite() || collapse > limit {
@@ -181,13 +181,13 @@ impl Fan {
         let axis = points
             .iter()
             .map(|&p| p - origin)
-            .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
+            .max_by(|a, b| a.norm_squared().total_cmp(&b.norm_squared()))?;
         let normal = points
             .iter()
-            .map(|&p| axis.cross(p - origin))
-            .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
-        let length = normal.magnitude();
-        let sign = normal.dot(orientation);
+            .map(|&p| axis.cross(&(p - origin)))
+            .max_by(|a, b| a.norm_squared().total_cmp(&b.norm_squared()))?;
+        let length = normal.norm();
+        let sign = normal.dot(&orientation);
         if !length.is_finite() || length <= 0.0 || !sign.is_finite() || sign.abs() == 0.0 {
             return None;
         }
@@ -195,7 +195,7 @@ impl Fan {
         let (u, v) = normal_basis(normal);
         let plane = Plane::new(origin, origin + u, origin + v);
         let normal = plane.normal();
-        if !normal.magnitude2().is_finite() || normal.dot(orientation) <= 0.0 {
+        if !normal.norm_squared().is_finite() || normal.dot(&orientation) <= 0.0 {
             return None;
         }
         let candidate = Self {
@@ -221,14 +221,14 @@ impl Fan {
                 self.base.front().point(),
                 self.base.back().point(),
             ])
-            .map(|p| normal.dot(p - origin).abs())
+            .map(|p| normal.dot(&(p - origin)).abs())
             .fold(0.0_f64, f64::max)
             + self.margin;
         (128.0 * f64::EPSILON).mul_add(origin.x.abs().max(origin.y.abs()).max(origin.z.abs()), slab)
     }
 
     fn certify(&self, origin: Point3, normal: Vector3, limit: f64) -> Option<Bounds> {
-        if self.plane.normal().dot(normal) <= 0.0 {
+        if self.plane.normal().dot(&normal) <= 0.0 {
             return None;
         }
         let plane = self.plane_bound(origin, normal);

@@ -25,7 +25,7 @@
 //! used by Monstertruck's existing intersection-curve implementation.
 
 use super::{
-    BoundResolution, Curve3D, EdgeCurve, EuclideanSpace, FaceBoundHolder, HashMap, InnerSpace,
+    AffinePoint, BoundResolution, Curve3D, EdgeCurve, FaceBoundHolder, HashMap, InnerProduct,
     IntersectionCurve, KERNEL_EPSILON, MetricSpace, Name, ParametricSurface3D, PlaceHolder, Point2,
     Point3, PolylineCurve, SearchNearestParameter, SearchParameter, ShellHolder, Surface, Table,
     step_geometry, step_p21,
@@ -420,11 +420,11 @@ impl Table {
             // the previous UVs only seed Newton and select the local root.
             let predictor_normal0 = first.surface.normal(expected0.x, expected0.y);
             let predictor_normal1 = second.surface.normal(expected1.x, expected1.y);
-            let tangent = predictor_normal0.cross(predictor_normal1);
-            let normal_scale = predictor_normal0.magnitude() * predictor_normal1.magnitude();
+            let tangent = predictor_normal0.cross(&predictor_normal1);
+            let normal_scale = predictor_normal0.norm() * predictor_normal1.norm();
             if !normal_scale.is_finite()
                 || normal_scale <= KERNEL_EPSILON
-                || tangent.magnitude()
+                || tangent.norm()
                     <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
             {
                 trace_recovery(edge_id, "pair_fail=predictor_tangent");
@@ -454,10 +454,10 @@ impl Table {
 
         let normal0 = first.surface.normal(uv0.x, uv0.y);
         let normal1 = second.surface.normal(uv1.x, uv1.y);
-        let normal_scale = normal0.magnitude() * normal1.magnitude();
+        let normal_scale = normal0.norm() * normal1.norm();
         if !normal_scale.is_finite()
             || normal_scale <= KERNEL_EPSILON
-            || normal0.cross(normal1).magnitude()
+            || normal0.cross(&normal1).norm()
                 <= DEFAULT_NUMERICAL_TOLERANCES.transversality_relative * normal_scale
         {
             trace_recovery(edge_id, "pair_fail=tangent");
@@ -782,7 +782,7 @@ mod tests {
     use monstertruck_geometry::prelude::{Line, Plane, Processor, RevolutionSurface, Vector3};
 
     fn cylinder() -> Surface {
-        let axis = Vector3::unit_z();
+        let axis = Vector3::z();
         let origin = Point3::origin();
         let point = Point3::new(1.0, 0.0, 0.0);
         Surface::Elementary(ElementarySurface::CylindricalSurface(Processor::new(
@@ -870,7 +870,7 @@ mod tests {
         assert!(midpoint.x > 0.5);
         assert!(midpoint.y > 0.5);
         assert!(midpoint.z.abs() <= GEOMETRY_TOLERANCE);
-        assert!((midpoint.to_vec().magnitude() - 1.0).abs() <= GEOMETRY_TOLERANCE);
+        assert!((midpoint.position_vector().norm() - 1.0).abs() <= GEOMETRY_TOLERANCE);
     }
     #[test]
     fn support_only_pair_does_not_invent_a_path() {

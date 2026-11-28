@@ -41,7 +41,7 @@ fn test_split_closed_face_simple_cylinder_case() {
         Point3::new(-1.0, 0.0, 1.0),
     ];
 
-    let translate = Matrix4::from_translation(Vector3::unit_z());
+    let translate = Matrix4::new_translation(&Vector3::z());
     let edges = vec![
         CompressedEdge {
             vertices: (0, 1),
@@ -79,7 +79,7 @@ fn test_split_closed_face_simple_cylinder_case() {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[2], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let faces = vec![Face {
         surface,
@@ -259,7 +259,7 @@ fn too_simple_cylinder() {
 
     let vertices = vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)];
 
-    let translation = Matrix4::from_translation(Vector3::unit_z());
+    let translation = Matrix4::new_translation(&Vector3::z());
     let circle0 = TrimmedCurve::new(Processor::new(UnitCircle::new()), (0.0, 2.0 * PI));
     let circle1 = TrimmedCurve::new(
         Processor::new(UnitCircle::new()).transformed(translation),
@@ -279,7 +279,7 @@ fn too_simple_cylinder() {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[1], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let faces = vec![CompressedFace {
         boundaries: vec![
@@ -469,7 +469,7 @@ fn double_closed_boundary_cylinder() {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[1], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let edges = vec![
         CompressedEdge {
@@ -483,7 +483,7 @@ fn double_closed_boundary_cylinder() {
             vertices: (1, 1),
             curve: Curve::Arc(TrimmedCurve::new(
                 Processor::new(UnitCircle::new())
-                    .transformed(Matrix4::from_translation(Vector3::unit_z())),
+                    .transformed(Matrix4::new_translation(&Vector3::z())),
                 (0.0, 2.0 * PI),
             )),
         },
@@ -492,8 +492,8 @@ fn double_closed_boundary_cylinder() {
             curve: Curve::ParameterCurve(ParameterCurve::new(
                 ParamCurve2D::Arc(TrimmedCurve::new(
                     Processor::new(UnitCircle::new()).transformed(
-                        Matrix3::from_translation(Vector2::new(0.5, 0.0))
-                            * Matrix3::from_scale(0.25),
+                        Matrix3::new_translation(&Vector2::new(0.5, 0.0))
+                            * Matrix3::new_scaling(0.25),
                     ),
                     (0.0, 2.0 * PI),
                 )),
@@ -505,8 +505,8 @@ fn double_closed_boundary_cylinder() {
             curve: Curve::ParameterCurve(ParameterCurve::new(
                 ParamCurve2D::Arc(TrimmedCurve::new(
                     Processor::new(UnitCircle::new()).transformed(
-                        Matrix3::from_translation(Vector2::new(0.5, PI))
-                            * Matrix3::from_scale(0.25),
+                        Matrix3::new_translation(&Vector2::new(0.5, PI))
+                            * Matrix3::new_scaling(0.25),
                     ),
                     (0.0, 2.0 * PI),
                 )),
@@ -756,7 +756,7 @@ fn many_closed_boundary_cylinder() {
     let surface = RevolutionSurface::by_revolution(
         Line(vertices[1], vertices[0]),
         Point3::origin(),
-        Vector3::unit_z(),
+        Vector3::z(),
     );
     let edges = {
         let mut edges = vec![
@@ -771,7 +771,7 @@ fn many_closed_boundary_cylinder() {
                 vertices: (1, 1),
                 curve: Curve::Arc(TrimmedCurve::new(
                     Processor::new(UnitCircle::new())
-                        .transformed(Matrix4::from_translation(Vector3::unit_z())),
+                        .transformed(Matrix4::new_translation(&Vector3::z())),
                     (0.0, 2.0 * PI),
                 )),
             },
@@ -783,8 +783,8 @@ fn many_closed_boundary_cylinder() {
                 curve: Curve::ParameterCurve(ParameterCurve::new(
                     ParamCurve2D::Arc(TrimmedCurve::new(
                         Processor::new(UnitCircle::new()).transformed(
-                            Matrix3::from_translation(Vector2::new(0.5, t))
-                                * Matrix3::from_scale(0.1),
+                            Matrix3::new_translation(&Vector2::new(0.5, t))
+                                * Matrix3::new_scaling(0.1),
                         ),
                         (0.0, 2.0 * PI),
                     )),

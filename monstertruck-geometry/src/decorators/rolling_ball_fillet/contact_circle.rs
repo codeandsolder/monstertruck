@@ -8,11 +8,11 @@
 )]
 
 use super::{
-    Angle, BsplineCurve, ContactCircle, ContactPoint, EuclideanSpace, InnerSpace, KnotVector,
-    Matrix, Matrix2, Matrix3, Matrix4, NurbsCurve, PI, ParameterRange, ParametricSurface3D, Point3,
-    Rad, SearchParameter, SquareMatrix, SurfaceParameter, ToSameGeometry, Tolerance, Vector2,
-    Vector3, Vector4,
+    AffinePoint, BsplineCurve, ContactCircle, ContactPoint, KnotVector, Matrix2, Matrix3, Matrix4,
+    NurbsCurve, PI, ParameterRange, ParametricSurface3D, Point2, Point3, SearchParameter,
+    SurfaceParameter, ToSameGeometry, Tolerance, Vector2, Vector3, Vector4,
 };
+use monstertruck_core::{Rotation3, Unit};
 use monstertruck_traits::ParametricCurve as ParametricCurveTrait;
 
 /// trait for attach rolling fillet
@@ -36,7 +36,7 @@ impl ContactCircle {
     /// angle of the fillet circle-arc
     #[inline]
     #[must_use = "The fillet arc angle is returned; ignoring it discards the angular extent."]
-    pub const fn angle(self) -> Rad<f64> { self.angle }
+    pub const fn angle(self) -> f64 { self.angle }
     /// parameter of the edge curve
     #[inline]
     #[must_use = "The computed curve parameter quantity is reported through this return value."]
@@ -76,11 +76,11 @@ impl ContactCircle {
         let (vec0, vec1) = (p0 - center, p1 - center);
         Some(Self {
             center,
-            axis: vec0.cross(vec1).normalize(),
-            angle: vec0.angle(vec1),
+            axis: vec0.cross(&vec1).normalize(),
+            angle: monstertruck_core::angle_between(vec0, vec1),
             t,
-            contact_point0: (p0, (u0, v0).into()).into(),
-            contact_point1: (p1, (u1, v1).into()).into(),
+            contact_point0: (p0, Point2::new(u0, v0)).into(),
+            contact_point1: (p1, Point2::new(u1, v1)).into(),
         })
     }
 }
@@ -96,12 +96,12 @@ impl ParametricCurveTrait for ContactCircle {
             2 => PI,
             _ => 3.0 * PI / 2.0,
         };
-        let angle = Rad(phase) + self.angle * t;
-        let rot = Matrix3::from_axis_angle(self.axis, angle);
-        let c = self.center.to_vec() * if n == 0 { 1.0 } else { 0.0 };
-        c + rot * radius * crate::pow_usize(self.angle.0, n)
+        let angle = phase + self.angle * t;
+        let rot = Rotation3::from_axis_angle(&Unit::new_unchecked(self.axis), angle).into_inner();
+        let c = self.center.position_vector() * if n == 0 { 1.0 } else { 0.0 };
+        c + rot * radius * crate::pow_usize(self.angle, n)
     }
-    fn evaluate(&self, t: f64) -> Self::Point { Point3::from_vec(self.derivative_n(0, t)) }
+    fn evaluate(&self, t: f64) -> Self::Point { Point3::from(self.derivative_n(0, t)) }
     fn derivative(&self, t: f64) -> Self::Vector { self.derivative_n(1, t) }
     fn derivative_2(&self, t: f64) -> Self::Vector { self.derivative_n(2, t) }
     fn parameter_range(&self) -> ParameterRange {
@@ -115,13 +115,13 @@ impl ToSameGeometry<NurbsCurve<Vector4>> for ContactCircle {
         let (sin2, cos2) = (self.angle / 2.0).sin_cos();
         let x_axis = self.contact_point0.point - self.center;
         let z_axis = self.axis;
-        let y_axis = z_axis.cross(x_axis);
-        let mat = Matrix4::from_cols(
-            x_axis.extend(0.0),
-            y_axis.extend(0.0),
-            z_axis.extend(0.0),
+        let y_axis = z_axis.cross(&x_axis);
+        let mat = Matrix4::from_columns(&[
+            x_axis.push(0.0),
+            y_axis.push(0.0),
+            z_axis.push(0.0),
             self.center.to_homogeneous(),
-        );
+        ]);
         NurbsCurve::new(BsplineCurve::new_unchecked(
             KnotVector::bezier_knot(2),
             vec![
@@ -145,14 +145,14 @@ fn contact_points(
     radius: f64,
 ) -> Option<(Point3, Point3, Point3)> {
     let ((p, der), (p0, n0), (p1, n1)) = (point_on_curve, plane0, plane1);
-    let sign = f64::signum(n0.cross(n1).dot(der));
-    let mat = Matrix3::from_cols(der, n0, n1).transpose();
+    let sign = f64::signum(n0.cross(&n1).dot(&der));
+    let mat = Matrix3::from_columns(&[der, n0, n1]).transpose();
     let vec = Vector3::new(
-        der.dot(p.to_vec()),
-        f64::mul_add(sign, -radius, n0.dot(p0.to_vec())),
-        f64::mul_add(sign, -radius, n1.dot(p1.to_vec())),
+        der.dot(&p.position_vector()),
+        f64::mul_add(sign, -radius, n0.dot(&p0.position_vector())),
+        f64::mul_add(sign, -radius, n1.dot(&p1.position_vector())),
     );
-    let center = Point3::from_vec(mat.invert()? * vec);
+    let center = Point3::from(mat.try_inverse()? * vec);
     let q0 = center + sign * radius * n0;
     let q1 = center + sign * radius * n1;
     Some((center, q0, q1))
@@ -166,12 +166,12 @@ fn next_point(
     let ders = surface.derivatives(2, u, v);
     let (uder, vder) = (ders[1][0], ders[0][1]);
     let d = q - p;
-    let uu = uder.dot(uder);
-    let uv = uder.dot(vder);
-    let vv = vder.dot(vder);
+    let uu = uder.dot(&uder);
+    let uv = uder.dot(&vder);
+    let vv = vder.dot(&vder);
     let mat = Matrix2::new(uu, uv, uv, vv);
-    let vec = Vector2::new(uder.dot(d), vder.dot(d));
-    let del = mat.invert()? * vec;
+    let vec = Vector2::new(uder.dot(&d), vder.dot(&d));
+    let del = mat.try_inverse()? * vec;
     let (u, v) = (u + del.x, v + del.y);
     Some((surface.evaluate(u, v), (u, v)))
 }

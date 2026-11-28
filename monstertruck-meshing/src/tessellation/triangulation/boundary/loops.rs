@@ -7,12 +7,13 @@
 
 use super::index::BoundaryIndex;
 use super::{
-    Cdt, FixedVertexHandle, HashMap, InnerSpace, IsoparametricCurveOptions, Itertools, MetricSpace,
-    Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2, SurfacePoint,
-    Tolerance, Triangulation, UvKey, align_full_period_open_pair, align_periodic_open_pair,
-    close_open_periodic_curve_to_singular, compact_periodic_closed_loop, connect_edges, mesh,
-    native_boundary_slack, normalize_range, open_periodic_closed_loop, periodic_axis_full_span,
-    periodic_open_axis_full_span, polyline_on_surface, surface_point_with_cache,
+    Cdt, FixedVertexHandle, HashMap, InnerProduct, IsoparametricCurveOptions, Itertools,
+    MetricSpace, Origin, Point2, Point3, PolyBoundaryPiece, PreMeshableSurface, SPoint2,
+    SurfacePoint, Tolerance, Triangulation, UvKey, align_full_period_open_pair,
+    align_periodic_open_pair, close_open_periodic_curve_to_singular, compact_periodic_closed_loop,
+    connect_edges, mesh, native_boundary_slack, normalize_range, open_periodic_closed_loop,
+    periodic_axis_full_span, periodic_open_axis_full_span, polyline_on_surface,
+    surface_point_with_cache,
 };
 use mesh::spade_round;
 use monstertruck_core::tolerance::DEFAULT_NUMERICAL_TOLERANCES;
@@ -95,12 +96,12 @@ pub(in crate::tessellation::triangulation) fn boundary_segment_parameter(
     back: Point2,
 ) -> Option<f64> {
     let segment = back - front;
-    let denom = segment.dot(segment);
+    let denom = segment.dot(&segment);
     if denom.so_small() {
         None
     } else {
         let offset = point - front;
-        let parameter = offset.dot(segment) / denom;
+        let parameter = offset.dot(&segment) / denom;
         let projected = front + segment * parameter;
         (parameter > 0.0
             && parameter < 1.0

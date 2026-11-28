@@ -53,7 +53,7 @@ fn union_with_thin_holed_profile_boss() -> Result<()> {
     )?;
     let boss = builder::transformed(
         &boss,
-        Matrix4::from_translation(Vector3::new(4.0, 4.0, 0.69999)),
+        Matrix4::new_translation(&Vector3::new(4.0, 4.0, 0.69999)),
     );
     let result = monstertruck_solid::or(
         &host,
