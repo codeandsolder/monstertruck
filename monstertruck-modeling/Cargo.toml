@@ -16,7 +16,7 @@ fillet = ["monstertruck-fillet"]
 font = ["dep:ttf-parser"]
 
 [dependencies]
-derive_more = { workspace = true }
+derive_more = { workspace = true, features = ["from"] }
 itertools = { workspace = true }
 rustc-hash = { workspace = true }
 robust = { workspace = true }
